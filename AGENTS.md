@@ -54,11 +54,16 @@ requirements.
 Keep every slice runnable with the repository contract:
 
 ```bash
-scripts/dev/setup.sh
-.dorf/bin/mise run check
-.dorf/bin/mise exec -- go build -o .dorf/bin/dorf ./cmd/dorf
+mise trust --yes
+mise install --locked go sqlc github:earendil-works/absurd
+docker compose -f compose.dev.yaml up --detach --wait postgres
+mise run db:init
+mise run check
+mise run build
 .dorf/bin/dorf version
 ```
+
+When `DORF_TEST_DATABASE_URL` selects an external test database, skip the Compose start.
 
 Run the PostgreSQL-backed integration suite locally before pushing changes to durable storage, SQL,
 transactions, or sequencing. CI repeats deterministic unit and PostgreSQL integration coverage;

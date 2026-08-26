@@ -8,6 +8,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: read
   contents: write
   packages: write
 
@@ -25,14 +26,33 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Set up the repository
-        run: scripts/dev/setup.sh
-      - name: Run the full repository check
-        run: .dorf/bin/mise run check
+      - name: Require successful CI for the dispatched commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ci_run_id="$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow ci.yml \
+            --commit "$GITHUB_SHA" \
+            --event push \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId // empty')"
+          if test -z "$ci_run_id"; then
+            echo "The dispatched commit does not have a successful CI run." >&2
+            exit 1
+          fi
+          echo "Verified CI run $ci_run_id."
+      - name: Install the release toolchain
+        uses: ./.github/actions/setup-mise
+        with:
+          install_args: go
       - name: Require an already proven Incus image pin
         shell: bash
         run: |
-          version="$(.dorf/bin/mise exec -- go run ./cmd/dorf version | awk '{print $2}')"
+          version="$(mise exec -- go run ./cmd/dorf version | awk '{print $2}')"
           image_release="$(jq -r .release_tag internal/release/official_image.json)"
           if test "$image_release" = "v$version"; then
             echo "Incus image pin advances require the local Codex/Pi proof and publication boundary." >&2

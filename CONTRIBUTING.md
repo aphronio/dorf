@@ -3,16 +3,24 @@
 Use the repository-managed toolchain and run the repository contract:
 
 ```bash
-scripts/dev/setup.sh
-.dorf/bin/mise run check
-.dorf/bin/mise exec -- go build -o .dorf/bin/dorf ./cmd/dorf
+mise trust --yes
+mise install --locked go sqlc github:earendil-works/absurd
+docker compose -f compose.dev.yaml up --detach --wait postgres
+mise run db:init
+mise run check
+mise run build
 .dorf/bin/dorf version
-.dorf/bin/mise exec -- go version -m .dorf/bin/dorf
+mise exec -- go version -m .dorf/bin/dorf
 ```
 
-`setup.sh` bootstraps a checkout-local Mise, installs the locked repository toolchain, and converges
-the disposable PostgreSQL test database. `.dorf/bin/mise run check` rejects stale generated SQL and runs query
-preparation, Go tests, and vet. Set `DORF_TEST_DATABASE_URL` to use an external test database.
+Contributors and coding agents provide Mise and Docker Compose. Mise installs the locked native
+toolchain, while `compose.dev.yaml` supplies PostgreSQL 17.10 at
+`127.0.0.1:55432/dorf_test`. Mise uses the matching connection URL unless
+`DORF_TEST_DATABASE_URL` overrides it; skip the Compose start when using that external database.
+`mise run db:init` idempotently initializes the Absurd and Dorf schemas. `mise run check` rejects
+stale generated SQL and runs query preparation, Go tests, and vet without rebuilding an image.
+Self-hosted deployments use the published image through `deploy/compose.yaml` and do not require
+Mise.
 
 Read [AGENTS.md](AGENTS.md) before changing a documented product, architecture, storage, provider,
 setup, image, or release boundary.

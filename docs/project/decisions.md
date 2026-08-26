@@ -787,10 +787,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   exact local fingerprint.
 - **Publication ownership:** When the declared Incus image pin is reused, hosted GitHub Actions owns
   application and GHCR publication with narrowly scoped `contents:write` and `packages:write`
-  permissions. The workflow checks out the exact dispatch commit and invokes the repository command;
-  it does not duplicate release logic. A pin advance remains an explicit local proof and
-  publication boundary because its real Codex/Pi proof requires the owner's Provider Gateway
-  credentials; those credentials are never moved to hosted Actions.
+  permissions. The workflow requires successful CI for the exact dispatch commit, checks out that
+  commit, and invokes the repository command; it does not duplicate release logic. A pin advance
+  remains an explicit local proof and publication boundary because its real Codex/Pi proof requires
+  the owner's Provider Gateway credentials; those credentials are never moved to hosted Actions.
 - **Compatibility:** The repository path, release tag shape, asset names, manifest schema, and
   installer module are pre-release implementation details. Existing Sandboxes remain bound to the image
   they were created from. The first image is x86_64-only; GitHub Releases are not a claim of support
@@ -1097,23 +1097,25 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 - **Status:** Accepted setup boundary — 2026-08-09; fixed image-inventory sentence superseded by
   D064 and D066 while repository ownership remains accepted — 2026-08-13; PostgreSQL installation
-  changed from a Mise source build to the native distribution package — 2026-08-14
+  changed from a Mise source build to the native distribution package — 2026-08-14; development
+  database moved from host-package bootstrap to Docker Compose — 2026-08-26
 - **Decision:** Do not expand the shared Incus image for Dorf-specific Go, Absurd, PostgreSQL, or
-  inspection needs. D064 and D066 own the current shared image profile. Dorf's declared
-  `commands.prepare` invokes a repository-owned script that installs missing pinned repository
-  tools through Mise and installs PostgreSQL from the native distribution package when a local
-  database is needed. The supported Debian workload uses its package-managed cluster; development
-  hosts may instead provide `DORF_TEST_DATABASE_URL`. The script converges the disposable database
-  and Absurd schema and downloads modules. Installation and initialization are deterministic
-  Actions; no AgentRun decides or performs them conversationally.
-- **Cost:** Every fresh Sandbox may pay package-download and initialization time. That cost is
-  accepted now because the setup remains visible, editable with the repository, and independent of
-  a Dorf-wide image release.
+  inspection needs. D064 and D066 own the current shared image profile. A Dorf development host or
+  Sandbox supplies Mise and Docker Compose. Repository-owned deterministic commands install the
+  trusted, locked native tools through `mise trust --yes` and `mise install --locked`, start the
+  static `compose.dev.yaml` PostgreSQL service, and idempotently initialize the Absurd and Dorf
+  schemas through `mise run db:init`. Dorf's declared `commands.prepare` selects those deterministic
+  Actions; no AgentRun decides or performs setup conversationally. `mise run check` retains the
+  native feedback loop. No repository script installs host packages or manages Docker or Compose.
+  D101's self-hosted deployment remains image-only and does not require Mise.
+- **Cost:** Every fresh Sandbox may pay tool and PostgreSQL image download and initialization time,
+  and development environments must supply both prerequisites. That cost is accepted because the
+  setup remains explicit, repository-versioned, and independent of a Dorf-wide development image.
 - **Why:** Different repositories need different toolchains. Encoding all of them in one shared
   image couples repository evolution to image publication and grows a supposedly reusable base.
-  A repository contract is the simplest correct ownership boundary. PostgreSQL's Mise backends
-  compile upstream source, while the supported Sandbox distribution supplies a maintained binary
-  package; using that package removes repeated compilation without coupling PostgreSQL to the image.
+  A repository contract is the simplest correct ownership boundary. Mise owns pinned native tools,
+  Compose owns the disposable database service, and native checks preserve the fast edit/verify loop
+  without a privileged host-package bootstrap.
 - **Reconsider when:** Repeated measurements show setup materially dominates Job latency or network
   reliability. First add a content-addressed package cache; if that is insufficient, snapshot a
   successfully prepared repository environment behind the same `commands.prepare` contract.
@@ -1213,10 +1215,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Tooling and verification:** Generation and stale-code comparison use the local schema analyzer and
   do not require a database. Strict function and `ORDER BY` checks are enabled. The repository check
   also runs `sqlc vet` with `sqlc/db-prepare` against the already migrated disposable PostgreSQL
-  database, followed by the live PostgreSQL Go suite and `go vet`. CI starts a fresh PostgreSQL
-  service and initializes the pinned Absurd and Dorf schemas before running the same check. No sqlc
-  Cloud project, token, `push`, `verify`, managed database, migration ownership, or runtime service is
-  introduced. This follows sqlc's official [CI guidance](https://docs.sqlc.dev/en/stable/howto/ci-cd.html),
+  database, followed by the live PostgreSQL Go suite and `go vet`. CI starts the `compose.dev.yaml`
+  PostgreSQL service and runs `mise run db:init` before the same check. No sqlc Cloud project, token,
+  `push`, `verify`, managed database, migration ownership, or runtime service is introduced. This
+  follows sqlc's official [CI guidance](https://docs.sqlc.dev/en/stable/howto/ci-cd.html),
   [configuration reference](https://docs.sqlc.dev/en/stable/reference/config.html), and
   [override guidance](https://docs.sqlc.dev/en/stable/howto/overrides.html) while keeping all committed
   paths repository-relative.

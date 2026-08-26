@@ -13,7 +13,7 @@ fi
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
-readonly MISE="$PROJECT_ROOT/.dorf/bin/mise"
+readonly MISE="${DORF_MISE:-mise}"
 readonly GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-aphronio/dorf}"
 readonly OUTPUT_DIR="${OUTPUT_DIR:-$PROJECT_ROOT/dist/release}"
 readonly IMAGE_DESCRIPTOR="$PROJECT_ROOT/internal/release/official_image.json"
@@ -30,8 +30,8 @@ for command in git jq; do
     exit 1
   fi
 done
-if [[ ! -x "$MISE" ]]; then
-  echo "Repository toolchain is unavailable; run scripts/dev/setup.sh first." >&2
+if ! command -v "$MISE" >/dev/null 2>&1; then
+  echo "Release toolchain is unavailable; run mise install --locked go or set DORF_MISE." >&2
   exit 1
 fi
 readonly SOURCE_COMMIT="$(git -C "$PROJECT_ROOT" rev-parse HEAD)"

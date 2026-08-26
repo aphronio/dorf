@@ -1,7 +1,9 @@
 # Releasing Dorf
 
-From a clean commit on `main` already available on GitHub, dispatch the Release workflow. The
-workflow runs the repository checks and invokes the release authority on that exact event commit:
+From a clean commit on `main` already available on GitHub with successful CI, dispatch the Release
+workflow. CI owns the full repository and PostgreSQL-backed checks. The publication workflow installs
+only the pinned release toolchain, requires a successful push CI run for the exact event commit, and
+invokes the release authority on that commit:
 
 ```bash
 gh workflow run release.yml --ref main
@@ -13,10 +15,11 @@ this repository Write access under **Manage Actions access**; the image's OCI so
 package linked to the repository after publication.
 
 [`scripts/release.sh`](../scripts/release.sh) remains the source of truth for release inputs,
-artifacts, and publication. Hosted Actions supplies the repository toolchain, Docker/Buildx, and
-narrowly scoped `GITHUB_TOKEN` GitHub and GHCR publication permissions. The workflow checks out the
-exact event commit; the authority rejects source changes before or during the build and verifies the
-release binary's Go VCS metadata against that commit.
+artifacts, and publication. Hosted Actions supplies the locked Go toolchain, Docker/Buildx, and
+narrowly scoped `GITHUB_TOKEN` GitHub and GHCR publication permissions. It does not provision a
+development database or repeat CI. The workflow checks out the exact event commit; the authority
+rejects source changes before or during the build and verifies the release binary's Go VCS metadata
+against that commit.
 
 Every run builds one x86_64 Linux application archive and the Linux/amd64 image
 `ghcr.io/aphronio/dorf:MAJOR.MINOR.PATCH` from the same exact binary and canonical container recipe.

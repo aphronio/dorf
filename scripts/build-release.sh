@@ -12,7 +12,7 @@ if [[ $# -gt 1 ]]; then
 fi
 
 readonly PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-readonly MISE="$PROJECT_ROOT/.dorf/bin/mise"
+readonly MISE="${DORF_MISE:-mise}"
 readonly OUTPUT_DIR="${1:-$PROJECT_ROOT/dist/release}"
 readonly DOCKERFILE="$PROJECT_ROOT/internal/release/container/Dockerfile"
 readonly DOCKERIGNORE="$PROJECT_ROOT/internal/release/container/.dockerignore"
@@ -31,8 +31,8 @@ readonly -a CONTAINER_PROOF_ARGS=(
   --user 65534:65534
 )
 
-if [[ ! -x "$MISE" ]]; then
-  echo "Repository toolchain is unavailable; run scripts/dev/setup.sh first." >&2
+if ! command -v "$MISE" >/dev/null 2>&1; then
+  echo "Release toolchain is unavailable; run mise install --locked go or set DORF_MISE." >&2
   exit 1
 fi
 for command in git docker jq; do

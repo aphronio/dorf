@@ -240,6 +240,7 @@ release_env() {
     AI_CONNECTION=test \
     GITHUB_REPOSITORY=aphronio/dorf \
     OUTPUT_DIR="$FIXTURE_ROOT/dist/release" \
+    DORF_MISE="$FIXTURE_ROOT/.dorf/bin/mise" \
     PATH="$SHIM_DIR:$PATH" \
     RELEASE_TEST_EVENTS="$EVENTS" \
     RELEASE_TEST_IMAGE_REF="$IMAGE_REF" \

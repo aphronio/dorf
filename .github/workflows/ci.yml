@@ -12,34 +12,22 @@ jobs:
   go:
     name: Go application
     runs-on: ubuntu-24.04
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_DB: dorf_test
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_USER: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d dorf_test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      DORF_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/dorf_test?sslmode=disable
     steps:
       - name: Check out the source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Set up the repository
-        run: scripts/dev/setup.sh
+      - name: Install the development toolchain
+        uses: ./.github/actions/setup-mise
+      - name: Start the disposable development database
+        run: docker compose -f compose.dev.yaml up --detach --wait postgres
+      - name: Initialize the development database
+        run: mise run db:init
       - name: Check SQL generation and live behavior
-        run: .dorf/bin/mise run check
+        run: mise run check
       - name: Build and prove supported release artifacts
-        run: .dorf/bin/mise exec -- scripts/build-release.sh dist/release
+        run: mise exec -- scripts/build-release.sh dist/release
       - name: Test release installer
         run: bash scripts/install-test.sh dist/release/install.sh dist/release
       - name: Test release authority
@@ -61,7 +49,7 @@ jobs:
           bash -n scripts/incus/check-image-inputs.sh
       - name: Smoke installed artifact
         run: |
-          version="$(.dorf/bin/mise exec -- go run ./cmd/dorf version | awk '{print $2}')"
+          version="$(mise exec -- go run ./cmd/dorf version | awk '{print $2}')"
           artifact_basename="dist/release/dorf_${version}_linux_x86_64"
           archive="${artifact_basename}.tar.gz"
           checksums="dist/release/dorf_${version}_checksums.txt"
@@ -82,4 +70,4 @@ jobs:
           test -x "$smoke_dir/bootstrap/incus.sh"
           cmp scripts/bootstrap/docker.sh "$smoke_dir/bootstrap/docker.sh"
           cmp scripts/bootstrap/incus.sh "$smoke_dir/bootstrap/incus.sh"
-          .dorf/bin/mise exec -- go version -m "$smoke_dir/dorf"
+          mise exec -- go version -m "$smoke_dir/dorf"

@@ -50,18 +50,23 @@ The stable remote contract and deployment boundary are in the
 ## Build
 
 ```bash
-go build -o ./bin/dorf ./cmd/dorf
-./bin/dorf version
+mise trust --yes
+mise install --locked go
+mise run build
+.dorf/bin/dorf version
 ```
 
 ## Development
 
-The project is one Go application with generated PostgreSQL query code:
+Development requires Mise and Docker Compose. Dorf and its checks run natively; Compose supplies the
+disposable PostgreSQL dependency:
 
 ```bash
-scripts/dev/setup.sh
-.dorf/bin/mise run check
-.dorf/bin/mise exec -- scripts/build-release.sh dist/release
+docker compose -f compose.dev.yaml up --detach --wait postgres
+mise install --locked go sqlc github:earendil-works/absurd
+mise run db:init
+mise run check
 ```
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete repository contract.
 Architecture and authority details are indexed in [docs/README.md](docs/README.md).

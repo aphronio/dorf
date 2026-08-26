@@ -3,9 +3,24 @@ go = "1.26.5"
 sqlc = "1.31.1"
 "github:earendil-works/absurd" = { version = "0.5.0", asset_pattern = "absurdctl" }
 
-[tasks.setup]
-description = "Converge the repository development environment"
-run = "scripts/dev/setup.sh"
+[env]
+DORF_TEST_DATABASE_URL = "${DORF_TEST_DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:55432/dorf_test?sslmode=disable}"
+
+[tasks."db:init"]
+description = "Initialize the disposable development database"
+run = """
+if ! absurdctl schema-version -d "$DORF_TEST_DATABASE_URL" >/dev/null 2>&1; then
+  absurdctl init -d "$DORF_TEST_DATABASE_URL"
+fi
+DORF_DATABASE_URL="$DORF_TEST_DATABASE_URL" go run ./cmd/dorf migrate
+"""
+
+[tasks.build]
+description = "Build the Dorf binary"
+run = """
+mkdir -p .dorf/bin
+go build -o .dorf/bin/dorf ./cmd/dorf
+"""
 
 [tasks."sql:generate"]
 description = "Generate private PostgreSQL query code"
@@ -34,10 +49,6 @@ run = "scripts/integration/compose-vm.sh"
 [tasks.check]
 description = "Run the repository's deterministic SQL and Go checks"
 run = """
-if [ -z "${DORF_TEST_DATABASE_URL:-}" ] && [ -f .dorf/test-database-url ]; then
-  export DORF_TEST_DATABASE_URL="$(cat .dorf/test-database-url)"
-fi
-: "${DORF_TEST_DATABASE_URL:?run scripts/dev/setup.sh or set DORF_TEST_DATABASE_URL}"
 sqlc diff
 sqlc vet
 scripts/incus/check-image-inputs.sh

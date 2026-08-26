@@ -28,9 +28,13 @@ readonly PROOF_ROOT="$(mktemp -d)"
 readonly BINARY="$PROOF_ROOT/dorf"
 JOB_ID=""
 
-if [[ -z "${DORF_DATABASE_URL:-}" && -f "$PROJECT_ROOT/.dorf/test-database-url" ]]; then
-  IFS= read -r DORF_DATABASE_URL <"$PROJECT_ROOT/.dorf/test-database-url"
+if [[ -z "${DORF_DATABASE_URL:-}" && -n "${DORF_TEST_DATABASE_URL:-}" ]]; then
+  DORF_DATABASE_URL="$DORF_TEST_DATABASE_URL"
   export DORF_DATABASE_URL
+fi
+if [[ -z "${DORF_DATABASE_URL:-}" ]]; then
+  echo "Set DORF_DATABASE_URL or run the release through the repository Mise environment." >&2
+  exit 2
 fi
 
 drive_job_until() {
