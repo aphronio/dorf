@@ -7,11 +7,10 @@ authority. [Getting started](getting-started.md) owns procedures and
 
 ## Role boundary
 
-The **deployment-host agent** may install Dorf, run setup, apply the documented static Compose
-project directly, manage Profiles and optional integrations, operate diagnostics, and coordinate
-storage, provider, Harness, and operator-owned ingress boundaries. It must pause for every password,
-secret, browser authorization, paid service, administrator helper, or consequential infrastructure
-choice.
+The **deployment-host agent** may install Dorf, run setup, use Compose directly for advanced
+operations, manage Profiles and optional integrations, operate diagnostics, and coordinate storage,
+provider, Harness, and operator-owned ingress boundaries. It must pause for every password, secret,
+browser authorization, paid service, administrator helper, or consequential infrastructure choice.
 
 The **remote-client agent** installs and uses only the Dorf CLI. It may connect, check its own
 authentication, admit a direct Job or either documented built-in workflow, inspect and watch the
@@ -36,16 +35,18 @@ capability. The deployment host owns all of those operations.
 
 Follow the complete setup and readiness procedure in Getting started. Let `dorf setup` select and
 prepare the approved Sandbox and Harness path and write the protected `.env` for the installed
-static Compose manifests. Setup's host-prerequisite checks are read-only. If it offers an administrator
-helper, follow the exact identity and privilege handoff in
+static Compose manifests. Setup automatically applies only that exact project as configuration
+becomes ready, waits for health, and resumes the guided flow; do not add a separate start command,
+permission prompt, manual Compose handoff, or unnecessary second setup run. Its host-prerequisite
+checks do not install or mutate them. If it offers an administrator helper, follow the exact identity
+and privilege handoff in
 [Getting started](getting-started.md#1-install-the-application-initialize-a-deployment-host), pause
 for explicit human authorization, then rerun setup. Honor its Docker-authority warning even when no
 escalation prompt appears.
 
-When setup reports its Compose handoff, run only the ordinary Compose lifecycle documented in
-Getting started, then rerun setup so it can probe readiness and resume. Dorf never runs or
-constructs that command. Do not invent a Dorf wrapper, edit the protected generated `.env`, or
-start separate foreground Dorf processes.
+Do not invent another Dorf lifecycle wrapper, edit the protected generated `.env`, or start separate
+foreground Dorf processes. Use Compose directly only for the advanced observation and process
+operations documented in Getting started.
 
 Cloudflare has no shell helper. Keep its existing guided browser, DNS, and named-Tunnel flow, pausing
 for the human authorization it requests. Prove the project through the deployment-host procedure

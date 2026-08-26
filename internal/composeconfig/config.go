@@ -83,7 +83,7 @@ type Spec struct {
 }
 
 // Config is a materializable protected projection. IncusOverlay tells the
-// caller to include the shipped static Incus overlay in its Compose handoff.
+// caller to include the shipped static Incus overlay when applying the project.
 type Config struct {
 	Image           Image
 	IncusOverlay    bool

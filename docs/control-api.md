@@ -97,9 +97,9 @@ that representation, so clients must also handle transport and generic HTTP serv
 
 ## Deployment services
 
-The accepted managed deployment is one versioned Docker Compose project. It remains release-pending
-until [D101's live proof gate](project/decisions.md#d101--compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit)
-passes:
+The accepted managed deployment is one versioned Docker Compose project. Its complete supported
+terminal remains gated by
+[D101's live proof](project/decisions.md#d101--compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit):
 
 ```text
 operator-owned HTTPS ingress
@@ -138,13 +138,14 @@ overlay gives only the worker the exact configured Incus Unix socket; a remote I
 its explicit HTTPS and mTLS adapter instead.
 
 The release installs static `dorf-compose.yaml` and `dorf-compose-incus.yaml` manifests beside the
-binary. `dorf setup` writes only the protected `.env` consumed by those manifests, then probes
-readiness. Dorf Go code neither constructs nor executes Compose lifecycle commands and does not
-reconcile Docker state. A human or deployment agent owns the Compose lifecycle directly from the
-generated project directory. The
+binary. One continuous `dorf setup` flow writes the protected `.env`, applies only those exact
+manifests through Compose as needed, waits for readiness, and continues guided configuration and
+verification. It does not render Compose YAML, reconcile arbitrary Docker resources, or provide a
+general lifecycle wrapper. A human or deployment agent uses Compose directly from the generated
+project directory only for advanced operations. The
 [deployment-host procedure](getting-started.md#1-install-the-application-initialize-a-deployment-host)
-is the sole authority for operator identity, privilege, installation, start, update, status,
-restart, logs, and the resumable setup handoff.
+is the sole authority for operator identity, privilege, installation, setup application, update,
+status, restart, logs, and resumability.
 
 The managed project always uses its PostgreSQL service and the protected persisted deployment
 configuration as authority. `DORF_DATABASE_URL` remains only a development, test, or explicitly

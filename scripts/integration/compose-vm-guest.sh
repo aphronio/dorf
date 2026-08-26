@@ -335,25 +335,19 @@ run_setup() {
 		--incus-manifest "$SANDBOX_MANIFEST"
 		--incus-archive "$SANDBOX_ARCHIVE"
 	)
-	local base_status=0 optional_status=0
-	capture "$EVIDENCE_DIR/setup-base-handoff.log" "$DORF_BIN" setup "${setup_args[@]}" || base_status=$?
+	if ! capture "$EVIDENCE_DIR/setup.log" "$DORF_BIN" setup "${setup_args[@]}"; then
+		die "setup did not apply and verify the Dorf deployment"
+	fi
+	grep -Fq -- "Dorf ready: Control plane and durable Job worker ready" "$EVIDENCE_DIR/setup.log" ||
+		die "setup did not print its final ready receipt"
+	if grep -Eq 'Dorf deployment configuration.*deployment guide|follow the deployment guide' "$EVIDENCE_DIR/setup.log"; then
+		die "setup returned a stale deployment handoff"
+	fi
 	assert_compose_project
-	[[ "$base_status" -ne 0 ]] || die "initial setup did not stop at the base deployment handoff"
-	grep -Fq 'awaits operator deployment' "$EVIDENCE_DIR/setup-base-handoff.log" ||
-		die "initial setup failed without the expected deployment handoff"
 	capture "$EVIDENCE_DIR/compose-images.txt" compose config --images
 	grep -Fxq -- "$IMAGE_REF" "$EVIDENCE_DIR/compose-images.txt" || die "Compose did not select the proven Dorf image"
 	if grep '^ghcr.io/aphronio/dorf:' "$EVIDENCE_DIR/compose-images.txt" | grep -Fvx -- "$IMAGE_REF" >/dev/null; then
 		die "Compose selected a different Dorf image"
-	fi
-	capture "$EVIDENCE_DIR/compose-base-up.log" compose up --detach --wait --remove-orphans
-	capture "$EVIDENCE_DIR/setup-optional-handoff.log" "$DORF_BIN" setup "${setup_args[@]}" || optional_status=$?
-	[[ "$optional_status" -ne 0 ]] || die "setup did not stop after publishing optional deployment inputs"
-	grep -Fq 'awaits operator deployment' "$EVIDENCE_DIR/setup-optional-handoff.log" ||
-		die "optional setup failed without the expected deployment handoff"
-	capture "$EVIDENCE_DIR/compose-final-up.log" compose up --detach --wait --remove-orphans
-	if ! capture "$EVIDENCE_DIR/setup.log" "$DORF_BIN" setup "${setup_args[@]}"; then
-		die "setup did not resume after both deployment handoffs (statuses $base_status and $optional_status)"
 	fi
 	rm -f -- "$SECRET_FILE"
 	SECRET_FILE=

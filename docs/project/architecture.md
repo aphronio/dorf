@@ -39,9 +39,10 @@ its lifecycle.
 Compose is the only supervisor in the managed shape. The project uses its own PostgreSQL service,
 segmented bridge networks, setup's protected generated `.env`, and a narrow authenticated reader
 hosted by the worker so the public API never receives provider credentials or provider mutation
-authority. Static manifests ship beside the binary. Setup writes that protected `.env` and probes
-readiness; it neither constructs nor executes Compose lifecycle commands. A human or deployment
-agent runs Compose directly, and no Dorf workload or Sandbox mounts the host Docker socket.
+authority. Static manifests ship beside the binary. Setup writes that protected `.env`, applies only
+those exact manifests through Compose, and probes readiness; it exposes no general lifecycle wrapper
+or arbitrary Docker reconciliation. A human or deployment agent uses Compose directly only for
+advanced operations, and no Dorf workload or Sandbox mounts the host Docker socket.
 `DORF_DATABASE_URL` is only a development, test, or explicitly manually supervised process
 override. Host prerequisites and bootstrap privilege follow the single
 [deployment-host setup procedure](../getting-started.md#1-install-the-application-initialize-a-deployment-host);
@@ -220,8 +221,9 @@ host-private HTTP address behind operator-owned HTTPS ingress. It admits and pro
 not register execution handlers; a separate durable worker claims and reconciles the attached
 Absurd tasks and hosts the fixed authenticated reads the API cannot perform without provider
 authority. The static Compose project supervises both long-running responsibilities after its
-one-shot migration completes. Setup prepares protected `.env` and observes readiness; the operator
-or deployment agent owns lifecycle through ordinary Compose.
+one-shot migration completes. Setup prepares protected `.env`, applies that exact project, waits for
+its services, and verifies readiness. The operator or deployment agent uses ordinary Compose
+directly only for advanced observation and process operations.
 Ingress, multi-user identity, roles, organizations, billing, and quotas remain separate work.
 
 A direct Job has no workflow identity. Its first Message carries the caller's exact prompt through

@@ -2567,7 +2567,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   ingress. It authenticates clients, admits and projects Jobs, and requests cleanup, but it registers
   no execution handlers. A separate durable worker owns task execution and recovery. D100 later
   proved their independent process-loss boundary; D101 now supervises both in one static Compose
-  project with a direct operator-owned lifecycle while keeping ingress operator-owned.
+  project applied by the continuous setup flow while keeping ingress operator-owned.
 - **Why:** SSH grants host authority that ordinary Job control neither needs nor should imply, while
   exposing every Core mechanism would be premature. The smaller authenticated projection makes a
   self-hosted deployment useful off-host without granting database, executor, provider, or host
@@ -2642,7 +2642,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   Add newest-first keyset listing of bounded Job summaries, stable JSON authentication status, and
   host-only Client list, show, and idempotent revoke commands. Do not add a generator dependency,
   SDK family, remote Client administration, or another status or event model.
-- **Service lifecycle:** Superseded by D101's static operator-owned Compose lifecycle. D100's
+- **Service lifecycle:** Superseded by D101's static setup-applied Compose lifecycle. D100's
   operator-owned HTTPS ingress remains accepted; its Dorf-specific status, restart, logs,
   reconciliation, update handoff, systemd units, notification, fragment custody, and journal facts
   are historical rather than current interfaces.
@@ -2667,7 +2667,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D101 — Compose owns deployment lifecycle; bootstrap privilege stays explicit
 
-- **Status:** Accepted implementation direction — 2026-08-26; live terminal proof pending
+- **Status:** Accepted implementation direction — 2026-08-26; setup application refined by live
+  `v0.5.4` dogfood — 2026-08-26; complete live terminal proof pending
 - **Decision:** Replace D071's standalone PostgreSQL container and D100's systemd units with one
   versioned static Dorf Docker Compose project. The
   [Remote Control API](../control-api.md#deployment-services) owns its exact service and network
@@ -2676,13 +2677,17 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Static delivery and operator lifecycle:** The application archive carries
   `dorf-compose.yaml` and `dorf-compose-incus.yaml`, and the installer places them beside the binary.
   Setup derives and atomically writes the protected `.env` in the generated project directory, then
-  probes readiness. Dorf Go code does not render Compose YAML, construct or execute Compose CLI
-  commands, or inspect and reconcile Docker resources. Setup's only Docker command is a read-only
-  Engine readiness probe.
-  The human or deployment agent runs the ordinary Compose lifecycle directly;
+  applies only those installed manifests through Compose and waits for factual readiness before
+  continuing. It reapplies the same exact project whenever guided configuration changes its inputs.
+  Calling `dorf setup` is sufficient deployment intent: there is no second permission prompt,
+  manual Compose handoff, separate `dorf start`, or setup-start-setup cycle. Dorf Go code does not
+  render Compose YAML, inspect arbitrary Docker resources, or expose a general Compose lifecycle
+  wrapper. Humans and deployment agents use Compose directly only for advanced observation and
+  process operations;
   [Getting started](../getting-started.md#1-install-the-application-initialize-a-deployment-host)
-  is its sole procedural authority. Updating replaces the binary and static manifests; rerunning
-  setup refreshes `.env`, and the same direct Compose start/update operation applies it.
+  is the sole procedural authority. The installer still never starts services. Updating replaces
+  the binary and static manifests; one subsequent setup run refreshes `.env`, applies the project,
+  and continues through readiness.
 - **Release image:** The release authority builds and pushes one exact Linux/amd64 semantic-version
   image at `ghcr.io/aphronio/dorf:MAJOR.MINOR.PATCH`. Official setup selects that reference with
   `pull_policy: always`. There is no production Docker image tar, local image cache, OCI parser,
@@ -2709,9 +2714,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   [Getting started](../getting-started.md#1-install-the-application-initialize-a-deployment-host)
   and its equivalent manual authorities. The release ships the same small, inspectable helpers from
   `scripts/bootstrap/`; they remain explicit, idempotent recipes for their stated proven host, not a
-  universal package manager or a second runtime reconciler. Setup and direct Compose use the same
-  invoking operator identity, root or non-root; Dorf never elevates, changes identity, runs helpers,
-  or manages host privilege. Cloudflare remains in the existing
+  universal package manager or a second runtime reconciler. Setup invokes Compose under its same
+  operator identity, root or non-root; Dorf never elevates, changes identity, runs helpers, installs
+  Docker or Incus, or manages host privilege. Cloudflare remains in the existing
   guided browser/DNS/Tunnel flow; a shell wrapper would only duplicate that authority.
 - **Sandbox boundary:** Incus remains a provider behind the existing Sandbox adapter rather than a
   universal deployment dependency. One Dorf Deployment configures at most one Incus endpoint and
@@ -2729,15 +2734,25 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   Profile adoption or migration path remains.
 - **Guided experience:** Missing infrastructure is not a documentation dead end. Interactive setup
   keeps its deliberate choices, exact plans, secret/browser pauses, profile creation, functional
-  verification, default selection, and resumable progress. Humans receive concise explanation and
-  a manual path; agents receive an exact command and must still pause for consequential authority.
+  verification, default selection, and resumable progress. Once prerequisites exist, setup applies
+  the base project, continues through Sandbox and Harness choice, AI connection and any guided
+  Cloudflare flow, reapplies changed project inputs, verifies the selected Profile, and reaches ready
+  as one continuous command. Humans receive concise explanation and a manual prerequisite path;
+  agents receive an exact command and must still pause for consequential external authority.
+- **Dogfood refinement:** A fresh-host `v0.5.4` terminal successfully installed and updated Dorf,
+  then setup wrote its deployment configuration and stopped before the existing Sandbox, Harness,
+  AI-connection, Cloudflare, Profile, and verification flow. Requiring the operator to locate the
+  generated project, invoke Compose, and rerun setup preserved an internal implementation boundary
+  at the cost of the accepted zero-friction setup experience. Setup therefore owns the narrow exact
+  project application above; that does not transfer general Docker lifecycle or host custody to
+  Dorf.
 - **Why:** The API and worker need durable supervision, not a custom privileged service manager or
-  a Go wrapper around Compose. PostgreSQL is already containerized, while the systemd,
+  a custom Compose manager. PostgreSQL is already containerized, while the systemd,
   standalone-container, image-acquisition, and Compose-manager implementations duplicate lifecycle,
   identity, readiness, update, and recovery concerns already owned by release artifacts and
-  Compose. Separating explicit bootstrap convenience from product runtime custody preserves the
-  deliberately low-friction setup experience without making Dorf responsible for a host's package
-  manager, init system, virtualization policy, container lifecycle, or ingress product.
+  Compose. A bounded invocation of the installed project lets setup preserve its deliberately
+  low-friction experience without making Dorf responsible for a host's package manager, init system,
+  virtualization policy, general container lifecycle, or ingress product.
 - **Supersedes:** D041's automatic host mutation, D071's deliberate Compose omission and standalone
   database reconciler, and D100's entire Dorf-owned service-lifecycle interface. D100's OpenAPI,
   authentication, Job-list, Problem, API/worker separation, and operator-owned public control
@@ -2749,9 +2764,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Proof gate:** Before this becomes the supported deployment, the repository-owned
   [frozen Compose VM harness](../../scripts/integration/compose-vm.sh) must let
   an administrator prepare Docker, Compose, and an Incus endpoint, then let a deployment operator
-  run setup without Dorf invoking `sudo`, apply the static project under that same identity with
-  direct Compose, complete a
-  real Job, survive direct worker and API restart, retrieve required state, and clean up.
+  run setup without Dorf invoking `sudo`, have setup apply the static project under that same
+  identity, complete its guided configuration and verification in one resumable flow, complete a
+  real Job, survive direct Compose worker and API restart, retrieve required state, and clean up.
   E2B/remote-Gateway behavior needs the cloud-controller terminal; local Incus behavior needs the
   workstation terminal; remote Incus remains unsupported until HTTPS client identity,
   instance-port forwarding, and the guest-to-Gateway path pass together.

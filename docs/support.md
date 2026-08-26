@@ -59,8 +59,9 @@ the [deployment-host procedure](getting-started.md#1-install-the-application-ini
 The Compose-owned PostgreSQL service must be healthy, the one-shot migration must have succeeded,
 and the worker and private API must be healthy. Worker readiness includes its narrow authenticated
 reader. A configured Gateway or Cloudflare Tunnel must also be running under its selected Compose
-profile. Rerun `dorf setup` to probe the private API and other prepared authorities; setup observes
-readiness but never starts or repairs a service.
+profile. Rerun `dorf setup` to apply the exact installed project as needed and probe the private API
+and other prepared authorities. Setup does not install host prerequisites, repair arbitrary Docker
+resources, or replace the direct advanced Compose operations in the deployment-host procedure.
 
 The [deployment service authority](control-api.md#deployment-services) owns the capability and
 network boundary, while Getting started alone owns lifecycle commands. A deployment using

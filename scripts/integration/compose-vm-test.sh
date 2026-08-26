@@ -66,13 +66,23 @@ test_public_image_inputs() {
 	fi
 }
 
-test_guest_uses_setup_generated_compose_selection() {
+test_guest_uses_one_command_setup_lifecycle() {
 	assert_contains "$GUEST" 'cd "$COMPOSE_DIR"'
 	if grep -Fq -- '--file "$COMPOSE_' "$GUEST" || grep -Fq -- '--env-file' "$GUEST"; then
 		fail "guest proof bypasses setup-generated Compose file selection"
 	fi
-	for evidence in setup-base-handoff.log setup-optional-handoff.log compose-base-up.log compose-final-up.log; do
-		assert_contains "$DRIVER" "$evidence"
+	assert_contains "$GUEST" 'capture "$EVIDENCE_DIR/setup.log" "$DORF_BIN" setup "${setup_args[@]}"'
+	assert_contains "$GUEST" 'Dorf ready: Control plane and durable Job worker ready'
+	if grep -Fq -- 'compose up' "$GUEST"; then
+		fail "guest proof directly applies Compose instead of relying on dorf setup"
+	fi
+	if grep -Fq -- 'awaits operator deployment' "$GUEST"; then
+		fail "guest proof still expects a deployment handoff from dorf setup"
+	fi
+	for stale_evidence in setup-base-handoff.log setup-optional-handoff.log compose-base-up.log compose-final-up.log; do
+		if grep -Fq -- "$stale_evidence" "$DRIVER"; then
+			fail "driver still collects stale onboarding evidence $stale_evidence"
+		fi
 	done
 }
 
@@ -113,7 +123,7 @@ test_foreign_project_is_never_mutated() {
 main() {
 	test_shell_syntax
 	test_public_image_inputs
-	test_guest_uses_setup_generated_compose_selection
+	test_guest_uses_one_command_setup_lifecycle
 	test_invalid_image_ref_fails_before_incus
 	test_guest_rejects_invalid_image_ref
 	test_foreign_project_is_never_mutated

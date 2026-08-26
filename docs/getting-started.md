@@ -53,43 +53,35 @@ resumable setup entry point:
 dorf setup
 ```
 
-Setup performs a read-only Docker Engine readiness probe; it does not invoke the Compose plugin.
-When the Engine is unavailable, setup materializes the version-matched `docker.sh` helper, which
-prepares both Engine and Compose on its stated clean Ubuntu 24.04 noble amd64 target. It prints the
-command an administrator may inspect and run and links the upstream
+Setup first checks that Docker Engine and its Compose plugin are usable. When they are unavailable,
+setup materializes the version-matched `docker.sh` helper, which prepares both Engine and Compose
+on its stated clean Ubuntu 24.04 noble amd64 target. It prints the command an administrator may
+inspect and run and links the upstream
 [Docker Engine](https://docs.docker.com/engine/install/) and
 [Compose plugin](https://docs.docker.com/compose/install/linux/) authorities. Dorf never runs the
 helper, invokes `sudo`, elevates, or changes identity. After the invoking operator prepares Docker,
 rerun `dorf setup`. Docker-daemon access may be root-equivalent authority, but Dorf does not acquire
-it. On another host, follow the
-linked upstream procedure. If the later direct lifecycle command reports a missing Compose plugin,
-use that plugin authority or the inspectable `bootstrap/docker.sh` shipped in the release archive.
+it. On another host, follow the linked upstream procedure.
 
-When configuration is complete enough to start, setup writes a protected `.env` under
+Setup writes a protected `.env` under
 `${XDG_DATA_HOME:-$HOME/.local/share}/dorf-compose`. The installed static manifests remain beside
 the binary; `.env` points Docker Compose at the base manifest and, for a local Incus endpoint, its
-static overlay. Dorf Go code and setup never construct or execute Compose lifecycle commands, and
-they do not inspect or reconcile Docker resources. Setup only prepares `.env` and probes readiness.
-
-Apply the handoff as the same invoking operator identity that ran setup. That identity may be root or
-non-root; setup and direct Compose must not be split across identities:
-
-```bash
-compose_dir="${XDG_DATA_HOME:-$HOME/.local/share}/dorf-compose"
-cd "$compose_dir"
-docker compose up -d --wait --remove-orphans
-dorf setup
-```
-
-The official release configuration selects the exact
-`ghcr.io/aphronio/dorf:MAJOR.MINOR.PATCH` image with `pull_policy: always`, so this one command is
-both the primary start and update operation. Its one-shot `migrate` service must complete
-successfully before the worker and private API start. Rerunning setup resumes the guided flow after
-the project is ready. Whenever setup later reports that protected `.env` changed, run the same
-`docker compose up` command and rerun setup. Public HTTPS control ingress remains an independent
+static overlay. As configuration becomes sufficient and whenever those protected inputs change,
+setup automatically applies that exact installed project and waits for it to become healthy before
+continuing the same guided flow. Its one-shot `migrate` service must complete successfully before
+the worker and private API start. Calling `dorf setup` is the deployment intent; there is no extra
+Compose permission prompt, manual start handoff, separate `dorf start`, or setup-start-setup loop.
+That invoking identity may be root or non-root. Public HTTPS control ingress remains an independent
 operator responsibility.
 
-Use Docker Compose itself for observation and process operations from that directory:
+The official release configuration selects the exact
+`ghcr.io/aphronio/dorf:MAJOR.MINOR.PATCH` image with `pull_policy: always`. Dorf does not render
+Compose YAML, install Docker, inspect arbitrary Docker resources, or provide a general lifecycle
+wrapper. After `dorf update`, one `dorf setup` run applies the updated installed manifests and
+continues through factual readiness.
+
+For advanced observation and process operations, use Docker Compose itself from the generated
+project directory:
 
 ```bash
 docker compose ps
@@ -97,9 +89,7 @@ docker compose restart worker control-api
 docker compose logs --tail=200 worker control-api
 ```
 
-There is no Dorf lifecycle wrapper. Do not edit the generated `.env`; rerun setup to change its
-source facts. After `dorf update`, rerun setup, apply the same Compose start/update command, and
-rerun setup once more for factual readiness.
+Do not edit the generated `.env`; rerun setup to change and apply its source facts.
 
 Setup offers local Incus, cloud E2B, both, or neither. A selected Incus endpoint must already be
 usable. For the default local `unix:///var/lib/incus/unix.socket` authority only, setup can
@@ -130,10 +120,10 @@ publication, live verification, and default-commit semantics. Automation can nam
 `--ai-connection` or explicitly select its authentication mode. Sandbox provider choices remain
 explicit; `dorf setup --yes` does not silently select one.
 
-The Provider Gateway joins the static Compose project when an AI connection is configured. After
-setup publishes that profile into the protected `.env`, apply the standard Compose handoff above
-and rerun setup so it can verify and finalize the retained candidate. Setup can verify an existing
-Sandbox-reachable route or guide the named Cloudflare Tunnel owned by the [Provider Gateway
+The Provider Gateway joins the static Compose project when an AI connection is configured. Setup
+publishes that profile into the protected `.env`, reapplies the project, and continues to verify and
+finalize the retained candidate in the same run. It can verify an existing Sandbox-reachable route
+or guide the named Cloudflare Tunnel owned by the [Provider Gateway
 authority](project/provider-gateway.md). This remains an unprivileged browser and DNS flow, not
 another shell helper.
 
@@ -184,7 +174,7 @@ The control API URL must be an operator-owned HTTPS origin backed by the Compose
 listener. The operator must give it a different origin from the Provider Gateway: that separate
 `/v1` service provides model access to Sandboxes, not Dorf client operations. Compose supervises the
 private API and worker, but Dorf does not provision or infer public ingress. Before Enrollment,
-verify the project with `docker compose ps` and the readiness handoff in
+complete the continuous setup flow in
 [the deployment-host procedure](#1-install-the-application-initialize-a-deployment-host). The
 [Remote Control API](control-api.md#deployment-services) owns the exact capability and service
 boundary.

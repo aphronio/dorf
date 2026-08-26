@@ -16,8 +16,7 @@ readonly GUEST_SCRIPT="$SCRIPT_DIR/compose-vm-guest.sh"
 readonly MAX_EVIDENCE_FILE_BYTES=262144
 readonly MAX_EVIDENCE_TOTAL_BYTES=4194304
 readonly -a REMOTE_EVIDENCE_FILES=(
-	setup-base-handoff.log setup-optional-handoff.log setup.log compose-images.txt
-	compose-base-up.log compose-final-up.log provider-status.json
+	setup.log compose-images.txt provider-status.json
 	compose-status.json compose-status-after-worker-restart.json compose-status-after-api-restart.json
 	compose-runtime.txt job-admission.json job-inspect-before-worker-restart.json job-inspect.json
 	cleanup-request.json cleanup-inspect.json incus-after-cleanup.json
@@ -512,7 +511,7 @@ prove() {
 	cleanup_temp_root
 	trap - EXIT
 	EPHEMERAL_SECRET=
-	printf 'SETUP HANDOFF -> Docker Compose -> Job recovery -> file bytes -> cleanup: proven\n'
+	printf 'ONE-COMMAND SETUP -> Compose recovery -> file bytes -> cleanup: proven\n'
 	printf 'Evidence: %s\n' "$evidence_dir"
 }
 

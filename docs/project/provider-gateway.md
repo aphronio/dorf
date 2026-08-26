@@ -12,11 +12,11 @@ API keys only from a file or standard input. The protected host state retains au
 connection candidates and the selected default; a deployment currently admits one unprefixed
 OpenAI authentication mode at a time.
 `provider connect` first prepares that retained candidate and publishes its protected environment
-and profile facts for the shipped static Compose project. When the running project does not yet
-reflect those facts, it stops at the invoking operator's Compose handoff. Rerunning the command
-after that handoff verifies the candidate through the live Gateway; only complete success selects it
-as the deployment default. Publication or verification failure preserves the previous healthy
-default. The command neither runs Compose nor treats prepared state as runtime readiness.
+and profile facts for the shipped static Compose project. It applies that exact project, waits for
+the live Gateway, and only then
+verifies and selects the candidate as the deployment default. Publication, application, or
+verification failure preserves the previous healthy default. Prepared state alone is never treated
+as runtime readiness.
 
 Executable code owns the exact broker version and artifact integrity. Each Sandbox receives only a
 scoped route and its selected Harness configuration.

@@ -32,31 +32,12 @@ import (
 
 const (
 	controlDiscoveryURL     = "http://127.0.0.1:8745/v1"
-	deploymentGuideURL      = "https://github.com/aphronio/dorf/blob/main/docs/getting-started.md"
 	deploymentProbeLimit    = 64 << 10
 	deploymentProbeTimeout  = 5 * time.Second
+	deploymentComposeLimit  = 256 << 10
 	dockerEngineProbeLimit  = 16 << 10
 	dockerEngineProbePeriod = 30 * time.Second
 )
-
-var errDeploymentSetupHandoff = errors.New("Dorf deployment configuration requires an operator handoff")
-
-// deploymentSetupHandoffError marks normal resumable setup. Dorf has committed
-// its configuration authority, but an operator still needs to apply the
-// static deployment manifests or make their running version current.
-type deploymentSetupHandoffError struct {
-	ProjectDir string
-	Changed    bool
-	Detail     string
-}
-
-func (err deploymentSetupHandoffError) Error() string {
-	return fmt.Sprintf("Dorf deployment configuration at %s awaits operator deployment; see %s", err.ProjectDir, deploymentGuideURL)
-}
-
-func (err deploymentSetupHandoffError) Is(target error) bool {
-	return target == errDeploymentSetupHandoff
-}
 
 // containerForegroundCommand is intentionally hidden from the human CLI. The
 // static manifests are its only caller and supply exact mounted state paths.
@@ -93,17 +74,16 @@ func containerForegroundCommand(ctx context.Context, args []string, stdout, stde
 	}
 }
 
-// checkDockerEngine is the only Docker process Dorf invokes. It proves the
-// protected local daemon for the administrator-helper UX; deployment
-// lifecycle remains entirely outside the Go program.
-func checkDockerEngine(ctx context.Context) error {
-	return checkDockerEngineWith(ctx, dockerexec.Resolve, dockerInfoOutput)
+// checkDockerRuntime proves both parts of the protected local deployment
+// boundary before setup prepares or applies Dorf's static project.
+func checkDockerRuntime(ctx context.Context) error {
+	return checkDockerRuntimeWith(ctx, dockerexec.Resolve, dockerCommandOutput)
 }
 
-func checkDockerEngineWith(
+func checkDockerRuntimeWith(
 	ctx context.Context,
 	resolve func() (string, error),
-	output func(context.Context, string) (string, error),
+	output func(context.Context, string, ...string) (string, error),
 ) error {
 	executable, err := resolve()
 	if err != nil {
@@ -111,22 +91,29 @@ func checkDockerEngineWith(
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, dockerEngineProbePeriod)
 	defer cancel()
-	server, err := output(probeCtx, executable)
+	server, err := output(probeCtx, executable, "info", "--format", "{{.ServerVersion}}")
 	if err != nil {
 		return fmt.Errorf("Docker Engine is unavailable: %w", err)
 	}
 	if strings.TrimSpace(server) == "" {
 		return fmt.Errorf("Docker Engine readiness returned no server version")
 	}
+	compose, err := output(probeCtx, executable, "compose", "version", "--short")
+	if err != nil {
+		return fmt.Errorf("Docker Compose plugin is unavailable: %w", err)
+	}
+	if strings.TrimSpace(compose) == "" {
+		return fmt.Errorf("Docker Compose readiness returned no version")
+	}
 	return nil
 }
 
-func dockerInfoOutput(ctx context.Context, executable string) (string, error) {
+func dockerCommandOutput(ctx context.Context, executable string, args ...string) (string, error) {
 	environment, err := dockerCommandEnvironment(os.Environ())
 	if err != nil {
 		return "", err
 	}
-	command := exec.CommandContext(ctx, executable, "info", "--format", "{{.ServerVersion}}")
+	command := exec.CommandContext(ctx, executable, args...)
 	command.Env = environment
 	output, err := command.CombinedOutput()
 	if len(output) > dockerEngineProbeLimit {
@@ -183,7 +170,7 @@ type deploymentConfigurationSource struct {
 // prepareSetupDeployment writes only the protected inputs consumed by the
 // installed static manifests. prepareOptional refreshes already-authorized
 // Gateway and Tunnel runtime state before projecting it.
-func prepareSetupDeployment(ctx context.Context, localImage string, prepareOptional bool, output io.Writer) (composeconfig.Image, error) {
+func prepareSetupDeployment(ctx context.Context, localImage string, prepareOptional bool) (composeconfig.Image, error) {
 	source, err := currentDeploymentConfigurationSource(ctx, prepareOptional)
 	if err != nil {
 		return composeconfig.Image{}, err
@@ -192,14 +179,14 @@ func prepareSetupDeployment(ctx context.Context, localImage string, prepareOptio
 	if err != nil {
 		return composeconfig.Image{}, err
 	}
-	return materializeDeploymentConfiguration(ctx, source, image, localControlHTTPClient(), output)
+	return materializeDeploymentConfiguration(ctx, source, image, localControlHTTPClient(), applyComposeProject)
 }
 
 // refreshExistingDeploymentConfig keeps an installed same-version image choice
-// while projecting newly prepared optional state. It never controls the
-// deployment lifecycle.
-func refreshExistingDeploymentConfig(ctx context.Context, output io.Writer) error {
-	_, err := prepareSetupDeployment(ctx, "", true, output)
+// while projecting newly prepared optional state and reapplying that exact
+// project.
+func refreshExistingDeploymentConfig(ctx context.Context) error {
+	_, err := prepareSetupDeployment(ctx, "", true)
 	return err
 }
 
@@ -281,7 +268,7 @@ func materializeDeploymentConfiguration(
 	source deploymentConfigurationSource,
 	image composeconfig.Image,
 	client *http.Client,
-	output io.Writer,
+	apply func(context.Context, string) error,
 ) (composeconfig.Image, error) {
 	rendered, err := composeconfig.Render(composeconfig.Spec{
 		Image: image, UID: source.UID, GID: source.GID,
@@ -292,24 +279,51 @@ func materializeDeploymentConfiguration(
 	if err != nil {
 		return composeconfig.Image{}, err
 	}
-	changed, err := rendered.Materialize(source.Paths.ComposeDir)
-	if err != nil {
+	if _, err := rendered.Materialize(source.Paths.ComposeDir); err != nil {
 		return composeconfig.Image{}, err
 	}
-	if changed {
-		return image, deploymentHandoff(source.Paths.ComposeDir, true, "configuration changed", output)
+	if apply == nil {
+		return image, fmt.Errorf("apply Dorf Compose project: deployment apply is unavailable")
+	}
+	if err := apply(ctx, source.Paths.ComposeDir); err != nil {
+		return image, fmt.Errorf("apply Dorf Compose project: %w", err)
 	}
 	ready, detail := controlAPIReady(ctx, image.Version, client)
 	if !ready {
-		return image, deploymentHandoff(source.Paths.ComposeDir, false, detail, output)
+		return image, fmt.Errorf("Dorf deployment did not become ready after Compose apply: %s", detail)
 	}
 	return image, nil
 }
 
-func deploymentHandoff(projectDir string, changed bool, detail string, output io.Writer) error {
-	fmt.Fprintf(output, "\nDorf deployment configuration is ready: %s\n", projectDir)
-	fmt.Fprintf(output, "Continue with the deployment guide: %s\n", deploymentGuideURL)
-	return deploymentSetupHandoffError{ProjectDir: projectDir, Changed: changed, Detail: detail}
+func applyComposeProject(ctx context.Context, projectDir string) error {
+	executable, err := dockerexec.Resolve()
+	if err != nil {
+		return err
+	}
+	environment, err := dockerCommandEnvironment(os.Environ())
+	if err != nil {
+		return err
+	}
+	output, err := dockerComposeUpOutput(ctx, executable, projectDir, environment)
+	if err == nil {
+		return nil
+	}
+	detail := strings.TrimSpace(output)
+	if detail == "" {
+		return err
+	}
+	return fmt.Errorf("%w: %s", err, detail)
+}
+
+func dockerComposeUpOutput(ctx context.Context, executable, projectDir string, environment []string) (string, error) {
+	command := exec.CommandContext(ctx, executable, "compose", "up", "--detach", "--wait", "--remove-orphans")
+	command.Dir = projectDir
+	command.Env = environment
+	output, err := command.CombinedOutput()
+	if len(output) > deploymentComposeLimit {
+		output = output[:deploymentComposeLimit]
+	}
+	return string(output), err
 }
 
 func selectDeploymentImage(projectDir string, uid, gid int, releaseVersion, localImage string) (composeconfig.Image, error) {

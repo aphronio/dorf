@@ -1,13 +1,13 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -51,7 +51,7 @@ func TestSelectDeploymentImagePreservesSameVersionChoice(t *testing.T) {
 	}
 }
 
-func TestMaterializeDeploymentConfigurationReturnsResumableHandoffUntilReady(t *testing.T) {
+func TestMaterializeDeploymentConfigurationAppliesChangedProjectAndContinuesWhenReady(t *testing.T) {
 	source := testDeploymentConfigurationSource(t)
 	image := composeconfig.Image{Version: "1.2.3", Reference: "ghcr.io/aphronio/dorf:1.2.3", Pull: true}
 	requests := 0
@@ -63,35 +63,141 @@ func TestMaterializeDeploymentConfigurationReturnsResumableHandoffUntilReady(t *
 			Header:     make(http.Header),
 		}, nil
 	})}
-
-	var output bytes.Buffer
-	got, err := materializeDeploymentConfiguration(context.Background(), source, image, readyClient, &output)
-	if got != image || !errors.Is(err, errDeploymentSetupHandoff) {
-		t.Fatalf("first materialization image=%+v error=%v", got, err)
-	}
-	var handoff deploymentSetupHandoffError
-	if !errors.As(err, &handoff) || !handoff.Changed || handoff.ProjectDir != source.Paths.ComposeDir {
-		t.Fatalf("first handoff = %+v", handoff)
-	}
-	if requests != 0 {
-		t.Fatalf("configuration change made %d premature readiness requests", requests)
-	}
-	if text := output.String(); !strings.Contains(text, source.Paths.ComposeDir) || !strings.Contains(text, deploymentGuideURL) || strings.Contains(strings.ToLower(text), "docker") {
-		t.Fatalf("handoff output = %q", text)
+	applied := 0
+	apply := func(_ context.Context, projectDir string) error {
+		applied++
+		if projectDir != source.Paths.ComposeDir {
+			t.Fatalf("applied project = %q, want %q", projectDir, source.Paths.ComposeDir)
+		}
+		return nil
 	}
 
-	output.Reset()
-	got, err = materializeDeploymentConfiguration(context.Background(), source, image, readyClient, &output)
-	if err != nil || got != image || requests != 1 || output.Len() != 0 {
-		t.Fatalf("ready replay image=%+v error=%v requests=%d output=%q", got, err, requests, output.String())
+	got, err := materializeDeploymentConfiguration(context.Background(), source, image, readyClient, apply)
+	if err != nil || got != image || applied != 1 || requests != 1 {
+		t.Fatalf("materialization image=%+v error=%v applies=%d requests=%d", got, err, applied, requests)
+	}
+}
+
+func TestMaterializeDeploymentConfigurationReappliesReadyUnchangedProject(t *testing.T) {
+	source := testDeploymentConfigurationSource(t)
+	image := composeconfig.Image{Version: "1.2.3", Reference: "ghcr.io/aphronio/dorf:1.2.3", Pull: true}
+	readyClient := &http.Client{Transport: deploymentRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"product":"dorf","version":"1.2.3"}`)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	applied := 0
+	apply := func(context.Context, string) error {
+		applied++
+		return nil
+	}
+	if _, err := materializeDeploymentConfiguration(context.Background(), source, image, readyClient, apply); err != nil {
+		t.Fatal(err)
+	}
+	applied = 0
+
+	if _, err := materializeDeploymentConfiguration(context.Background(), source, image, readyClient, apply); err != nil {
+		t.Fatal(err)
+	}
+	if applied != 1 {
+		t.Fatalf("ready unchanged project applied %d times, want 1", applied)
+	}
+}
+
+func TestMaterializeDeploymentConfigurationRestartsStoppedUnchangedProject(t *testing.T) {
+	source := testDeploymentConfigurationSource(t)
+	image := composeconfig.Image{Version: "1.2.3", Reference: "ghcr.io/aphronio/dorf:1.2.3", Pull: true}
+	running := false
+	client := &http.Client{Transport: deploymentRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		if !running {
+			return nil, errors.New("connection refused")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"product":"dorf","version":"1.2.3"}`)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	applied := 0
+	apply := func(context.Context, string) error {
+		applied++
+		running = true
+		return nil
 	}
 
+	if _, err := materializeDeploymentConfiguration(context.Background(), source, image, client, apply); err != nil {
+		t.Fatal(err)
+	}
+	running = false
+	if _, err := materializeDeploymentConfiguration(context.Background(), source, image, client, apply); err != nil {
+		t.Fatal(err)
+	}
+	if applied != 2 {
+		t.Fatalf("stopped unchanged project applied %d times, want 2 total", applied)
+	}
+}
+
+func TestMaterializeDeploymentConfigurationReturnsComposeApplyFailureWithoutReadinessProbe(t *testing.T) {
+	source := testDeploymentConfigurationSource(t)
+	image := composeconfig.Image{Version: "1.2.3", Reference: "ghcr.io/aphronio/dorf:1.2.3", Pull: true}
+	requests := 0
+	client := &http.Client{Transport: deploymentRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return nil, errors.New("unexpected readiness request")
+	})}
+
+	_, err := materializeDeploymentConfiguration(context.Background(), source, image, client, func(context.Context, string) error {
+		return errors.New("worker exited before becoming healthy")
+	})
+	if err == nil || !strings.Contains(err.Error(), "apply Dorf Compose project") ||
+		!strings.Contains(err.Error(), "worker exited before becoming healthy") || requests != 0 {
+		t.Fatalf("Compose apply error=%v readiness requests=%d", err, requests)
+	}
+}
+
+func TestMaterializeDeploymentConfigurationFailsWhenAppliedProjectIsNotReady(t *testing.T) {
+	source := testDeploymentConfigurationSource(t)
+	image := composeconfig.Image{Version: "1.2.3", Reference: "ghcr.io/aphronio/dorf:1.2.3", Pull: true}
 	notReady := &http.Client{Transport: deploymentRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return nil, errors.New("connection refused")
 	})}
-	_, err = materializeDeploymentConfiguration(context.Background(), source, image, notReady, &output)
-	if !errors.As(err, &handoff) || handoff.Changed || !strings.Contains(handoff.Detail, "unavailable") {
-		t.Fatalf("not-ready handoff = %+v error=%v", handoff, err)
+	applied := 0
+
+	_, err := materializeDeploymentConfiguration(context.Background(), source, image, notReady, func(context.Context, string) error {
+		applied++
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "did not become ready") || applied != 1 {
+		t.Fatalf("not-ready apply error=%v applies=%d", err, applied)
+	}
+}
+
+func TestDockerComposeUpUsesGeneratedProjectAndWaitsForHealth(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "project")
+	if err := os.Mkdir(projectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	capture := filepath.Join(root, "invocation")
+	executable := filepath.Join(root, "docker")
+	script := "#!/bin/sh\n{ printf 'dir=%s\\n' \"$PWD\"; printf 'arg=%s\\n' \"$@\"; } >\"$CAPTURE\"\n"
+	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := dockerComposeUpOutput(context.Background(), executable, projectDir, []string{"CAPTURE=" + capture})
+	if err != nil || output != "" {
+		t.Fatalf("compose output=%q error=%v", output, err)
+	}
+	contents, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "dir=" + projectDir + "\narg=compose\narg=up\narg=--detach\narg=--wait\narg=--remove-orphans\n"
+	if string(contents) != want {
+		t.Fatalf("Compose invocation:\n%s\nwant:\n%s", contents, want)
 	}
 }
 
@@ -145,19 +251,41 @@ func TestPublicServiceCommandHasNoEarlyDispatch(t *testing.T) {
 	}
 }
 
-func TestCheckDockerEngineUsesOnlyReadOnlyDaemonObservation(t *testing.T) {
-	var executable string
-	err := checkDockerEngineWith(context.Background(), func() (string, error) {
+func TestCheckDockerRuntimeRequiresEngineAndComposePlugin(t *testing.T) {
+	var calls [][]string
+	err := checkDockerRuntimeWith(context.Background(), func() (string, error) {
 		return "/usr/bin/docker", nil
-	}, func(_ context.Context, name string) (string, error) {
-		executable = name
-		return "28.0.0\n", nil
+	}, func(_ context.Context, name string, args ...string) (string, error) {
+		calls = append(calls, append([]string{name}, args...))
+		if len(args) > 0 && args[0] == "info" {
+			return "28.0.0\n", nil
+		}
+		return "v2.39.2\n", nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if executable != "/usr/bin/docker" {
-		t.Fatalf("Docker executable = %q", executable)
+	want := [][]string{
+		{"/usr/bin/docker", "info", "--format", "{{.ServerVersion}}"},
+		{"/usr/bin/docker", "compose", "version", "--short"},
+	}
+	if !slices.EqualFunc(calls, want, slices.Equal) {
+		t.Fatalf("Docker readiness calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestCheckDockerRuntimeReportsMissingComposePlugin(t *testing.T) {
+	missing := errors.New("compose is not a docker command")
+	err := checkDockerRuntimeWith(context.Background(), func() (string, error) {
+		return "/usr/bin/docker", nil
+	}, func(_ context.Context, _ string, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "info" {
+			return "28.0.0\n", nil
+		}
+		return "", missing
+	})
+	if !errors.Is(err, missing) || !strings.Contains(err.Error(), "Compose plugin is unavailable") {
+		t.Fatalf("missing Compose error = %v", err)
 	}
 }
 

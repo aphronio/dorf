@@ -69,7 +69,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 		if result.Updated {
 			fmt.Fprintf(stdout, "Dorf update complete: %s -> %s\n", result.From, result.Latest)
-			fmt.Fprintln(stdout, "On a deployment host, run dorf setup and follow the deployment guide it links.")
+			fmt.Fprintln(stdout, "On a deployment host, run dorf setup to apply and verify the updated deployment.")
 		} else if result.From == result.Latest {
 			fmt.Fprintf(stdout, "Dorf is already up to date: %s\n", result.From)
 		} else {
@@ -387,7 +387,7 @@ func providerCommand(ctx context.Context, store postgres.Store, cfg config.Confi
 		}
 	}
 	if err := makeProviderConnectionReady(ctx, *name, func(ctx context.Context) error {
-		return refreshExistingDeploymentConfig(ctx, stdout)
+		return refreshExistingDeploymentConfig(ctx)
 	}, g.FinalizeConnection, g.SetDefaultConnection); err != nil {
 		return err
 	}
@@ -910,10 +910,10 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	}
 	presenter := newSetupPresenter(stdout)
 	presenter.Welcome()
-	if err := checkDockerEngine(ctx); err != nil {
+	if err := checkDockerRuntime(ctx); err != nil {
 		return setupBootstrapHandoff(bootstrapDocker, err, stdout)
 	}
-	presenter.Ready("Host runtime", "Docker Engine")
+	presenter.Ready("Host runtime", "Docker Engine · Compose")
 
 	database, err := hostsetup.InitializeDatabase(cfg.DeploymentPath)
 	if err != nil {
@@ -923,10 +923,14 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	if err != nil {
 		return err
 	}
-	_, err = prepareSetupDeployment(ctx, options.LocalImage, false, stdout)
+	err = presenter.Run(ctx, "Starting Dorf services", func(ctx context.Context) error {
+		_, err := prepareSetupDeployment(ctx, options.LocalImage, false)
+		return err
+	})
 	if err != nil {
 		return err
 	}
+	presenter.Ready("Deployment", "Docker Compose services healthy")
 	var db *sql.DB
 	var store postgres.Store
 	err = presenter.Run(ctx, "Preparing durable state", func(ctx context.Context) error {
@@ -985,8 +989,10 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	}
 	if prepared != nil {
 		if err := makeProviderConnectionReady(ctx, prepared.Connection, func(ctx context.Context) error {
-			_, err := prepareSetupDeployment(ctx, options.LocalImage, true, stdout)
-			return err
+			return presenter.Run(ctx, "Applying agent services", func(ctx context.Context) error {
+				_, err := prepareSetupDeployment(ctx, options.LocalImage, true)
+				return err
+			})
 		}, prepared.Gateway.FinalizeConnection, prepared.Gateway.SetDefaultConnection); err != nil {
 			return err
 		}
