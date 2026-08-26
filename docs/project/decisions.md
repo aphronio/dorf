@@ -667,7 +667,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 - **Status:** Accepted direction — 2026-07-29; Go control plane at D047 cutover — 2026-08-08;
   remote E2B route wire proved — 2026-08-14; named Cloudflare route implemented, live hostname proof
-  pending — 2026-08-21; deployment supervision and Incus route custody refined by D101 — 2026-08-26
+  pending — 2026-08-21; deployment supervision and Incus route custody refined by D101 — 2026-08-26;
+  broker-state ownership and explicit stale-DNS repair refined — 2026-08-27
 - **Decision:** Keep the Provider Gateway as a sibling application subsystem outside the durable
   Job core. Its programmatic boundary manages durable upstream Provider
   AI connections and revocable consumer-specific Inference Routes over a supervised broker backend.
@@ -690,14 +691,21 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   default-deny egress remains adapter-owned.
   Any exact stable HTTPS `/v1` ingress remains valid deployment input. Guided setup owns one narrower
   convenience: a named outbound-only Cloudflare Tunnel for an operator-authorized hostname and exact
-  retained Tunnel credential. The Gateway and `cloudflared` run as foreground services under the one
-  Compose supervisor defined by D101; there is no host Cloudflare service. Only `/v1` reaches the
-  private broker. One random nonsecret probe path terminates inside the exact Tunnel configuration;
+  retained Tunnel credential. A resolving Cloudflare hostname defaults to operator-owned ingress;
+  setup may replace its DNS route only after an explicit interactive repair choice or the exact
+  automation flag paired with that hostname. The Gateway and `cloudflared` run as foreground
+  services under the one Compose supervisor defined by D101; there is no host Cloudflare service.
+  Only `/v1` reaches the private broker. One random nonsecret probe path terminates inside the exact
+  Tunnel configuration;
   readiness requires its HTTP 204 plus the private Gateway's anonymous HTTP 401. Operator-owned HTTPS
   ingress retains only the latter universal contract because Dorf cannot attest routing it does not
   own. The broad Cloudflare account certificate used to create the Tunnel and DNS route is removed
   after readiness. Disposable Quick Tunnels remain proof-only. Workload identity beyond the scoped
   route and multi-user authority remain unimplemented until a concrete deployment requires them.
+- **Broker-state ownership:** Dorf attests the pinned broker executable and its own launch inputs.
+  The running broker owns and may normalize its protected active configuration; Dorf does not hash
+  those mutable bytes as a second launch authority or prevent setup from resuming after a valid
+  runtime rewrite.
 - **Provider posture:** The gateway is intended to admit validated subscription providers such as
   ChatGPT, Kimi Code, or Grok and API-key providers such as OpenAI or OpenRouter. Names are direction,
   not support claims. Validate each provider, auth mode, consumer wire dialect, refresh path, and

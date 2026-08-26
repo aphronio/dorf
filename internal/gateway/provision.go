@@ -53,9 +53,8 @@ type composeLaunchState struct {
 }
 
 type brokerLaunchState struct {
-	SchemaVersion      int    `json:"schema_version"`
-	BackendSHA256      string `json:"backend_sha256"`
-	BrokerConfigSHA256 string `json:"broker_config_sha256"`
+	SchemaVersion int    `json:"schema_version"`
+	BackendSHA256 string `json:"backend_sha256"`
 }
 
 // ComposeState returns the exact prepared runtime authority when at least one
@@ -90,10 +89,10 @@ func (g Gateway) ComposeState() (ComposeState, bool, error) {
 	if err := g.attestPreparedBroker(); err != nil {
 		return ComposeState{}, false, err
 	}
-	// Hash only stable launch inputs. Subscription auth files and route state
-	// are intentionally live-managed by the broker; hashing them would make a
-	// successful WebSocket enable or route mutation immediately look drifted.
-	paths := []string{"broker.yaml", "compose.json", "launch.json", filepath.ToSlash(filepath.Join("bin", BackendVersion, "cli-proxy-api"))}
+	// Hash only stable launch inputs. broker.yaml, subscription auth files, and
+	// route state are intentionally live-managed by the broker; hashing them
+	// would make a successful runtime normalization or route mutation look drifted.
+	paths := []string{"compose.json", "launch.json", filepath.ToSlash(filepath.Join("bin", BackendVersion, "cli-proxy-api"))}
 	for _, connection := range connections {
 		if filepath.Base(connection.CredentialRef) != connection.CredentialRef || connection.CredentialRef == "." || connection.CredentialRef == "" {
 			return ComposeState{}, false, fmt.Errorf("AI connection %q credential path is invalid", connection.Name)
@@ -207,9 +206,10 @@ func (g Gateway) prepare(ctx context.Context, bind string, allowRemote bool) err
 	})
 }
 
-// RunForeground runs an already prepared broker attached to the caller. It
-// does not daemonize, rewrite broker.yaml, or install a backend. Canceling ctx
-// forwards SIGTERM and waits for the broker before returning.
+// RunForeground runs an already prepared broker attached to the caller. Dorf
+// does not daemonize or install a backend here; the broker may normalize its
+// runtime-owned broker.yaml. Canceling ctx forwards SIGTERM and waits for the
+// broker before returning.
 func (g Gateway) RunForeground(ctx context.Context, stdout, stderr io.Writer) error {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		return fmt.Errorf("the supported Provider Gateway binary is Linux x86_64 only")
@@ -316,15 +316,9 @@ func (g Gateway) writeBrokerLaunchState(executable string) error {
 	if err := g.verifyBackendDigest(executable); err != nil {
 		return err
 	}
-	config, err := readProtectedRuntimeFile(filepath.Join(g.StatePath, "broker.yaml"), 1<<20)
-	if err != nil {
-		return fmt.Errorf("attest Provider Gateway broker.yaml: %w", err)
-	}
-	digest := sha256.Sum256(config)
 	return writePrivateJSON(filepath.Join(g.StatePath, "launch.json"), brokerLaunchState{
-		SchemaVersion:      1,
-		BackendSHA256:      g.expectedBackendSHA256(),
-		BrokerConfigSHA256: hex.EncodeToString(digest[:]),
+		SchemaVersion: 1,
+		BackendSHA256: g.expectedBackendSHA256(),
 	})
 }
 
@@ -340,22 +334,18 @@ func (g Gateway) attestPreparedBroker() error {
 	if err := json.Unmarshal(raw, &launch); err != nil {
 		return fmt.Errorf("decode Provider Gateway launch authority: %w", err)
 	}
-	if launch.SchemaVersion != 1 || launch.BackendSHA256 != g.expectedBackendSHA256() || len(launch.BrokerConfigSHA256) != sha256.Size*2 {
+	if launch.SchemaVersion != 1 || launch.BackendSHA256 != g.expectedBackendSHA256() {
 		return fmt.Errorf("Provider Gateway launch authority is invalid")
 	}
 	if err := g.verifyBackendDigest(g.backendExecutable()); err != nil {
 		return err
 	}
-	config, err := readProtectedRuntimeFile(filepath.Join(g.StatePath, "broker.yaml"), 1<<20)
+	_, err = readProtectedRuntimeFile(filepath.Join(g.StatePath, "broker.yaml"), 1<<20)
 	if errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("Provider Gateway broker.yaml is not prepared")
 	}
 	if err != nil {
 		return fmt.Errorf("attest Provider Gateway broker.yaml: %w", err)
-	}
-	digest := sha256.Sum256(config)
-	if hex.EncodeToString(digest[:]) != launch.BrokerConfigSHA256 {
-		return fmt.Errorf("Provider Gateway broker.yaml checksum mismatch; rerun dorf setup")
 	}
 	return nil
 }

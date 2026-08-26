@@ -86,12 +86,13 @@ func mergeEnv(base, overrides []string) []string {
 }
 
 type Tunnel struct {
-	StatePath  string
-	Binary     string
-	Origin     string
-	Runner     CommandRunner
-	HTTPClient *http.Client
-	Resolver   DNSResolver
+	StatePath          string
+	Binary             string
+	Origin             string
+	ReplaceExistingDNS bool
+	Runner             CommandRunner
+	HTTPClient         *http.Client
+	Resolver           DNSResolver
 	// binarySHA256 is a package-private test seam. Production always uses the
 	// compiled cloudflared digest above.
 	binarySHA256 string
@@ -472,6 +473,15 @@ func (t Tunnel) reconcile(ctx context.Context, hostname string, stdout, stderr i
 			}
 		}
 	}
+	if state.DNSConfigured && t.ReplaceExistingDNS {
+		// An explicit repair is stronger than the coarse public-DNS presence
+		// observation above: reapply this exact Tunnel route with Cloudflare's
+		// replacement primitive.
+		state.DNSConfigured = false
+		if err := t.save(state); err != nil {
+			return state, err
+		}
+	}
 	binary, err := t.ensureBinary(ctx)
 	if err != nil {
 		return state, err
@@ -567,9 +577,14 @@ func (t Tunnel) reconcile(ctx context.Context, hostname string, stdout, stderr i
 	if !state.DNSConfigured {
 		// Cloudflare atomically creates an absent record, accepts the existing
 		// CNAME only when it already targets this exact Tunnel, and rejects every
-		// foreign record. Never turn the availability preflight into permission to
-		// replace DNS that changed ownership before this mutation.
-		if err := t.Runner.Run(ctx, env, stdout, stderr, binary, "tunnel", "--origincert", certificate, "route", "dns", state.TunnelID, state.Hostname); err != nil {
+		// foreign record unless this setup run carries the operator's explicit
+		// replacement choice.
+		routeArgs := []string{"tunnel", "--origincert", certificate, "route", "dns"}
+		if t.ReplaceExistingDNS {
+			routeArgs = append(routeArgs, "--overwrite-dns")
+		}
+		routeArgs = append(routeArgs, state.TunnelID, state.Hostname)
+		if err := t.Runner.Run(ctx, env, stdout, stderr, binary, routeArgs...); err != nil {
 			return state, fmt.Errorf("route Cloudflare hostname: %w", err)
 		}
 		state.DNSConfigured = true

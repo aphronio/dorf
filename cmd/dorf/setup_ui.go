@@ -188,10 +188,16 @@ func (p setupPresenter) ConnectionGroup(selected *setupConnectionMode) *huh.Grou
 		Description("The upstream credential stays on this host and never enters a Sandbox.")
 }
 
-func (p setupPresenter) CloudflareGatewayGroup(selected *setupGatewayMode, zone string) *huh.Group {
+func (p setupPresenter) CloudflareGatewayGroup(selected *setupGatewayMode, zone string, occupied bool) *huh.Group {
+	cloudflareTitle := "Guided Cloudflare Tunnel"
+	cloudflareDescription := "Create and run a stable outbound-only route"
+	if occupied {
+		cloudflareTitle = "Repair with a guided Cloudflare Tunnel"
+		cloudflareDescription = "Replace this hostname's existing DNS route"
+	}
 	return huh.NewGroup(
 		setupSelect(p, selected,
-			setupChoice[setupGatewayMode]{Title: "Guided Cloudflare Tunnel", Description: "Create and run a stable outbound-only route", Value: setupGatewayCloudflare},
+			setupChoice[setupGatewayMode]{Title: cloudflareTitle, Description: cloudflareDescription, Value: setupGatewayCloudflare},
 			setupChoice[setupGatewayMode]{Title: "Existing HTTPS ingress", Description: "Use routing infrastructure you already operate", Value: setupGatewayExisting},
 		),
 	).Title("Cloudflare DNS detected for " + zone).

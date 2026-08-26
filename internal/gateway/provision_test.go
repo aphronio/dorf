@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -113,6 +114,56 @@ func TestComposeStateRequiresOnePreparedConnectionAndTracksPublication(t *testin
 	}
 }
 
+func TestComposeStateSurvivesBrokerOwnedConfigurationRewrite(t *testing.T) {
+	state := t.TempDir()
+	g := fakeGateway(t, state)
+	if err := g.PrepareContainer(context.Background(), "127.0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.recordOpenAIAPIKey("openai-api", "sk-first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.PrepareContainer(context.Background(), "127.0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	launchPath := filepath.Join(state, "launch.json")
+	launch, err := os.ReadFile(launchPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacyLaunch map[string]any
+	if err := json.Unmarshal(launch, &legacyLaunch); err != nil {
+		t.Fatal(err)
+	}
+	legacyLaunch["broker_config_sha256"] = strings.Repeat("0", sha256.Size*2)
+	launch, err = json.MarshalIndent(legacyLaunch, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launchPath, append(launch, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, desired, err := g.ComposeState()
+	if err != nil || !desired {
+		t.Fatalf("prepared Compose state=%+v desired=%t err=%v", before, desired, err)
+	}
+
+	path := filepath.Join(state, "broker.yaml")
+	config, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config = append(config, []byte("# normalized by the running broker\n")...)
+	if err := os.WriteFile(path, config, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	after, desired, err := g.ComposeState()
+	if err != nil || !desired || after.Digest != before.Digest {
+		t.Fatalf("rewritten Compose state=%+v desired=%t err=%v, want stable digest %q", after, desired, err, before.Digest)
+	}
+}
+
 func TestRunForegroundUsesPreparedBrokerUntilContextCancellation(t *testing.T) {
 	state := t.TempDir()
 	g := fakeGateway(t, state)
@@ -189,22 +240,27 @@ fi
 	}
 }
 
-func TestRunForegroundRefusesBrokerConfigChangedAfterPreparation(t *testing.T) {
+func TestRunForegroundAcceptsBrokerOwnedConfigurationRewrite(t *testing.T) {
 	state := t.TempDir()
 	g := fakeGateway(t, state)
 	if err := g.Prepare(context.Background(), "127.0.0.2"); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(state, "broker.yaml"), []byte("host: malicious.example\n"), 0o600); err != nil {
+	path := filepath.Join(state, "broker.yaml")
+	config, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config = append(config, []byte("# normalized by the running broker\n")...)
+	if err := os.WriteFile(path, config, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	err := g.RunForeground(context.Background(), io.Discard, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "broker.yaml checksum mismatch") {
-		t.Fatalf("tampered broker config error=%v", err)
+	if err := g.RunForeground(context.Background(), io.Discard, io.Discard); err != nil {
+		t.Fatalf("run rewritten broker config: %v", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(state, "foreground.started")); !os.IsNotExist(statErr) {
-		t.Fatalf("broker started with tampered config: %v", statErr)
+	if _, err := os.Stat(filepath.Join(state, "foreground.started")); err != nil {
+		t.Fatalf("broker did not start with its normalized config: %v", err)
 	}
 }
 

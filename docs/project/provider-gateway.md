@@ -50,12 +50,13 @@ remote endpoint never uses guided bridge inference and remains unsupported until
 endpoint, port-forward, and explicit guest-route terminal passes.
 
 An existing operator-owned HTTPS URL is the universal remote contract. Guided setup asks for the
-intended hostname and discovers its nearest public DNS delegation. When the hostname is unused and
-every authoritative nameserver is Cloudflare, it offers to reconcile one named, outbound-only
-Cloudflare Tunnel. A hostname with existing address records is reusable only when it resolves
-exactly to Dorf's retained Tunnel hostname; otherwise setup keeps the existing-HTTPS-ingress path
-and never replaces DNS it cannot prove is available. Browser authorization creates a broad
-Cloudflare account certificate only
+intended hostname and discovers its nearest public DNS delegation. When every authoritative
+nameserver is Cloudflare, it can reconcile one named, outbound-only Cloudflare Tunnel. An unused
+hostname enters that guided path normally. A resolving hostname defaults to the existing-HTTPS
+ingress path, but interactive setup also offers an explicit repair choice that replaces its current
+DNS route after confirmation. Automation must provide both the exact hostname and the explicit DNS
+replacement flag. Dorf never requests Cloudflare's overwrite behavior without one of those explicit
+operator choices. Browser authorization creates a broad Cloudflare account certificate only
 for Tunnel and DNS reconciliation; setup removes it after those account-level mutations settle.
 The Gateway and configured `cloudflared` process are foreground siblings in Dorf's static Compose
 project; there is no host Cloudflare service. The Tunnel receives no upstream Provider credential
@@ -88,6 +89,9 @@ machine-readable facts.
 ## Security and recovery
 
 - Upstream OAuth or API-key state stays in protected host storage.
+- The pinned broker executable and Dorf launch inputs are attested. The running broker owns and may
+  normalize its protected active configuration, so those mutable bytes are not treated as a second
+  immutable launch authority.
 - Route keys are broker-local capabilities, never upstream credentials.
 - Compose keeps the broker private; any guest-reachable route is an explicit verified Profile field,
   never a wildcard or inferred public listener.

@@ -40,9 +40,10 @@ type guidedProfilePlan struct {
 }
 
 type guidedGatewayPlan struct {
-	Mode     setupGatewayMode
-	URL      string
-	Hostname string
+	Mode               setupGatewayMode
+	URL                string
+	Hostname           string
+	ReplaceExistingDNS bool
 }
 
 type guidedSetupPrepared struct {
@@ -727,10 +728,13 @@ func planRemoteGateway(ctx context.Context, options setupOptions, profiles []gui
 			}
 			parsed, _ := url.Parse(wanted)
 			hostname := parsed.Hostname()
-			if err := requireUnusedOrOwnedCloudflareHostname(ctx, resolver, hostname, ownedCloudflareHostname); err != nil {
+			if err := requireUnusedOrOwnedCloudflareHostname(ctx, resolver, hostname, ownedCloudflareHostname, options.ReplaceCloudflareDNS); err != nil {
 				return guidedGatewayPlan{}, err
 			}
-			return guidedGatewayPlan{Mode: setupGatewayCloudflare, URL: wanted, Hostname: hostname}, nil
+			return guidedGatewayPlan{
+				Mode: setupGatewayCloudflare, URL: wanted, Hostname: hostname,
+				ReplaceExistingDNS: options.ReplaceCloudflareDNS,
+			}, nil
 		}
 		return guidedGatewayPlan{Mode: setupGatewayExisting, URL: existingURL}, nil
 	}
@@ -741,6 +745,7 @@ func planRemoteGateway(ctx context.Context, options setupOptions, profiles []gui
 	switch {
 	case options.CloudflareHost != "":
 		plan.Mode, plan.Hostname = setupGatewayCloudflare, options.CloudflareHost
+		plan.ReplaceExistingDNS = options.ReplaceCloudflareDNS
 	case options.GatewayURL != "":
 		plan.Mode, plan.URL = setupGatewayExisting, options.GatewayURL
 	case presenter.interactive && !options.Yes:
@@ -767,11 +772,15 @@ func planRemoteGateway(ctx context.Context, options setupOptions, profiles []gui
 				presenter.Note("Gateway ingress", "Existing DNS records could not be ruled out; use existing HTTPS ingress")
 			case occupied:
 				plan.Mode = setupGatewayExisting
-				presenter.Note("Gateway ingress", plan.Hostname+" already resolves; Dorf will not replace its DNS")
+				cloudflareDNSConfirmed = true
+				if err := presenter.RunForm(ctx, presenter.CloudflareGatewayGroup(&plan.Mode, delegation.Zone, true)); err != nil {
+					return guidedGatewayPlan{}, err
+				}
+				plan.ReplaceExistingDNS = plan.Mode == setupGatewayCloudflare
 			default:
 				cloudflareDNSConfirmed = true
 				plan.Mode = setupGatewayCloudflare
-				if err := presenter.RunForm(ctx, presenter.CloudflareGatewayGroup(&plan.Mode, delegation.Zone)); err != nil {
+				if err := presenter.RunForm(ctx, presenter.CloudflareGatewayGroup(&plan.Mode, delegation.Zone, false)); err != nil {
 					return guidedGatewayPlan{}, err
 				}
 			}
@@ -840,7 +849,7 @@ func planRemoteGateway(ctx context.Context, options setupOptions, profiles []gui
 			if _, err := requireCloudflareDNS(ctx, resolver, plan.Hostname); err != nil {
 				return guidedGatewayPlan{}, err
 			}
-			if err := requireUnusedOrOwnedCloudflareHostname(ctx, resolver, plan.Hostname, ownedCloudflareHostname); err != nil {
+			if err := requireUnusedOrOwnedCloudflareHostname(ctx, resolver, plan.Hostname, ownedCloudflareHostname, plan.ReplaceExistingDNS); err != nil {
 				return guidedGatewayPlan{}, err
 			}
 		}
@@ -850,8 +859,8 @@ func planRemoteGateway(ctx context.Context, options setupOptions, profiles []gui
 	}
 }
 
-func requireUnusedOrOwnedCloudflareHostname(ctx context.Context, resolver dnsResolver, hostname, ownedHostname string) error {
-	if hostname == ownedHostname {
+func requireUnusedOrOwnedCloudflareHostname(ctx context.Context, resolver dnsResolver, hostname, ownedHostname string, allowReplacement bool) error {
+	if hostname == ownedHostname || allowReplacement {
 		return nil
 	}
 	occupied, err := hostnameHasAddresses(ctx, resolver, hostname)
@@ -901,8 +910,9 @@ func normalizeExactGatewayURL(raw string) (string, error) {
 
 func prepareRemoteGateway(ctx context.Context, gatewayStatePath string, plan guidedGatewayPlan, yes bool, presenter setupPresenter, stdout, stderr io.Writer) (string, error) {
 	tunnel := cloudflareapp.Tunnel{
-		StatePath: filepath.Join(gatewayStatePath, "cloudflare"),
-		Origin:    cloudflareapp.ComposeGatewayOrigin,
+		StatePath:          filepath.Join(gatewayStatePath, "cloudflare"),
+		Origin:             cloudflareapp.ComposeGatewayOrigin,
+		ReplaceExistingDNS: plan.ReplaceExistingDNS,
 	}
 	switch plan.Mode {
 	case setupGatewayExisting:
@@ -930,6 +940,9 @@ func prepareRemoteGateway(ctx context.Context, gatewayStatePath string, plan gui
 		confirmed := yes
 		if !confirmed {
 			description := fmt.Sprintf("Create one named Tunnel, route %s to the Compose Provider Gateway, and remove the temporary account credential.", plan.Hostname)
+			if plan.ReplaceExistingDNS {
+				description = fmt.Sprintf("Create one named Tunnel and replace %s's existing DNS route with the Compose Provider Gateway.", plan.Hostname)
+			}
 			if err := presenter.RunForm(ctx, presenter.ConfirmGroup("Review Cloudflare changes", description, &confirmed)); err != nil {
 				return "", err
 			}

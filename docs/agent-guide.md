@@ -49,9 +49,11 @@ foreground Dorf processes. Use Compose directly only for the advanced observatio
 operations documented in Getting started.
 
 Cloudflare has no shell helper. Keep its existing guided browser, DNS, and named-Tunnel flow, pausing
-for the human authorization it requests. Prove the project through the deployment-host procedure
-and [Support](support.md), then run the documented Profile, Provider Gateway, and `dorf doctor`
-checks with the exact selected names.
+for the human authorization it requests. If setup finds a resolving hostname, let the human choose
+between their existing ingress and the repair path described by the [Provider Gateway
+authority](project/provider-gateway.md); never infer DNS-replacement authority. Prove the project
+through the deployment-host procedure and [Support](support.md), then run the documented Profile,
+Provider Gateway, and `dorf doctor` checks with the exact selected names.
 
 Optional integrations remain host concerns. Pause while the human completes browser authorization,
 and return a short-lived code only to its waiting command. Let runtime composition supply integration

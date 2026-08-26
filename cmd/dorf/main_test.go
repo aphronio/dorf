@@ -509,6 +509,17 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 		!containsSandboxProvider(options.SandboxProviders, core.SandboxProviderE2B) {
 		t.Fatalf("options=%#v", options)
 	}
+	replacement, err := parseSetupOptions([]string{
+		"--sandbox-provider", "e2b", "--cloudflare-hostname", "dorf.example.com", "--replace-cloudflare-dns",
+	}, &stderr)
+	if err != nil || !replacement.ReplaceCloudflareDNS {
+		t.Fatalf("replacement options=%#v error=%v", replacement, err)
+	}
+	if _, err := parseSetupOptions([]string{
+		"--sandbox-provider", "e2b", "--replace-cloudflare-dns",
+	}, &stderr); err == nil || !strings.Contains(err.Error(), "--cloudflare-hostname") {
+		t.Fatalf("hostname-less replacement error=%v", err)
+	}
 	if _, err := parseSetupOptions([]string{"--profile", "local-codex", "--sandbox-provider", "incus", "--sandbox-provider", "e2b"}, &stderr); err == nil || !strings.Contains(err.Error(), "exactly one") {
 		t.Fatalf("multi-provider named profile error=%v", err)
 	}
@@ -579,7 +590,7 @@ func TestGuidedSetupPresenterKeepsChoicesAndControlsUsable(t *testing.T) {
 	provider := presenter.ProviderGroup(&providers, true)
 	harness := presenter.HarnessGroup(new(string))
 	connection := presenter.ConnectionGroup(new(setupConnectionMode))
-	gateway := presenter.CloudflareGatewayGroup(new(setupGatewayMode), "example.com")
+	gateway := presenter.CloudflareGatewayGroup(new(setupGatewayMode), "example.com", false)
 	for _, group := range []struct{ name, header, content string }{
 		{"provider", provider.Header(), provider.Content()},
 		{"harness", harness.Header(), harness.Content()},
@@ -615,6 +626,12 @@ func TestGuidedSetupPresenterKeepsChoicesAndControlsUsable(t *testing.T) {
 	if styles.Focused.SelectSelector.String() == styles.Blurred.SelectSelector.String() ||
 		styles.Focused.FocusedButton.Render("Continue") == styles.Focused.BlurredButton.Render("Continue") {
 		t.Fatal("focused controls lack a distinct indicator")
+	}
+	repairGroup := presenter.CloudflareGatewayGroup(new(setupGatewayMode), "example.com", true)
+	for _, label := range []string{"Repair with a guided Cloudflare Tunnel", "Replace this hostname's existing DNS route", "Existing HTTPS ingress"} {
+		if !strings.Contains(repairGroup.Content(), label) {
+			t.Fatalf("Cloudflare repair selector omitted %q:\n%s", label, repairGroup.Content())
+		}
 	}
 }
 
@@ -683,6 +700,22 @@ func TestGuidedGatewayPlanningRequiresCloudflareDNSAndAnUnusedHostname(t *testin
 	}
 }
 
+func TestGuidedGatewayPlanningCanExplicitlyReplaceCloudflareDNS(t *testing.T) {
+	const hostname = "dorf.example.com"
+	occupied := fakeDNSResolver{
+		records: map[string][]*net.NS{
+			"example.com": {{Host: "cash.ns.cloudflare.com."}, {Host: "lana.ns.cloudflare.com."}},
+		},
+		addresses: map[string][]net.IPAddr{hostname: {{IP: net.ParseIP("192.0.2.1")}}},
+	}
+	plan, err := planRemoteGateway(context.Background(), setupOptions{
+		CloudflareHost: hostname, ReplaceCloudflareDNS: true,
+	}, nil, setupPresenter{}, occupied, "")
+	if err != nil || plan.Mode != setupGatewayCloudflare || plan.URL != "https://dorf.example.com/v1" || !plan.ReplaceExistingDNS {
+		t.Fatalf("replacement plan=%#v error=%v", plan, err)
+	}
+}
+
 func TestExistingProfileCannotTurnOccupiedDNSIntoADorfTunnel(t *testing.T) {
 	const hostname = "dorf.example.com"
 	existing := core.SandboxProfile{
@@ -705,6 +738,11 @@ func TestExistingProfileCannotTurnOccupiedDNSIntoADorfTunnel(t *testing.T) {
 	plan, err := planRemoteGateway(context.Background(), options, plans, setupPresenter{}, occupied, hostname)
 	if err != nil || plan.Mode != setupGatewayCloudflare || plan.Hostname != hostname {
 		t.Fatalf("owned existing-profile replay plan=%#v error=%v", plan, err)
+	}
+	options.ReplaceCloudflareDNS = true
+	plan, err = planRemoteGateway(context.Background(), options, plans, setupPresenter{}, occupied, "")
+	if err != nil || plan.Mode != setupGatewayCloudflare || !plan.ReplaceExistingDNS {
+		t.Fatalf("explicit existing-profile replacement plan=%#v error=%v", plan, err)
 	}
 }
 

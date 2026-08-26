@@ -783,21 +783,22 @@ func releaseManifest(args []string, stdout, stderr io.Writer) error {
 }
 
 type setupOptions struct {
-	Yes              bool
-	Connection       string
-	ProfileName      string
-	LocalImage       string
-	IncusManifest    string
-	IncusArchive     string
-	SandboxProviders sandboxProviderFlags
-	Harness          string
-	ConnectionMode   setupConnectionMode
-	OpenAIKeyFile    string
-	E2BKeyFile       string
-	E2BTemplate      string
-	GatewayURL       string
-	CloudflareHost   string
-	AllowInternet    bool
+	Yes                  bool
+	Connection           string
+	ProfileName          string
+	LocalImage           string
+	IncusManifest        string
+	IncusArchive         string
+	SandboxProviders     sandboxProviderFlags
+	Harness              string
+	ConnectionMode       setupConnectionMode
+	OpenAIKeyFile        string
+	E2BKeyFile           string
+	E2BTemplate          string
+	GatewayURL           string
+	CloudflareHost       string
+	ReplaceCloudflareDNS bool
+	AllowInternet        bool
 }
 
 type sandboxProviderFlags []core.SandboxProvider
@@ -842,6 +843,7 @@ func parseSetupOptions(args []string, stderr io.Writer) (setupOptions, error) {
 	e2bTemplate := set.String("e2b-template", "", "exact E2B template build reference")
 	gatewayURL := set.String("gateway-url", "", "existing stable HTTPS /v1 Provider Gateway URL")
 	cloudflareHost := set.String("cloudflare-hostname", "", "hostname for guided Cloudflare Tunnel setup")
+	replaceCloudflareDNS := set.Bool("replace-cloudflare-dns", false, "replace the selected hostname's existing Cloudflare DNS route")
 	allowInternet := set.Bool("allow-internet", false, "allow general internet egress from the guided E2B profile")
 	if err := set.Parse(args); err != nil {
 		return setupOptions{}, err
@@ -857,7 +859,8 @@ func parseSetupOptions(args []string, stderr io.Writer) (setupOptions, error) {
 		Harness:          strings.TrimSpace(*harness), ConnectionMode: setupConnectionMode(strings.TrimSpace(*connectionMode)),
 		OpenAIKeyFile: strings.TrimSpace(*openAIKeyFile), E2BKeyFile: strings.TrimSpace(*e2bKeyFile),
 		E2BTemplate: strings.TrimSpace(*e2bTemplate), GatewayURL: strings.TrimSpace(*gatewayURL),
-		CloudflareHost: strings.TrimSpace(*cloudflareHost), AllowInternet: *allowInternet,
+		CloudflareHost: strings.TrimSpace(*cloudflareHost), ReplaceCloudflareDNS: *replaceCloudflareDNS,
+		AllowInternet: *allowInternet,
 	}
 	if err := validateSetupOptions(options); err != nil {
 		return setupOptions{}, err
@@ -874,6 +877,9 @@ func validateSetupOptions(options setupOptions) error {
 	}
 	if options.GatewayURL != "" && options.CloudflareHost != "" {
 		return fmt.Errorf("setup accepts either --gateway-url or --cloudflare-hostname, not both")
+	}
+	if options.ReplaceCloudflareDNS && options.CloudflareHost == "" {
+		return fmt.Errorf("--replace-cloudflare-dns requires --cloudflare-hostname")
 	}
 	if options.Connection != "" && options.ConnectionMode != "" {
 		return fmt.Errorf("setup accepts either an existing --ai-connection or --connection-auth, not both")

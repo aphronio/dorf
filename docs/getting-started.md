@@ -125,7 +125,10 @@ publishes that profile into the protected `.env`, reapplies the project, and con
 finalize the retained candidate in the same run. It can verify an existing Sandbox-reachable route
 or guide the named Cloudflare Tunnel owned by the [Provider Gateway
 authority](project/provider-gateway.md). This remains an unprivileged browser and DNS flow, not
-another shell helper.
+another shell helper. When a Cloudflare-delegated hostname already resolves, setup defaults to the
+existing ingress but offers to repair it with the guided Tunnel. Selecting repair clearly confirms
+the DNS replacement before applying it; automation pairs `--cloudflare-hostname HOST` with
+`--replace-cloudflare-dns` for the same explicit intent.
 
 The separate `profile` and `provider` commands remain available for custom artifacts and advanced
 operations. Their exact-artifact, credential, and route boundaries are described by the

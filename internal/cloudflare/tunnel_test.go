@@ -121,6 +121,50 @@ func TestGuidedTunnelRefusesHostnameOccupiedImmediatelyBeforeDNSMutation(t *test
 	}
 }
 
+func TestGuidedTunnelExplicitDNSReplacementUsesCloudflareOverwrite(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state")
+	binary, digest := installFakeCloudflared(t, statePath)
+	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}
+	tunnel := Tunnel{
+		StatePath: statePath, Binary: binary, Origin: ComposeGatewayOrigin,
+		Runner: runner, Resolver: &fakeDNSResolver{addresses: []string{"192.0.2.1"}},
+		ReplaceExistingDNS: true, binarySHA256: digest,
+	}
+
+	state, err := tunnel.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard)
+	if err != nil || !state.DNSConfigured {
+		t.Fatalf("replacement state=%+v error=%v", state, err)
+	}
+	if countCall(runner.calls, " route dns --overwrite-dns ") != 1 {
+		t.Fatalf("explicit replacement calls=%v", runner.calls)
+	}
+}
+
+func TestGuidedTunnelExplicitRepairReplacesAPreviouslyConfiguredRoute(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state")
+	binary, digest := installFakeCloudflared(t, statePath)
+	resolver := &fakeDNSResolver{}
+	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}
+	tunnel := Tunnel{
+		StatePath: statePath, Binary: binary, Origin: ComposeGatewayOrigin,
+		Runner: runner, Resolver: resolver, binarySHA256: digest,
+	}
+	if _, err := tunnel.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver.addresses = []string{"192.0.2.1"}
+	runner.calls = nil
+	tunnel.ReplaceExistingDNS = true
+	state, err := tunnel.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard)
+	if err != nil || !state.DNSConfigured {
+		t.Fatalf("repair state=%+v error=%v", state, err)
+	}
+	if countCall(runner.calls, " route dns --overwrite-dns ") != 1 {
+		t.Fatalf("explicit repair calls=%v", runner.calls)
+	}
+}
+
 func TestGuidedTunnelReplaysAmbiguousDNSCommitForExactRetainedTunnel(t *testing.T) {
 	tunnel, runner, initial := preparedTunnel(t, ComposeGatewayOrigin)
 	resolver := tunnel.Resolver.(*fakeDNSResolver)
