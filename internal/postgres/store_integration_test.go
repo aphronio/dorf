@@ -415,10 +415,9 @@ func codingAdmissionRequest(input coding.Admission) coding.AdmissionRequest {
 func TestPostgresDirectBootstrapFollowAndExplicitCleanup(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
-	profile := profileapp.Runtime{SandboxProfile: "incus"}
-	job, created, err := direct.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{}, profile, core.JobAdmission{
+	job, created, err := direct.NewAdmissionService(store, core.Application{Store: store, Tasks: client}, providerCheck{}).Admit(ctx, direct.AdmissionRequest{
 		AdmissionKey: fmt.Sprintf("direct-execution-%d", time.Now().UnixNano()),
-		Goal:         "prove the direct client execution boundary", SandboxProfile: profile.SandboxProfile,
+		Goal:         "prove the direct client execution boundary", SandboxProfile: "incus",
 		ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
 	})
 	if err != nil || !created || job.CurrentTaskID == "" {
@@ -512,19 +511,21 @@ func TestPostgresDirectAdmissionReplayRecoversTaskAttachment(t *testing.T) {
 	if err != nil || !created || job.Workflow != "" || job.WorkflowRevision != "" {
 		t.Fatalf("direct admission job=%#v created=%t err=%v", job, created, err)
 	}
-	recovered, created, err := direct.Admit(
-		ctx, store, core.Application{Store: store, Tasks: client},
+	request := direct.AdmissionRequest{
+		AdmissionKey: input.AdmissionKey, Goal: input.Goal, SandboxProfile: input.SandboxProfile,
+		ProviderConnection: input.ProviderConnection, Model: input.Model, ReasoningEffort: input.ReasoningEffort,
+	}
+	recovered, created, err := direct.NewAdmissionService(
+		store, core.Application{Store: store, Tasks: client},
 		providerCheck{err: errors.New("provider unavailable during admission recovery")},
-		profileapp.Runtime{SandboxProfile: "unavailable-during-admission-recovery"}, input,
-	)
+	).Admit(ctx, request)
 	if err != nil || created || recovered.ID != job.ID || recovered.CurrentTaskID == "" {
 		t.Fatalf("client scheduling recovery job=%#v created=%t err=%v", recovered, created, err)
 	}
-	replayed, created, err := direct.Admit(
-		ctx, store, core.Application{Store: store, Tasks: client},
+	replayed, created, err := direct.NewAdmissionService(
+		store, core.Application{Store: store, Tasks: client},
 		providerCheck{err: errors.New("provider unavailable during replay")},
-		profileapp.Runtime{SandboxProfile: "unavailable-during-replay"}, input,
-	)
+	).Admit(ctx, request)
 	if err != nil || created || replayed.ID != job.ID || replayed.CurrentTaskID != recovered.CurrentTaskID {
 		t.Fatalf("client scheduled replay job=%#v created=%t err=%v", replayed, created, err)
 	}

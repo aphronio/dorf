@@ -204,20 +204,13 @@ func runDirect(ctx context.Context, store postgres.Store, client *absurd.Client,
 	if generatedKey {
 		fmt.Fprintf(stderr, "Generated admission key %s; if this command is interrupted, retry with --key %s.\n", admissionKey, admissionKey)
 	}
-	profile, err := selectedSandboxProfile(ctx, store, *profileName)
-	if err != nil {
-		return err
-	}
 	providers := gateway.Gateway{StatePath: cfg.GatewayStatePath}
-	selectedConnection, err := selectedAIConnection(providers, *connection)
-	if err != nil {
-		return err
+	input := direct.AdmissionRequest{
+		AdmissionKey: admissionKey, Goal: goal, SandboxProfile: *profileName,
+		ProviderConnection: *connection, Model: *model, ReasoningEffort: *effort,
 	}
-	input := core.JobAdmission{
-		AdmissionKey: admissionKey, Goal: goal, SandboxProfile: profile.Name,
-		ProviderConnection: selectedConnection, Model: *model, ReasoningEffort: *effort,
-	}
-	job, created, err := direct.Admit(ctx, store, coreApplication(store, client), providers, profileapp.Runtime{SandboxProfile: profile.Name}, input)
+	admissions := direct.NewAdmissionService(store, coreApplication(store, client), providers)
+	job, created, err := admissions.Admit(ctx, input)
 	if err != nil {
 		return err
 	}

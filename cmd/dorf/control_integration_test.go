@@ -22,6 +22,7 @@ import (
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
 	"github.com/aphronio/dorf/internal/core"
+	"github.com/aphronio/dorf/internal/direct"
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
@@ -53,7 +54,7 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	}
 
 	key := fmt.Sprintf("control-api-replay-%d", time.Now().UnixNano())
-	input := controlapi.AdmitJobRequest{Goal: "prove remote durable replay", Profile: profileName, Model: "model-test", Reasoning: "high"}
+	input := controlapi.AdmitJobRequest{Goal: "prove remote durable replay", Model: "model-test", Reasoning: "high"}
 	// The response is deliberately discarded after the handler commits, matching
 	// a client that cannot know whether its first request succeeded.
 	lost := controlTestRequest(t, first, http.MethodPost, "/v1/jobs", credential, key, input)
@@ -63,6 +64,11 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	committed, err := store.Job(ctx, core.JobID(key))
 	if err != nil || committed.CurrentTaskID == "" {
 		t.Fatalf("committed Job=%#v err=%v", committed, err)
+	}
+	// Replay must use the retained profile and AI connection even when the
+	// deployment defaults can no longer be consulted.
+	if err := os.Remove(filepath.Join(provider.StatePath, "connections.json")); err != nil {
+		t.Fatal(err)
 	}
 
 	restartedTasks := controlTestTasks(t, store.DB, firstTasks.QueueName(), false)
@@ -507,7 +513,8 @@ func controlTestHandlerWithGitHub(store postgres.Store, tasks *absurd.Client, pr
 	application := coreApplication(store, tasks)
 	return controlapi.NewServer(controlapi.Discovery{Product: "dorf"}, auth,
 		controlAPIJobs{
-			store: store, tasks: tasks, gateway: provider,
+			store: store, tasks: tasks,
+			directAdmissions:        direct.NewAdmissionService(store, application, provider),
 			codingAdmissions:        coding.NewAdmissionService(store, application, provider, github),
 			investigationAdmissions: investigation.NewAdmissionService(store, application, provider),
 			runtimes:                runtimes, evidence: evidence,

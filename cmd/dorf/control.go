@@ -32,7 +32,6 @@ import (
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/managedservice"
 	"github.com/aphronio/dorf/internal/postgres"
-	profileapp "github.com/aphronio/dorf/internal/profile"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/version"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -800,7 +799,7 @@ func ambiguousMutationError(err error) bool {
 type controlAPIJobs struct {
 	store                   postgres.Store
 	tasks                   *absurd.Client
-	gateway                 gateway.Gateway
+	directAdmissions        direct.AdmissionService
 	codingAdmissions        coding.AdmissionService
 	investigationAdmissions investigation.AdmissionService
 	runtimes                core.SandboxRuntimeResolver
@@ -818,36 +817,12 @@ func (a controlAPIJobs) AdmitDirect(ctx context.Context, key string, input contr
 	if err != nil {
 		return controlapi.DirectJob{}, false, err
 	}
-	profile := core.SandboxProfile{}
-	existing, err := a.store.Job(ctx, core.JobID(key))
-	switch {
-	case err == nil:
-		if existing.Workflow != "" || existing.WorkflowRevision != "" || (admission.SandboxProfile != "" && admission.SandboxProfile != existing.SandboxProfile) {
-			return controlapi.DirectJob{}, false, controlapi.ErrIdempotencyConflict
-		}
-		admission.SandboxProfile = existing.SandboxProfile
-		admission.ProviderConnection = existing.ProviderConnection
-	case errors.Is(err, postgres.ErrNotFound):
-		profile, err = selectedSandboxProfile(ctx, a.store, admission.SandboxProfile)
-		if err != nil {
-			if admission.SandboxProfile != "" && errors.Is(err, postgres.ErrProfileNotFound) {
-				return controlapi.DirectJob{}, false, fmt.Errorf("%w: %v", controlapi.ErrInvalidInput, err)
-			}
-			return controlapi.DirectJob{}, false, err
-		}
-		admission.SandboxProfile = profile.Name
-		admission.ProviderConnection, err = selectedAIConnection(a.gateway, "")
-		if err != nil {
-			return controlapi.DirectJob{}, false, err
-		}
-	default:
-		return controlapi.DirectJob{}, false, err
-	}
-
-	job, created, err := direct.Admit(ctx, a.store, a.application(), a.gateway,
-		profileapp.Runtime{SandboxProfile: admission.SandboxProfile}, admission)
-	if errors.Is(err, postgres.ErrAdmissionConflict) {
+	job, created, err := a.directAdmissions.Admit(ctx, admission)
+	if errors.Is(err, direct.ErrAdmissionConflict) {
 		return controlapi.DirectJob{}, false, controlapi.ErrIdempotencyConflict
+	}
+	if errors.Is(err, direct.ErrInvalidAdmission) {
+		return controlapi.DirectJob{}, false, fmt.Errorf("%w: %v", controlapi.ErrInvalidInput, err)
 	}
 	if err != nil {
 		return controlapi.DirectJob{}, false, err
@@ -898,21 +873,21 @@ func validControlAdmissionKey(key string) bool {
 	return key != "" && key == strings.TrimSpace(key) && len(key) <= 255 && !strings.ContainsRune(key, 0)
 }
 
-func newControlJobAdmission(key, goal, profile, model, reasoning string) (core.JobAdmission, error) {
+func newControlJobAdmission(key, goal, profile, model, reasoning string) (direct.AdmissionRequest, error) {
 	profile = strings.TrimSpace(profile)
 	model = strings.TrimSpace(model)
 	reasoning = strings.TrimSpace(reasoning)
 	if !validControlAdmissionKey(key) || invalidControlPrompt(goal, 1<<20) ||
 		invalidOptionalControlText(profile, 255) || invalidControlText(model, maxControlModelBytes) {
-		return core.JobAdmission{}, controlapi.ErrInvalidInput
+		return direct.AdmissionRequest{}, controlapi.ErrInvalidInput
 	}
 	if reasoning == "" {
 		reasoning = "high"
 	}
 	if !validControlReasoning(reasoning) {
-		return core.JobAdmission{}, controlapi.ErrInvalidInput
+		return direct.AdmissionRequest{}, controlapi.ErrInvalidInput
 	}
-	return core.JobAdmission{
+	return direct.AdmissionRequest{
 		AdmissionKey: key, Goal: goal, SandboxProfile: profile, Model: model, ReasoningEffort: reasoning,
 	}, nil
 }
@@ -1414,7 +1389,8 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 	auth := controlauth.Service{Store: store}
 	runtimes := profileRuntimeResolver{cfg: cfg, store: store, client: tasks}
 	jobs := controlAPIJobs{
-		store: store, tasks: tasks, gateway: gateway.Gateway{StatePath: cfg.GatewayStatePath},
+		store: store, tasks: tasks,
+		directAdmissions: direct.NewAdmissionService(store, coreApplication(store, tasks), gateway.Gateway{StatePath: cfg.GatewayStatePath}),
 		codingAdmissions: runtimes.CodingAdmissions(), investigationAdmissions: runtimes.InvestigationAdmissions(),
 		runtimes: runtimes, evidence: blob.Store{Root: cfg.BlobRoot},
 	}
