@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -14,12 +15,13 @@ import (
 
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/incus"
+	incustest "github.com/aphronio/dorf/internal/incus/testkit"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/coder/websocket"
 )
 
-func testSandbox(runner incus.Runner) incus.Adapter {
-	return incus.Adapter{Sandbox: incus.Sandbox{Runner: runner}}
+func testSandbox(runner incustest.Runner) incus.Adapter {
+	return incus.Adapter{Sandbox: incustest.Sandbox(runner, incus.Config{})}
 }
 
 func testOwner(sandboxID string) provider.Ownership {
@@ -230,6 +232,45 @@ func TestRemoteEndpointSeparatesGuestBindFromAuthenticatedDial(t *testing.T) {
 	}
 	if headers.Get("Authorization") != "" {
 		t.Fatal("dial mutated the provider-owned header set")
+	}
+}
+
+func TestProtocolUsesFreshProviderStreamForEveryDialAttempt(t *testing.T) {
+	const token = "retained-control-capability"
+	server := testAppServer(t, token, false)
+	defer server.Close()
+	serverAddress := strings.TrimPrefix(server.URL, "http://")
+
+	var calls atomic.Int32
+	dial := func(ctx context.Context, network, address string) (net.Conn, error) {
+		calls.Add(1)
+		if network != "tcp" || address != "incus.invalid:4500" {
+			t.Fatalf("dial target = %s %s", network, address)
+		}
+		return (&net.Dialer{}).DialContext(ctx, "tcp", serverAddress)
+	}
+	for range 2 {
+		protocol, err := dialProtocol(context.Background(), "ws://incus.invalid:4500", token, nil, dial)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = protocol.connection.CloseNow()
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("provider streams=%d, want one fresh stream per attempt", calls.Load())
+	}
+}
+
+func TestProtocolProviderDialHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	dial := func(ctx context.Context, _, _ string) (net.Conn, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	_, err := dialProtocol(ctx, "ws://incus.invalid:4500", "capability", nil, dial)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("dial error=%v, want canceled context", err)
 	}
 }
 

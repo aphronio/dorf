@@ -13,13 +13,13 @@ import (
 
 const beginSandboxProfileVerification = `-- name: BeginSandboxProfileVerification :one
 insert into dorf.sandbox_profile_verifications(
-    profile_name,contract_version,sandbox_id,ownership_nonce
+    profile_name,contract_version,definition_hash,sandbox_id,ownership_nonce
 )
-values($1,$2,$3,$4)
+values($1,$2,$3,$4,$5)
 on conflict(profile_name) do update
 set attempted_at=clock_timestamp(),cleaned_at=null,last_error=null
 where dorf.sandbox_profile_verifications.probe_completed_at is null
-returning profile_name,contract_version,sandbox_id,ownership_nonce,
+returning profile_name,contract_version,definition_hash,sandbox_id,ownership_nonce,
           coalesce(harness_version,'') as harness_version,attempted_at,
           probe_completed_at,cleaned_at,coalesce(last_error,'') as last_error
 `
@@ -27,6 +27,7 @@ returning profile_name,contract_version,sandbox_id,ownership_nonce,
 type BeginSandboxProfileVerificationParams struct {
 	ProfileName     string
 	ContractVersion string
+	DefinitionHash  sql.NullString
 	SandboxID       string
 	OwnershipNonce  string
 }
@@ -34,6 +35,7 @@ type BeginSandboxProfileVerificationParams struct {
 type BeginSandboxProfileVerificationRow struct {
 	ProfileName      string
 	ContractVersion  string
+	DefinitionHash   sql.NullString
 	SandboxID        string
 	OwnershipNonce   string
 	HarnessVersion   string
@@ -47,6 +49,7 @@ func (q *Queries) BeginSandboxProfileVerification(ctx context.Context, arg Begin
 	row := q.db.QueryRowContext(ctx, beginSandboxProfileVerification,
 		arg.ProfileName,
 		arg.ContractVersion,
+		arg.DefinitionHash,
 		arg.SandboxID,
 		arg.OwnershipNonce,
 	)
@@ -54,6 +57,7 @@ func (q *Queries) BeginSandboxProfileVerification(ctx context.Context, arg Begin
 	err := row.Scan(
 		&i.ProfileName,
 		&i.ContractVersion,
+		&i.DefinitionHash,
 		&i.SandboxID,
 		&i.OwnershipNonce,
 		&i.HarnessVersion,
@@ -63,6 +67,33 @@ func (q *Queries) BeginSandboxProfileVerification(ctx context.Context, arg Begin
 		&i.LastError,
 	)
 	return i, err
+}
+
+const bindLegacyProfileVerificationForAdoption = `-- name: BindLegacyProfileVerificationForAdoption :execrows
+update dorf.sandbox_profile_verifications
+set definition_hash=$1,contract_version=$2
+where profile_name=$3 and definition_hash is null and cleaned_at is null
+  and contract_version=$4
+`
+
+type BindLegacyProfileVerificationForAdoptionParams struct {
+	DefinitionHash          sql.NullString
+	ContractVersion         string
+	ProfileName             string
+	PreviousContractVersion string
+}
+
+func (q *Queries) BindLegacyProfileVerificationForAdoption(ctx context.Context, arg BindLegacyProfileVerificationForAdoptionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindLegacyProfileVerificationForAdoption,
+		arg.DefinitionHash,
+		arg.ContractVersion,
+		arg.ProfileName,
+		arg.PreviousContractVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const clearDefaultSandboxProfile = `-- name: ClearDefaultSandboxProfile :exec
@@ -96,13 +127,19 @@ func (q *Queries) GetDefaultSandboxProfile(ctx context.Context) (string, error) 
 
 const getSandboxProfile = `-- name: GetSandboxProfile :one
 select p.name,p.provider,p.harness,p.artifact,
+       coalesce(p.definition_hash,'') as definition_hash,
+       coalesce(p.incus_endpoint_authority_hash,'') as incus_endpoint_authority_hash,
+       coalesce(p.incus_project,'') as incus_project,
+       coalesce(p.incus_storage_pool,'') as incus_storage_pool,
        coalesce(p.incus_network,'') as incus_network,
        coalesce(p.incus_disk_size,'') as incus_disk_size,
+       coalesce(p.incus_gateway_url,'') as incus_gateway_url,
        coalesce(p.e2b_gateway_url,'') as e2b_gateway_url,
        coalesce(p.e2b_sandbox_timeout_seconds,0) as e2b_sandbox_timeout_seconds,
        coalesce(p.e2b_allow_internet,false) as e2b_allow_internet,
        p.is_default,p.created_at,
        coalesce(v.contract_version,'') as verification_contract,
+       coalesce(v.definition_hash,'') as verification_definition_hash,
        coalesce(v.sandbox_id,'') as verification_sandbox_id,
        coalesce(v.ownership_nonce,'') as verification_ownership_nonce,
        coalesce(v.harness_version,'') as verification_harness_version,
@@ -118,14 +155,20 @@ type GetSandboxProfileRow struct {
 	Provider                   string
 	Harness                    string
 	Artifact                   string
+	DefinitionHash             string
+	IncusEndpointAuthorityHash string
+	IncusProject               string
+	IncusStoragePool           string
 	IncusNetwork               string
 	IncusDiskSize              string
+	IncusGatewayURL            string
 	E2bGatewayURL              string
 	E2bSandboxTimeoutSeconds   int64
 	E2bAllowInternet           bool
 	IsDefault                  bool
 	CreatedAt                  time.Time
 	VerificationContract       string
+	VerificationDefinitionHash string
 	VerificationSandboxID      string
 	VerificationOwnershipNonce string
 	VerificationHarnessVersion string
@@ -143,14 +186,20 @@ func (q *Queries) GetSandboxProfile(ctx context.Context, name string) (GetSandbo
 		&i.Provider,
 		&i.Harness,
 		&i.Artifact,
+		&i.DefinitionHash,
+		&i.IncusEndpointAuthorityHash,
+		&i.IncusProject,
+		&i.IncusStoragePool,
 		&i.IncusNetwork,
 		&i.IncusDiskSize,
+		&i.IncusGatewayURL,
 		&i.E2bGatewayURL,
 		&i.E2bSandboxTimeoutSeconds,
 		&i.E2bAllowInternet,
 		&i.IsDefault,
 		&i.CreatedAt,
 		&i.VerificationContract,
+		&i.VerificationDefinitionHash,
 		&i.VerificationSandboxID,
 		&i.VerificationOwnershipNonce,
 		&i.VerificationHarnessVersion,
@@ -164,27 +213,36 @@ func (q *Queries) GetSandboxProfile(ctx context.Context, name string) (GetSandbo
 
 const insertSandboxProfile = `-- name: InsertSandboxProfile :execrows
 insert into dorf.sandbox_profiles(
-    name,provider,harness,artifact,incus_network,incus_disk_size,
+    name,provider,harness,artifact,definition_hash,
+    incus_endpoint_authority_hash,incus_project,incus_storage_pool,
+    incus_network,incus_disk_size,incus_gateway_url,
     e2b_gateway_url,e2b_sandbox_timeout_seconds,e2b_allow_internet
 )
 values(
     $1,$2,$3,$4,
-    $5,$6,$7,
-    $8,$9
+    $5,$6,
+    $7,$8,$9,
+    $10,$11,$12,
+    $13,$14
 )
 on conflict(name) do nothing
 `
 
 type InsertSandboxProfileParams struct {
-	Name                     string
-	Provider                 string
-	Harness                  string
-	Artifact                 string
-	IncusNetwork             sql.NullString
-	IncusDiskSize            sql.NullString
-	E2bGatewayURL            sql.NullString
-	E2bSandboxTimeoutSeconds sql.NullInt64
-	E2bAllowInternet         sql.NullBool
+	Name                       string
+	Provider                   string
+	Harness                    string
+	Artifact                   string
+	DefinitionHash             sql.NullString
+	IncusEndpointAuthorityHash sql.NullString
+	IncusProject               sql.NullString
+	IncusStoragePool           sql.NullString
+	IncusNetwork               sql.NullString
+	IncusDiskSize              sql.NullString
+	IncusGatewayURL            sql.NullString
+	E2bGatewayURL              sql.NullString
+	E2bSandboxTimeoutSeconds   sql.NullInt64
+	E2bAllowInternet           sql.NullBool
 }
 
 func (q *Queries) InsertSandboxProfile(ctx context.Context, arg InsertSandboxProfileParams) (int64, error) {
@@ -193,8 +251,13 @@ func (q *Queries) InsertSandboxProfile(ctx context.Context, arg InsertSandboxPro
 		arg.Provider,
 		arg.Harness,
 		arg.Artifact,
+		arg.DefinitionHash,
+		arg.IncusEndpointAuthorityHash,
+		arg.IncusProject,
+		arg.IncusStoragePool,
 		arg.IncusNetwork,
 		arg.IncusDiskSize,
+		arg.IncusGatewayURL,
 		arg.E2bGatewayURL,
 		arg.E2bSandboxTimeoutSeconds,
 		arg.E2bAllowInternet,
@@ -207,13 +270,19 @@ func (q *Queries) InsertSandboxProfile(ctx context.Context, arg InsertSandboxPro
 
 const listSandboxProfiles = `-- name: ListSandboxProfiles :many
 select p.name,p.provider,p.harness,p.artifact,
+       coalesce(p.definition_hash,'') as definition_hash,
+       coalesce(p.incus_endpoint_authority_hash,'') as incus_endpoint_authority_hash,
+       coalesce(p.incus_project,'') as incus_project,
+       coalesce(p.incus_storage_pool,'') as incus_storage_pool,
        coalesce(p.incus_network,'') as incus_network,
        coalesce(p.incus_disk_size,'') as incus_disk_size,
+       coalesce(p.incus_gateway_url,'') as incus_gateway_url,
        coalesce(p.e2b_gateway_url,'') as e2b_gateway_url,
        coalesce(p.e2b_sandbox_timeout_seconds,0) as e2b_sandbox_timeout_seconds,
        coalesce(p.e2b_allow_internet,false) as e2b_allow_internet,
        p.is_default,p.created_at,
        coalesce(v.contract_version,'') as verification_contract,
+       coalesce(v.definition_hash,'') as verification_definition_hash,
        coalesce(v.sandbox_id,'') as verification_sandbox_id,
        coalesce(v.ownership_nonce,'') as verification_ownership_nonce,
        coalesce(v.harness_version,'') as verification_harness_version,
@@ -229,14 +298,20 @@ type ListSandboxProfilesRow struct {
 	Provider                   string
 	Harness                    string
 	Artifact                   string
+	DefinitionHash             string
+	IncusEndpointAuthorityHash string
+	IncusProject               string
+	IncusStoragePool           string
 	IncusNetwork               string
 	IncusDiskSize              string
+	IncusGatewayURL            string
 	E2bGatewayURL              string
 	E2bSandboxTimeoutSeconds   int64
 	E2bAllowInternet           bool
 	IsDefault                  bool
 	CreatedAt                  time.Time
 	VerificationContract       string
+	VerificationDefinitionHash string
 	VerificationSandboxID      string
 	VerificationOwnershipNonce string
 	VerificationHarnessVersion string
@@ -260,14 +335,20 @@ func (q *Queries) ListSandboxProfiles(ctx context.Context) ([]ListSandboxProfile
 			&i.Provider,
 			&i.Harness,
 			&i.Artifact,
+			&i.DefinitionHash,
+			&i.IncusEndpointAuthorityHash,
+			&i.IncusProject,
+			&i.IncusStoragePool,
 			&i.IncusNetwork,
 			&i.IncusDiskSize,
+			&i.IncusGatewayURL,
 			&i.E2bGatewayURL,
 			&i.E2bSandboxTimeoutSeconds,
 			&i.E2bAllowInternet,
 			&i.IsDefault,
 			&i.CreatedAt,
 			&i.VerificationContract,
+			&i.VerificationDefinitionHash,
 			&i.VerificationSandboxID,
 			&i.VerificationOwnershipNonce,
 			&i.VerificationHarnessVersion,
@@ -291,8 +372,13 @@ func (q *Queries) ListSandboxProfiles(ctx context.Context) ([]ListSandboxProfile
 
 const lockSandboxProfile = `-- name: LockSandboxProfile :one
 select name,provider,harness,artifact,
+       coalesce(definition_hash,'') as definition_hash,
+       coalesce(incus_endpoint_authority_hash,'') as incus_endpoint_authority_hash,
+       coalesce(incus_project,'') as incus_project,
+       coalesce(incus_storage_pool,'') as incus_storage_pool,
        coalesce(incus_network,'') as incus_network,
        coalesce(incus_disk_size,'') as incus_disk_size,
+       coalesce(incus_gateway_url,'') as incus_gateway_url,
        coalesce(e2b_gateway_url,'') as e2b_gateway_url,
        coalesce(e2b_sandbox_timeout_seconds,0) as e2b_sandbox_timeout_seconds,
        coalesce(e2b_allow_internet,false) as e2b_allow_internet,
@@ -301,17 +387,22 @@ from dorf.sandbox_profiles where name=$1 for update
 `
 
 type LockSandboxProfileRow struct {
-	Name                     string
-	Provider                 string
-	Harness                  string
-	Artifact                 string
-	IncusNetwork             string
-	IncusDiskSize            string
-	E2bGatewayURL            string
-	E2bSandboxTimeoutSeconds int64
-	E2bAllowInternet         bool
-	IsDefault                bool
-	CreatedAt                time.Time
+	Name                       string
+	Provider                   string
+	Harness                    string
+	Artifact                   string
+	DefinitionHash             string
+	IncusEndpointAuthorityHash string
+	IncusProject               string
+	IncusStoragePool           string
+	IncusNetwork               string
+	IncusDiskSize              string
+	IncusGatewayURL            string
+	E2bGatewayURL              string
+	E2bSandboxTimeoutSeconds   int64
+	E2bAllowInternet           bool
+	IsDefault                  bool
+	CreatedAt                  time.Time
 }
 
 func (q *Queries) LockSandboxProfile(ctx context.Context, name string) (LockSandboxProfileRow, error) {
@@ -322,8 +413,13 @@ func (q *Queries) LockSandboxProfile(ctx context.Context, name string) (LockSand
 		&i.Provider,
 		&i.Harness,
 		&i.Artifact,
+		&i.DefinitionHash,
+		&i.IncusEndpointAuthorityHash,
+		&i.IncusProject,
+		&i.IncusStoragePool,
 		&i.IncusNetwork,
 		&i.IncusDiskSize,
+		&i.IncusGatewayURL,
 		&i.E2bGatewayURL,
 		&i.E2bSandboxTimeoutSeconds,
 		&i.E2bAllowInternet,
@@ -338,6 +434,7 @@ select p.name
 from dorf.sandbox_profiles p
 join dorf.sandbox_profile_verifications v on v.profile_name=p.name
 where p.name=$1 and v.contract_version=$2
+  and p.definition_hash is not null and v.definition_hash=p.definition_hash
   and v.probe_completed_at is not null and v.cleaned_at is not null and v.last_error is null
 for key share of p,v
 `
@@ -359,6 +456,7 @@ update dorf.sandbox_profile_verifications
 set last_error=$1
 where profile_name=$2
   and contract_version=$3
+  and definition_hash=(select definition_hash from dorf.sandbox_profiles where name=$2)
   and probe_completed_at is not null and cleaned_at is not null
 `
 
@@ -407,7 +505,8 @@ const recordSandboxProfileProbe = `-- name: RecordSandboxProfileProbe :execrows
 update dorf.sandbox_profile_verifications
 set harness_version=$1,probe_completed_at=coalesce(probe_completed_at,clock_timestamp()),last_error=null
 where profile_name=$2 and contract_version=$3
-  and sandbox_id=$4 and ownership_nonce=$5
+  and definition_hash=$4
+  and sandbox_id=$5 and ownership_nonce=$6
   and cleaned_at is null
 `
 
@@ -415,6 +514,7 @@ type RecordSandboxProfileProbeParams struct {
 	HarnessVersion  sql.NullString
 	ProfileName     string
 	ContractVersion string
+	DefinitionHash  sql.NullString
 	SandboxID       string
 	OwnershipNonce  string
 }
@@ -424,6 +524,7 @@ func (q *Queries) RecordSandboxProfileProbe(ctx context.Context, arg RecordSandb
 		arg.HarnessVersion,
 		arg.ProfileName,
 		arg.ContractVersion,
+		arg.DefinitionHash,
 		arg.SandboxID,
 		arg.OwnershipNonce,
 	)
@@ -437,12 +538,14 @@ const recordSandboxProfileVerificationCleanup = `-- name: RecordSandboxProfileVe
 update dorf.sandbox_profile_verifications
 set cleaned_at=coalesce(cleaned_at,clock_timestamp())
 where profile_name=$1 and contract_version=$2
-  and sandbox_id=$3 and ownership_nonce=$4
+  and definition_hash=$3
+  and sandbox_id=$4 and ownership_nonce=$5
 `
 
 type RecordSandboxProfileVerificationCleanupParams struct {
 	ProfileName     string
 	ContractVersion string
+	DefinitionHash  sql.NullString
 	SandboxID       string
 	OwnershipNonce  string
 }
@@ -451,6 +554,7 @@ func (q *Queries) RecordSandboxProfileVerificationCleanup(ctx context.Context, a
 	result, err := q.db.ExecContext(ctx, recordSandboxProfileVerificationCleanup,
 		arg.ProfileName,
 		arg.ContractVersion,
+		arg.DefinitionHash,
 		arg.SandboxID,
 		arg.OwnershipNonce,
 	)
@@ -464,13 +568,15 @@ const recordSandboxProfileVerificationError = `-- name: RecordSandboxProfileVeri
 update dorf.sandbox_profile_verifications
 set last_error=$1
 where profile_name=$2 and contract_version=$3
-  and sandbox_id=$4 and ownership_nonce=$5
+  and definition_hash=$4
+  and sandbox_id=$5 and ownership_nonce=$6
 `
 
 type RecordSandboxProfileVerificationErrorParams struct {
 	LastError       sql.NullString
 	ProfileName     string
 	ContractVersion string
+	DefinitionHash  sql.NullString
 	SandboxID       string
 	OwnershipNonce  string
 }
@@ -480,6 +586,7 @@ func (q *Queries) RecordSandboxProfileVerificationError(ctx context.Context, arg
 		arg.LastError,
 		arg.ProfileName,
 		arg.ContractVersion,
+		arg.DefinitionHash,
 		arg.SandboxID,
 		arg.OwnershipNonce,
 	)
@@ -503,24 +610,31 @@ func (q *Queries) SetDefaultSandboxProfile(ctx context.Context, name string) (in
 
 const updateSandboxProfile = `-- name: UpdateSandboxProfile :execrows
 update dorf.sandbox_profiles
-set provider=$1,harness=$2,artifact=$3,
-    incus_network=$4,incus_disk_size=$5,
-    e2b_gateway_url=$6,
-    e2b_sandbox_timeout_seconds=$7,
-    e2b_allow_internet=$8,is_default=false
-where name=$9
+set provider=$1,harness=$2,artifact=$3,definition_hash=$4,
+    incus_endpoint_authority_hash=$5,
+    incus_project=$6,incus_storage_pool=$7,
+    incus_network=$8,incus_disk_size=$9,incus_gateway_url=$10,
+    e2b_gateway_url=$11,
+    e2b_sandbox_timeout_seconds=$12,
+    e2b_allow_internet=$13,is_default=false
+where name=$14
 `
 
 type UpdateSandboxProfileParams struct {
-	Provider                 string
-	Harness                  string
-	Artifact                 string
-	IncusNetwork             sql.NullString
-	IncusDiskSize            sql.NullString
-	E2bGatewayURL            sql.NullString
-	E2bSandboxTimeoutSeconds sql.NullInt64
-	E2bAllowInternet         sql.NullBool
-	Name                     string
+	Provider                   string
+	Harness                    string
+	Artifact                   string
+	DefinitionHash             sql.NullString
+	IncusEndpointAuthorityHash sql.NullString
+	IncusProject               sql.NullString
+	IncusStoragePool           sql.NullString
+	IncusNetwork               sql.NullString
+	IncusDiskSize              sql.NullString
+	IncusGatewayURL            sql.NullString
+	E2bGatewayURL              sql.NullString
+	E2bSandboxTimeoutSeconds   sql.NullInt64
+	E2bAllowInternet           sql.NullBool
+	Name                       string
 }
 
 func (q *Queries) UpdateSandboxProfile(ctx context.Context, arg UpdateSandboxProfileParams) (int64, error) {
@@ -528,8 +642,13 @@ func (q *Queries) UpdateSandboxProfile(ctx context.Context, arg UpdateSandboxPro
 		arg.Provider,
 		arg.Harness,
 		arg.Artifact,
+		arg.DefinitionHash,
+		arg.IncusEndpointAuthorityHash,
+		arg.IncusProject,
+		arg.IncusStoragePool,
 		arg.IncusNetwork,
 		arg.IncusDiskSize,
+		arg.IncusGatewayURL,
 		arg.E2bGatewayURL,
 		arg.E2bSandboxTimeoutSeconds,
 		arg.E2bAllowInternet,

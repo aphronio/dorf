@@ -11,7 +11,7 @@ Product direction and vocabulary live in the [North Star](north-star.md).
 ```mermaid
 flowchart LR
     Remote["Remote client"] --> Ingress["Operator-owned HTTPS ingress"]
-    Ingress --> API["Managed API · fixed Job projections"]
+    Ingress --> API["Control API · fixed Job projections"]
     API -->|direct| Core["In-process Core application boundary"]
     Client["Host-local client adapter"] --> Core
     Workflow["Native Dorf workflow"] --> Core
@@ -31,8 +31,18 @@ compose one small application boundary in-process. A separate API service projec
 narrow closed set over authenticated HTTPS: direct Jobs and typed admission for the compiled coding
 and codebase-investigation workflows, followed by their common Job interaction surface. This is not
 a network exposure of Core itself, a workflow registry, a client SDK, or an embeddable-runtime
-contract. Setup and update converge that API and the durable worker as separate systemd units;
-operator-owned HTTPS ingress remains outside their lifecycle.
+contract. Setup and update converge the accepted managed topology under one versioned Docker
+Compose project; the [Remote Control API](../control-api.md#deployment-services) owns its exact
+service inventory, capability custody, and network segmentation. Operator-owned public control
+ingress remains outside its lifecycle.
+
+Compose is the only supervisor in the managed shape. The project uses its own PostgreSQL service,
+segmented bridge networks, protected generated configuration, and a narrow internal reader so the
+public API never receives provider credentials or provider mutation authority; it never mounts the
+host Docker socket into a Dorf workload or Sandbox. `DORF_DATABASE_URL` is only a development, test, or explicitly manually
+supervised process override. Host prerequisites and bootstrap privilege follow the single
+[deployment-host setup procedure](../getting-started.md#1-install-the-application-initialize-a-deployment-host);
+version-matched helpers are explicit administrator handoffs, not another reconciler.
 
 Absurd owns when durable work is eligible, claimed, checkpointed, retried, sleeping, waiting, or
 cancelled. It does not own Dorf's product vocabulary or become the only place where a Job's truth can
@@ -205,8 +215,9 @@ and each Client can be revoked independently. The CLI retains one Deployment ori
 credential rather than implementing multi-deployment context selection. The API listens on a
 host-private HTTP address behind operator-owned HTTPS ingress. It admits and projects Jobs but does
 not register execution handlers; a separate durable worker claims and reconciles the attached
-Absurd tasks. Setup converges both responsibilities as fixed, separately supervised systemd units;
-status distinguishes exact unit convergence from runtime readiness and probes the API boundary.
+Absurd tasks. Setup converges both responsibilities as separate services in the one Dorf Compose
+project; status distinguishes project and service convergence from runtime readiness and probes the
+API boundary.
 Ingress, multi-user identity, roles, organizations, billing, and quotas remain separate work.
 
 A direct Job has no workflow identity. Its first Message carries the caller's exact prompt through
@@ -271,7 +282,7 @@ clones and retained Git input, does not require the integration.
 
 The first product is local-first. PostgreSQL, Dorf executors, Incus, the Provider Gateway when used,
 and agent services run on infrastructure controlled by the owner. The ordinary supported path
-requires no Dorf-hosted durability account or host Docker socket.
+requires no Dorf-hosted durability account and exposes no host Docker socket to workloads.
 
 "Infrastructure you control" may later include a local machine, bring-your-own-cloud or on-premise
 execution, or a deliberately selected managed Sandbox provider. Support is expressed through
@@ -291,16 +302,25 @@ receipt while Jobs continue against the unchanged definition, fencing new admiss
 attempt settles successfully. Profiles are immutable while a referencing Job has incomplete
 cleanup; an update clears verification and default status. Credentials remain host configuration.
 
+Deployment configuration owns at most one Incus endpoint and client identity. Incus Profiles bind
+that endpoint's public identity together with their restricted project, storage pool, network,
+exact image and disk contract, and exact guest-reachable Provider Gateway URL. The adapter may use
+the same Incus API over a local Unix socket or remote HTTPS and obtains controller-to-guest app-server
+streams through Incus port forwarding. Guided setup may observe one unambiguous prepared local
+bridge once to create an exact private Gateway URL in a Profile; admission and runtime use only that
+persisted definition. That local setup convenience never applies to a remote endpoint, and the
+controller path itself does not infer or supply the separate guest-to-Gateway route. Support
+requires the complete selected topology to pass live proof.
+
 ### Current dogfood deployment terminals
 
-The local workstation terminal runs Dorf, PostgreSQL, the Worker, Incus/KVM Sandboxes, and a private
-Provider Gateway on one owner-controlled machine. It requires no cloud controller, public Gateway
-hostname, or tunnel.
+The local workstation terminal runs the Dorf Compose project beside an operator-prepared local
+Incus/KVM endpoint on one owner-controlled machine. Its private Provider Gateway requires no cloud
+controller, public Gateway hostname, or tunnel.
 
-The cloud controller terminal runs Dorf, PostgreSQL, the Worker, and a loopback-bound Provider
-Gateway on an ordinary shared Linux VM without Incus or KVM. Managed E2B Sandboxes reach only the
-scoped Gateway through a stable deployment-owned outbound HTTPS tunnel; administration and storage
-remain private.
+The cloud controller terminal runs the Dorf Compose project on an ordinary shared Linux VM without
+Incus or KVM. Managed E2B Sandboxes reach only the scoped Gateway through a stable
+deployment-owned outbound HTTPS tunnel; administration and storage remain private.
 
 Live proof selects the terminal that exercises the changed authority. Local Incus, image, KVM, or
 private-network changes require the workstation terminal. E2B, remote Gateway, and cloud

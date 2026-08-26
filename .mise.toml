@@ -27,6 +27,10 @@ run = "go run ./cmd/dorf-brand-terminal"
 description = "Fail when the generated terminal brand lockup is stale"
 run = "go run ./cmd/dorf-brand-terminal --check"
 
+[tasks."integration:compose-vm"]
+description = "Refresh or run the disposable Ubuntu Compose deployment proof"
+run = "scripts/integration/compose-vm.sh"
+
 [tasks.check]
 description = "Run the repository's deterministic SQL and Go checks"
 run = """
@@ -38,6 +42,7 @@ sqlc diff
 sqlc vet
 scripts/incus/check-image-inputs.sh
 go run ./cmd/dorf-brand-terminal --check
+bash scripts/integration/compose-vm-test.sh
 go test ./...
 go vet ./...
 """

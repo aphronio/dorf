@@ -12,6 +12,7 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/incus"
+	incustest "github.com/aphronio/dorf/internal/incus/testkit"
 	policy "github.com/aphronio/dorf/internal/review"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
@@ -22,8 +23,8 @@ func (f sandboxRunner) Run(ctx context.Context, command string, input []byte, ar
 	return f(ctx, command, input, args...)
 }
 
-func publicationSandbox(runner incus.Runner) incus.Adapter {
-	return incus.Adapter{Sandbox: incus.Sandbox{Runner: runner}}
+func publicationSandbox(runner incustest.Runner) incus.Adapter {
+	return incus.Adapter{Sandbox: incustest.Sandbox(runner, incus.Config{})}
 }
 
 func publicationOwner(_ context.Context, sandboxID string) (provider.Ownership, error) {

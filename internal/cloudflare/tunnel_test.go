@@ -2,6 +2,8 @@ package cloudflare
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,19 +14,22 @@ import (
 )
 
 type fakeRunner struct {
-	created        bool
-	loseCredential bool
-	id             string
-	serviceUnit    string
-	calls          []string
+	created                bool
+	loseCredential         bool
+	afterIngressValidation func()
+	dnsRouteErr            error
+	id                     string
+	calls                  []string
 }
 
 type fakeDNSResolver struct {
 	addresses []string
 	err       error
+	lookups   int
 }
 
 func (r *fakeDNSResolver) LookupHost(_ context.Context, _ string) ([]string, error) {
+	r.lookups++
 	return append([]string(nil), r.addresses...), r.err
 }
 
@@ -54,14 +59,8 @@ func (f *fakeRunner) Run(_ context.Context, env []string, _, _ io.Writer, name s
 			}
 		}
 		return fmt.Errorf("token command omitted --cred-file: %q", call)
-	case strings.Contains(call, "install -m 0644"):
-		parts := strings.Fields(call)
-		if len(parts) < 3 {
-			return fmt.Errorf("invalid install call %q", call)
-		}
-		raw, err := os.ReadFile(parts[len(parts)-2])
-		f.serviceUnit = string(raw)
-		return err
+	case strings.Contains(call, " route dns "):
+		return f.dnsRouteErr
 	default:
 		return nil
 	}
@@ -70,6 +69,9 @@ func (f *fakeRunner) Run(_ context.Context, env []string, _, _ io.Writer, name s
 func (f *fakeRunner) Output(_ context.Context, _ []string, name string, args ...string) (string, error) {
 	call := strings.Join(append([]string{name}, args...), " ")
 	f.calls = append(f.calls, call)
+	if strings.Contains(call, " ingress validate") && f.afterIngressValidation != nil {
+		f.afterIngressValidation()
+	}
 	if strings.Contains(call, "tunnel") && strings.Contains(call, " list ") {
 		if !f.created {
 			return "[]", nil
@@ -77,133 +79,358 @@ func (f *fakeRunner) Output(_ context.Context, _ []string, name string, args ...
 		raw, _ := json.Marshal([]listedTunnel{{ID: f.id, Name: tunnelNameFromCalls(f.calls)}})
 		return string(raw), nil
 	}
-	if strings.Contains(call, "systemctl cat dorf-cloudflared.service") {
-		if f.serviceUnit != "" {
-			return f.serviceUnit, nil
-		}
-		return "", fmt.Errorf("not installed")
-	}
 	return "", nil
 }
 
-func TestGuidedTunnelReconciliationRetainsOnlyExactRunAuthority(t *testing.T) {
-	root := t.TempDir()
-	binary := filepath.Join(root, "cloudflared")
-	if err := os.WriteFile(binary, []byte("fake"), 0o700); err != nil {
+func TestGuidedTunnelRefusesHostnameOccupiedImmediatelyBeforeDNSMutation(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state")
+	binary, digest := installFakeCloudflared(t, statePath)
+	resolver := &fakeDNSResolver{}
+	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}
+	tunnel := Tunnel{
+		StatePath: statePath, Binary: binary, Origin: ComposeGatewayOrigin,
+		Runner: runner, Resolver: resolver, binarySHA256: digest,
+	}
+	if _, err := tunnel.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
+	runner.calls = nil
+	resolver.lookups = 0
+	runner.afterIngressValidation = func() {
+		// Another actor claims the hostname after the DNS preflight but before
+		// Cloudflare atomically applies the exact Tunnel route.
+		runner.dnsRouteErr = fmt.Errorf("hostname record now belongs to another target")
+	}
+
+	state, err := tunnel.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "route Cloudflare hostname") || !strings.Contains(err.Error(), "another target") {
+		t.Fatalf("late hostname occupation error=%v", err)
+	}
+	if state.DNSConfigured {
+		t.Fatalf("occupied hostname recorded as configured: %+v", state)
+	}
+	if resolver.lookups != 1 {
+		t.Fatalf("DNS preflight lookups=%d, want one initial observation", resolver.lookups)
+	}
+	if countCall(runner.calls, " ingress validate") != 1 || countCall(runner.calls, " route dns ") != 1 || countCall(runner.calls, "--overwrite-dns") != 0 {
+		t.Fatalf("occupied hostname mutation calls=%v", runner.calls)
+	}
+}
+
+func TestGuidedTunnelReplaysAmbiguousDNSCommitForExactRetainedTunnel(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state")
+	binary, digest := installFakeCloudflared(t, statePath)
+	resolver := &fakeDNSResolver{}
 	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}
-	resolver := &fakeDNSResolver{addresses: []string{"192.0.2.1"}}
-	tunnel := Tunnel{StatePath: filepath.Join(root, "state"), Binary: binary, Origin: "http://127.0.0.1:8317", Runner: runner, Resolver: resolver, RootPrefix: []string{}}
-	state, err := tunnel.Reconcile(context.Background(), "dorf.example.com", io.Discard, io.Discard)
+	tunnel := Tunnel{
+		StatePath: statePath, Binary: binary, Origin: ComposeGatewayOrigin,
+		Runner: runner, Resolver: resolver, binarySHA256: digest,
+	}
+
+	initial, err := tunnel.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !state.Complete || !state.DNSConfigured || !state.ServiceInstalled || state.TunnelID != runner.id || !probeIDPattern.MatchString(state.ProbeID) {
-		t.Fatalf("state=%#v", state)
+	// Simulate process loss after the exact route mutation succeeded but before
+	// its local completion flag was retained.
+	initial.DNSConfigured = false
+	if err := tunnel.save(initial); err != nil {
+		t.Fatal(err)
+	}
+	resolver.addresses = []string{"192.0.2.1"}
+	resolver.lookups = 0
+	runner.calls = nil
+	replayed, err := tunnel.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("replay exact retained Tunnel: %v", err)
+	}
+	if replayed.TunnelID != initial.TunnelID || replayed.Hostname != initial.Hostname || !replayed.DNSConfigured {
+		t.Fatalf("replayed state=%+v, initial=%+v", replayed, initial)
+	}
+	wantRoute := " route dns " + initial.TunnelID + " " + initial.Hostname
+	if countCall(runner.calls, wantRoute) != 1 || countCall(runner.calls, " create ") != 0 {
+		t.Fatalf("exact Tunnel replay calls=%v", runner.calls)
+	}
+	if countCall(runner.calls, "--overwrite-dns") != 0 {
+		t.Fatalf("exact Tunnel replay requested destructive DNS replacement: %v", runner.calls)
+	}
+}
+
+func TestGuidedTunnelPreparationRetainsRunAuthorityWithoutInstallingAService(t *testing.T) {
+	root := t.TempDir()
+	statePath := filepath.Join(root, "state")
+	binary, digest := installFakeCloudflared(t, statePath)
+	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}
+	tunnel := Tunnel{
+		StatePath:    statePath,
+		Binary:       binary,
+		Origin:       "http://127.0.0.1:8317",
+		Runner:       runner,
+		Resolver:     &fakeDNSResolver{},
+		binarySHA256: digest,
+	}
+
+	state, err := tunnel.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.DNSConfigured {
+		t.Fatalf("prepared state=%#v", state)
+	}
+	for _, path := range []string{state.CredentialPath, state.ConfigPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("retained run authority %q: %v", path, err)
+		}
 	}
 	if _, err := os.Stat(filepath.Join(tunnel.StatePath, "management")); !os.IsNotExist(err) {
 		t.Fatalf("temporary account authority remains: %v", err)
 	}
-	credential, err := os.Stat(state.CredentialPath)
-	if err != nil || credential.Mode().Perm() != 0o600 {
-		t.Fatalf("credential=%v err=%v", credential, err)
+	for _, forbidden := range []string{"systemctl", "install -m 0644", "sudo"} {
+		if countCall(runner.calls, forbidden) != 0 {
+			t.Fatalf("preparation invoked host service authority %q: %v", forbidden, runner.calls)
+		}
+	}
+}
+
+func TestPreparedTunnelRunsForegroundWithPinnedBinaryAndRetainedConfig(t *testing.T) {
+	root := t.TempDir()
+	statePath := filepath.Join(root, "state")
+	binary, digest := installFakeCloudflared(t, statePath)
+	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}
+	tunnel := Tunnel{
+		StatePath:    statePath,
+		Binary:       binary,
+		Origin:       "http://127.0.0.1:8317",
+		Runner:       runner,
+		Resolver:     &fakeDNSResolver{},
+		binarySHA256: digest,
+	}
+	state, err := tunnel.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.calls = nil
+
+	if err := tunnel.RunForeground(context.Background(), io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Join([]string{binary, "--no-autoupdate", "--config", state.ConfigPath, "tunnel", "run"}, " ")
+	if len(runner.calls) != 1 || runner.calls[0] != want {
+		t.Fatalf("foreground calls=%v, want %q", runner.calls, want)
+	}
+}
+
+func TestPreparedTunnelRefusesBinaryChangedAfterPreparation(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state")
+	binary, digest := installFakeCloudflared(t, statePath)
+	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}
+	tunnel := Tunnel{
+		StatePath: statePath, Binary: binary, Origin: ComposeGatewayOrigin,
+		Runner: runner, Resolver: &fakeDNSResolver{}, binarySHA256: digest,
+	}
+	if _, err := tunnel.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	runner.calls = nil
+	if err := os.WriteFile(binary, []byte("tampered"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	err := tunnel.RunForeground(context.Background(), io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("tampered cloudflared error=%v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("tampered cloudflared was executed: %v", runner.calls)
+	}
+}
+
+func TestPreparedTunnelRefusesConfigChangedAfterPreparation(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state")
+	binary, digest := installFakeCloudflared(t, statePath)
+	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}
+	tunnel := Tunnel{
+		StatePath: statePath, Binary: binary, Origin: ComposeGatewayOrigin,
+		Runner: runner, Resolver: &fakeDNSResolver{}, binarySHA256: digest,
+	}
+	state, err := tunnel.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.calls = nil
+	if err := os.WriteFile(state.ConfigPath, []byte("tunnel: malicious\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err = tunnel.RunForeground(context.Background(), io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "config checksum mismatch") {
+		t.Fatalf("tampered Tunnel config error=%v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("cloudflared ran with tampered config: %v", runner.calls)
+	}
+}
+
+func TestPrepareRuntimeBinaryUpdatesOnlyRetainedExecutableAuthority(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state")
+	legacyPath := filepath.Join(statePath, "bin", "legacy", "cloudflared")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacyRaw := []byte("legacy cloudflared")
+	if err := os.WriteFile(legacyPath, legacyRaw, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacyHash := sha256.Sum256(legacyRaw)
+	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}
+	legacy := Tunnel{
+		StatePath: statePath, Binary: legacyPath, Origin: ComposeGatewayOrigin,
+		Runner: runner, Resolver: &fakeDNSResolver{}, binarySHA256: hex.EncodeToString(legacyHash[:]),
+	}
+	if _, err := legacy.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	accountCalls := append([]string(nil), runner.calls...)
+
+	currentPath := filepath.Join(statePath, "bin", "current", "cloudflared")
+	if err := os.MkdirAll(filepath.Dir(currentPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	currentRaw := []byte("current pinned cloudflared")
+	if err := os.WriteFile(currentPath, currentRaw, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	currentHash := sha256.Sum256(currentRaw)
+	current := Tunnel{StatePath: statePath, Binary: currentPath, binarySHA256: hex.EncodeToString(currentHash[:])}
+	for attempt := 0; attempt < 2; attempt++ {
+		found, err := current.PrepareRuntimeBinary(context.Background())
+		if err != nil || !found {
+			t.Fatalf("attempt %d prepared=%t error=%v", attempt+1, found, err)
+		}
+	}
+	state, found, err := current.Current()
+	if err != nil || !found || state.BinaryPath != currentPath {
+		t.Fatalf("updated state=%+v found=%t error=%v", state, found, err)
+	}
+	if strings.Join(runner.calls, "\n") != strings.Join(accountCalls, "\n") {
+		t.Fatalf("runtime binary update repeated Cloudflare authority calls: before=%v after=%v", accountCalls, runner.calls)
+	}
+}
+
+func TestPrepareRuntimeBinaryRepairsConfigAfterStateCommitProcessLoss(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state")
+	binary, digest := installFakeCloudflared(t, statePath)
+	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}
+	tunnel := Tunnel{
+		StatePath: statePath, Binary: binary, Origin: "http://127.0.0.1:8317",
+		Runner: runner, Resolver: &fakeDNSResolver{}, binarySHA256: digest,
+	}
+	state, err := tunnel.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate process loss after Prepare retained the new state authority but
+	// before it atomically replaced the config derived from that state.
+	state.Origin = ComposeGatewayOrigin
+	if err := tunnel.save(state); err != nil {
+		t.Fatal(err)
+	}
+	runner.calls = nil
+
+	reconcile := Tunnel{StatePath: statePath, Binary: binary, Runner: runner, binarySHA256: digest}
+	found, err := reconcile.PrepareRuntimeBinary(context.Background())
+	if err != nil || !found {
+		t.Fatalf("repair retained config found=%t error=%v", found, err)
 	}
 	config, err := os.ReadFile(state.ConfigPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, wanted := range []string{`hostname: "dorf.example.com"`, "path: ^/\\.dorf/probe/" + state.ProbeID + "$", "service: http_status:204", "path: ^/v1(/.*)?$", `service: "http://127.0.0.1:8317"`, "service: http_status:404"} {
-		if !strings.Contains(string(config), wanted) {
-			t.Fatalf("config omitted %q:\n%s", wanted, config)
+	if got, want := string(config), reconcile.config(state); got != want {
+		t.Fatalf("repaired config=%q, want %q", got, want)
+	}
+	if _, desired, err := reconcile.ComposeState(); err != nil || !desired {
+		t.Fatalf("repaired Compose state desired=%t error=%v", desired, err)
+	}
+	for _, forbidden := range []string{"tunnel login", " create ", " route dns ", " token "} {
+		if countCall(runner.calls, forbidden) != 0 {
+			t.Fatalf("config recovery repeated Cloudflare authority call %q: %v", forbidden, runner.calls)
 		}
-	}
-	for _, forbidden := range []string{"temporary broad authority", "cert.pem"} {
-		if strings.Contains(string(config), forbidden) {
-			t.Fatalf("config retained %q", forbidden)
-		}
-	}
-	if !strings.Contains(runner.serviceUnit, fmt.Sprintf("User=%d", os.Getuid())) || !strings.Contains(runner.serviceUnit, "NoNewPrivileges=true") {
-		t.Fatalf("service would execute user-owned tunnel state as root:\n%s", runner.serviceUnit)
-	}
-	if countCall(runner.calls, "tunnel login") != 1 || countCall(runner.calls, " create ") != 1 || countCall(runner.calls, " route dns ") != 1 {
-		t.Fatalf("calls=%v", runner.calls)
-	}
-	if _, err := tunnel.Reconcile(context.Background(), "dorf.example.com", io.Discard, io.Discard); err != nil {
-		t.Fatalf("idempotent reconciliation: %v", err)
-	}
-	if countCall(runner.calls, "tunnel login") != 1 || countCall(runner.calls, " create ") != 1 || countCall(runner.calls, " route dns ") != 1 || countCall(runner.calls, "install -m 0644") != 1 {
-		t.Fatalf("replay repeated external creation: %v", runner.calls)
-	}
-	runner.serviceUnit = ""
-	if _, err := tunnel.Reconcile(context.Background(), "dorf.example.com", io.Discard, io.Discard); err != nil {
-		t.Fatalf("recover absent service: %v", err)
-	}
-	if countCall(runner.calls, "install -m 0644") != 2 {
-		t.Fatalf("absent service was not restored: %v", runner.calls)
-	}
-	tunnel.Origin = "http://10.44.0.1:8317"
-	updated, err := tunnel.Reconcile(context.Background(), "dorf.example.com", io.Discard, io.Discard)
-	if err != nil {
-		t.Fatalf("move Tunnel to private Incus origin: %v", err)
-	}
-	if updated.Origin != tunnel.Origin {
-		t.Fatalf("origin=%q, want %q", updated.Origin, tunnel.Origin)
-	}
-	config, err = os.ReadFile(updated.ConfigPath)
-	if err != nil || !strings.Contains(string(config), `service: "http://10.44.0.1:8317"`) {
-		t.Fatalf("updated config=%s err=%v", config, err)
-	}
-	if countCall(runner.calls, "tunnel login") != 1 || countCall(runner.calls, " create ") != 1 || countCall(runner.calls, " route dns ") != 1 {
-		t.Fatalf("origin update recreated Cloudflare authority: %v", runner.calls)
-	}
-	if countCall(runner.calls, "systemctl restart dorf-cloudflared.service") != 4 {
-		t.Fatalf("each reconciliation must reload exact config: %v", runner.calls)
 	}
 }
 
-func TestGuidedTunnelRepairsDeletedDNSRouteWithFreshAuthorization(t *testing.T) {
+func TestPreparedTunnelExposesStableComposeState(t *testing.T) {
 	root := t.TempDir()
-	binary := filepath.Join(root, "cloudflared")
-	if err := os.WriteFile(binary, []byte("fake"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	statePath := filepath.Join(root, "state")
+	binary, digest := installFakeCloudflared(t, statePath)
 	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}
-	resolver := &fakeDNSResolver{addresses: []string{"192.0.2.1"}}
-	tunnel := Tunnel{StatePath: filepath.Join(root, "state"), Binary: binary, Origin: "http://127.0.0.1:8317", Runner: runner, Resolver: resolver, RootPrefix: []string{}}
-	if _, err := tunnel.Reconcile(context.Background(), "dorf.example.com", io.Discard, io.Discard); err != nil {
+	tunnel := Tunnel{
+		StatePath: statePath, Binary: binary, Origin: ComposeGatewayOrigin,
+		Runner: runner, Resolver: &fakeDNSResolver{}, binarySHA256: digest,
+	}
+	if _, desired, err := tunnel.ComposeState(); err != nil || desired {
+		t.Fatalf("absent Compose state desired=%t err=%v", desired, err)
+	}
+	if _, err := tunnel.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	resolver.addresses = nil
-	state, err := tunnel.Reconcile(context.Background(), "dorf.example.com", io.Discard, io.Discard)
-	if err != nil {
-		t.Fatal(err)
+	prepared, desired, err := tunnel.ComposeState()
+	if err != nil || !desired || prepared.StatePath != tunnel.StatePath || len(prepared.Digest) != 64 {
+		t.Fatalf("Compose state=%+v desired=%t err=%v", prepared, desired, err)
 	}
-	if !state.DNSConfigured || !state.Complete {
-		t.Fatalf("repaired state=%#v", state)
-	}
-	if countCall(runner.calls, "tunnel login") != 2 || countCall(runner.calls, " route dns ") != 2 || countCall(runner.calls, " create ") != 1 {
-		t.Fatalf("DNS repair did not reuse the exact Tunnel: %v", runner.calls)
+	config, err := os.ReadFile(filepath.Join(tunnel.StatePath, "config.yml"))
+	if err != nil || !strings.Contains(string(config), `service: "`+ComposeGatewayOrigin+`"`) {
+		t.Fatalf("Compose sibling config=%s err=%v", config, err)
 	}
 }
 
-func TestGuidedTunnelRecoversCredentialAfterAmbiguousCreate(t *testing.T) {
+func installFakeCloudflared(t *testing.T, statePath string) (string, string) {
+	t.Helper()
+	binary := filepath.Join(statePath, "bin", BinaryVersion, "cloudflared")
+	if err := os.MkdirAll(filepath.Dir(binary), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte("fake")
+	if err := os.WriteFile(binary, raw, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(raw)
+	return binary, hex.EncodeToString(digest[:])
+}
+
+func TestCurrentRejectsUnprotectedOrLinkedOwnershipState(t *testing.T) {
 	root := t.TempDir()
-	binary := filepath.Join(root, "cloudflared")
-	if err := os.WriteFile(binary, []byte("fake"), 0o700); err != nil {
+	statePath := filepath.Join(root, "state")
+	if err := os.MkdirAll(statePath, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555", loseCredential: true}
-	tunnel := Tunnel{StatePath: filepath.Join(root, "state"), Binary: binary, Origin: "http://127.0.0.1:8317", Runner: runner, RootPrefix: []string{}}
-	state, err := tunnel.Reconcile(context.Background(), "dorf.example.com", io.Discard, io.Discard)
-	if err != nil {
+	state := []byte(`{"schema_version":1,"tunnel_name":"dorf-proof","hostname":"dorf.example.com","origin":"http://provider-gateway:8317"}`)
+	path := filepath.Join(statePath, "state.json")
+	if err := os.WriteFile(path, state, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(state.CredentialPath); err != nil {
-		t.Fatalf("recovered credential: %v", err)
+	if _, _, err := (Tunnel{StatePath: statePath}).Current(); err == nil || !strings.Contains(err.Error(), "protected") {
+		t.Fatalf("unprotected state error=%v", err)
 	}
-	if countCall(runner.calls, " create ") != 1 || countCall(runner.calls, " token ") != 1 {
-		t.Fatalf("calls=%v", runner.calls)
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if state, desired, err := (Tunnel{StatePath: statePath}).ComposeState(); err != nil || desired || state != (ComposeState{}) {
+		t.Fatalf("partial state=%#v desired=%t error=%v", state, desired, err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "foreign.json")
+	if err := os.WriteFile(target, state, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := (Tunnel{StatePath: statePath}).Current(); err == nil || !strings.Contains(err.Error(), "protected") {
+		t.Fatalf("linked state error=%v", err)
 	}
 }
 
@@ -216,6 +443,22 @@ func TestCloudflareHostnameContract(t *testing.T) {
 	got, err := GatewayURL("dorf.example.com")
 	if err != nil || got != "https://dorf.example.com/v1" {
 		t.Fatalf("url=%q err=%v", got, err)
+	}
+}
+
+func TestCloudflareTunnelOriginAllowsOnlyTheComposeGatewayServiceName(t *testing.T) {
+	got, err := validateOrigin(ComposeGatewayOrigin)
+	if err != nil || got != ComposeGatewayOrigin {
+		t.Fatalf("Compose origin=%q err=%v", got, err)
+	}
+	for _, invalid := range []string{
+		"http://gateway:8317",
+		"http://provider-gateway.internal:8317",
+		"http://provider-gateway:8318",
+	} {
+		if _, err := validateOrigin(invalid); err == nil {
+			t.Fatalf("accepted arbitrary service origin %q", invalid)
+		}
 	}
 }
 
@@ -251,14 +494,6 @@ func TestExecRunnerKeepsDiagnosticStderrOutOfMachineReadableOutput(t *testing.T)
 	_, err = (ExecRunner{}).Output(context.Background(), nil, "sh", "-c", `printf 'useful failure' >&2; exit 7`)
 	if err == nil || !strings.Contains(err.Error(), "useful failure") {
 		t.Fatalf("error=%v", err)
-	}
-}
-
-func TestGuidedTunnelRefusesForeignServiceUnit(t *testing.T) {
-	runner := &fakeRunner{serviceUnit: "[Unit]\nDescription=Operator service\n"}
-	_, err := (Tunnel{Runner: runner}).serviceOwned(context.Background(), "/owned/cloudflared", "/owned/config.yml")
-	if err == nil || !strings.Contains(err.Error(), "without Dorf ownership") {
-		t.Fatalf("foreign service error=%v", err)
 	}
 }
 

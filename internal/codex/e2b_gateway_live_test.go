@@ -70,7 +70,7 @@ func TestLiveE2BScopedGatewayCompletesCodexTurn(t *testing.T) {
 		}
 	})
 
-	routeURL, err := sandbox.ProviderRouteURL(ctx, "http://private.invalid/v1")
+	routeURL, err := sandbox.ProviderRouteURL(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"strconv"
+	"strings"
 
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
@@ -62,35 +62,32 @@ func (a Adapter) Exec(ctx context.Context, owner provider.Ownership, input []byt
 }
 
 func (a Adapter) Endpoint(ctx context.Context, owner provider.Ownership, port int) (provider.Endpoint, error) {
-	if port < 1 || port > 65535 {
-		return provider.Endpoint{}, fmt.Errorf("Incus endpoint port must be between 1 and 65535")
-	}
-	if err := a.Sandbox.AttestOwnership(ctx, owner); err != nil {
-		return provider.Endpoint{}, err
-	}
-	address, err := a.Sandbox.PrivateIPv4(ctx, owner.SandboxID)
-	if err != nil {
-		return provider.Endpoint{}, err
-	}
-	endpoint := "ws://" + net.JoinHostPort(address, strconv.Itoa(port))
-	return provider.NewEndpoint(endpoint, endpoint, nil), nil
+	return a.Sandbox.PortForwardEndpoint(ctx, owner, port)
 }
 
-func (a Adapter) ProviderRouteURL(ctx context.Context, baseURL string) (string, error) {
-	parsed, err := url.Parse(baseURL)
-	if err != nil {
-		return "", fmt.Errorf("provider route URL is invalid: %w", err)
+func (a Adapter) ProviderRouteURL(_ context.Context) (string, error) {
+	value := strings.TrimSpace(a.Config.ProviderGatewayURL)
+	parsed, err := url.Parse(value)
+	if value == "" || value != a.Config.ProviderGatewayURL || err != nil || parsed.Host == "" || parsed.User != nil || parsed.Path != "/v1" || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.Opaque != "" {
+		return "", fmt.Errorf("Incus Provider Gateway URL must be exact HTTPS /v1 or HTTP /v1 on a private non-loopback IP")
 	}
-	bridgeIPv4, err := a.Sandbox.BridgeIPv4(ctx)
-	if err != nil {
-		return "", err
+	switch parsed.Scheme {
+	case "https":
+		return parsed.String(), nil
+	case "http":
+		ip := net.ParseIP(parsed.Hostname())
+		if !privateGatewayIP(ip) || ip.IsLoopback() {
+			return "", fmt.Errorf("Incus HTTP Provider Gateway URL must use a private non-loopback IPv4 address")
+		}
+		return parsed.String(), nil
+	default:
+		return "", fmt.Errorf("Incus Provider Gateway URL must be exact HTTPS /v1 or HTTP /v1 on a private non-loopback IP")
 	}
-	address := net.ParseIP(parsed.Hostname())
-	bridge := net.ParseIP(bridgeIPv4)
-	if parsed.Scheme != "http" || address == nil || address.To4() == nil || bridge == nil || bridge.To4() == nil || !bridge.IsPrivate() || bridge.IsLoopback() || !address.Equal(bridge) {
-		return "", fmt.Errorf("provider route must use configured Incus bridge IPv4 %s", bridgeIPv4)
-	}
-	return baseURL, nil
+}
+
+func privateGatewayIP(ip net.IP) bool {
+	ipv4 := ip.To4()
+	return ipv4 != nil && (ipv4.IsPrivate() || ipv4[0] == 100 && ipv4[1]&0xc0 == 64)
 }
 
 var _ provider.Sandbox = Adapter{}

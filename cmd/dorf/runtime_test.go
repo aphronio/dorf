@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/core"
+	"github.com/aphronio/dorf/internal/deployment"
 	"github.com/aphronio/dorf/internal/direct"
+	"github.com/aphronio/dorf/internal/incus"
 )
 
 func TestDirectClientPromptIsExactAndFailClosed(t *testing.T) {
@@ -44,5 +48,41 @@ func TestDirectClientPromptIsExactAndFailClosed(t *testing.T) {
 				t.Fatal("changed direct Agent contract resolved a Harness operation")
 			}
 		})
+	}
+}
+
+func TestSandboxForIncusProfileRequiresAndUsesExactDeploymentAuthority(t *testing.T) {
+	authority := deployment.Incus{Endpoint: "unix:///var/lib/incus/unix.socket"}
+	authorityHash, err := authority.AuthorityHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := core.SandboxProfile{
+		Name: "local-codex", Provider: core.SandboxProviderIncus,
+		Artifact: strings.Repeat("a", 64), IncusEndpointAuthorityHash: authorityHash,
+		IncusProject: "dorf", IncusStoragePool: "default", IncusNetwork: "incusbr0",
+		IncusDiskSize: "40GiB", IncusGatewayURL: "http://10.44.0.1:8317/v1",
+	}
+
+	resolved, err := sandboxForProfile(config.Config{Workspace: "/workspace/job", Incus: &authority}, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := resolved.(incus.Adapter)
+	if !ok {
+		t.Fatalf("Incus runtime = %T", resolved)
+	}
+	connection := adapter.Config.Connection
+	if connection.Endpoint != authority.Endpoint || connection.Project != profile.IncusProject || connection.StoragePool != profile.IncusStoragePool ||
+		adapter.Config.ProviderGatewayURL != profile.IncusGatewayURL {
+		t.Fatalf("Incus runtime does not preserve endpoint/profile custody: %#v", adapter.Config)
+	}
+
+	if _, err := sandboxForProfile(config.Config{Workspace: "/workspace/job"}, profile); err == nil || !strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("missing Incus authority error = %v", err)
+	}
+	profile.IncusEndpointAuthorityHash = strings.Repeat("b", 64)
+	if _, err := sandboxForProfile(config.Config{Workspace: "/workspace/job", Incus: &authority}, profile); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("mismatched Incus authority error = %v", err)
 	}
 }

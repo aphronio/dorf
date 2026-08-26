@@ -43,11 +43,7 @@ func (e Externals) RouteCreate(ctx context.Context, job core.Job, sandbox core.S
 	if err := e.Sandbox.AttestOwnership(ctx, ownershipMetadata(sandbox)); err != nil {
 		return err
 	}
-	baseURL, err := e.Gateway.BaseURL()
-	if err != nil {
-		return err
-	}
-	baseURL, err = e.Sandbox.ProviderRouteURL(ctx, baseURL)
+	baseURL, err := e.Sandbox.ProviderRouteURL(ctx)
 	if err != nil {
 		return err
 	}

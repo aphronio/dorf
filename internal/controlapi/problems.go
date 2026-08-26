@@ -34,7 +34,7 @@ var problemCatalog = []ProblemDescriptor{
 	describeProblem(400, "invalid_query", "Query parameters are invalid", false),
 	describeProblem(404, "job_not_found", "Job not found", false),
 	describeProblem(404, "message_not_found", "Message not found", false),
-	describeProblem(409, "message_unavailable", "The Job cannot accept this Message", false),
+	describeProblem(409, "message_unavailable", "Message is unavailable for this operation", false),
 	describeProblem(405, "method_not_allowed", "Method not allowed", false),
 	describeProblem(406, "not_acceptable", "Accept must be text/event-stream", false),
 	describeProblem(404, "not_found", "Resource not found", false),

@@ -7,6 +7,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/incus"
+	incustest "github.com/aphronio/dorf/internal/incus/testkit"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
@@ -40,13 +41,14 @@ func TestHarnessObservationNeverFallsBackFromExactSandbox(t *testing.T) {
 	}
 }
 
-func TestSandboxRoutesRequireExactConfiguredBridgeAddress(t *testing.T) {
-	adapter := incus.Adapter{Sandbox: incus.Sandbox{Config: incus.Config{Network: "dorf0"}, Runner: bridgeAddressRunner{}}}
-	if _, err := adapter.ProviderRouteURL(context.Background(), "http://10.42.0.1:8317/v1"); err != nil {
+func TestSandboxRoutesUseOnlyTheExactConfiguredProfileURL(t *testing.T) {
+	adapter := incus.Adapter{Sandbox: incustest.Sandbox(bridgeAddressRunner{}, incus.Config{Network: "dorf0", ProviderGatewayURL: "http://10.42.0.1:8317/v1"})}
+	if _, err := adapter.ProviderRouteURL(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	for _, value := range []string{"http://10.43.0.1:8317/v1", "http://127.0.0.1:8317/v1", "http://0.0.0.0:8317/v1", "http://192.0.2.10:8317/v1", "https://10.42.0.1:8317/v1"} {
-		if _, err := adapter.ProviderRouteURL(context.Background(), value); err == nil {
+	for _, value := range []string{"", "http://127.0.0.1:8317/v1", "http://0.0.0.0:8317/v1", "http://192.0.2.10:8317/v1", "https://gateway.example/v1?token=x"} {
+		adapter.Config.ProviderGatewayURL = value
+		if _, err := adapter.ProviderRouteURL(context.Background()); err == nil {
 			t.Fatalf("accepted unsafe Sandbox route %s", value)
 		}
 	}

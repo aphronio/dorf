@@ -201,7 +201,7 @@ func (a Adapter) Endpoint(ctx context.Context, owner provider.Ownership, port in
 	return provider.NewEndpoint(endpoint.ListenURL, endpoint.DialURL, endpoint.Headers()), nil
 }
 
-func (a Adapter) ProviderRouteURL(_ context.Context, _ string) (string, error) {
+func (a Adapter) ProviderRouteURL(_ context.Context) (string, error) {
 	if strings.TrimSpace(a.Config.ProviderGatewayURL) == "" {
 		return "", &provider.UnsupportedError{Capability: "remote-provider-gateway-route"}
 	}

@@ -2,74 +2,177 @@ package incus
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
+	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
-type scriptedRunner struct {
-	calls    [][]string
-	inputs   [][]byte
-	existing bool
-	head     string
-	remote   string
-	name     string
-	metadata map[string]string
+type fakeFactory struct {
+	mu      sync.Mutex
+	client  *fakeClient
+	opens   int
+	configs []ConnectionConfig
 }
 
-type inventoryRunner struct {
-	instances []reviewInstance
-	exists    bool
-	calls     [][]string
+func (f *fakeFactory) Open(_ context.Context, config ConnectionConfig) (Client, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.opens++
+	f.configs = append(f.configs, config)
+	return f.client, nil
 }
 
-type imageInfoRunner struct{ result Result }
-
-type missingImageRunner struct{ create Result }
-
-func (r missingImageRunner) Run(_ context.Context, _ string, _ []byte, args ...string) (Result, error) {
-	if len(args) > 0 && args[0] == "info" {
-		return Result{ExitCode: 1, Stderr: "not found"}, nil
-	}
-	if len(args) > 0 && args[0] == "init" {
-		return r.create, nil
-	}
-	return Result{}, nil
+type fakeClient struct {
+	mu             sync.Mutex
+	instances      map[string]Instance
+	createErr      error
+	creates        []CreateInstanceRequest
+	starts         int
+	deletes        int
+	execCalls      [][]string
+	execResult     Result
+	networkIPv4    string
+	forwardCalls   int
+	forwardAddress string
+	forwardPort    int
+	forward        func(context.Context) (net.Conn, error)
 }
 
-func (r imageInfoRunner) Run(_ context.Context, command string, _ []byte, args ...string) (Result, error) {
-	if command != "incus" || strings.Join(args, " ") != "image info custom" {
-		return Result{ExitCode: 1, Stderr: "unexpected command"}, nil
+func newFakeClient(instances ...Instance) *fakeClient {
+	client := &fakeClient{instances: map[string]Instance{}}
+	for _, instance := range instances {
+		client.instances[instance.Name] = cloneInstance(instance)
 	}
-	return r.result, nil
+	return client
 }
 
-func TestResolveImageFingerprintTurnsAliasIntoExactIdentity(t *testing.T) {
-	fingerprint := strings.Repeat("a", 64)
-	got, err := ResolveImageFingerprint(context.Background(), "custom", imageInfoRunner{result: Result{Stdout: "Fingerprint: " + fingerprint + "\n"}})
-	if err != nil || got != fingerprint {
-		t.Fatalf("fingerprint=%q err=%v", got, err)
+func (c *fakeClient) Instances(context.Context) ([]Instance, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	result := make([]Instance, 0, len(c.instances))
+	for _, instance := range c.instances {
+		result = append(result, cloneInstance(instance))
 	}
-	if _, err := ResolveImageFingerprint(context.Background(), "custom", imageInfoRunner{result: Result{Stdout: "Aliases:\n- custom\n"}}); err == nil {
-		t.Fatal("missing exact fingerprint was accepted")
+	return result, nil
+}
+
+func (c *fakeClient) Instance(_ context.Context, name string) (Instance, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	instance, ok := c.instances[name]
+	if !ok {
+		return Instance{}, ErrNotFound
 	}
+	return cloneInstance(instance), nil
+}
+
+func (c *fakeClient) CreateInstance(_ context.Context, request CreateInstanceRequest) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.createErr != nil {
+		return c.createErr
+	}
+	c.creates = append(c.creates, request)
+	c.instances[request.Name] = Instance{Name: request.Name, Config: cloneStrings(request.Config)}
+	return nil
+}
+
+func (c *fakeClient) PatchInstanceConfig(_ context.Context, name string, required, updates map[string]string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	instance, ok := c.instances[name]
+	if !ok {
+		return ErrNotFound
+	}
+	for key, value := range required {
+		if instance.Config[key] != value {
+			return ownershipErrorf("Incus instance metadata %s does not match its durable owner", key)
+		}
+	}
+	instance.Config = cloneStrings(instance.Config)
+	for key, value := range updates {
+		instance.Config[key] = value
+	}
+	c.instances[name] = instance
+	return nil
+}
+
+func (c *fakeClient) StartInstance(_ context.Context, name string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	instance := c.instances[name]
+	instance.Running = true
+	c.instances[name] = instance
+	c.starts++
+	return nil
+}
+
+func (c *fakeClient) DeleteInstance(_ context.Context, name string, required map[string]string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key, value := range required {
+		if c.instances[name].Config[key] != value {
+			return ownershipErrorf("Incus instance metadata %s does not match its durable owner", key)
+		}
+	}
+	delete(c.instances, name)
+	c.deletes++
+	return nil
+}
+
+func (c *fakeClient) Exec(_ context.Context, _ string, _ []byte, args ...string) (Result, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.execCalls = append(c.execCalls, append([]string(nil), args...))
+	return c.execResult, nil
+}
+
+func (c *fakeClient) NetworkIPv4(context.Context, string) (string, error) {
+	return c.networkIPv4, nil
+}
+
+func (c *fakeClient) OpenPortForward(ctx context.Context, _ string, address string, port int) (net.Conn, error) {
+	c.mu.Lock()
+	c.forwardCalls++
+	c.forwardAddress, c.forwardPort = address, port
+	forward := c.forward
+	c.mu.Unlock()
+	if forward == nil {
+		return nil, errors.New("unexpected port forward")
+	}
+	return forward(ctx)
+}
+
+func (*fakeClient) Close() {}
+
+func cloneInstance(instance Instance) Instance {
+	instance.Config = cloneStrings(instance.Config)
+	return instance
+}
+
+func ownedInstance(owner OwnershipMetadata) Instance {
+	return Instance{Name: owner.SandboxID, Config: ownershipConfig(owner), Running: true}
 }
 
 func TestCreateClassifiesOnlyMissingImageAsUnavailableProfileArtifact(t *testing.T) {
 	owner := OwnershipMetadata{JobID: "job-1", SandboxID: "dorf-owned", OwnershipNonce: strings.Repeat("b", 64)}
 	for _, test := range []struct {
 		name        string
-		create      Result
+		createErr   error
 		unavailable bool
 	}{
-		{name: "missing image", create: Result{ExitCode: 1, Stderr: `Error: Image "missing" not found`}, unavailable: true},
-		{name: "other create failure", create: Result{ExitCode: 1, Stderr: "network unavailable"}},
+		{name: "missing image", createErr: errors.New(`create Incus instance: image "missing" not found`), unavailable: true},
+		{name: "other create failure", createErr: errors.New("network unavailable")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			sandbox := Sandbox{Config: Config{Image: "missing", Network: "incusbr0", DiskSize: "40GiB"}, Runner: missingImageRunner{create: test.create}}
+			client := newFakeClient()
+			client.createErr = test.createErr
+			sandbox := Sandbox{Config: Config{Image: "missing", Network: "incusbr0", DiskSize: "40GiB"}, ClientFactory: &fakeFactory{client: client}}
 			err := sandbox.ReconcileOwnedCreate(context.Background(), owner)
 			if provider.IsArtifactUnavailable(err) != test.unavailable {
 				t.Fatalf("unavailable=%v error=%v", provider.IsArtifactUnavailable(err), err)
@@ -78,155 +181,145 @@ func TestCreateClassifiesOnlyMissingImageAsUnavailableProfileArtifact(t *testing
 	}
 }
 
-func (r *inventoryRunner) Run(_ context.Context, command string, _ []byte, args ...string) (Result, error) {
-	r.calls = append(r.calls, append([]string{command}, args...))
-	joined := strings.Join(args, " ")
-	if strings.HasPrefix(joined, "list ") {
-		payload, _ := json.Marshal(r.instances)
-		return Result{Stdout: string(payload)}, nil
-	}
-	if strings.HasPrefix(joined, "info ") && !r.exists {
-		return Result{ExitCode: 1, Stderr: "not found"}, nil
-	}
-	return Result{}, nil
-}
-
 func TestSandboxRequiresExactDurableOwnership(t *testing.T) {
-	metadata := OwnershipMetadata{JobID: "job-1", SandboxID: "dorf-owned", OwnershipNonce: strings.Repeat("b", 64)}
-	config := map[string]string{
-		"user.dorf.owner": "sandbox", "user.dorf.job": metadata.JobID, "user.dorf.sandbox": metadata.SandboxID,
-		"user.dorf.ownership_nonce": metadata.OwnershipNonce,
-	}
-	runner := &inventoryRunner{exists: true, instances: []reviewInstance{{Name: metadata.SandboxID, Config: config}}}
-	sandbox := Sandbox{Runner: runner}
-	if err := sandbox.AttestOwnership(context.Background(), metadata); err != nil {
+	owner := OwnershipMetadata{JobID: "job-1", SandboxID: "dorf-owned", OwnershipNonce: strings.Repeat("b", 64)}
+	client := newFakeClient(ownedInstance(owner))
+	sandbox := Sandbox{ClientFactory: &fakeFactory{client: client}}
+	if err := sandbox.AttestOwnership(context.Background(), owner); err != nil {
 		t.Fatal(err)
 	}
-	wrong := metadata
+	wrong := owner
 	wrong.OwnershipNonce = strings.Repeat("c", 64)
 	if err := sandbox.AttestOwnership(context.Background(), wrong); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("mismatched owner metadata error=%v", err)
 	}
-	runner.instances = append(runner.instances, reviewInstance{Name: "dorf-competing", Config: config})
-	if err := sandbox.AttestOwnership(context.Background(), metadata); err == nil || !strings.Contains(err.Error(), "does not match") {
-		t.Fatalf("ambiguous Sandbox error=%v", err)
+	competing := ownedInstance(owner)
+	competing.Name = "dorf-competing"
+	client.instances[competing.Name] = competing
+	if err := sandbox.AttestOwnership(context.Background(), owner); err == nil {
+		t.Fatal("ambiguous Sandbox was accepted")
 	}
 }
 
 func TestSandboxDeletionIsRetrySafeButNeverDeletesForeignMetadata(t *testing.T) {
-	metadata := OwnershipMetadata{JobID: "job-1", SandboxID: "dorf-owned", OwnershipNonce: strings.Repeat("b", 64)}
-	runner := &inventoryRunner{}
-	sandbox := Sandbox{Runner: runner}
+	owner := OwnershipMetadata{JobID: "job-1", SandboxID: "dorf-owned", OwnershipNonce: strings.Repeat("b", 64)}
+	client := newFakeClient()
+	sandbox := Sandbox{ClientFactory: &fakeFactory{client: client}}
 	for range 2 {
-		if err := sandbox.DeleteOwned(context.Background(), metadata); err != nil {
+		if err := sandbox.DeleteOwned(context.Background(), owner); err != nil {
 			t.Fatal(err)
 		}
 	}
-	runner.exists = true
-	runner.instances = []reviewInstance{{Name: metadata.SandboxID, Config: map[string]string{"user.dorf.sandbox": metadata.SandboxID, "user.dorf.owner": "foreign"}}}
-	if err := sandbox.DeleteOwned(context.Background(), metadata); err == nil || !strings.Contains(err.Error(), "does not match") {
+	client.instances[owner.SandboxID] = Instance{Name: owner.SandboxID, Config: map[string]string{"user.dorf.sandbox": owner.SandboxID, "user.dorf.owner": "foreign"}}
+	if err := sandbox.DeleteOwned(context.Background(), owner); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("foreign Sandbox deletion error=%v", err)
 	}
 }
 
-func (r *scriptedRunner) Run(_ context.Context, command string, input []byte, args ...string) (Result, error) {
-	r.calls = append(r.calls, append([]string{command}, args...))
-	r.inputs = append(r.inputs, append([]byte(nil), input...))
-	joined := strings.Join(args, " ")
-	if strings.HasPrefix(joined, "list ") {
-		instances := []reviewInstance{}
-		if r.existing && r.metadata != nil {
-			instances = append(instances, reviewInstance{Name: r.name, Config: r.metadata})
-		}
-		payload, _ := json.Marshal(instances)
-		return Result{Stdout: string(payload)}, nil
-	}
-	if strings.HasPrefix(joined, "info ") && !r.existing {
-		return Result{ExitCode: 1, Stderr: "not found"}, nil
-	}
-	if strings.Contains(joined, "rev-parse --git-dir") && !r.existing {
-		return Result{ExitCode: 1, Stderr: "not a repository"}, nil
-	}
-	if strings.HasPrefix(joined, "init ") {
-		r.existing = true
-		r.name = args[2]
-		r.metadata = make(map[string]string)
-		for i := 3; i+1 < len(args); i++ {
-			if args[i] != "-c" {
-				continue
-			}
-			key, value, ok := strings.Cut(args[i+1], "=")
-			if ok {
-				r.metadata[key] = value
-			}
-			i++
-		}
-	}
-	if strings.Contains(joined, "git clone --no-checkout") {
-		r.existing = true
-	}
-	if strings.Contains(joined, "rev-parse HEAD") {
-		return Result{Stdout: r.head + "\n"}, nil
-	}
-	if strings.Contains(joined, "remote get-url origin") {
-		return Result{Stdout: r.remote + "\n"}, nil
-	}
-	if strings.HasPrefix(joined, "network get ") {
-		return Result{Stdout: r.head + "\n"}, nil
-	}
-	return Result{}, nil
-}
-
 func TestOwnedSandboxCreationUsesRecordedIdentityAndCredentialFreeBoundary(t *testing.T) {
-	runner := &scriptedRunner{}
-	sandbox := Sandbox{Config: Config{Image: "dorf-codex", Network: "incusbr0", DiskSize: "40GiB", Workspace: "/workspace/job"}, Runner: runner, Sleep: func(_ time.Duration) {}}
-	metadata := OwnershipMetadata{JobID: "job-1", SandboxID: "dorf-sandbox-exact", OwnershipNonce: strings.Repeat("a", 64)}
-	if err := sandbox.ReconcileOwnedCreate(context.Background(), metadata); err != nil {
+	client := newFakeClient()
+	factory := &fakeFactory{client: client}
+	sandbox := Sandbox{Config: Config{Image: "dorf-codex", Network: "incusbr0", DiskSize: "40GiB", Workspace: "/workspace/job"}, ClientFactory: factory, Sleep: func(time.Duration) {}}
+	owner := OwnershipMetadata{JobID: "job-1", SandboxID: "dorf-sandbox-exact", OwnershipNonce: strings.Repeat("a", 64)}
+	if err := sandbox.ReconcileOwnedCreate(context.Background(), owner); err != nil {
 		t.Fatal(err)
 	}
-	if err := sandbox.ReconcileOwnedCreate(context.Background(), metadata); err != nil {
+	if err := sandbox.ReconcileOwnedCreate(context.Background(), owner); err != nil {
 		t.Fatal(err)
 	}
-	creates := 0
+	if len(client.creates) != 1 || client.creates[0].Config["user.dorf.ownership_nonce"] != owner.OwnershipNonce || client.creates[0].StoragePool != DefaultStoragePool {
+		t.Fatalf("creates=%#v", client.creates)
+	}
 	credentialChecks := 0
-	for _, call := range runner.calls {
-		joined := strings.Join(call, " ")
-		if strings.HasPrefix(joined, "incus init ") {
-			creates++
-		}
-		if strings.Contains(joined, "auth.json") && strings.Contains(joined, "provider-route.key") {
+	for _, call := range client.execCalls {
+		if strings.Contains(strings.Join(call, " "), "auth.json") {
 			credentialChecks++
 		}
 	}
-	if creates != 1 {
-		t.Fatalf("Incus creates=%d, want 1", creates)
-	}
-	if credentialChecks == 0 {
-		t.Fatal("credential-free image boundary was not checked")
+	if credentialChecks != 2 {
+		t.Fatalf("credential checks=%d", credentialChecks)
 	}
 }
 
 func TestConfiguredBridgeIPv4ComesFromExactIncusNetwork(t *testing.T) {
-	runner := &scriptedRunner{}
-	sandbox := Sandbox{Config: Config{Network: "dorfbr0"}, Runner: runner}
-	runner.head = "10.42.0.1/24"
+	client := newFakeClient()
+	client.networkIPv4 = "10.42.0.1/24"
+	sandbox := Sandbox{Config: Config{Network: "dorfbr0"}, ClientFactory: &fakeFactory{client: client}}
 	address, err := sandbox.BridgeIPv4(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if address != "10.42.0.1" {
-		t.Fatalf("bridge address = %q", address)
-	}
-	if !hasCall(runner.calls, "incus network get dorfbr0 ipv4.address") {
-		t.Fatal("configured Incus network was not queried")
+		t.Fatalf("bridge address=%q", address)
 	}
 }
 
-func hasCall(calls [][]string, suffix string) bool {
-	for _, call := range calls {
-		if strings.HasSuffix(strings.Join(call, " "), suffix) {
-			return true
-		}
+func TestDefaultConnectionUsesDedicatedRestrictedProject(t *testing.T) {
+	connection := DefaultConnectionConfig()
+	if connection.Endpoint != "unix:///var/lib/incus/unix.socket" || connection.Project != "dorf" || connection.StoragePool != "default" {
+		t.Fatalf("default Incus connection=%#v", connection)
 	}
-	return false
 }
+
+func TestPortForwardEndpointIsFailClosedAndOpensAFreshOwnedStream(t *testing.T) {
+	owner := OwnershipMetadata{JobID: "job-1", SandboxID: "dorf-owned", OwnershipNonce: strings.Repeat("b", 64)}
+	client := newFakeClient(ownedInstance(owner))
+	var peers []net.Conn
+	client.forward = func(context.Context) (net.Conn, error) {
+		connection, peer := net.Pipe()
+		peers = append(peers, peer)
+		return connection, nil
+	}
+	t.Cleanup(func() {
+		for _, peer := range peers {
+			_ = peer.Close()
+		}
+	})
+	factory := &fakeFactory{client: client}
+	sandbox := Sandbox{ClientFactory: factory}
+	endpoint, err := sandbox.PortForwardEndpoint(context.Background(), owner, 4500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoint.ListenURL != "ws://127.0.0.1:4500" || endpoint.DialURL != "ws://incus.invalid:4500" {
+		t.Fatalf("endpoint=%#v", endpoint)
+	}
+	if _, err := endpoint.DialContext()(context.Background(), "tcp", "foreign.example:4500"); err == nil {
+		t.Fatal("synthetic endpoint dialer accepted a foreign target")
+	}
+	first, err := endpoint.DialContext()(context.Background(), "tcp", "incus.invalid:4500")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := endpoint.DialContext()(context.Background(), "tcp", "incus.invalid:4500")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = first.Close()
+	_ = second.Close()
+	if factory.opens != 3 || client.forwardCalls != 2 || client.forwardAddress != "127.0.0.1" || client.forwardPort != 4500 {
+		t.Fatalf("opens=%d forwards=%d target=%s:%d", factory.opens, client.forwardCalls, client.forwardAddress, client.forwardPort)
+	}
+}
+
+func TestPortForwardEndpointPropagatesDialCancellation(t *testing.T) {
+	owner := OwnershipMetadata{JobID: "job-1", SandboxID: "dorf-owned", OwnershipNonce: strings.Repeat("b", 64)}
+	client := newFakeClient(ownedInstance(owner))
+	client.forward = func(ctx context.Context) (net.Conn, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	endpoint, err := (Sandbox{ClientFactory: &fakeFactory{client: client}}).PortForwardEndpoint(context.Background(), owner, 4500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = endpoint.DialContext()(ctx, "tcp", "incus.invalid:4500")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("dial error=%v", err)
+	}
+}
+
+var _ ClientFactory = (*fakeFactory)(nil)
+var _ Client = (*fakeClient)(nil)

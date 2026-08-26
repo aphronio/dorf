@@ -21,7 +21,9 @@ import (
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
+	"github.com/aphronio/dorf/internal/controlreader"
 	"github.com/aphronio/dorf/internal/core"
+	"github.com/aphronio/dorf/internal/deployment"
 	"github.com/aphronio/dorf/internal/direct"
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/investigation"
@@ -430,9 +432,15 @@ func controlTestStore(t *testing.T) (postgres.Store, *absurd.Client, string) {
 	}
 	suffix := time.Now().UnixNano()
 	profileName := fmt.Sprintf("control-api-%d", suffix)
+	incusAuthorityHash, err := (deployment.Incus{Endpoint: "unix:///var/lib/incus/unix.socket"}).AuthorityHash()
+	if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
 	profile, _, err := store.CreateSandboxProfile(context.Background(), core.SandboxProfile{
 		Name: profileName, Provider: core.SandboxProviderIncus, Harness: "codex", Artifact: strings.Repeat("a", 64),
-		IncusNetwork: "incusbr0", IncusDiskSize: "40GiB",
+		IncusEndpointAuthorityHash: incusAuthorityHash, IncusProject: "dorf", IncusStoragePool: "default",
+		IncusNetwork: "incusbr0", IncusDiskSize: "40GiB", IncusGatewayURL: "http://10.44.0.1:8317/v1",
 	})
 	if err != nil {
 		db.Close()
@@ -514,13 +522,14 @@ func controlTestHandler(store postgres.Store, tasks *absurd.Client, provider gat
 
 func controlTestHandlerWithGitHub(store postgres.Store, tasks *absurd.Client, provider gateway.Gateway, auth controlauth.Service, runtimes core.SandboxRuntimeResolver, evidence blob.Store, github coding.InstallationDiscovery) http.Handler {
 	application := coreApplication(store, tasks)
+	reader := controlreader.Service{Store: store, Runtimes: runtimes, Provider: provider, Installations: github}
 	return controlapi.NewServer(controlapi.Discovery{Product: "dorf"}, auth,
 		controlAPIJobs{
 			store: store, tasks: tasks,
-			directAdmissions:        direct.NewAdmissionService(store, application, provider),
-			codingAdmissions:        coding.NewAdmissionService(store, application, provider, github),
-			investigationAdmissions: investigation.NewAdmissionService(store, application, provider),
-			runtimes:                runtimes, evidence: evidence,
+			directAdmissions:        direct.NewAdmissionService(store, application, reader),
+			codingAdmissions:        coding.NewAdmissionService(store, application, reader, reader),
+			investigationAdmissions: investigation.NewAdmissionService(store, application, reader),
+			reader:                  reader, evidence: evidence,
 		}).Handler
 }
 

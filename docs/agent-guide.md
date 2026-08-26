@@ -8,9 +8,9 @@ authority. [Getting started](getting-started.md) owns procedures and
 ## Role boundary
 
 The **deployment-host agent** may install Dorf, run setup, manage Profiles and optional integrations,
-operate diagnostics, reconcile Dorf's managed API and worker units, and coordinate storage,
+operate diagnostics, reconcile Dorf's managed Compose project, and coordinate storage,
 provider, Harness, and operator-owned ingress boundaries. It must pause for every password, secret,
-browser authorization, paid service, or consequential infrastructure choice.
+browser authorization, paid service, administrator helper, or consequential infrastructure choice.
 
 The **remote-client agent** installs and uses only the Dorf CLI. It may connect, check its own
 authentication, admit a direct Job or either documented built-in workflow, inspect and watch the
@@ -34,19 +34,30 @@ those operations.
 ## Deployment-host protocol
 
 Follow the complete setup and readiness procedure in Getting started. Let `dorf setup` select and
-prepare the approved Sandbox and Harness path; do not substitute direct Docker, Incus, PostgreSQL,
-systemd, E2B, Cloudflare, or Gateway mutations for its recovery. Prove the managed pair with the
-[service diagnostic](support.md), and use only its documented reconcile, restart, and bounded-log
-commands. Run the documented Profile, Provider Gateway, and `dorf doctor` checks with the exact
-selected names.
+prepare the approved Sandbox and Harness path. Setup's host-prerequisite checks are read-only. If it
+offers an administrator helper, follow the exact handoff in
+[Getting started](getting-started.md#1-install-the-application-initialize-a-deployment-host), pause
+for explicit human authorization, then rerun setup. Honor its Docker-authority warning even when no
+escalation prompt appears. The same pause-and-rerun rule applies when Compose reconciliation offers
+the fixed legacy-systemd retirement helper; do not stop, disable, edit, or remove units directly.
+
+Use setup's local image transport options only when the human explicitly requests the contributor
+or disposable-proof path documented in Getting started.
+
+Cloudflare has no shell helper. Keep its existing guided browser, DNS, and named-Tunnel flow, pausing
+for the human authorization it requests. Prove the managed Compose project with the
+[service diagnostic](support.md), and use only the lifecycle commands and targets documented by the
+[deployment-service authority](control-api.md#deployment-services). Run the documented Profile,
+Provider Gateway, and `dorf doctor` checks with the exact selected names. Do not directly supervise
+managed project processes.
 
 Optional integrations remain host concerns. Pause while the human completes browser authorization,
 and return a short-lived code only to its waiting command. Let runtime composition supply integration
 authority instead of putting credentials or integration settings in a Job request.
 
-Keep the operator-owned HTTPS ingress distinct from both the managed private control API and the
-Provider Gateway origin. Do not infer service readiness from a process or terminal merely remaining
-open; use the factual status result.
+Keep the operator-owned HTTPS ingress distinct from both the Compose-managed private control API and
+the Provider Gateway origin. Do not infer service readiness from a process or terminal merely
+remaining open; use the factual status result.
 
 ## Remote-client protocol
 

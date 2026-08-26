@@ -38,23 +38,50 @@ jobs:
         run: scripts/dev/setup.sh
       - name: Check SQL generation and live behavior
         run: .dorf/bin/mise run check
-      - name: Build supported release artifact
+      - name: Build and prove supported release artifacts
         run: .dorf/bin/mise exec -- scripts/build-release.sh dist/release
       - name: Test release installer
         run: bash scripts/install-test.sh dist/release/install.sh dist/release
+      - name: Test release authority
+        run: bash scripts/release-test.sh
       - name: Check generated installer
         run: |
           test -x dist/release/install.sh
           sh -n dist/release/install.sh
+          bash -n scripts/build-release.sh
+          bash -n scripts/install-test.sh
           bash -n scripts/release.sh
+          bash -n scripts/release-test.sh
+          bash -n scripts/integration/compose-vm.sh
+          bash -n scripts/integration/compose-vm-guest.sh
+          bash -n scripts/integration/compose-vm-test.sh
+          sh -n scripts/bootstrap/docker.sh
+          sh -n scripts/bootstrap/incus.sh
+          sh -n scripts/bootstrap/retire-systemd.sh
           bash -n scripts/incus/release-dorf-image.sh
           bash -n scripts/incus/check-image-inputs.sh
       - name: Smoke installed artifact
         run: |
-          archive="$(find dist/release -maxdepth 1 -name 'dorf_*_linux_x86_64.tar.gz' -print -quit)"
-          test -n "$archive"
+          version="$(.dorf/bin/mise exec -- go run ./cmd/dorf version | awk '{print $2}')"
+          artifact_basename="dist/release/dorf_${version}_linux_x86_64"
+          archive="${artifact_basename}.tar.gz"
+          image_archive="${artifact_basename}_container-image.docker.tar"
+          checksums="dist/release/dorf_${version}_checksums.txt"
+          test -f "$archive"
+          test -f "$image_archive"
+          test -f "$checksums"
+          test "$(awk -v file="$(basename "$archive")" '$2 == file { count += 1 } END { print count + 0 }' "$checksums")" -eq 1
+          test "$(awk -v file="$(basename "$image_archive")" '$2 == file { count += 1 } END { print count + 0 }' "$checksums")" -eq 1
+          test "$(wc -l < "$checksums")" -eq 2
+          (cd dist/release && sha256sum --check --strict "$(basename "$checksums")")
           smoke_dir="$(mktemp -d)"
           trap 'rm -rf -- "$smoke_dir"' EXIT
           tar -xzf "$archive" -C "$smoke_dir"
-          "$smoke_dir/dorf" version
+          test "$("$smoke_dir/dorf" version)" = "dorf $version"
+          test -x "$smoke_dir/bootstrap/docker.sh"
+          test -x "$smoke_dir/bootstrap/incus.sh"
+          test -x "$smoke_dir/bootstrap/retire-systemd.sh"
+          cmp scripts/bootstrap/docker.sh "$smoke_dir/bootstrap/docker.sh"
+          cmp scripts/bootstrap/incus.sh "$smoke_dir/bootstrap/incus.sh"
+          cmp scripts/bootstrap/retire-systemd.sh "$smoke_dir/bootstrap/retire-systemd.sh"
           .dorf/bin/mise exec -- go version -m "$smoke_dir/dorf"

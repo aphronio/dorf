@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
-	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/core"
+	"github.com/aphronio/dorf/internal/deployment"
 	"github.com/aphronio/dorf/internal/e2b"
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/incus"
@@ -38,7 +38,7 @@ func Run(ctx context.Context, db *sql.DB, cfg config.Config, profile core.Sandbo
 		}
 		checks = append(checks, Check{Name: name, Status: "failed", Detail: detail})
 	}
-	localVMs := profile.Provider == core.SandboxProviderIncus
+	localVMs := profile.Provider == core.SandboxProviderIncus && cfg.Incus != nil && strings.HasPrefix(cfg.Incus.Endpoint, "unix://")
 	capacityRepair := "provide at least 2 GiB total memory and 10 GiB free on /"
 	if localVMs {
 		capacityRepair = "provide at least 4 GiB total memory and 20 GiB free on /"
@@ -72,7 +72,7 @@ func Run(ctx context.Context, db *sql.DB, cfg config.Config, profile core.Sandbo
 	add("absurd-queue", err, "run dorf migrate")
 	switch profile.Provider {
 	case core.SandboxProviderIncus:
-		addIncusChecks(ctx, profile, add)
+		addIncusChecks(ctx, cfg.Incus, profile, add)
 	case core.SandboxProviderE2B:
 		adapter := e2b.Adapter{Config: e2b.AdapterConfig{Template: profile.Artifact, Workspace: cfg.Workspace, SandboxTimeout: profile.E2BSandboxTimeout, ProcessTimeout: cfg.TurnTimeout, ProviderGatewayURL: profile.E2BGatewayURL, AllowInternet: profile.E2BAllowInternet}}
 		add("e2b-profile", adapter.Validate(), "configure the exact E2B template, whole-second timeout, workspace, and deployment-owned HTTPS /v1 Gateway URL")
@@ -84,7 +84,7 @@ func Run(ctx context.Context, db *sql.DB, cfg config.Config, profile core.Sandbo
 	default:
 		add("sandbox-profile", fmt.Errorf("unsupported Sandbox provider %q in profile %q", profile.Provider, profile.Name), "select a supported named profile")
 	}
-	err = gateway.Gateway{StatePath: cfg.GatewayStatePath}.Check(ctx, connection)
+	err = (gateway.Gateway{StatePath: cfg.GatewayStatePath, InternalDialOrigin: cfg.GatewayInternalOrigin}).Check(ctx, connection)
 	repair := "connect the named provider and bind the broker to the private Incus bridge"
 	if profile.Provider == core.SandboxProviderE2B {
 		repair = "connect the named provider; the deployment-owned HTTPS route must reach its private broker"
@@ -93,7 +93,88 @@ func Run(ctx context.Context, db *sql.DB, cfg config.Config, profile core.Sandbo
 	return checks
 }
 
-func addIncusChecks(ctx context.Context, profile core.SandboxProfile, add func(string, error, string)) {
+type incusReadClient interface {
+	NetworkIPv4(context.Context, string) (string, error)
+	Close()
+}
+
+type incusCheckDependencies struct {
+	openClient              func(context.Context, incus.ConnectionConfig) (incusReadClient, error)
+	resolveImageFingerprint func(context.Context, incus.ConnectionConfig, string) (string, error)
+}
+
+var productionIncusCheckDependencies = incusCheckDependencies{
+	openClient: func(ctx context.Context, config incus.ConnectionConfig) (incusReadClient, error) {
+		return (incus.SDKClientFactory{}).Open(ctx, config)
+	},
+	resolveImageFingerprint: incus.ResolveImageFingerprint,
+}
+
+func addIncusChecks(ctx context.Context, authority *deployment.Incus, profile core.SandboxProfile, add func(string, error, string)) {
+	addIncusChecksWithDependencies(ctx, authority, profile, add, productionIncusCheckDependencies)
+}
+
+func addIncusChecksWithDependencies(ctx context.Context, authority *deployment.Incus, profile core.SandboxProfile, add func(string, error, string), dependencies incusCheckDependencies) {
+	connection, local, err := incusConnectionForProfile(authority, profile)
+	if local {
+		addLocalIncusHostChecks(add)
+	}
+	if err != nil {
+		add("incus-access", err, "configure the exact Incus endpoint authority selected by this profile")
+		add("incus-network", fmt.Errorf("Incus endpoint access is unavailable: %w", err), "create the configured private Incus bridge")
+		add("incus-image", fmt.Errorf("Incus endpoint access is unavailable: %w", err), "restore the exact Incus image fingerprint selected by this profile, then rerun profile verification")
+		return
+	}
+
+	client, err := dependencies.openClient(ctx, connection)
+	add("incus-access", err, "grant this deployment identity direct access to the configured Incus endpoint")
+	if err != nil {
+		add("incus-network", fmt.Errorf("Incus endpoint access is unavailable: %w", err), "create the configured private Incus bridge")
+		add("incus-image", fmt.Errorf("Incus endpoint access is unavailable: %w", err), "restore the exact Incus image fingerprint selected by this profile, then rerun profile verification")
+		return
+	} else {
+		defer client.Close()
+		_, networkErr := client.NetworkIPv4(ctx, profile.IncusNetwork)
+		if networkErr != nil {
+			networkErr = fmt.Errorf("inspect Incus network %q: %w", profile.IncusNetwork, networkErr)
+		}
+		add("incus-network", networkErr, "create the configured private Incus bridge")
+	}
+
+	_, imageErr := dependencies.resolveImageFingerprint(ctx, connection, profile.Artifact)
+	add("incus-image", imageErr, "restore the exact Incus image fingerprint selected by this profile, then rerun profile verification")
+}
+
+func incusConnectionForProfile(authority *deployment.Incus, profile core.SandboxProfile) (incus.ConnectionConfig, bool, error) {
+	if authority == nil {
+		return incus.ConnectionConfig{}, false, fmt.Errorf("Incus endpoint authority is not configured")
+	}
+	authorityHash, err := authority.AuthorityHash()
+	if err != nil {
+		return incus.ConnectionConfig{}, false, err
+	}
+	local := strings.HasPrefix(authority.Endpoint, "unix://")
+	if profile.IncusEndpointAuthorityHash == "" {
+		return incus.ConnectionConfig{}, local, fmt.Errorf("Incus profile %q does not select an endpoint authority", profile.Name)
+	}
+	if authorityHash != profile.IncusEndpointAuthorityHash {
+		return incus.ConnectionConfig{}, local, fmt.Errorf("configured Incus endpoint authority does not match profile %q", profile.Name)
+	}
+	connection := incus.ConnectionConfig{
+		Endpoint:             authority.Endpoint,
+		Project:              profile.IncusProject,
+		StoragePool:          profile.IncusStoragePool,
+		TLSServerCertificate: authority.ServerCertificate,
+		TLSClientCertificate: authority.ClientCertificate,
+		TLSClientKey:         authority.ClientPrivateKey,
+	}
+	if err := connection.Validate(); err != nil {
+		return incus.ConnectionConfig{}, local, err
+	}
+	return connection, local, nil
+}
+
+func addLocalIncusHostChecks(add func(string, error, string)) {
 	var platformErr error
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		platformErr = fmt.Errorf("found %s/%s; supported host is linux/amd64", runtime.GOOS, runtime.GOARCH)
@@ -104,30 +185,6 @@ func addIncusChecks(ctx context.Context, profile core.SandboxProfile, add func(s
 		kvmErr = kvm.Close()
 	}
 	add("hardware-virtualization", kvmErr, "enable virtualization and grant this user read/write access to /dev/kvm")
-	_, err := exec.LookPath("incus")
-	add("incus-command", err, "install and initialize Incus; no Docker socket is used")
-	runner := incus.CommandRunner{}
-	if err == nil {
-		result, runErr := runner.Run(ctx, "incus", nil, "info")
-		if runErr != nil {
-			err = runErr
-		} else if result.ExitCode != 0 {
-			err = fmt.Errorf("%s", strings.TrimSpace(result.Stderr))
-		}
-	}
-	add("incus-access", err, "grant the current user direct Incus access")
-	result, runErr := runner.Run(ctx, "incus", nil, "network", "show", profile.IncusNetwork)
-	err = runErr
-	if err == nil && result.ExitCode != 0 {
-		err = fmt.Errorf("network %s is unavailable", profile.IncusNetwork)
-	}
-	add("incus-network", err, "create the configured private Incus bridge")
-	result, runErr = runner.Run(ctx, "incus", nil, "image", "info", profile.Artifact)
-	err = runErr
-	if err == nil && result.ExitCode != 0 {
-		err = fmt.Errorf("image %s is unavailable", profile.Artifact)
-	}
-	add("incus-image", err, "restore the exact Incus image fingerprint selected by this profile, then rerun profile verification")
 }
 
 func HostCapacity(localVMs bool) error {

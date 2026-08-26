@@ -187,10 +187,10 @@ func TestAdmissionServiceHonorsExplicitProfileAndConnection(t *testing.T) {
 
 func verifiedAdmissionProfile(name string) core.SandboxProfile {
 	now := time.Unix(1, 0)
-	return core.SandboxProfile{
-		Name: name,
-		Verification: &core.ProfileVerification{
-			ContractVersion: core.BaseProfileContract, ProbeCompletedAt: now, CleanedAt: now,
-		},
+	profile := core.SandboxProfile{Name: name}
+	profile.DefinitionHash = profile.CurrentDefinitionHash()
+	profile.Verification = &core.ProfileVerification{
+		ContractVersion: core.BaseProfileContract, DefinitionHash: profile.DefinitionHash, ProbeCompletedAt: now, CleanedAt: now,
 	}
+	return profile
 }

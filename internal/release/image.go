@@ -1,6 +1,7 @@
 package release
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,6 +14,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/aphronio/dorf/internal/incus"
 )
@@ -151,98 +153,79 @@ func CreateManifest(archivePath, metadataPath, tag, sourceCommit, validatedAt, o
 	return os.WriteFile(outputPath, data, 0o644)
 }
 
-func InstallImage(ctx context.Context, manifestPath, archivePath, alias string) (Manifest, error) {
-	var manifest Manifest
-	data, err := os.ReadFile(manifestPath)
+func InstallImage(ctx context.Context, connection incus.ConnectionConfig, manifestPath, archivePath, alias string) (Manifest, error) {
+	manifest, archive, err := openValidatedImage(ctx, manifestPath, archivePath)
 	if err != nil {
+		return Manifest{}, err
+	}
+	defer archive.Close()
+	if err := installValidatedImage(ctx, connection, manifest, archive, alias); err != nil {
 		return manifest, err
-	}
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return manifest, err
-	}
-	if err := validate(manifest, archivePath); err != nil {
-		return manifest, err
-	}
-	file, err := os.Open(archivePath)
-	if err != nil {
-		return manifest, err
-	}
-	hash := sha256.New()
-	size, err := io.Copy(hash, file)
-	file.Close()
-	if err != nil {
-		return manifest, err
-	}
-	if size != manifest.Archive.Size || hex.EncodeToString(hash.Sum(nil)) != manifest.Archive.SHA256 {
-		return manifest, fmt.Errorf("official image archive does not match its manifest")
-	}
-	runner := incus.CommandRunner{}
-	previousFingerprint := ""
-	previous, previousErr := runner.Run(ctx, "incus", nil, "image", "info", alias)
-	if previousErr == nil && previous.ExitCode == 0 {
-		previousFingerprint = outputFingerprint(previous.Stdout)
-		if !digest.MatchString(previousFingerprint) {
-			return manifest, fmt.Errorf("existing Incus image alias %s has no exact fingerprint", alias)
-		}
-	}
-	result, err := runner.Run(ctx, "incus", nil, "image", "info", manifest.ImageFingerprint)
-	if err == nil && result.ExitCode == 0 {
-		// The immutable image is already present; only converge the friendly alias.
-	} else {
-		result, err = runner.Run(ctx, "incus", nil, "image", "import", archivePath)
-		if err != nil {
-			return manifest, err
-		}
-		if result.ExitCode != 0 {
-			return manifest, fmt.Errorf("Incus image import failed: %s", result.Stderr)
-		}
-	}
-	if previousFingerprint == manifest.ImageFingerprint {
-		return manifest, nil
-	}
-	if previousFingerprint != "" {
-		result, err = runner.Run(ctx, "incus", nil, "image", "alias", "delete", alias)
-		if err != nil {
-			return manifest, err
-		}
-		if result.ExitCode != 0 {
-			return manifest, fmt.Errorf("Incus image alias removal failed: %s", result.Stderr)
-		}
-	}
-	result, err = runner.Run(ctx, "incus", nil, "image", "alias", "create", alias, manifest.ImageFingerprint)
-	if err != nil {
-		return manifest, err
-	}
-	if result.ExitCode != 0 {
-		if previousFingerprint != "" {
-			_, _ = runner.Run(ctx, "incus", nil, "image", "alias", "create", alias, previousFingerprint)
-		}
-		return manifest, fmt.Errorf("Incus image alias failed: %s", result.Stderr)
-	}
-	result, err = runner.Run(ctx, "incus", nil, "image", "info", alias)
-	if err != nil {
-		return manifest, err
-	}
-	if result.ExitCode != 0 {
-		return manifest, fmt.Errorf("installed image alias is not inspectable")
-	}
-	if outputFingerprint(result.Stdout) != manifest.ImageFingerprint {
-		_, _ = runner.Run(ctx, "incus", nil, "image", "alias", "delete", alias)
-		if previousFingerprint != "" {
-			_, _ = runner.Run(ctx, "incus", nil, "image", "alias", "create", alias, previousFingerprint)
-		}
-		return manifest, fmt.Errorf("installed image alias does not resolve to the verified fingerprint")
 	}
 	return manifest, nil
 }
 
-func outputFingerprint(output string) string {
-	for _, line := range strings.Split(output, "\n") {
-		if strings.HasPrefix(line, "Fingerprint: ") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "Fingerprint: "))
-		}
+func openValidatedImage(ctx context.Context, manifestPath, archivePath string) (Manifest, *os.File, error) {
+	var manifest Manifest
+	manifestInfo, err := os.Stat(manifestPath)
+	if err != nil {
+		return manifest, nil, err
 	}
-	return ""
+	if manifestInfo.Size() < 1 || manifestInfo.Size() > 64<<10 {
+		return manifest, nil, fmt.Errorf("official image manifest exceeds its exact size bounds")
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return manifest, nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&manifest); err != nil {
+		return manifest, nil, err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return manifest, nil, fmt.Errorf("official image manifest has trailing content")
+	}
+	if err := validate(manifest, archivePath); err != nil {
+		return manifest, nil, err
+	}
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return manifest, nil, err
+	}
+	hash := sha256.New()
+	size, err := io.Copy(hash, &contextReader{ctx: ctx, reader: file})
+	if err != nil {
+		file.Close()
+		return manifest, nil, err
+	}
+	if size != manifest.Archive.Size || hex.EncodeToString(hash.Sum(nil)) != manifest.Archive.SHA256 {
+		file.Close()
+		return manifest, nil, fmt.Errorf("official image archive does not match its manifest")
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		file.Close()
+		return manifest, nil, fmt.Errorf("rewind verified Incus image archive: %w", err)
+	}
+	return manifest, file, nil
+}
+
+func installValidatedImage(ctx context.Context, connection incus.ConnectionConfig, manifest Manifest, archive io.Reader, alias string) error {
+	return incus.InstallUnifiedVMArchive(ctx, connection, archive, manifest.Archive.Name, manifest.ImageFingerprint, alias)
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r *contextReader) Read(buffer []byte) (int, error) {
+	select {
+	case <-r.ctx.Done():
+		return 0, r.ctx.Err()
+	default:
+		return r.reader.Read(buffer)
+	}
 }
 
 func validate(m Manifest, archivePath string) error {
@@ -255,11 +238,15 @@ func validate(m Manifest, archivePath string) error {
 	if m.BaseImage.Reference != BaseImageReference || !digest.MatchString(m.BaseImage.Fingerprint) {
 		return fmt.Errorf("official image manifest has no exact Debian 13 base identity")
 	}
-	if m.Archive.Name != ArchiveName || filepath.Base(archivePath) != ArchiveName || m.Archive.SHA256 != m.ImageFingerprint || !digest.MatchString(m.ImageFingerprint) || m.Archive.Size < 1 {
+	if m.Archive.Name != ArchiveName || filepath.Base(archivePath) != ArchiveName || m.Archive.SHA256 != m.ImageFingerprint || !digest.MatchString(m.ImageFingerprint) || m.Archive.Size < 1 || m.Archive.Size > 2_000_000_000 {
 		return fmt.Errorf("official image manifest has invalid archive identity")
 	}
 	if !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(m.ReleaseTag) || !oid.MatchString(m.SourceCommit) {
 		return fmt.Errorf("official image manifest has invalid release identity")
+	}
+	validatedAt, err := time.Parse(time.RFC3339, m.ValidatedAt)
+	if err != nil || !strings.HasSuffix(m.ValidatedAt, "Z") || validatedAt.Location() != time.UTC {
+		return fmt.Errorf("official image manifest has invalid validation time")
 	}
 	if err := validateHarnesses(m.Harnesses); err != nil {
 		return fmt.Errorf("official image manifest %w", err)

@@ -12,6 +12,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/incus"
+	incustest "github.com/aphronio/dorf/internal/incus/testkit"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
@@ -123,9 +124,9 @@ func TestPrepareReviewCheckoutRealGitIgnoresImplementationForgedWorktree(t *test
 		"user.dorf.owner": "sandbox", "user.dorf.job": job.ID, "user.dorf.sandbox": run.Sandbox.ID, "user.dorf.agent_run": run.ID,
 		"user.dorf.revision": revision, "user.dorf.ownership_nonce": run.Sandbox.OwnershipNonce,
 	}
-	sandbox := incus.Sandbox{Config: incus.Config{Workspace: "/workspace/job"}}
-	runner := &localReviewBoundaryRunner{implementationName: sandbox.Name(job.ID), reviewerName: run.Sandbox.ID, implementationPath: implementationPath, reviewerPath: reviewerPath, metadata: metadata}
-	sandbox.Runner = runner
+	baseSandbox := incus.Sandbox{Config: incus.Config{Workspace: "/workspace/job"}}
+	runner := &localReviewBoundaryRunner{implementationName: baseSandbox.Name(job.ID), reviewerName: run.Sandbox.ID, implementationPath: implementationPath, reviewerPath: reviewerPath, metadata: metadata}
+	sandbox := incustest.Sandbox(runner, incus.Config{Workspace: "/workspace/job"})
 	controller := ReviewController{
 		Transport: incus.Adapter{Sandbox: sandbox},
 		Ownership: func(_ context.Context, sandboxID string) (provider.Ownership, error) {

@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/aphronio/dorf/internal/incus"
 )
 
 const manifestName = "dorf-incus-vm-v5-x86_64.json"
@@ -34,7 +36,7 @@ type githubAsset struct {
 
 // InstallPublishedImage downloads and verifies both assets from one immutable
 // GitHub release before delegating the local Incus convergence.
-func InstallPublishedImage(ctx context.Context, tag, alias string) (Manifest, error) {
+func InstallPublishedImage(ctx context.Context, connection incus.ConnectionConfig, tag, alias string) (Manifest, error) {
 	if !regexpTag.MatchString(tag) {
 		return Manifest{}, fmt.Errorf("release must be vMAJOR.MINOR.PATCH")
 	}
@@ -86,12 +88,16 @@ func InstallPublishedImage(ctx context.Context, tag, alias string) (Manifest, er
 	if err := downloadAsset(ctx, client, archiveAsset, archivePath); err != nil {
 		return Manifest{}, err
 	}
-	manifest, err := InstallImage(ctx, manifestPath, archivePath, alias)
+	manifest, archive, err := openValidatedImage(ctx, manifestPath, archivePath)
 	if err != nil {
 		return Manifest{}, err
 	}
+	defer archive.Close()
 	if manifest.ReleaseTag != tag || manifest.Archive.Size != archiveAsset.Size || "sha256:"+manifest.Archive.SHA256 != archiveAsset.Digest {
 		return Manifest{}, fmt.Errorf("official image manifest does not agree with GitHub release authority")
+	}
+	if err := installValidatedImage(ctx, connection, manifest, archive, alias); err != nil {
+		return Manifest{}, err
 	}
 	return manifest, nil
 }

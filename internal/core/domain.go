@@ -6,6 +6,8 @@ package core
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -72,23 +74,29 @@ const (
 // selected by name at Job admission. It is immutable while referenced by an
 // incompletely cleaned Job. Provider credentials remain deployment secrets.
 type SandboxProfile struct {
-	Name              string               `json:"name"`
-	Provider          SandboxProvider      `json:"provider"`
-	Harness           string               `json:"harness"`
-	Artifact          string               `json:"artifact"`
-	IncusNetwork      string               `json:"incus_network,omitempty"`
-	IncusDiskSize     string               `json:"incus_disk_size,omitempty"`
-	E2BGatewayURL     string               `json:"e2b_gateway_url,omitempty"`
-	E2BSandboxTimeout time.Duration        `json:"e2b_sandbox_timeout,omitempty"`
-	E2BAllowInternet  bool                 `json:"e2b_allow_internet,omitempty"`
-	Default           bool                 `json:"default"`
-	CreatedAt         time.Time            `json:"created_at,omitempty"`
-	Verification      *ProfileVerification `json:"verification,omitempty"`
+	Name                       string               `json:"name"`
+	Provider                   SandboxProvider      `json:"provider"`
+	Harness                    string               `json:"harness"`
+	Artifact                   string               `json:"artifact"`
+	DefinitionHash             string               `json:"definition_hash,omitempty"`
+	IncusEndpointAuthorityHash string               `json:"incus_endpoint_authority_hash,omitempty"`
+	IncusProject               string               `json:"incus_project,omitempty"`
+	IncusStoragePool           string               `json:"incus_storage_pool,omitempty"`
+	IncusNetwork               string               `json:"incus_network,omitempty"`
+	IncusDiskSize              string               `json:"incus_disk_size,omitempty"`
+	IncusGatewayURL            string               `json:"incus_gateway_url,omitempty"`
+	E2BGatewayURL              string               `json:"e2b_gateway_url,omitempty"`
+	E2BSandboxTimeout          time.Duration        `json:"e2b_sandbox_timeout,omitempty"`
+	E2BAllowInternet           bool                 `json:"e2b_allow_internet,omitempty"`
+	Default                    bool                 `json:"default"`
+	CreatedAt                  time.Time            `json:"created_at,omitempty"`
+	Verification               *ProfileVerification `json:"verification,omitempty"`
 }
 
 type ProfileVerification struct {
 	ProfileName      string    `json:"profile_name"`
 	ContractVersion  string    `json:"contract_version"`
+	DefinitionHash   string    `json:"definition_hash"`
 	SandboxID        string    `json:"sandbox_id"`
 	OwnershipNonce   string    `json:"-"`
 	HarnessVersion   string    `json:"harness_version,omitempty"`
@@ -99,9 +107,40 @@ type ProfileVerification struct {
 }
 
 func (p SandboxProfile) BaseVerified() bool {
-	return p.Verification != nil && p.Verification.ContractVersion == BaseProfileContract &&
+	definitionHash := p.CurrentDefinitionHash()
+	return p.DefinitionHash != "" && p.DefinitionHash == definitionHash && p.Verification != nil &&
+		p.Verification.DefinitionHash == definitionHash && p.Verification.ContractVersion == BaseProfileContract &&
 		!p.Verification.ProbeCompletedAt.IsZero() && !p.Verification.CleanedAt.IsZero() &&
 		p.Verification.LastError == ""
+}
+
+// CurrentDefinitionHash binds every Sandbox and Harness fact whose change
+// invalidates functional verification. The profile name and mutable
+// presentation/receipt fields are deliberately excluded.
+func (p SandboxProfile) CurrentDefinitionHash() string {
+	fields := []string{
+		"dorf-sandbox-profile-v1",
+		string(p.Provider),
+		p.Harness,
+		p.Artifact,
+		p.IncusEndpointAuthorityHash,
+		p.IncusProject,
+		p.IncusStoragePool,
+		p.IncusNetwork,
+		p.IncusDiskSize,
+		p.IncusGatewayURL,
+		p.E2BGatewayURL,
+		strconv.FormatInt(int64(p.E2BSandboxTimeout), 10),
+		strconv.FormatBool(p.E2BAllowInternet),
+	}
+	var canonical strings.Builder
+	for _, field := range fields {
+		canonical.WriteString(strconv.Itoa(len(field)))
+		canonical.WriteByte(':')
+		canonical.WriteString(field)
+	}
+	digest := sha256.Sum256([]byte(canonical.String()))
+	return hex.EncodeToString(digest[:])
 }
 
 type Job struct {

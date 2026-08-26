@@ -7,11 +7,12 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/incus"
+	incustest "github.com/aphronio/dorf/internal/incus/testkit"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
-func testSandbox(runner incus.Runner) incus.Adapter {
-	return incus.Adapter{Sandbox: incus.Sandbox{Runner: runner}}
+func testSandbox(runner incustest.Runner) incus.Adapter {
+	return incus.Adapter{Sandbox: incustest.Sandbox(runner, incus.Config{})}
 }
 
 func testOwner(sandboxID string) provider.Ownership {

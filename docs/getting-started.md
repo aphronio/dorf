@@ -14,8 +14,8 @@ The installer downloads the matching x86_64 Linux archive and checksum, verifies
 atomically installing `dorf` to `~/.local/bin`, and prints a `PATH` handoff when needed. It does not
 run setup. A standalone install prints the next-step `dorf setup` guidance; `dorf update` uses the
 same verified installer while omitting that fresh-install hint. On a deployment host with Dorf's
-managed API and worker already installed, update also hands those services to the new binary for
-reconciliation and restart; a remote CLI-only installation remains service-free. Install an exact
+Compose project already present, update also hands that project to the new binary for reconciliation
+and restart; a remote CLI-only installation remains project-free. Install an exact
 release by using its pinned installer asset:
 
 ```bash
@@ -35,7 +35,8 @@ gh release download "$RELEASE_TAG" --repo aphronio/dorf --dir "$release_dir" \
   --pattern "dorf_${RELEASE_TAG#v}_checksums.txt"
 (cd "$release_dir" && sha256sum --check "dorf_${RELEASE_TAG#v}_checksums.txt")
 tar -xzf "$release_dir/dorf_${RELEASE_TAG#v}_linux_x86_64.tar.gz" -C "$release_dir"
-sudo install -m 0755 "$release_dir/dorf" /usr/local/bin/dorf
+mkdir -p "$HOME/.local/bin"
+install -m 0755 "$release_dir/dorf" "$HOME/.local/bin/dorf"
 dorf version
 ```
 
@@ -50,34 +51,75 @@ convergent setup entry point:
 dorf setup
 ```
 
-It prepares Docker/PostgreSQL first, then offers local Incus, cloud E2B, both, or neither. Selecting a
-provider continues through Harness choice, ChatGPT-subscription or OpenAI-API authentication,
-provider inputs, profile creation, functional verification, and default selection. E2B uses Dorf's
-exact public Standard template build unless `--e2b-template` selects a custom exact build, and needs
-one stable HTTPS `/v1` Gateway route. Setup can verify an existing route or guide a named Cloudflare
-Tunnel after you authorize a hostname on a
-Cloudflare-managed domain. Interactive setup discovers the hostname's DNS provider and offers the
-guided Tunnel only when it finds Cloudflare nameservers and no existing address records; every
-other domain stays on the existing-HTTPS-ingress path.
+Setup first checks for a usable Docker Engine and Compose plugin. When either is not ready, it
+materializes the exact version-matched `docker.sh` helper, prints the command an administrator may
+inspect and run, links the equivalent upstream [Docker Engine](https://docs.docker.com/engine/install/)
+and [Compose plugin](https://docs.docker.com/compose/install/linux/) installation authorities, and
+exits with a resumable handoff. Dorf never runs the helper or invokes `sudo`. After the operator
+prepares Docker, rerun the same command. Docker-daemon access is root-equivalent authority even
+though Dorf does not escalate itself. The shipped bootstrap helpers automate only their stated
+clean Ubuntu 24.04 noble amd64 host with systemd; on another supported x86_64 Linux host, follow the
+linked upstream or manual preparation authority and then rerun setup.
 
-After persisting deployment configuration, setup shows and reconciles the supported managed API and
-worker pair. This happens even when the operator selects no Sandbox provider yet, so the control
-plane is ready while Job admission waits for a verified Profile. Use `--yes` to approve the shown
-service plan in automation. The public HTTPS ingress remains an independent operator responsibility;
-the [Remote Control API](control-api.md#deployment-services) owns the exact service boundary.
+The managed deployment converges the one versioned Compose topology defined by the
+[Remote Control API](control-api.md#deployment-services). It does so even when the operator selects
+no Sandbox provider, leaving Job admission to wait for a verified Profile. Use `--yes` to approve
+the shown Dorf-owned project plan in automation. Public HTTPS control ingress remains an independent
+operator responsibility.
 
-When supported Ubuntu 24.04 host changes are needed, setup previews and applies only those exact
-changes after approval. `--yes` approves the same host and Cloudflare plans for automation. Setup
-reuses one unambiguous ready AI connection when it already exists; otherwise automation must name
-one with `--ai-connection` or explicitly select its authentication mode. Sandbox provider choices
-remain explicit. `dorf setup --yes` alone prepares the common durable foundation and managed
-services; it does not silently select a Sandbox provider.
+Before any real Compose apply, Dorf checks only the three service names shipped by the superseded
+systemd deployment. If an intact root-owned unit for the same numeric operator remains active or
+enabled, Dorf materializes the version-matched `retire-systemd.sh` helper and exits with an exact
+administrator command. That helper reattests the fixed units, stops and disables only those units,
+and deletes no files; it is safe to rerun after a partial attempt. A same-named foreign, modified,
+or differently owned unit is refused for manual review. Dorf itself never invokes `sudo` or a
+mutating `systemctl` command. After the helper succeeds, rerun the interrupted setup, reconcile, or
+update command.
 
-Sign out and back in if setup adds Docker or Incus group access, then run the same command again.
-Setup initializes a pristine Incus daemon only when Incus was selected and preserves operator-owned
-storage and networking. It owns only the labeled `dorf-postgres` container and
-`dorf-postgres-data` volume, exposes PostgreSQL on loopback, and never gives a Sandbox the host
-Docker socket.
+Setup then offers local Incus, cloud E2B, both, or neither. A selected Incus endpoint must already
+be usable. For the default local `unix:///var/lib/incus/unix.socket` authority only, setup can
+materialize the version-matched `incus.sh` administrator helper, print its exact command and the
+upstream manual path, and exit. A custom Unix socket receives an exact repair-or-select handoff
+instead of a host recipe. An HTTPS endpoint is rejected while remote Incus remains unsupported.
+Dorf does not install Incus or QEMU, enable a
+service, change group membership, initialize the daemon, or mutate a host network. The manual
+authority is the upstream [Incus installation
+guide](https://linuxcontainers.org/incus/docs/main/installing/). The helper owns any administrator
+action and login handoff; rerun setup afterward. A Dorf Deployment configures at most one Incus
+endpoint, while each Incus Profile owns its restricted project, pool, network, exact image, disk
+contract, and guest-reachable Provider Gateway URL. Guided local setup may create that route from
+one unambiguous prepared bridge observation; the [Provider Gateway
+authority](project/provider-gateway.md) owns the exact persistence and no-runtime-inference rule.
+Remote Incus never uses that convenience and remains unsupported until the live gate in
+[Support](support.md) passes.
+
+When the selected Profile predates endpoint custody, guided setup adopts only its exact legacy
+shape after persisting the prepared local endpoint. Legacy Incus profiles move to the guided
+`dorf` project, `default` pool, and `incusbr0` network; Dorf does not copy an image from another
+Incus project. Adoption removes any settled verification and default selection, safely finishes an
+interrupted verification Sandbox when present, and requires a fresh live proof before admission.
+If the image is unavailable in the adopted project, install it there explicitly and rerun setup.
+
+Selecting a provider continues through Harness choice, ChatGPT-subscription or OpenAI-API
+authentication, provider inputs, profile creation, functional verification, and default selection.
+E2B uses Dorf's exact public Standard template build unless `--e2b-template` selects a custom exact
+build, and needs one stable HTTPS `/v1` Gateway route. The [Provider Gateway
+authority](project/provider-gateway.md) owns retained-candidate replay, reconciliation, live
+verification, and default-commit semantics. Automation can name a candidate with
+`--ai-connection` or explicitly select its authentication mode. Sandbox provider choices remain
+explicit. Running
+`dorf setup --yes` alone creates the common Compose deployment and does not silently select one.
+
+Ordinary setup consumes the immutable release artifacts. `--local-image REF` instead selects one
+already-loaded Compose image, while the paired `--incus-manifest PATH --incus-archive PATH` options
+supply matching local Incus image assets and require `--sandbox-provider incus`. These are explicit
+contributor and disposable-integration-proof transports, not production channels or additional
+release authorities; omit them in an ordinary deployment.
+
+The Provider Gateway joins the same Compose project when an AI connection is configured. Setup can
+verify an existing Sandbox-reachable route or guide the named Cloudflare Tunnel owned by the
+[Provider Gateway authority](project/provider-gateway.md). This remains an unprivileged browser and
+DNS flow, not another shell helper.
 
 The separate `profile` and `provider` commands remain available for custom artifacts and advanced
 operations. Their exact-artifact, credential, and route boundaries are described by the
@@ -119,14 +161,14 @@ Replacing the configured credential bundle retains its explicit `--yes` approval
 ## 3. Connect one remote CLI Client
 
 The deployment host owns setup, Profiles, provider and Harness credentials, PostgreSQL, and the
-managed worker. A remote client machine needs only the Dorf CLI, an operator-provided HTTPS
+managed Compose project. A remote client machine needs only the Dorf CLI, an operator-provided HTTPS
 Deployment URL, and one short-lived Enrollment; it does not run `dorf setup`.
 
-The control API URL must be an operator-owned HTTPS origin backed by the managed API's private
+The control API URL must be an operator-owned HTTPS origin backed by the Compose API's private
 listener. The operator must give it a different origin from the Provider Gateway: that separate
-`/v1` service provides model access to Sandboxes, not Dorf client operations. Dorf installs and
-supervises the private API and worker, but does not provision or infer public ingress. Verify the
-host pair before Enrollment:
+`/v1` service provides model access to Sandboxes, not Dorf client operations. Compose supervises the
+private API and worker, but Dorf does not provision or infer public ingress. Verify the project
+before Enrollment:
 
 ```bash
 dorf service status
@@ -246,7 +288,7 @@ dorf run \
 dorf inspect --follow JOB_ID
 ```
 
-The managed worker claims the Job; do not start a competing foreground worker in the ordinary
+The Compose-managed worker claims the Job; do not start a competing foreground worker in the ordinary
 deployment flow.
 
 For a human invocation, `--key` is optional: Dorf generates and prints an admission key before
@@ -311,7 +353,7 @@ dorf inspect --follow JOB_ID
 The follower shows current status and durable Job history until attention appears or cleanup
 completes. `Ctrl-C` stops only the local view, not the Job.
 
-The managed worker recovers after process loss; use the [service diagnostics](support.md) when an
+The Compose-managed worker recovers after process loss; use the [service diagnostics](support.md) when an
 operator action is needed. Use `dorf message` for later input and `--intent steer` to target active
 work. The coding workflow observes the exact pull request for acceptance or
 rejection and requests cleanup after its terminal policy is satisfied. To stop without a GitHub

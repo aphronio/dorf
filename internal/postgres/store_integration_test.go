@@ -34,6 +34,22 @@ type providerCheck struct {
 	err error
 }
 
+type scopedCleanupRequestStore struct {
+	postgres.Store
+	jobID string
+}
+
+func (s scopedCleanupRequestStore) CleanupRequests(ctx context.Context) ([]string, error) {
+	jobIDs, err := s.Store.CleanupRequests(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if slices.Contains(jobIDs, s.jobID) {
+		return []string{s.jobID}, nil
+	}
+	return nil, nil
+}
+
 func codingDelivery(ctx context.Context, store postgres.Store, jobID string) (*core.Delivery, error) {
 	work, err := store.AgentMessage(ctx, jobID)
 	if err != nil || work == nil {
@@ -163,10 +179,27 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 		db.Close()
 		t.Fatal(err)
 	}
-	profile, _, err := store.CreateSandboxProfile(context.Background(), core.SandboxProfile{
-		Name: "incus", Provider: core.SandboxProviderIncus, Harness: "codex", Artifact: strings.Repeat("a", 64),
-		IncusNetwork: "incusbr0", IncusDiskSize: "40GiB",
-	})
+	// The shared local test database may retain the pre-007 fixture across
+	// branch upgrades. Test data has no operator-owned compatibility boundary;
+	// converge only that exact fixture before exercising current behavior.
+	fixture := completeIncusProfile("incus", "codex", strings.Repeat("a", 64))
+	fixture.DefinitionHash = fixture.CurrentDefinitionHash()
+	if _, err := db.ExecContext(context.Background(), `
+delete from dorf.sandbox_profile_verifications
+where profile_name='incus'
+  and exists(select 1 from dorf.sandbox_profiles where name='incus' and definition_hash is null)`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(context.Background(), `update dorf.sandbox_profiles
+set definition_hash=$1,incus_endpoint_authority_hash=$2,incus_project=$3,incus_storage_pool=$4,
+    incus_network=$5,incus_disk_size=$6,incus_gateway_url=$7
+where name='incus' and definition_hash is null`, fixture.DefinitionHash, fixture.IncusEndpointAuthorityHash,
+		fixture.IncusProject, fixture.IncusStoragePool, fixture.IncusNetwork, fixture.IncusDiskSize, fixture.IncusGatewayURL); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	profile, _, err := store.CreateSandboxProfile(context.Background(), completeIncusProfile("incus", "codex", strings.Repeat("a", 64)))
 	if err != nil {
 		db.Close()
 		t.Fatal(err)
@@ -231,7 +264,10 @@ func TestActiveWorkerRecoversOrphanedCleanupRequestAndScheduledReplayIsInert(t *
 	if err != nil || !created {
 		t.Fatalf("admit Job=%#v created=%t err=%v", job, created, err)
 	}
-	application := core.Application{Store: store, Tasks: client}
+	application := core.Application{
+		Store: scopedCleanupRequestStore{Store: store, jobID: job.ID},
+		Tasks: client,
+	}
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	workerDone := make(chan error, 1)
 	recoveryDone := make(chan error, 1)
@@ -758,10 +794,7 @@ func TestSandboxProfileVerificationHasOneOwnerAndReleasesAfterCrash(t *testing.T
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
 	name := fmt.Sprintf("verify-owner-%d", time.Now().UnixNano())
-	if _, _, err := store.CreateSandboxProfile(ctx, core.SandboxProfile{
-		Name: name, Provider: core.SandboxProviderIncus, Harness: "codex", Artifact: strings.Repeat("d", 64),
-		IncusNetwork: "incusbr0", IncusDiskSize: "40GiB",
-	}); err != nil {
+	if _, _, err := store.CreateSandboxProfile(ctx, completeIncusProfile(name, "codex", strings.Repeat("d", 64))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -837,10 +870,7 @@ func TestSandboxProfileVerificationTransitionSerializesNewAdmission(t *testing.T
 	db, store, _ := testDatabase(t)
 	ctx := context.Background()
 	name := fmt.Sprintf("verify-serial-%d", time.Now().UnixNano())
-	if _, _, err := store.CreateSandboxProfile(ctx, core.SandboxProfile{
-		Name: name, Provider: core.SandboxProviderIncus, Harness: "codex", Artifact: strings.Repeat("f", 64),
-		IncusNetwork: "incusbr0", IncusDiskSize: "40GiB",
-	}); err != nil {
+	if _, _, err := store.CreateSandboxProfile(ctx, completeIncusProfile(name, "codex", strings.Repeat("f", 64))); err != nil {
 		t.Fatal(err)
 	}
 	_, verification, err := store.BeginSandboxProfileVerification(ctx, name)
@@ -1027,10 +1057,7 @@ func TestSandboxProfileUpdateInvalidatesActiveVerification(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
 	name := fmt.Sprintf("verification-update-%d", time.Now().UnixNano())
-	original := core.SandboxProfile{
-		Name: name, Provider: core.SandboxProviderIncus, Harness: "codex", Artifact: strings.Repeat("b", 64),
-		IncusNetwork: "incusbr0", IncusDiskSize: "40GiB",
-	}
+	original := completeIncusProfile(name, "codex", strings.Repeat("b", 64))
 	if _, _, err := store.CreateSandboxProfile(ctx, original); err != nil {
 		t.Fatal(err)
 	}
@@ -1132,10 +1159,7 @@ func TestSandboxProfileSchemaRejectsNullRequiredFacts(t *testing.T) {
 		}
 	}
 	name := fmt.Sprintf("invalid-verification-%d", time.Now().UnixNano())
-	if _, _, err := store.CreateSandboxProfile(ctx, core.SandboxProfile{
-		Name: name, Provider: core.SandboxProviderIncus, Harness: "codex", Artifact: strings.Repeat("e", 64),
-		IncusNetwork: "incusbr0", IncusDiskSize: "40GiB",
-	}); err != nil {
+	if _, _, err := store.CreateSandboxProfile(ctx, completeIncusProfile(name, "codex", strings.Repeat("e", 64))); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `

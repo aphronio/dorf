@@ -13,7 +13,6 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/direct"
 	"github.com/aphronio/dorf/internal/e2b"
-	"github.com/aphronio/dorf/internal/gateway"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/incus"
@@ -99,7 +98,7 @@ func (r profileRuntimeResolver) CodingAdmissions() coding.AdmissionService {
 	return coding.NewAdmissionService(
 		r.store,
 		application,
-		gateway.Gateway{StatePath: r.cfg.GatewayStatePath},
+		configuredProviderGateway(r.cfg),
 		githubapi.Client{APIURL: r.cfg.GitHubAPIURL, Credentials: r.cfg.GitHubCredentials},
 	)
 }
@@ -108,7 +107,7 @@ func (r profileRuntimeResolver) InvestigationAdmissions() investigation.Admissio
 	return investigation.NewAdmissionService(
 		r.store,
 		coreApplication(r.store, r.client),
-		gateway.Gateway{StatePath: r.cfg.GatewayStatePath},
+		configuredProviderGateway(r.cfg),
 	)
 }
 
@@ -170,7 +169,7 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (r
 		return provider.Ownership{JobID: owned.JobID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce}, nil
 	}
 	externals := terminal.Externals{
-		Sandbox: sandbox, Gateway: gateway.Gateway{StatePath: r.cfg.GatewayStatePath},
+		Sandbox: sandbox, Gateway: configuredProviderGateway(r.cfg),
 		Agent: agent, Ownership: ownership,
 	}
 	review := coding.ReviewController{Transport: sandbox, Agent: agent, Ownership: ownership}
@@ -266,9 +265,25 @@ func validateDirectAgentExecution(execution core.AgentMessageExecution) error {
 func sandboxForProfile(cfg config.Config, profile core.SandboxProfile) (provider.Sandbox, error) {
 	switch profile.Provider {
 	case core.SandboxProviderIncus:
+		if cfg.Incus == nil {
+			return nil, fmt.Errorf("invalid Incus Sandbox profile %q: Deployment Incus authority is not configured", profile.Name)
+		}
+		authorityHash, err := cfg.Incus.AuthorityHash()
+		if err != nil {
+			return nil, fmt.Errorf("invalid Incus Deployment authority: %w", err)
+		}
+		if authorityHash != profile.IncusEndpointAuthorityHash {
+			return nil, fmt.Errorf("invalid Incus Sandbox profile %q: endpoint authority does not match its verified definition", profile.Name)
+		}
 		return incus.Adapter{Sandbox: incus.Sandbox{Config: incus.Config{
 			Image: profile.Artifact, Network: profile.IncusNetwork, DiskSize: profile.IncusDiskSize,
-			Workspace: cfg.Workspace,
+			Workspace: cfg.Workspace, ProviderGatewayURL: profile.IncusGatewayURL,
+			Connection: incus.ConnectionConfig{
+				Endpoint: cfg.Incus.Endpoint, Project: profile.IncusProject, StoragePool: profile.IncusStoragePool,
+				TLSServerCertificate: cfg.Incus.ServerCertificate,
+				TLSClientCertificate: cfg.Incus.ClientCertificate,
+				TLSClientKey:         cfg.Incus.ClientPrivateKey,
+			},
 		}}}, nil
 	case core.SandboxProviderE2B:
 		if strings.TrimSpace(cfg.E2BAPIKey) == "" {

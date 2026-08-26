@@ -40,7 +40,9 @@ create_release() {
   local version="$1"
   local output="$2"
   local checksum="$3"
-  local archive="dorf_${version}_linux_x86_64.tar.gz"
+  local artifact_basename="dorf_${version}_linux_x86_64"
+  local archive="${artifact_basename}.tar.gz"
+  local container_archive="${artifact_basename}_container-image.docker.tar"
   local release_dir="$RELEASES_DIR/download/v$version"
   local stage="$WORK_DIR/stage-$version"
 
@@ -49,19 +51,27 @@ create_release() {
     "$output" >"$stage/dorf"
   chmod 0755 "$stage/dorf"
   tar -C "$stage" -czf "$release_dir/$archive" dorf
+  printf '%s\n' "unrelated container archive for checksum selection" \
+    >"$release_dir/$container_archive"
 
   if [[ "$checksum" == valid ]]; then
     (
       cd "$release_dir"
-      sha256sum "$archive" >"dorf_${version}_checksums.txt"
+      # Keep the unrelated asset first so a successful install proves the installer
+      # selects the one exact application-archive line rather than the first line.
+      sha256sum "$container_archive" "$archive" >"dorf_${version}_checksums.txt"
     )
   else
-    printf '%064d  %s\n' 0 "$archive" >"$release_dir/dorf_${version}_checksums.txt"
+    (
+      cd "$release_dir"
+      sha256sum "$container_archive" >"dorf_${version}_checksums.txt"
+      printf '%064d  %s\n' 0 "$archive" >>"dorf_${version}_checksums.txt"
+    )
   fi
 }
 
 prepare_generated_release() {
-  local archive_path archive
+  local archive_path
   local release_dir
 
   if [[ -z "$GENERATED_INSTALLER" ]]; then
@@ -69,12 +79,11 @@ prepare_generated_release() {
   fi
   [[ -n "$GENERATED_ASSETS" ]] || fail "generated installer assets directory is required"
   [[ -x "$GENERATED_INSTALLER" ]] || fail "generated installer is not executable: $GENERATED_INSTALLER"
-  archive_path="$(find "$GENERATED_ASSETS" -maxdepth 1 -type f \
-    -name 'dorf_*_linux_x86_64.tar.gz' -print -quit)"
-  [[ -n "$archive_path" ]] || fail "generated Go release archive is missing"
-  archive="$(basename "$archive_path")"
-  GENERATED_VERSION="${archive#dorf_}"
-  GENERATED_VERSION="${GENERATED_VERSION%_linux_x86_64.tar.gz}"
+  GENERATED_VERSION="$(sed -n 's/^DEFAULT_VERSION="v\([0-9][0-9.]*\)"$/\1/p' \
+    "$GENERATED_INSTALLER")"
+  [[ -n "$GENERATED_VERSION" ]] || fail "generated installer release version is missing"
+  archive_path="$GENERATED_ASSETS/dorf_${GENERATED_VERSION}_linux_x86_64.tar.gz"
+  [[ -f "$archive_path" ]] || fail "generated Go release archive is missing: $archive_path"
   release_dir="$RELEASES_DIR/download/v$GENERATED_VERSION"
   mkdir -p "$release_dir"
   cp "$archive_path" "$GENERATED_ASSETS/dorf_${GENERATED_VERSION}_checksums.txt" "$release_dir/"

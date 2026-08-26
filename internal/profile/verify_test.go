@@ -23,10 +23,12 @@ type verificationStore struct {
 }
 
 func newVerificationStore() *verificationStore {
+	profile := core.SandboxProfile{Name: "local", Harness: "codex", Artifact: "exact-artifact"}
+	profile.DefinitionHash = profile.CurrentDefinitionHash()
 	return &verificationStore{
-		profile: core.SandboxProfile{Name: "local", Harness: "codex"},
+		profile: profile,
 		verification: core.ProfileVerification{
-			ProfileName: "local", ContractVersion: core.BaseProfileContract,
+			ProfileName: "local", ContractVersion: core.BaseProfileContract, DefinitionHash: profile.DefinitionHash,
 			SandboxID: "dorf-profile-local", OwnershipNonce: "nonce", AttemptedAt: time.Now(),
 		},
 	}
@@ -44,7 +46,7 @@ func (s *verificationStore) BeginSandboxProfileVerification(context.Context, str
 	s.beginCalls++
 	if !s.verification.ProbeCompletedAt.IsZero() && !s.verification.CleanedAt.IsZero() {
 		s.verification = core.ProfileVerification{
-			ProfileName: s.profile.Name, ContractVersion: core.BaseProfileContract,
+			ProfileName: s.profile.Name, ContractVersion: core.BaseProfileContract, DefinitionHash: s.profile.DefinitionHash,
 			SandboxID: "dorf-profile-local", OwnershipNonce: "fresh-nonce", AttemptedAt: time.Now(),
 		}
 	}
@@ -146,7 +148,7 @@ func (s *verificationSandbox) Exec(context.Context, provider.Ownership, []byte, 
 func (*verificationSandbox) Endpoint(context.Context, provider.Ownership, int) (provider.Endpoint, error) {
 	return provider.NewEndpoint("", "", http.Header{}), nil
 }
-func (*verificationSandbox) ProviderRouteURL(context.Context, string) (string, error) { return "", nil }
+func (*verificationSandbox) ProviderRouteURL(context.Context) (string, error) { return "", nil }
 
 func TestVerifyBaseRecordsProbeAndExactCleanup(t *testing.T) {
 	store := newVerificationStore()

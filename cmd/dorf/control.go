@@ -22,22 +22,22 @@ import (
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/clientconfig"
 	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/composeservice"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
 	"github.com/aphronio/dorf/internal/controlclient"
+	"github.com/aphronio/dorf/internal/controlreader"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/direct"
-	"github.com/aphronio/dorf/internal/gateway"
+	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/investigation"
-	"github.com/aphronio/dorf/internal/managedservice"
 	"github.com/aphronio/dorf/internal/postgres"
-	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/version"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
-const defaultControlAddress = managedservice.ControlAddress
+const defaultControlAddress = composeservice.ControlAddress
 
 const maxControlModelBytes = 1024
 
@@ -802,14 +802,20 @@ type controlAPIJobs struct {
 	directAdmissions        direct.AdmissionService
 	codingAdmissions        coding.AdmissionService
 	investigationAdmissions investigation.AdmissionService
-	runtimes                core.SandboxRuntimeResolver
+	reader                  controlReader
 	evidence                blob.Store
 }
 
+type controlReader interface {
+	ReadFile(context.Context, string, string) ([]byte, error)
+	ObserveMessage(context.Context, string, string) (core.MessageResult, error)
+	DefaultConnection() (string, error)
+	Check(context.Context, string) error
+	DiscoverInstallation(context.Context, string) (string, error)
+}
+
 func (a controlAPIJobs) application() core.Application {
-	application := coreApplication(a.store, a.tasks)
-	application.SandboxRuntimes = a.runtimes
-	return application
+	return coreApplication(a.store, a.tasks)
 }
 
 func (a controlAPIJobs) AdmitDirect(ctx context.Context, key string, input controlapi.AdmitJobRequest) (controlapi.DirectJob, bool, error) {
@@ -976,18 +982,14 @@ func (a controlAPIJobs) GetMessage(ctx context.Context, jobID, messageID string)
 	if job.CleanupState == core.CleanupPending {
 		switch run.State {
 		case core.AgentRunCompleted:
-			if a.runtimes == nil {
-				return controlapi.Message{}, fmt.Errorf("Agent observation runtime is not configured")
+			if a.reader == nil {
+				return controlapi.Message{}, fmt.Errorf("control reader is not configured")
 			}
-			runtime, resolveErr := a.runtimes.ResolveSandbox(ctx, job.SandboxProfile)
-			if resolveErr != nil {
-				return controlapi.Message{}, resolveErr
-			}
-			if runtime.SandboxProfile != job.SandboxProfile || runtime.Execution == nil {
-				return controlapi.Message{}, fmt.Errorf("Agent observation runtime does not match Job profile %q", job.SandboxProfile)
-			}
-			observed, observeErr := runtime.Execution.ObserveSettledAgentMessage(ctx, job.ID, message.ID)
+			observed, observeErr := a.reader.ObserveMessage(ctx, job.ID, message.ID)
 			if observeErr != nil {
+				if errors.Is(observeErr, controlreader.ErrUnavailable) || errors.Is(observeErr, controlreader.ErrResponseTooLarge) {
+					return controlapi.Message{}, controlapi.ErrMessageUnavailable
+				}
 				return controlapi.Message{}, observeErr
 			}
 			result = &controlapi.MessageResult{Outcome: observed.Outcome, Output: observed.Output}
@@ -1047,22 +1049,19 @@ func (a controlAPIJobs) ReadSandboxFile(ctx context.Context, sandboxID, relative
 	if _, err := a.supportedJob(ctx, owned.JobID); err != nil {
 		return nil, err
 	}
-	handle, err := a.application().OpenJob(ctx, owned.JobID)
-	if err != nil {
-		return nil, err
+	if a.reader == nil {
+		return nil, fmt.Errorf("control reader is not configured")
 	}
-	sandbox, err := handle.Sandbox(ctx, owned.ID)
-	if err != nil {
-		return nil, err
-	}
-	contents, err := sandbox.ReadFile(ctx, relativePath)
+	contents, err := a.reader.ReadFile(ctx, owned.ID, relativePath)
 	switch {
-	case errors.Is(err, core.ErrSandboxFileCleanupFenced):
+	case errors.Is(err, controlreader.ErrUnavailable):
 		return nil, controlapi.ErrFileUnavailable
-	case errors.Is(err, provider.ErrInvalidFilePath):
+	case errors.Is(err, controlreader.ErrInvalidFilePath):
 		return nil, controlapi.ErrInvalidFilePath
-	case errors.Is(err, provider.ErrFileUnavailable):
+	case errors.Is(err, controlreader.ErrFileNotFound):
 		return nil, controlapi.ErrFileNotFound
+	case errors.Is(err, controlreader.ErrSandboxNotFound):
+		return nil, controlapi.ErrSandboxNotFound
 	case err != nil:
 		return nil, err
 	default:
@@ -1372,34 +1371,69 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 	set := flag.NewFlagSet("serve", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	address := set.String("listen", defaultControlAddress, "private loopback HTTP listen address")
+	allowContainerListen := set.Bool("allow-container-listen", false, "allow 0.0.0.0 for container port publishing")
+	readerMode := set.Bool("control-reader", false, "serve the Compose-internal read-only external-observation capability")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
 	if set.NArg() != 0 {
 		return fmt.Errorf("serve does not accept positional arguments")
 	}
-	if err := requireLoopbackAddress(*address); err != nil {
+	listenAddress, err := controlListenAddress(*address, *allowContainerListen)
+	if err != nil {
 		return err
 	}
-	listener, err := net.Listen("tcp", *address)
+	network := "tcp6"
+	if listenAddress.Addr().Is4() {
+		network = "tcp4"
+	}
+	listener, err := net.Listen(network, listenAddress.String())
 	if err != nil {
 		return fmt.Errorf("listen for Dorf control API: %w", err)
 	}
 	defer listener.Close()
-	auth := controlauth.Service{Store: store}
 	runtimes := profileRuntimeResolver{cfg: cfg, store: store, client: tasks}
-	jobs := controlAPIJobs{
-		store: store, tasks: tasks,
-		directAdmissions: direct.NewAdmissionService(store, coreApplication(store, tasks), gateway.Gateway{StatePath: cfg.GatewayStatePath}),
-		codingAdmissions: runtimes.CodingAdmissions(), investigationAdmissions: runtimes.InvestigationAdmissions(),
-		runtimes: runtimes, evidence: blob.Store{Root: cfg.BlobRoot},
-	}
-	server := controlapi.NewServer(controlapi.Discovery{
-		Product: "dorf", Version: version.Version,
-		Capabilities: []string{"direct_jobs", "coding_jobs", "codebase_investigation_jobs", "job_list", "job_watch", "messages", "job_retry", "sandbox_files", "evidence"},
-	}, auth, jobs)
-	if err := managedservice.NotifyReady(); err != nil {
-		return err
+	var (
+		server      *http.Server
+		serviceName = "Dorf control API"
+	)
+	if *readerMode {
+		token := strings.TrimSpace(os.Getenv("DORF_CONTROL_READER_TOKEN"))
+		handler, err := controlreader.NewHandler(token, controlreader.Service{
+			Store: store, Runtimes: runtimes,
+			Provider: configuredProviderGateway(cfg),
+			Installations: githubapi.Client{
+				APIURL: cfg.GitHubAPIURL, Credentials: cfg.GitHubCredentials,
+			},
+		})
+		if err != nil {
+			return err
+		}
+		server = &http.Server{
+			Handler:           handler,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       10 * time.Second,
+			WriteTimeout:      25 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		}
+		serviceName = "Dorf control reader"
+	} else {
+		reader, err := configuredControlReader(cfg, store, runtimes)
+		if err != nil {
+			return err
+		}
+		auth := controlauth.Service{Store: store}
+		jobs := controlAPIJobs{
+			store: store, tasks: tasks,
+			directAdmissions:        direct.NewAdmissionService(store, coreApplication(store, tasks), reader),
+			codingAdmissions:        coding.NewAdmissionService(store, coreApplication(store, tasks), reader, reader),
+			investigationAdmissions: investigation.NewAdmissionService(store, coreApplication(store, tasks), reader),
+			reader:                  reader, evidence: blob.Store{Root: cfg.BlobRoot},
+		}
+		server = controlapi.NewServer(controlapi.Discovery{
+			Product: "dorf", Version: version.Version,
+			Capabilities: []string{"direct_jobs", "coding_jobs", "codebase_investigation_jobs", "job_list", "job_watch", "messages", "job_retry", "sandbox_files", "evidence"},
+		}, auth, jobs)
 	}
 	serverCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -1411,7 +1445,11 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 		_ = server.Shutdown(shutdownCtx)
 		close(done)
 	}()
-	fmt.Fprintf(stdout, "Dorf control API listening privately on http://%s\n", listener.Addr())
+	if *allowContainerListen && listenAddress.Addr().Is4() && listenAddress.Addr().IsUnspecified() {
+		fmt.Fprintf(stdout, "%s listening inside its container on http://%s\n", serviceName, listener.Addr())
+	} else {
+		fmt.Fprintf(stdout, "%s listening privately on http://%s\n", serviceName, listener.Addr())
+	}
 	err = server.Serve(listener)
 	if errors.Is(err, http.ErrServerClosed) {
 		<-done
@@ -1420,10 +1458,40 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 	return err
 }
 
-func requireLoopbackAddress(address string) error {
-	parsed, err := netip.ParseAddrPort(strings.TrimSpace(address))
-	if err != nil || !parsed.Addr().IsLoopback() || parsed.Port() < 1024 {
-		return fmt.Errorf("control API listen address must use an exact loopback IP and port 1024-65535")
+func configuredControlReader(cfg config.Config, store postgres.Store, runtimes core.SandboxRuntimeResolver) (controlReader, error) {
+	origin := strings.TrimSpace(os.Getenv("DORF_CONTROL_READER_ORIGIN"))
+	token := strings.TrimSpace(os.Getenv("DORF_CONTROL_READER_TOKEN"))
+	if origin == "" && token == "" {
+		// Explicitly manually supervised local `dorf serve` remains useful in
+		// development. Compose always supplies the isolated HTTP capability.
+		return controlreader.Service{
+			Store: store, Runtimes: runtimes,
+			Provider: configuredProviderGateway(cfg),
+			Installations: githubapi.Client{
+				APIURL: cfg.GitHubAPIURL, Credentials: cfg.GitHubCredentials,
+			},
+		}, nil
 	}
-	return nil
+	if origin == "" || token == "" {
+		return nil, fmt.Errorf("control reader requires both DORF_CONTROL_READER_ORIGIN and DORF_CONTROL_READER_TOKEN")
+	}
+	client, err := controlreader.NewClient(origin, token, nil)
+	if err != nil {
+		return nil, err
+	}
+	return client, nil
+}
+
+func controlListenAddress(address string, allowContainerListen bool) (netip.AddrPort, error) {
+	parsed, err := netip.ParseAddrPort(strings.TrimSpace(address))
+	if err != nil || parsed.Port() < 1024 {
+		return netip.AddrPort{}, fmt.Errorf("control API listen address must use an exact IP and port 1024-65535")
+	}
+	if parsed.Addr().IsLoopback() {
+		return parsed, nil
+	}
+	if allowContainerListen && parsed.Addr().Is4() && parsed.Addr().IsUnspecified() {
+		return parsed, nil
+	}
+	return netip.AddrPort{}, fmt.Errorf("control API listen address must use an exact loopback IP; only --allow-container-listen permits 0.0.0.0 for container port publishing")
 }

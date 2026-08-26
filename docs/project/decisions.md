@@ -132,7 +132,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 | ID | Decision and why | Reconsider when |
 | --- | --- | --- |
 | D011 | **One coding task slice per Job, Assignment, isolated clone, branch, and PR proposal.** Revision retains those identities; merge, rejection, or abandonment is workflow-terminal. | A concrete workflow needs different cardinality with equally clear acceptance semantics. |
-| D012 | **Incus VM is the only current environment adapter.** It provides local isolation without exposing the host Docker daemon or home directory. | The Incus lifecycle is dogfooded and a meaningfully different environment is deliberately selected. |
+| D012 | **Incus VM was the first environment adapter.** Its exclusive-adapter choice is superseded by D067's provider-neutral Incus/E2B seam; its isolation boundary remains accepted. | The remaining isolation boundary no longer fits a proved provider. |
 | D013 | **GitHub PR is the acceptance primitive.** Git and GitHub already provide durable diffs, review, merge, and rejection. | A non-GitHub coding workflow becomes a real requirement. |
 | D014 | **SQLite state lives outside managed repos.** Local runtime and coding workflow indexing remains durable without modifying target repositories. | Multi-host coordination requires another store. |
 | D015 | **The Dorf control plane owns coding-branch authentication through the GitHub App.** It delivers short-lived installation tokens through the Environment seam without borrowing ambient controller-machine Git credentials, credential stores, or checkout state. | Another source-control host is supported or a narrower equally usable credential flow is proven. |
@@ -667,7 +667,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 - **Status:** Accepted direction — 2026-07-29; Go control plane at D047 cutover — 2026-08-08;
   remote E2B route wire proved — 2026-08-14; named Cloudflare route implemented, live hostname proof
-  pending — 2026-08-21
+  pending — 2026-08-21; deployment supervision and Incus route custody refined by D101 — 2026-08-26
 - **Decision:** Keep the Provider Gateway as a sibling application subsystem outside the durable
   Job core. Its programmatic boundary manages durable upstream Provider
   AI connections and revocable consumer-specific Inference Routes over a supervised broker backend.
@@ -676,26 +676,28 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   subscription or API credentials are never copied into clients or Sandboxes. CLIProxyAPI is the first
   concrete daemon backend; D035 is the first validated ChatGPT-to-Codex route.
 - **Location authority:** Deployment configuration resolves one Gateway data directory using
-  `XDG_DATA_HOME` (falling back to `~/.local/share`) or an explicit operator override. Provider setup,
-  doctor, admission, and task executors use that same adapter. Admission checks the named connection
-  before creating a durable Job; the Job stores only the connection name, never a host path.
-- **Local and remote posture:** The current broker has one concrete bind address. Host-only use may
-  bind loopback; Codex Sandbox composition binds the selected private Incus bridge address so both the
-  host and attached Sandboxes can reach it, never a wildcard or LAN address. An interface-scoped
-  firewall rule admits the gateway port only from the bridge. Connection and route semantics do not
-  depend on that location. A remote Sandbox may use the same route shape through an exact
-  deployment-supplied HTTPS `/v1` URL while the broker remains private behind an outbound tunnel.
-  The Sandbox adapter owns topology validation and exact-host default-deny egress; the revocable
-  consumer route key authenticates Gateway requests. Any exact stable HTTPS `/v1` ingress remains
-  valid deployment input. Guided setup owns one narrower convenience: a named outbound-only
-  Cloudflare Tunnel for an operator-authorized hostname, an exact retained Tunnel credential, and a
-  dedicated `dorf-cloudflared.service`. Only `/v1` reaches the private broker. One random nonsecret
-  probe path terminates inside the exact managed Tunnel configuration; readiness requires its HTTP
-  204 plus the private Gateway's anonymous HTTP 401. Operator-owned HTTPS ingress retains only the
-  latter universal contract because Dorf cannot attest routing it does not own. The broad Cloudflare
-  account certificate used to create the Tunnel and DNS route is removed after readiness. Disposable
-  Quick Tunnels remain proof-only. Workload identity beyond the scoped route and multi-user authority
-  remain unimplemented until a concrete deployment requires them.
+  `XDG_DATA_HOME` (falling back to `~/.local/share`). The Gateway-specific
+  `DORF_PROVIDER_GATEWAY_STATE` name is container-only and cannot relocate setup-owned host state.
+  Provider setup, doctor, admission, and task executors use that same adapter. Admission checks the
+  named connection before creating a durable Job; the Job stores only the connection name, never a
+  host path.
+- **Local and remote posture:** Every Sandbox Profile owns one exact guest-reachable `/v1` Gateway
+  URL; E2B requires HTTPS, while Incus may use an operator-routed private/VPN address or HTTPS. The
+  adapter verifies that persisted route rather than inferring it at runtime. Guided setup may
+  resolve one unambiguous prepared bridge IPv4 through the configured local Unix endpoint once and
+  persist the exact `http://IP:8317/v1` route in the new Profile. A remote endpoint never uses that
+  convenience. A remote Sandbox's scoped route key authenticates Gateway requests, and exact-host
+  default-deny egress remains adapter-owned.
+  Any exact stable HTTPS `/v1` ingress remains valid deployment input. Guided setup owns one narrower
+  convenience: a named outbound-only Cloudflare Tunnel for an operator-authorized hostname and exact
+  retained Tunnel credential. The Gateway and `cloudflared` run as foreground services under the one
+  Compose supervisor defined by D101; there is no host Cloudflare service. Only `/v1` reaches the
+  private broker. One random nonsecret probe path terminates inside the exact Tunnel configuration;
+  readiness requires its HTTP 204 plus the private Gateway's anonymous HTTP 401. Operator-owned HTTPS
+  ingress retains only the latter universal contract because Dorf cannot attest routing it does not
+  own. The broad Cloudflare account certificate used to create the Tunnel and DNS route is removed
+  after readiness. Disposable Quick Tunnels remain proof-only. Workload identity beyond the scoped
+  route and multi-user authority remain unimplemented until a concrete deployment requires them.
 - **Provider posture:** The gateway is intended to admit validated subscription providers such as
   ChatGPT, Kimi Code, or Grok and API-key providers such as OpenAI or OpenRouter. Names are direction,
   not support claims. Validate each provider, auth mode, consumer wire dialect, refresh path, and
@@ -832,8 +834,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D041 — Host setup is capability-first with narrow native-package recipes
 
-- **Status:** Accepted for initial open-source setup — 2026-08-04; automatic recipe narrowed to the
-  proven Ubuntu 24.04 cutover host — 2026-08-08
+- **Status:** Superseded by D101 — 2026-08-26
 - **Decision:** Accept any x86_64 Linux host whose local Incus daemon is already usable, but perform
   automatic package, service, and root-equivalent group mutations only through exact clean-host
   validated recipes. The Go cutover retains Ubuntu 24.04 LTS as the automatic clean-machine recipe;
@@ -1612,7 +1613,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 ## D067 — E2B is the next Sandbox portability proof target
 
 - **Status:** Accepted; complete second-provider Codex and Pi coding-to-PR terminals proven —
-  2026-08-14
+  2026-08-14; Incus endpoint and route custody refined by D070 and D101 — 2026-08-26
 - **Decision:** Pursue E2B as D063's second Sandbox provider one earned slice at a time. The first
   implementation is a narrow native Go control-plane client for one create attempt, exhaustive exact
   ownership discovery across running and paused Sandboxes, individual-resource attestation, and
@@ -1639,9 +1640,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   relies on the Dorf Sandbox name without its nonce. Incus resolves its deterministic instance while
   E2B exhaustively resolves one opaque provider locator from exact metadata. Authenticated endpoints
   expose separate guest-bind and controller-dial URLs plus cloned provider headers without exposing
-  their capability in formatting. Provider-route reachability is also adapter-owned: Incus validates
-  the exact configured private bridge, while E2B requires one exact HTTPS `/v1` URL and defaults to
-  allowing only that hostname over otherwise denied egress. A selected repository profile may
+  their capability in formatting. Provider-route reachability is also adapter-owned: each Profile
+  provides one exact guest-reachable Gateway URL, while E2B specifically requires HTTPS and defaults
+  to allowing only that hostname over otherwise denied egress. A selected repository profile may
   explicitly admit general internet egress. Tunnel lifecycle remains deployment-owned. A
   compile-time implementation assertion covers both adapters and an
   import-boundary test rejects Incus or E2B imports from common consumers. Startup selects exactly
@@ -1725,7 +1726,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   JavaScript SDK through a sidecar would add another protocol and process boundary before command
   streaming has proved that cost necessary.
 - **Reconsider when:** The native command protocol cannot remain smaller than a maintained sidecar,
-  E2B cannot support Dorf's no-duplicate recovery or scoped Provider Gateway route, managed-service
+  E2B cannot support Dorf's no-duplicate recovery or scoped Provider Gateway route, deployment-service
   cost or reliability fails dogfood, or another provider reaches the complete D063 coding-to-PR
   terminal with materially less authority overlap.
 
@@ -1807,10 +1808,15 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 ## D070 — Named Sandbox profiles pin exact artifacts and require Dorf verification
 
 - **Status:** Accepted incremental profile-management slice; base file contract refined by D089 and
-  online re-verification refined by D091 — 2026-08-22
+  online re-verification refined by D091; Incus endpoint custody refined by D101 — 2026-08-26
 - **Decision:** PostgreSQL owns named Sandbox profiles. A profile binds one provider, exact provider
   artifact, Harness, provider networking and lifecycle settings, and Dorf verification receipt.
   Provider credentials and host paths remain deployment configuration and never enter the profile.
+  One Deployment owns at most one Incus endpoint and client identity. An Incus profile binds that
+  endpoint's stable public identity and owns its restricted project, storage pool, network, exact
+  image and disk contract, and exact guest-reachable Provider Gateway URL; it never borrows ambient
+  Incus CLI context. The same endpoint contract admits a local Unix socket or remote HTTPS daemon,
+  though remote Incus remains unsupported until D101's complete live proof passes.
   One verified profile may be selected explicitly per Job; omission resolves the one deployment
   default. The Job durably pins the profile name. Workers resolve that name through the composition
   root into the existing provider-neutral Sandbox and Harness contracts, so workflows contain no
@@ -1826,10 +1832,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   operation, `bash`, `git`, `rg`, and the selected Harness/version, then ownership-deletes the
   Sandbox and confirms absence. Its stable
   ownership tuple and typed receipt make process-loss recovery converge through cleanup rather than
-  leak a proof resource. Each explicit `profile verify` and each selected-profile setup run starts
-  a fresh functional attempt after any prior settled receipt; an interrupted attempt resumes its
-  exact cleanup. Ordinary Job admission uses the latest successful receipt without making a
-  billable provider call. D091 separates that admission receipt from already-admitted runtime
+  leak a proof resource. Each explicit `profile verify` starts a fresh functional attempt after any
+  prior settled receipt; convergent setup reuses an exact current successful receipt instead of
+  making another billable provider call. An interrupted attempt resumes its exact cleanup. Ordinary
+  Job admission uses the same latest successful receipt. D091 separates that admission receipt from already-admitted runtime
   authority and permits a fresh attempt against the unchanged definition while Jobs remain open.
   If a provider definitively reports that the pinned artifact no longer
   exists, Core invalidates the receipt for new admission, leaves the affected Job at its exact
@@ -1863,8 +1869,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D071 — Setup converges one Docker PostgreSQL deployment
 
-- **Status:** Accepted portability and bootstrap slice, simplified to one usable setup path —
-  2026-08-21
+- **Status:** Superseded by D101 — 2026-08-26
 - **Decision:** Keep Dorf as a native Go binary with PostgreSQL as its external durability authority.
   The supported ordinary deployment has one database shape: Dorf-owned Docker PostgreSQL. There is
   no backend selection, native PostgreSQL installer, Compose wrapper, or separate host-install
@@ -2543,7 +2548,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 ## D097 — One authenticated HTTPS Deployment projects direct Job control
 
 - **Status:** Accepted and dogfooded — 2026-08-26; projection expanded by D098 and D099; automation
-  contract and service lifecycle refined by D100
+  contract refined by D100 and deployment lifecycle refined by D101
 - **Decision:** Expose one deliberately narrow external client boundary for a configured Dorf
   Deployment over HTTPS. The initial surface admits direct Jobs, returns their situation-first
   projection, and accepts an explicit cleanup request; D098 and D099 expand that same boundary. It
@@ -2557,7 +2562,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Deployment:** The API service binds a host-private HTTP listener behind operator-owned HTTPS
   ingress. It authenticates clients, admits and projects Jobs, and requests cleanup, but it registers
   no execution handlers. A separate durable worker owns task execution and recovery. D100 later
-  packages those two processes as managed services while keeping ingress operator-owned.
+  fixed their narrow lifecycle interface; D101 now supervises both in one Compose project while
+  keeping ingress operator-owned.
 - **Why:** SSH grants host authority that ordinary Job control neither needs nor should imply, while
   exposing every Core mechanism would be premature. The smaller authenticated projection makes a
   self-hosted deployment useful off-host without granting database, executor, provider, or host
@@ -2625,22 +2631,20 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D100 — Automation contract and managed host services stay narrow
 
-- **Status:** Accepted and dogfooded — 2026-08-26
+- **Status:** Automation contract accepted and dogfooded; service lifecycle superseded by D101 —
+  2026-08-26
 - **Decision:** Publish one embedded OpenAPI 3.1 document for the exact remote surface and derive the
   runtime RFC 9457 Problem responses and its `x-dorf-problems` catalog from one central authority.
   Add newest-first keyset listing of bounded Job summaries, stable JSON authentication status, and
   host-only Client list, show, and idempotent revoke commands. Do not add a generator dependency,
   SDK family, remote Client administration, or another status or event model.
-- **Service lifecycle:** `dorf setup` and `dorf service reconcile` own exactly two compiled systemd
-  system units: the private loopback API and durable worker. Units bind the exact operator, resolved
-  Dorf binary, protected persisted deployment configuration, required state paths, readiness
-  notification, restart policy, and a bounded hardening envelope. Reconciliation refuses foreign or
-  locally edited unit authority. `dorf update` asks the installed new binary to reconcile and restart
-  an existing pair, while remaining inert on a CLI-only machine. HTTPS ingress remains an
-  operator-owned, separately named authority and is not installed or inferred by Dorf.
-- **Proof:** The full live PostgreSQL suite passed. A non-TTY direct HTTPS client derived the Job-list
-  operation from the published OpenAPI document, traversed a page, and received the catalogued
-  `invalid_cursor` response for an altered cursor. A temporary Client appeared in host list and show,
+- **Service lifecycle:** Superseded by D101's one Compose project. D100's narrow setup, status,
+  restart, logs, reconcile, update, and operator-owned HTTPS ingress interfaces remain accepted;
+  systemd units, notification, fragment custody, and journal facts do not.
+- **Historical proof:** The full live PostgreSQL suite passed. A non-TTY direct HTTPS client derived
+  the Job-list operation from the published OpenAPI document, traversed a page, and received the
+  catalogued `invalid_cursor` response for an altered cursor. A temporary Client appeared in host
+  list and show,
   an idempotent revoke returned the same revoked identity, and the next request received `401`. A
   clean managed-service install passed `systemd-analyze verify`; a real Job completed across a worker
   restart, remained available across an API restart, and cleaned up successfully. Both units then
@@ -2653,5 +2657,88 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   D099's closed Job union. The shipped boundary is documented in the
   [Remote Control API](../control-api.md).
 - **Reconsider when:** A second concrete client earns generated distribution artifacts, a real
-  organization needs identity federation or roles, a supported non-systemd host needs an equivalent
-  lifecycle, or repeated ingress deployment evidence justifies Dorf owning that separate product.
+  organization needs identity federation or roles, or repeated ingress deployment evidence
+  justifies Dorf owning that separate product. Deployment-lifecycle reconsideration belongs to D101.
+
+## D101 — Compose owns deployment lifecycle; bootstrap privilege stays explicit
+
+- **Status:** Accepted implementation direction — 2026-08-26; live terminal proof pending
+- **Decision:** Replace D071's standalone PostgreSQL container and D100's systemd units with one
+  versioned Dorf Docker Compose project. The
+  [Remote Control API](../control-api.md#deployment-services) owns its exact service and network
+  topology. Each long-running responsibility has one
+  foreground container process and Compose is its only supervisor. The default project uses bridge
+  networking, publishes PostgreSQL and the control API only on host loopback, keeps the Gateway
+  private, and never mounts the host Docker socket into a Dorf workload or Sandbox.
+- **Database boundary:** The Compose-managed deployment defined here always uses the PostgreSQL
+  service in the project. `DORF_DATABASE_URL` remains a development, test, and explicitly manually supervised
+  process override; it does not select a second `dorf setup` or Compose topology.
+- **Operator lifecycle:** Preserve `dorf setup`, `dorf update`, `dorf service status`, `restart`,
+  `logs`, and `reconcile` as the human and agent interfaces, backed only by the exact Compose
+  project. Status reports project/service convergence and actual API readiness without fabricating
+  facts belonging to a superseded supervisor. Migrations settle once before the API and worker
+  start. The deployment uses the protected persisted configuration as authority and derives
+  container-only addresses and secrets from it rather than creating a second editable
+  configuration source. The supported release ships one immutable, checksummed Docker-loadable
+  container image archive; Compose loads and runs that exact image identity. A local image build
+  remains a contributor and disposable-test path rather than a second production release authority.
+  Setup's `--local-image` and paired `--incus-manifest`/`--incus-archive` inputs are explicit
+  transports for that contributor or disposable-proof path, not configurable release channels.
+- **Capability custody:** The private control API keeps database and HTTP admission authority but
+  receives no Sandbox-provider, GitHub, Gateway, or Incus credential or socket. One independently
+  keyed, authenticated control reader exposes only the fixed read operations required by that API.
+  The exact capability and network separation lives in the
+  [deployment-service authority](../control-api.md#deployment-services).
+- **Privilege and helpers:** Host prerequisites remain outside Dorf's runtime custody. The exact
+  no-hidden-privilege and administrator-handoff contract lives in
+  [Getting started](../getting-started.md#1-install-the-application-initialize-a-deployment-host)
+  and its equivalent manual authorities. The release ships the same small, inspectable helpers from
+  `scripts/bootstrap/`; they remain explicit, idempotent recipes for their stated proven host, not a
+  universal package manager or a second runtime reconciler. Before a real Compose apply, a read-only
+  transition gate detects only the three active or enabled units shipped by the superseded
+  deployment. It offers a version-matched administrator helper only after the root-owned unit and
+  its exact operator identity are attested; the helper reattests, stops, and disables those fixed
+  units without deleting them. Cloudflare remains in the existing guided browser/DNS/Tunnel flow;
+  a shell wrapper would only duplicate that authority.
+- **Sandbox boundary:** Incus remains a provider behind the existing Sandbox adapter rather than a
+  universal deployment dependency. One Dorf Deployment configures at most one Incus endpoint and
+  client identity; its profiles name their restricted project, storage pool, network, and exact
+  guest-reachable Gateway URL. The same official Incus client can address a prepared local Unix
+  socket or remote HTTPS daemon without a connection registry or selector layer. The
+  `instance_port_forward` API extension introduced by Incus
+  7.3 carries Dorf's private worker-to-guest app-server connection through that same control plane,
+  so neither local nor remote workers require direct routes to guest addresses. This does not solve
+  the separate guest-to-Provider-Gateway path. Guided local setup follows D036's one-time route
+  rule; every other topology requires an explicit guest-reachable private/VPN address or public
+  HTTPS ingress, and profile verification must prove it before admission. Dorf mounts neither a
+  general operator CLI configuration nor an invented data-plane proxy. Guided setup may adopt only
+  the exact pre-endpoint-custody Profile shape into the new local scope and must require a fresh
+  live proof; [Getting started](../getting-started.md) owns that migration procedure.
+- **Guided experience:** Missing infrastructure is not a documentation dead end. Interactive setup
+  keeps its deliberate choices, exact plans, secret/browser pauses, profile creation, functional
+  verification, default selection, and resumable progress. Humans receive concise explanation and
+  a manual path; agents receive an exact command and must still pause for consequential authority.
+- **Why:** The API and worker need durable supervision, not a custom privileged service manager.
+  PostgreSQL is already containerized, while the systemd and standalone-container implementations
+  duplicate lifecycle, identity, readiness, update, and recovery concerns that Compose can own as
+  one deployment. Separating explicit bootstrap convenience from product runtime custody preserves
+  the deliberately low-friction setup experience without making Dorf responsible for a host's
+  package manager, init system, virtualization policy, or ingress product.
+- **Supersedes:** D041's automatic host mutation, D071's deliberate Compose omission and standalone
+  database reconciler, and only D100's systemd service-lifecycle choice. D100's OpenAPI,
+  authentication, Job-list, Problem, API/worker separation, and operator-owned public control
+  ingress decisions remain accepted.
+- **Refines:** D012's local-Incus assumption, D036's Gateway and Cloudflare supervision, D067's
+  provider-route wording, D070's Incus profile custody, and D097's API/worker deployment shape. It
+  does not change their Job, Sandbox, Gateway, or authenticated-client authorities.
+- **Proof gate:** Before this becomes the supported deployment, the repository-owned
+  [frozen Compose VM harness](../../scripts/integration/compose-vm.sh) must let
+  an administrator prepare Docker, Compose, and an Incus endpoint, then let a fresh ordinary user
+  run setup without Dorf invoking `sudo`, complete a real Job, survive worker and API restart,
+  retrieve required state, and clean up. E2B/remote-Gateway behavior needs the cloud-controller
+  terminal; local Incus behavior needs the workstation terminal; remote Incus remains unsupported
+  until HTTPS client identity, instance-port forwarding, and the guest-to-Gateway path pass together.
+- **Reconsider when:** Compose cannot preserve deterministic migration and recovery under real
+  process loss, a supported non-Docker deployment earns equal proof, rootless container operation
+  materially changes the Docker authority boundary, or repeated routed-Incus deployments justify
+  an adapter-owned data-plane proxy.

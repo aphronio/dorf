@@ -5,22 +5,119 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
 	"github.com/aphronio/dorf/internal/controlclient"
+	"github.com/aphronio/dorf/internal/controlreader"
 	"github.com/aphronio/dorf/internal/core"
+	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
+
+func TestServeAllowsWildcardOnlyWithExplicitContainerOptIn(t *testing.T) {
+	probe, err := net.Listen("tcp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := probe.Addr().(*net.TCPAddr).Port
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	address := net.JoinHostPort("0.0.0.0", strconv.Itoa(port))
+	var stdout, stderr strings.Builder
+	err = serveCommand(ctx, postgres.Store{}, nil, config.Config{},
+		[]string{"--listen", address, "--allow-container-listen"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("explicit container listen %s: %v\nstderr: %s", address, err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "http://"+address) {
+		t.Fatalf("serve output %q does not report container listener %s", stdout.String(), address)
+	}
+}
+
+func TestServeRejectsUnsafeListeners(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "wildcard without container opt-in",
+			args:    []string{"--listen", "0.0.0.0:8745"},
+			wantErr: "--allow-container-listen",
+		},
+		{
+			name:    "specific host interface despite container opt-in",
+			args:    []string{"--listen", "192.0.2.10:8745", "--allow-container-listen"},
+			wantErr: "exact loopback IP",
+		},
+		{
+			name:    "privileged port despite container opt-in",
+			args:    []string{"--listen", "0.0.0.0:1023", "--allow-container-listen"},
+			wantErr: "port 1024-65535",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stderr strings.Builder
+			err := serveCommand(context.Background(), postgres.Store{}, nil, config.Config{},
+				test.args, io.Discard, &stderr)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("serve args %q error=%v, want %q", test.args, err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestConfiguredControlReaderUsesOnlyCompleteInternalCapability(t *testing.T) {
+	t.Run("manual local serve", func(t *testing.T) {
+		t.Setenv("DORF_CONTROL_READER_ORIGIN", "")
+		t.Setenv("DORF_CONTROL_READER_TOKEN", "")
+		reader, err := configuredControlReader(config.Config{}, postgres.Store{}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := reader.(controlreader.Service); !ok {
+			t.Fatalf("manual reader type=%T", reader)
+		}
+	})
+
+	t.Run("partial capability rejected", func(t *testing.T) {
+		t.Setenv("DORF_CONTROL_READER_ORIGIN", "http://control-reader:8756")
+		t.Setenv("DORF_CONTROL_READER_TOKEN", "")
+		if _, err := configuredControlReader(config.Config{}, postgres.Store{}, nil); err == nil || !strings.Contains(err.Error(), "requires both") {
+			t.Fatalf("configuredControlReader() error=%v", err)
+		}
+	})
+
+	t.Run("Compose capability", func(t *testing.T) {
+		t.Setenv("DORF_CONTROL_READER_ORIGIN", "http://control-reader:8756")
+		t.Setenv("DORF_CONTROL_READER_TOKEN", strings.Repeat("a", 64))
+		reader, err := configuredControlReader(config.Config{}, postgres.Store{}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := reader.(controlreader.Client); !ok {
+			t.Fatalf("Compose reader type=%T", reader)
+		}
+	})
+}
 
 func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	auth := &remoteCLIAuth{client: controlauth.Client{

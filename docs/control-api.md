@@ -82,7 +82,8 @@ optimization over complete canonical snapshots: it may coalesce intermediate val
 by reading current truth rather than replaying a second event log. Follow is durable FIFO input;
 steer remains bound to the exact active Turn and never degrades into Follow. Retry accepts only an
 eligible failed execution. Cleanup is an explicit idempotent request, separate from execution or a
-workflow Outcome.
+workflow Outcome. A settled Message whose internal encoded JSON observation exceeds 16 MiB returns
+the published `message_unavailable` Problem rather than a partial result.
 
 Sandbox files are exact, caller-selected, workspace-relative regular-file reads at Sandbox level.
 The server enforces Job custody and the cleanup fence; the response includes exact bytes, length, and
@@ -96,48 +97,83 @@ that representation, so clients must also handle transport and generic HTTP serv
 
 ## Deployment services
 
-The supported deployment runs two separately supervised systemd units:
+The accepted managed deployment is one versioned Docker Compose project. It remains release-pending
+until [D101's live proof gate](project/decisions.md#d101--compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit)
+passes:
 
 ```text
 operator-owned HTTPS ingress
             |
             v
-dorf-control-api.service  -- private HTTP on 127.0.0.1:8745
+127.0.0.1:8745
             |
-            +------------------- PostgreSQL + Absurd
-                                |
-dorf-worker.service ------------+
+            v
+Docker Compose project
+  PostgreSQL -> migrate -> worker
+                        -> control-api -> authenticated typed control-reader
+                                             |          |
+                                             v          v
+                                     provider reads   PostgreSQL
+                        -> provider-gateway  (when configured)
+                             ^
+                             |
+                        cloudflared          (when guided Tunnel is configured)
 ```
 
-`dorf setup` converges both units after durable deployment configuration, even when no Sandbox
-provider is selected yet. It shows the exact plan, obtains administrator authorization, installs or
-updates only Dorf-owned units, restarts worker then API, and waits for them to become ready. The
-units run as the exact setup operator, use the resolved Dorf executable and protected default
-deployment configuration, declare systemd notification readiness, restart after failure, and carry
-a bounded systemd hardening envelope.
+PostgreSQL, one successful migration phase, the private API, the internal control reader, and the
+durable worker are always part of the project, even when no Sandbox provider is selected yet. The
+Provider Gateway and guided named Cloudflare Tunnel are optional foreground services under the
+same Compose supervisor.
 
-Use the host-only lifecycle commands rather than supervising `dorf serve` and `dorf worker` in
-ordinary deployments:
+The API receives only its generated database configuration, read-only API state, and one
+image-bound token derived from an independent deployment-owned reader key; the raw key never enters
+the API. It receives no Incus socket or identity, E2B key, GitHub credential, Gateway state, or
+provider configuration. The control reader alone answers
+the API's fixed authenticated read operations: default and named AI-connection observation, GitHub
+installation discovery, an
+exact Job-owned Sandbox file read, and one settled Message result. It has no generic proxy,
+provider selector, credential response, or mutation operation.
+
+Bridge networks separate database access, API-to-reader calls, reader-to-Gateway calls,
+worker-to-Gateway calls, worker egress, reader egress, and Gateway ingress. `cloudflared` can reach
+only the Gateway. PostgreSQL and the control API publish only on host loopback; the Gateway publishes
+only an explicitly selected Profile route. No Dorf workload or Sandbox receives the host Docker
+socket.
+
+`dorf setup` follows the
+[deployment-host setup procedure](getting-started.md#1-install-the-application-initialize-a-deployment-host)
+for host prerequisites, then persists the protected deployment configuration, shows the exact
+Compose plan, and waits for the project to become ready.
+
+Use the host-only lifecycle commands rather than supervising foreground Dorf processes or editing
+the Compose project in ordinary deployments:
 
 ```text
-dorf service reconcile [--yes] [--existing]
+dorf service reconcile [--yes] [--existing] [--local-image REF]
 dorf service status [--output json]
-dorf service restart <api|worker|all>
-dorf service logs <api|worker> [--lines N]
+dorf service restart <api|worker|gateway|cloudflare|all>
+dorf service logs <api|worker|gateway|cloudflare> [--lines N]
 ```
 
-Status distinguishes desired-unit convergence from runtime readiness and checks the private API's
-discovery and authentication boundary. Reconcile refuses a foreign or locally edited unit instead
-of overwriting it. `--existing` makes an absent pair a no-op rather than installing one.
-`dorf update` uses that gate when handing an installed pair to the new binary for reconciliation
-and restart, so a remote CLI-only installation remains service-free.
+Status distinguishes exact project and service convergence from runtime readiness and checks the
+private API's discovery and authentication boundary. Logs are bounded Compose service logs;
+the `gateway` and `cloudflare` targets exist only when their optional services are configured, and
+the restart target `all` includes the internal control reader and those configured services. The
+reader has no direct human restart or log target. Restart and reconcile operate only on the
+protected generated project.
+`--existing` makes an absent project a no-op rather than creating one. `dorf update` uses that gate
+when handing an existing project to the new binary for reconciliation and
+restart, so a remote CLI-only installation remains project-free.
 
-Managed units require the default protected deployment configuration rather than process-only
-`DORF_*`, `XDG_*`, or credential environment authority. Setup reports when that boundary prevents
-managed installation; such a custom deployment must provide its own explicit supervision and
-configuration custody.
+`--local-image` is only the explicit contributor and disposable-proof transport described in
+[Getting started](getting-started.md#1-install-the-application-initialize-a-deployment-host); an
+ordinary deployment omits it.
 
-HTTPS ingress remains operator-owned and distinct from these two units. Dorf never infers, installs,
+The managed project always uses its PostgreSQL service and the protected persisted deployment
+configuration as authority. `DORF_DATABASE_URL` remains only a development, test, or explicitly
+manually supervised process override; it does not select another managed topology.
+
+HTTPS ingress remains operator-owned and outside the Compose project. Dorf never infers, installs,
 or mutates the public control origin. The control API must also use a different origin from the
 Provider Gateway's OpenAI-compatible `/v1` service; the two authorities are not interchangeable.
 See [Getting started](getting-started.md#3-connect-one-remote-cli-client) for the operator and client

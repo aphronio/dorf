@@ -218,7 +218,7 @@ func (a Agent) withServer(ctx context.Context, owner provider.Ownership, fn func
 	if err != nil {
 		return err
 	}
-	return a.withServerEndpointController(ctx, owner, endpointAccess{listen: endpoint.ListenURL, dial: endpoint.DialURL, headers: endpoint.Headers()}, false, nil, fn)
+	return a.withServerEndpointController(ctx, owner, endpointAccess{listen: endpoint.ListenURL, dial: endpoint.DialURL, headers: endpoint.Headers(), dialContext: endpoint.DialContext()}, false, nil, fn)
 }
 
 func (a Agent) withReviewServer(ctx context.Context, owner provider.Ownership, review provider.ReviewMetadata, fn func(*protocol) error) error {
@@ -229,7 +229,7 @@ func (a Agent) withReviewServer(ctx context.Context, owner provider.Ownership, r
 	if err != nil {
 		return err
 	}
-	return a.withReviewServerAccess(ctx, owner, endpointAccess{listen: endpoint.ListenURL, dial: endpoint.DialURL, headers: endpoint.Headers()}, review, fn)
+	return a.withReviewServerAccess(ctx, owner, endpointAccess{listen: endpoint.ListenURL, dial: endpoint.DialURL, headers: endpoint.Headers(), dialContext: endpoint.DialContext()}, review, fn)
 }
 
 func (a Agent) withReviewServerEndpoint(ctx context.Context, owner provider.Ownership, endpoint string, review provider.ReviewMetadata, fn func(*protocol) error) error {
@@ -252,9 +252,10 @@ func (a Agent) withServerEndpoint(ctx context.Context, owner provider.Ownership,
 }
 
 type endpointAccess struct {
-	listen  string
-	dial    string
-	headers http.Header
+	listen      string
+	dial        string
+	headers     http.Header
+	dialContext provider.DialContextFunc
 }
 
 func sameEndpoint(endpoint string) endpointAccess {
@@ -269,7 +270,7 @@ func (a Agent) withServerEndpointController(ctx context.Context, owner provider.
 	// Prefer the exact authenticated process left by a dead executor. A live
 	// process that cannot be inspected is attention, never permission to kill it.
 	if probe.running && probe.tracked && probe.token != "" {
-		protocol, dialErr := dialProtocol(ctx, endpoint.dial, probe.token, endpoint.headers)
+		protocol, dialErr := dialProtocol(ctx, endpoint.dial, probe.token, endpoint.headers, endpoint.dialContext)
 		if dialErr == nil {
 			defer protocol.connection.Close(websocket.StatusNormalClosure, "done")
 			if authorize != nil {
@@ -307,7 +308,7 @@ func (a Agent) withServerEndpointController(ctx context.Context, owner provider.
 	}
 	deadline := time.Now().Add(20 * time.Second)
 	for {
-		protocol, dialErr := dialProtocol(ctx, endpoint.dial, token, endpoint.headers)
+		protocol, dialErr := dialProtocol(ctx, endpoint.dial, token, endpoint.headers, endpoint.dialContext)
 		if dialErr == nil {
 			defer protocol.connection.Close(websocket.StatusNormalClosure, "done")
 			if authorize != nil {
@@ -375,19 +376,22 @@ func tokenSHA256(token string) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func dialProtocol(ctx context.Context, endpoint, token string, transportHeaders ...http.Header) (*protocol, error) {
+func dialProtocol(ctx context.Context, endpoint, token string, headers http.Header, providerDial provider.DialContextFunc) (*protocol, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
+	if providerDial != nil {
+		transport.DialContext = providerDial
+	}
 	defer transport.CloseIdleConnections()
 	httpClient := &http.Client{Transport: transport}
 	requestCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	headers := make(http.Header)
-	if len(transportHeaders) > 0 && transportHeaders[0] != nil {
-		headers = transportHeaders[0].Clone()
+	requestHeaders := make(http.Header)
+	if headers != nil {
+		requestHeaders = headers.Clone()
 	}
-	headers.Set("Authorization", "Bearer "+token)
-	conn, response, err := websocket.Dial(requestCtx, endpoint, &websocket.DialOptions{HTTPClient: httpClient, HTTPHeader: headers})
+	requestHeaders.Set("Authorization", "Bearer "+token)
+	conn, response, err := websocket.Dial(requestCtx, endpoint, &websocket.DialOptions{HTTPClient: httpClient, HTTPHeader: requestHeaders})
 	if err != nil {
 		if response != nil && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden) {
 			return nil, fmt.Errorf("Codex app-server rejected its scoped control capability")

@@ -2,7 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"io"
+	"math/big"
 	"net"
 	"os"
 	"path/filepath"
@@ -58,8 +66,240 @@ func TestOpenAIConnectionReadsAProtectedFileOrStandardInput(t *testing.T) {
 	}
 }
 
-func TestSetupRetainsVerifiedE2BCredentialForManagedServices(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "deployment.json")
+func TestProviderConnectionBecomesReadyOnlyAfterComposeAndLiveVerification(t *testing.T) {
+	events := []string{}
+	defaultConnection := "healthy"
+	err := makeProviderConnectionReady(context.Background(), "openai-api",
+		func(context.Context) error {
+			events = append(events, "compose")
+			return nil
+		},
+		func(_ context.Context, name string) error {
+			events = append(events, "finalize:"+name)
+			return nil
+		},
+		func(name string) error {
+			events = append(events, "default:"+name)
+			defaultConnection = name
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(events, ","), "compose,finalize:openai-api,default:openai-api"; got != want {
+		t.Fatalf("provider readiness order=%q want %q", got, want)
+	}
+	if defaultConnection != "openai-api" {
+		t.Fatalf("default connection=%q", defaultConnection)
+	}
+}
+
+func TestProviderConnectionReadinessStopsAtEachFailedStage(t *testing.T) {
+	for _, failure := range []string{"compose", "finalize", "default"} {
+		t.Run(failure, func(t *testing.T) {
+			events := []string{}
+			defaultConnection := "healthy"
+			failed := errors.New("stage failed")
+			err := makeProviderConnectionReady(context.Background(), "personal-chatgpt",
+				func(context.Context) error {
+					events = append(events, "compose")
+					if failure == "compose" {
+						return failed
+					}
+					return nil
+				},
+				func(context.Context, string) error {
+					events = append(events, "finalize")
+					if failure == "finalize" {
+						return failed
+					}
+					return nil
+				},
+				func(name string) error {
+					events = append(events, "default")
+					if failure == "default" {
+						return failed
+					}
+					defaultConnection = name
+					return nil
+				},
+			)
+			if !errors.Is(err, failed) {
+				t.Fatalf("error=%v", err)
+			}
+			want := map[string]string{
+				"compose":  "compose",
+				"finalize": "compose,finalize",
+				"default":  "compose,finalize,default",
+			}[failure]
+			if got := strings.Join(events, ","); got != want {
+				t.Fatalf("events=%q want %q", got, want)
+			}
+			if defaultConnection != "healthy" {
+				t.Fatalf("failed %s changed default to %q", failure, defaultConnection)
+			}
+		})
+	}
+}
+
+func TestGuidedSetupCommitsDefaultOnlyAfterLiveConnectionVerification(t *testing.T) {
+	for _, failure := range []string{"compose", "finalize", "default", ""} {
+		t.Run(failure, func(t *testing.T) {
+			events := []string{}
+			defaultConnection := "healthy"
+			failed := errors.New("stage failed")
+			err := makeProviderConnectionReady(context.Background(), "candidate",
+				func(context.Context) error {
+					events = append(events, "compose")
+					if failure == "compose" {
+						return failed
+					}
+					return nil
+				},
+				func(context.Context, string) error {
+					events = append(events, "finalize")
+					if failure == "finalize" {
+						return failed
+					}
+					return nil
+				},
+				func(name string) error {
+					events = append(events, "default")
+					if failure == "default" {
+						return failed
+					}
+					defaultConnection = name
+					return nil
+				},
+			)
+			if failure == "" {
+				if err != nil || defaultConnection != "candidate" || strings.Join(events, ",") != "compose,finalize,default" {
+					t.Fatalf("events=%v default=%q error=%v", events, defaultConnection, err)
+				}
+				return
+			}
+			if !errors.Is(err, failed) || defaultConnection != "healthy" {
+				t.Fatalf("failure=%s events=%v default=%q error=%v", failure, events, defaultConnection, err)
+			}
+		})
+	}
+}
+
+func TestGuidedSetupResumesRetainedOpenAICandidateWithoutEarlyDefaultCommit(t *testing.T) {
+	configured := func(name string) (bool, error) { return name == "openai-api", nil }
+	missingDefault := func() (string, error) { return "", errors.New("no default") }
+	for _, options := range []setupOptions{{}, {ConnectionMode: setupConnectionOpenAI}} {
+		name, retained, err := retainedSetupConnection(options, missingDefault, configured)
+		if err != nil || !retained || name != "openai-api" {
+			t.Fatalf("options=%#v name=%q retained=%t error=%v", options, name, retained, err)
+		}
+	}
+
+	defaultConnection := "healthy"
+	failed := errors.New("live proof failed")
+	err := makeProviderConnectionReady(context.Background(), "openai-api",
+		func(context.Context) error { return nil },
+		func(context.Context, string) error { return failed },
+		func(name string) error { defaultConnection = name; return nil },
+	)
+	if !errors.Is(err, failed) || defaultConnection != "healthy" {
+		t.Fatalf("failed replay default=%q error=%v", defaultConnection, err)
+	}
+	err = makeProviderConnectionReady(context.Background(), "openai-api",
+		func(context.Context) error { return nil },
+		func(context.Context, string) error { return nil },
+		func(name string) error { defaultConnection = name; return nil },
+	)
+	if err != nil || defaultConnection != "openai-api" {
+		t.Fatalf("successful replay default=%q error=%v", defaultConnection, err)
+	}
+
+	name, retained, err := retainedSetupConnection(setupOptions{}, missingDefault, func(string) (bool, error) { return true, nil })
+	if err != nil || retained || name != "" {
+		t.Fatalf("ambiguous candidates name=%q retained=%t error=%v", name, retained, err)
+	}
+}
+
+func TestProviderGatewayRejectsUnscopedNonLoopbackBindBeforeStateMutation(t *testing.T) {
+	_, _, err := providerGatewayForBind(context.Background(), postgres.Store{}, config.Config{}, "10.20.30.1", "")
+	if err == nil || !strings.Contains(err.Error(), "matching Incus --profile") {
+		t.Fatalf("unscoped bind error=%v", err)
+	}
+}
+
+func TestProviderConnectReusesPersistedGatewayPublication(t *testing.T) {
+	authority := &deployment.Incus{Endpoint: "unix:///var/lib/incus/unix.socket"}
+	hash, err := authority.AuthorityHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := core.SandboxProfile{
+		Name: "local", Provider: core.SandboxProviderIncus, IncusEndpointAuthorityHash: hash,
+		IncusNetwork: "incusbr0", IncusGatewayURL: "http://10.44.0.1:8317/v1",
+	}
+	cfg := config.Config{Incus: authority}
+	for _, prepared := range []string{"", "10.44.0.1"} {
+		address, err := selectProviderGatewayBind(cfg, []core.SandboxProfile{profile}, &profile, "", prepared, prepared != "")
+		if err != nil || address != "10.44.0.1" {
+			t.Fatalf("prepared=%q address=%q error=%v", prepared, address, err)
+		}
+	}
+	if _, err := selectProviderGatewayBind(cfg, []core.SandboxProfile{profile}, &profile, "", "10.44.0.2", true); err == nil || !strings.Contains(err.Error(), "conflicts with Sandbox Profile") {
+		t.Fatalf("publication mismatch error=%v", err)
+	}
+	if _, err := selectProviderGatewayBind(cfg, []core.SandboxProfile{profile}, &profile, "10.44.0.2", "", false); err == nil || !strings.Contains(err.Error(), "exact Gateway URL") {
+		t.Fatalf("explicit mismatch error=%v", err)
+	}
+	if address, err := selectProviderGatewayBind(cfg, []core.SandboxProfile{profile}, &profile, "10.44.0.1", "", false); err != nil || address != "10.44.0.1" {
+		t.Fatalf("explicit matching address=%q error=%v", address, err)
+	}
+}
+
+func TestProviderConnectPreservesOperatorRoutedPublication(t *testing.T) {
+	authority := &deployment.Incus{Endpoint: "unix:///var/lib/incus/unix.socket"}
+	hash, err := authority.AuthorityHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := core.SandboxProfile{
+		Name: "remote", Provider: core.SandboxProviderIncus, IncusEndpointAuthorityHash: hash,
+		IncusNetwork: "remote0", IncusGatewayURL: "https://gateway.example/v1",
+	}
+	address, err := selectProviderGatewayBind(config.Config{Incus: authority}, []core.SandboxProfile{profile}, &profile, "", "127.0.0.1", true)
+	if err != nil || address != "127.0.0.1" {
+		t.Fatalf("operator publication=%q error=%v", address, err)
+	}
+	other := &deployment.Incus{Endpoint: "unix:///run/incus/unix.socket"}
+	if _, err := selectProviderGatewayBind(config.Config{Incus: other}, []core.SandboxProfile{profile}, &profile, "", "127.0.0.1", true); err == nil || !strings.Contains(err.Error(), "different Incus endpoint authority") {
+		t.Fatalf("remote authority mismatch error=%v", err)
+	}
+}
+
+func TestProviderConnectNeedsNoDefaultProfileForRetainedLoopbackPublication(t *testing.T) {
+	selected, err := providerGatewayProfile(nil, "")
+	if err != nil || selected != nil {
+		t.Fatalf("selected profile=%#v error=%v", selected, err)
+	}
+	address, err := selectProviderGatewayBind(config.Config{}, nil, selected, "", "127.0.0.2", true)
+	if err != nil || address != "127.0.0.2" {
+		t.Fatalf("retained publication=%q error=%v", address, err)
+	}
+}
+
+func TestGuidedGatewayBindPreservesPreparedAddressWithoutDirectProfile(t *testing.T) {
+	address, privateBridge, resolve, err := selectGuidedGatewayBind(
+		nil,
+		[]guidedProfilePlan{{Provider: core.SandboxProviderE2B, Name: "cloud-codex"}},
+		nil, "127.0.0.2", true,
+	)
+	if err != nil || resolve || address != "127.0.0.2" || privateBridge != "" {
+		t.Fatalf("replayed publication=%q private bridge=%q resolve=%t error=%v", address, privateBridge, resolve, err)
+	}
+}
+
+func TestSetupRetainsVerifiedE2BCredentialForComposeServices(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config", "deployment.json")
 	durable := deployment.Config{Database: deployment.Database{
 		Host: "127.0.0.1", Port: 5432, Name: "dorf", User: "dorf", Password: "secret",
 		Image: "postgres:17", ImageID: "sha256:test",
@@ -74,6 +314,13 @@ func TestSetupRetainsVerifiedE2BCredentialForManagedServices(t *testing.T) {
 	stored, found, err := deployment.Load(path)
 	if err != nil || !found || stored.E2B == nil || stored.E2B.APIKey != cfg.E2BAPIKey {
 		t.Fatalf("retained E2B credential: found=%t config=%#v err=%v", found, stored, err)
+	}
+	if err := retainSetupE2BCredential(&cfg, "rotated-verified-key", true); err != nil {
+		t.Fatal(err)
+	}
+	stored, found, err = deployment.Load(path)
+	if err != nil || !found || stored.E2B == nil || stored.E2B.APIKey != "rotated-verified-key" || cfg.E2BAPIKey != "rotated-verified-key" {
+		t.Fatalf("rotated E2B credential: found=%t config=%#v runtime=%q err=%v", found, stored, cfg.E2BAPIKey, err)
 	}
 
 	external := config.Config{DatabaseExternal: true, E2BAPIKey: "environment-key"}
@@ -125,7 +372,7 @@ func TestApplicationUpdateRejectsArgumentsBeforeHostConfiguration(t *testing.T) 
 
 func TestProfileUpdatePatchContainsOnlyExplicitFlags(t *testing.T) {
 	var stderr strings.Builder
-	patch, err := parseSandboxProfilePatch(context.Background(), "update managed", core.SandboxProviderE2B, []string{
+	patch, err := parseSandboxProfilePatch(context.Background(), "update managed", core.SandboxProviderE2B, nil, "", "", []string{
 		"--gateway-url", "https://replacement.example/v1", "--allow-internet=false",
 	}, &stderr)
 	if err != nil {
@@ -134,17 +381,68 @@ func TestProfileUpdatePatchContainsOnlyExplicitFlags(t *testing.T) {
 	if patch.E2BGatewayURL == nil || *patch.E2BGatewayURL != "https://replacement.example/v1" ||
 		patch.E2BAllowInternet == nil || *patch.E2BAllowInternet || patch.E2BArtifact != nil ||
 		patch.E2BSandboxTimeout != nil || patch.Harness != nil ||
-		patch.IncusArtifact != nil || patch.IncusNetwork != nil || patch.IncusDiskSize != nil {
+		patch.IncusArtifact != nil || patch.IncusEndpointAuthorityHash != nil || patch.IncusProject != nil ||
+		patch.IncusStoragePool != nil || patch.IncusNetwork != nil || patch.IncusDiskSize != nil || patch.IncusGatewayURL != nil {
 		t.Fatalf("patch contains omitted or incorrect fields: %#v", patch)
 	}
-	if _, err := parseSandboxProfilePatch(context.Background(), "update managed", core.SandboxProviderE2B, nil, &stderr); err == nil || !strings.Contains(err.Error(), "at least one field flag") {
+	if _, err := parseSandboxProfilePatch(context.Background(), "update managed", core.SandboxProviderE2B, nil, "", "", nil, &stderr); err == nil || !strings.Contains(err.Error(), "at least one field flag") {
 		t.Fatalf("empty patch error=%v", err)
 	}
-	if _, err := parseSandboxProfilePatch(context.Background(), "update managed", core.SandboxProviderE2B, []string{"--sandbox-provider", "e2b"}, &stderr); err == nil {
+	if _, err := parseSandboxProfilePatch(context.Background(), "update managed", core.SandboxProviderE2B, nil, "", "", []string{"--sandbox-provider", "e2b"}, &stderr); err == nil {
 		t.Fatal("profile update accepted a provider change")
 	}
-	if _, err := parseSandboxProfilePatch(context.Background(), "update managed", core.SandboxProviderE2B, []string{"--image", "dorf"}, &stderr); err == nil || !strings.Contains(err.Error(), "does not accept Incus fields") {
+	if _, err := parseSandboxProfilePatch(context.Background(), "update managed", core.SandboxProviderE2B, nil, "", "", []string{"--image", "dorf"}, &stderr); err == nil || !strings.Contains(err.Error(), "does not accept Incus fields") {
 		t.Fatalf("E2B Incus-field error=%v", err)
+	}
+}
+
+func TestIncusProfileUpdateAcceptsOnlyExplicitDefinitionFields(t *testing.T) {
+	var stderr strings.Builder
+	patch, err := parseSandboxProfilePatch(context.Background(), "update local", core.SandboxProviderIncus, nil, "", "", []string{
+		"--project", "dorf", "--storage-pool", "default", "--network", "incusbr0",
+		"--disk-size", "80GiB", "--gateway-url", "http://10.20.30.1:8317/v1",
+	}, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patch.IncusProject == nil || *patch.IncusProject != "dorf" ||
+		patch.IncusStoragePool == nil || *patch.IncusStoragePool != "default" ||
+		patch.IncusNetwork == nil || *patch.IncusNetwork != "incusbr0" ||
+		patch.IncusDiskSize == nil || *patch.IncusDiskSize != "80GiB" ||
+		patch.IncusGatewayURL == nil || *patch.IncusGatewayURL != "http://10.20.30.1:8317/v1" ||
+		patch.E2BGatewayURL != nil {
+		t.Fatalf("Incus patch=%#v", patch)
+	}
+	if _, err := parseSandboxProfilePatch(context.Background(), "update local", core.SandboxProviderIncus, nil, "", "",
+		[]string{"--sandbox-timeout", "1h"}, &stderr); err == nil || !strings.Contains(err.Error(), "does not accept E2B fields") {
+		t.Fatalf("Incus accepted E2B field: %v", err)
+	}
+}
+
+func TestIncusProfileImageOperationsRequireDeploymentAuthorityAndUseProfileScope(t *testing.T) {
+	var stderr strings.Builder
+	_, err := parseSandboxProfile(context.Background(), "create local", "local", nil, []string{
+		"--sandbox-provider", "incus", "--harness", "codex", "--image", "dorf",
+	}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "not configured in the Dorf Deployment") {
+		t.Fatalf("missing create authority error=%v", err)
+	}
+	_, err = parseSandboxProfilePatch(context.Background(), "update local", core.SandboxProviderIncus, nil, "dorf", "default", []string{"--image", "dorf"}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "not configured in the Dorf Deployment") {
+		t.Fatalf("missing update authority error=%v", err)
+	}
+
+	authority := &deployment.Incus{Endpoint: "unix:///run/incus/dorf.socket"}
+	connection, hash, err := incusProfileConnection(authority, "restricted-project", "dorf-pool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHash, err := authority.AuthorityHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connection.Endpoint != authority.Endpoint || connection.Project != "restricted-project" || connection.StoragePool != "dorf-pool" || hash != wantHash {
+		t.Fatalf("profile-scoped Incus connection=%#v hash=%q", connection, hash)
 	}
 }
 
@@ -152,9 +450,11 @@ func TestProviderGatewayStatusDistinguishesHistoricalVerificationFromCurrentReac
 	verifiedAt := time.Date(2026, 8, 19, 10, 0, 0, 0, time.UTC)
 	profile := core.SandboxProfile{
 		Name: "managed", Provider: core.SandboxProviderE2B, E2BGatewayURL: "https://gateway.example/v1",
-		Verification: &core.ProfileVerification{
-			ContractVersion: core.BaseProfileContract, ProbeCompletedAt: verifiedAt, CleanedAt: verifiedAt.Add(time.Second),
-		},
+	}
+	profile.DefinitionHash = profile.CurrentDefinitionHash()
+	profile.Verification = &core.ProfileVerification{
+		ContractVersion: core.BaseProfileContract, DefinitionHash: profile.DefinitionHash,
+		ProbeCompletedAt: verifiedAt, CleanedAt: verifiedAt.Add(time.Second),
 	}
 	view := newProviderGatewayStatusView(profile, "personal-chatgpt", nil, context.DeadlineExceeded)
 	if view.Ready || !view.ProfileVerified || view.ProfileVerifiedAt == nil || view.SandboxPath.Status != "failed" {
@@ -188,14 +488,43 @@ func TestProviderGatewayStatusDistinguishesHistoricalVerificationFromCurrentReac
 	if unavailable.Ready || !strings.Contains(unavailable.Impact, "E2B template not found") || !strings.Contains(unavailable.Next, "repair or update") {
 		t.Fatalf("unavailable status=%#v", unavailable)
 	}
-	local := newProviderGatewayStatusView(core.SandboxProfile{
+	localProfile := core.SandboxProfile{
 		Name: "local", Provider: core.SandboxProviderIncus, IncusNetwork: "incusbr0",
-		Verification: &core.ProfileVerification{
-			ContractVersion: core.BaseProfileContract, ProbeCompletedAt: verifiedAt, CleanedAt: verifiedAt.Add(time.Second),
-		},
-	}, "personal-chatgpt", nil, nil)
-	if !local.Ready || local.SandboxPath.Status != "historical" || !strings.Contains(local.SandboxPath.Detail, "no Sandbox was created") {
-		t.Fatalf("local status overclaimed live Sandbox reachability: %#v", local)
+		IncusGatewayURL: "http://10.44.0.1:8317/v1",
+	}
+	localProfile.DefinitionHash = localProfile.CurrentDefinitionHash()
+	localProfile.Verification = &core.ProfileVerification{
+		ContractVersion: core.BaseProfileContract, DefinitionHash: localProfile.DefinitionHash,
+		ProbeCompletedAt: verifiedAt, CleanedAt: verifiedAt.Add(time.Second),
+	}
+	local := newProviderGatewayStatusView(localProfile, "personal-chatgpt", nil, nil)
+	if !local.Ready || local.SandboxPath.Status != "ready" || !strings.Contains(local.SandboxPath.Detail, "anonymous access rejected") {
+		t.Fatalf("local status omitted current Gateway reachability: %#v", local)
+	}
+	localFailed := newProviderGatewayStatusView(localProfile, "personal-chatgpt", nil, errors.New("Compose publication mismatch"))
+	if localFailed.Ready || localFailed.SandboxPath.Status != "failed" || !strings.Contains(localFailed.Next, "update and reverify") {
+		t.Fatalf("local mismatch status=%#v", localFailed)
+	}
+}
+
+func TestProviderStatusFencesIncusProfileAgainstComposePublication(t *testing.T) {
+	statePath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(statePath, "compose.json"), []byte(`{"publish_address":"10.44.0.2"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	profile := core.SandboxProfile{
+		Name: "local", Provider: core.SandboxProviderIncus,
+		IncusGatewayURL: "http://10.44.0.1:8317/v1",
+	}
+	g := gateway.Gateway{StatePath: statePath}
+	if err := validateIncusComposePublication(g, profile); err == nil || !strings.Contains(err.Error(), "publishes 10.44.0.2") {
+		t.Fatalf("publication mismatch error=%v", err)
+	}
+	if err := os.WriteFile(filepath.Join(statePath, "compose.json"), []byte(`{"publish_address":"10.44.0.1"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateIncusComposePublication(g, profile); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -229,15 +558,17 @@ func TestProviderStatusUsesFreshDNSForTheExactDorfOwnedTunnel(t *testing.T) {
 func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 	var stderr strings.Builder
 	options, err := parseSetupOptions([]string{
-		"--yes", "--ai-connection", "personal-chatgpt",
+		"--yes", "--local-image", "dorf-proof:0.5.2", "--ai-connection", "personal-chatgpt",
 		"--sandbox-provider", "incus", "--sandbox-provider", "e2b",
 		"--harness", "codex", "--e2b-template", "dorf:exact-build",
+		"--incus-manifest", "/proof/manifest.json", "--incus-archive", "/proof/image.tar.zst",
 		"--gateway-url", "https://gateway.example/v1", "--allow-internet",
 	}, &stderr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !options.Yes || options.Connection != "personal-chatgpt" || options.ProfileName != "" ||
+		options.LocalImage != "dorf-proof:0.5.2" || options.IncusManifest != "/proof/manifest.json" || options.IncusArchive != "/proof/image.tar.zst" ||
 		options.Harness != "codex" || options.E2BTemplate != "dorf:exact-build" ||
 		options.GatewayURL != "https://gateway.example/v1" || !options.AllowInternet ||
 		!containsSandboxProvider(options.SandboxProviders, core.SandboxProviderIncus) ||
@@ -253,6 +584,18 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 	if _, err := parseSetupOptions([]string{"--database", "native"}, &stderr); err == nil {
 		t.Fatal("removed database selection was accepted")
 	}
+	if _, err := parseSetupOptions([]string{"--absurd-schema", "/tmp/absurd.sql"}, &stderr); err == nil {
+		t.Fatal("removed setup Absurd schema transport was accepted")
+	}
+	for _, args := range [][]string{
+		{"--sandbox-provider", "incus", "--incus-manifest", "manifest.json"},
+		{"--sandbox-provider", "incus", "--incus-archive", "image.tar.zst"},
+		{"--sandbox-provider", "e2b", "--incus-manifest", "manifest.json", "--incus-archive", "image.tar.zst"},
+	} {
+		if _, err := parseSetupOptions(args, &stderr); err == nil {
+			t.Fatalf("invalid Incus image transport was accepted: %v", args)
+		}
+	}
 	for _, removed := range []string{"--provider", "--connection"} {
 		if _, err := parseSetupOptions([]string{removed, "legacy"}, &stderr); err == nil {
 			t.Fatalf("removed setup flag %s was accepted", removed)
@@ -260,6 +603,9 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 	}
 	if _, err := parseSetupOptions([]string{"--sandbox-provider", "unknown"}, &stderr); err == nil {
 		t.Fatal("unknown Sandbox provider was accepted")
+	}
+	if _, err := parseSetupOptions([]string{"unexpected"}, &stderr); err == nil || !strings.Contains(err.Error(), "positional") {
+		t.Fatalf("setup positional argument error=%v", err)
 	}
 	if _, err := parseSetupOptions([]string{"--yes", "--e2b-template", "dorf:build"}, &stderr); err == nil || !strings.Contains(err.Error(), "--sandbox-provider") {
 		t.Fatalf("provider-less agent setup error=%v", err)
@@ -295,14 +641,11 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 		{ready: map[string]bool{"personal-chatgpt": true, "openai-api": true}},
 		{ready: map[string]bool{}},
 	} {
-		got := unambiguousSetupConnection(func(name string) error {
-			if test.ready[name] {
-				return nil
-			}
-			return context.Canceled
+		got, err := unambiguousSetupConnection(func(name string) (bool, error) {
+			return test.ready[name], nil
 		})
-		if got != test.want {
-			t.Fatalf("ready connections=%v got=%q want=%q", test.ready, got, test.want)
+		if err != nil || got != test.want {
+			t.Fatalf("ready connections=%v got=%q want=%q error=%v", test.ready, got, test.want, err)
 		}
 	}
 	selected := []core.SandboxProvider{}
@@ -366,6 +709,17 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 	}
 }
 
+func TestManagedSetupRejectsExternalPostgreSQLBeforeHostWork(t *testing.T) {
+	var stdout strings.Builder
+	err := setupCommand(context.Background(), config.Config{DatabaseExternal: true}, nil, &stdout, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "DORF_DATABASE_URL") {
+		t.Fatalf("external setup error = %v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("external setup performed presentation or host work: %q", stdout.String())
+	}
+}
+
 func TestGuidedGatewayPlanningReusesTheDurableProfileContract(t *testing.T) {
 	existing := core.SandboxProfile{
 		Name: "cloud-codex", Provider: core.SandboxProviderE2B, Harness: "codex",
@@ -373,7 +727,7 @@ func TestGuidedGatewayPlanningReusesTheDurableProfileContract(t *testing.T) {
 	}
 	plan, err := planRemoteGateway(context.Background(), setupOptions{}, []guidedProfilePlan{{
 		Provider: core.SandboxProviderE2B, Name: existing.Name, Harness: existing.Harness, Existing: &existing,
-	}}, setupPresenter{}, fakeDNSResolver{})
+	}}, setupPresenter{}, fakeDNSResolver{}, "")
 	if err != nil || plan.Mode != setupGatewayExisting || plan.URL != existing.E2BGatewayURL {
 		t.Fatalf("plan=%#v err=%v", plan, err)
 	}
@@ -381,7 +735,7 @@ func TestGuidedGatewayPlanningReusesTheDurableProfileContract(t *testing.T) {
 		Provider: core.SandboxProviderE2B, Name: existing.Name, Harness: existing.Harness, Existing: &existing,
 	}}, setupPresenter{}, fakeDNSResolver{records: map[string][]*net.NS{
 		"example.com": {{Host: "cash.ns.cloudflare.com."}, {Host: "lana.ns.cloudflare.com."}},
-	}})
+	}}, "")
 	if err == nil || !strings.Contains(err.Error(), "update the profile explicitly") {
 		t.Fatalf("conflicting Gateway error=%v", err)
 	}
@@ -398,7 +752,7 @@ func TestGuidedGatewayPlanningRequiresCloudflareDNSAndAnUnusedHostname(t *testin
 	cloudflare := fakeDNSResolver{records: map[string][]*net.NS{
 		"example.com": {{Host: "cash.ns.cloudflare.com."}, {Host: "lana.ns.cloudflare.com."}},
 	}}
-	plan, err := planRemoteGateway(context.Background(), setupOptions{CloudflareHost: "dorf.example.com"}, nil, setupPresenter{}, cloudflare)
+	plan, err := planRemoteGateway(context.Background(), setupOptions{CloudflareHost: "dorf.example.com"}, nil, setupPresenter{}, cloudflare, "")
 	if err != nil || plan.Mode != setupGatewayCloudflare || plan.URL != "https://dorf.example.com/v1" {
 		t.Fatalf("plan=%#v err=%v", plan, err)
 	}
@@ -406,29 +760,340 @@ func TestGuidedGatewayPlanningRequiresCloudflareDNSAndAnUnusedHostname(t *testin
 	nonCloudflare := fakeDNSResolver{records: map[string][]*net.NS{
 		"example.com": {{Host: "ns1.other-provider.example."}},
 	}}
-	if _, err := planRemoteGateway(context.Background(), setupOptions{CloudflareHost: "dorf.example.com"}, nil, setupPresenter{}, nonCloudflare); err == nil || !strings.Contains(err.Error(), "not Cloudflare") {
+	if _, err := planRemoteGateway(context.Background(), setupOptions{CloudflareHost: "dorf.example.com"}, nil, setupPresenter{}, nonCloudflare, ""); err == nil || !strings.Contains(err.Error(), "not Cloudflare") {
 		t.Fatalf("non-Cloudflare error=%v", err)
 	}
 
 	occupied := cloudflare
 	occupied.addresses = map[string][]net.IPAddr{"dorf.example.com": {{IP: net.ParseIP("192.0.2.1")}}}
-	if _, err := planRemoteGateway(context.Background(), setupOptions{CloudflareHost: "dorf.example.com"}, nil, setupPresenter{}, occupied); err == nil || !strings.Contains(err.Error(), "already resolves") {
+	if _, err := planRemoteGateway(context.Background(), setupOptions{CloudflareHost: "dorf.example.com"}, nil, setupPresenter{}, occupied, ""); err == nil || !strings.Contains(err.Error(), "already resolves") {
 		t.Fatalf("occupied hostname error=%v", err)
+	}
+	if plan, err := planRemoteGateway(context.Background(), setupOptions{CloudflareHost: "dorf.example.com"}, nil, setupPresenter{}, occupied, "dorf.example.com"); err != nil || plan.Mode != setupGatewayCloudflare {
+		t.Fatalf("owned hostname replay plan=%#v error=%v", plan, err)
+	}
+}
+
+func TestExistingProfileCannotTurnOccupiedDNSIntoADorfTunnel(t *testing.T) {
+	const hostname = "dorf.example.com"
+	existing := core.SandboxProfile{
+		Name: "cloud-codex", Provider: core.SandboxProviderE2B, Harness: "codex",
+		Artifact: "dorf:exact-build", E2BGatewayURL: "https://" + hostname + "/v1",
+	}
+	plans := []guidedProfilePlan{{
+		Provider: core.SandboxProviderE2B, Name: existing.Name, Harness: existing.Harness, Existing: &existing,
+	}}
+	occupied := fakeDNSResolver{
+		records: map[string][]*net.NS{
+			"example.com": {{Host: "cash.ns.cloudflare.com."}, {Host: "lana.ns.cloudflare.com."}},
+		},
+		addresses: map[string][]net.IPAddr{hostname: {{IP: net.ParseIP("192.0.2.1")}}},
+	}
+	options := setupOptions{CloudflareHost: hostname}
+	if _, err := planRemoteGateway(context.Background(), options, plans, setupPresenter{}, occupied, ""); err == nil || !strings.Contains(err.Error(), "already resolves") {
+		t.Fatalf("occupied existing-profile hostname error=%v", err)
+	}
+	plan, err := planRemoteGateway(context.Background(), options, plans, setupPresenter{}, occupied, hostname)
+	if err != nil || plan.Mode != setupGatewayCloudflare || plan.Hostname != hostname {
+		t.Fatalf("owned existing-profile replay plan=%#v error=%v", plan, err)
 	}
 }
 
 func TestGuidedGatewayBindPreservesExistingLocalProfiles(t *testing.T) {
-	network, err := gatewayIncusNetwork([]core.SandboxProfile{{
+	profiles := []core.SandboxProfile{{
 		Name: "local-codex", Provider: core.SandboxProviderIncus, IncusNetwork: "incusbr0",
-	}}, []guidedProfilePlan{{Provider: core.SandboxProviderE2B, Name: "cloud-codex"}})
+		IncusProject: "restricted", IncusStoragePool: "dorf-pool", IncusGatewayURL: "http://10.44.0.1:8317/v1",
+	}}
+	selected := []guidedProfilePlan{{Provider: core.SandboxProviderE2B, Name: "cloud-codex"}}
+	network, err := gatewayIncusNetwork(profiles, selected)
 	if err != nil || network != "incusbr0" {
 		t.Fatalf("network=%q err=%v", network, err)
 	}
-	_, err = gatewayIncusNetwork([]core.SandboxProfile{{Provider: core.SandboxProviderIncus, IncusNetwork: "incusbr0"}}, []guidedProfilePlan{{
-		Provider: core.SandboxProviderIncus, Name: "local-pi", Existing: &core.SandboxProfile{Provider: core.SandboxProviderIncus, IncusNetwork: "otherbr0"},
+	project, pool := gatewayIncusScope(profiles, selected, network)
+	if project != "restricted" || pool != "dorf-pool" {
+		t.Fatalf("Incus Gateway scope=%s/%s", project, pool)
+	}
+	address, required, err := guidedIncusBridgeAuthority(profiles, selected, network)
+	if err != nil || !required || address != "10.44.0.1" {
+		t.Fatalf("Incus Gateway address=%q required=%t error=%v", address, required, err)
+	}
+	_, err = gatewayIncusNetwork([]core.SandboxProfile{{
+		Provider: core.SandboxProviderIncus, IncusNetwork: "incusbr0", IncusGatewayURL: "http://10.44.0.1:8317/v1",
+	}}, []guidedProfilePlan{{
+		Provider: core.SandboxProviderIncus, Name: "local-pi", Existing: &core.SandboxProfile{
+			Provider: core.SandboxProviderIncus, IncusNetwork: "otherbr0", IncusGatewayURL: "http://10.55.0.1:8317/v1",
+		},
 	}})
 	if err == nil || !strings.Contains(err.Error(), "multiple networks") {
 		t.Fatalf("ambiguous network error=%v", err)
+	}
+}
+
+func TestGuidedGatewayBindNeverRewritesExistingProfileAuthority(t *testing.T) {
+	profiles := []core.SandboxProfile{
+		{Name: "first", Provider: core.SandboxProviderIncus, IncusNetwork: "incusbr0", IncusGatewayURL: "http://10.44.0.1:8317/v1"},
+		{Name: "same", Provider: core.SandboxProviderIncus, IncusNetwork: "incusbr0", IncusGatewayURL: "http://10.44.0.1:8317/v1"},
+	}
+	address, required, err := guidedIncusBridgeAuthority(profiles, nil, "incusbr0")
+	if err != nil || !required || address != "10.44.0.1" {
+		t.Fatalf("shared authority address=%q required=%t error=%v", address, required, err)
+	}
+	profiles[1].IncusGatewayURL = "http://10.44.0.2:8317/v1"
+	if _, _, err := guidedIncusBridgeAuthority(profiles, nil, "incusbr0"); err == nil || !strings.Contains(err.Error(), "different Gateway addresses") {
+		t.Fatalf("divergent profile authority error=%v", err)
+	}
+
+	httpsProfile := core.SandboxProfile{
+		Name: "remote", Provider: core.SandboxProviderIncus, IncusNetwork: "remote0", IncusGatewayURL: "https://gateway.example/v1",
+	}
+	if network, err := gatewayIncusNetwork([]core.SandboxProfile{httpsProfile}, nil); err != nil || network != "" {
+		t.Fatalf("operator-routed HTTPS profile selected guided bridge %q: %v", network, err)
+	}
+	if address, required, err := guidedIncusBridgeAuthority([]core.SandboxProfile{httpsProfile}, nil, ""); err != nil || required || address != "" {
+		t.Fatalf("operator-routed HTTPS authority address=%q required=%t error=%v", address, required, err)
+	}
+
+	address, required, err = guidedIncusBridgeAuthority(nil, []guidedProfilePlan{{Provider: core.SandboxProviderIncus, Name: "new"}}, guidedIncusNetwork)
+	if err != nil || !required || address != "" {
+		t.Fatalf("new Incus profile address=%q required=%t error=%v", address, required, err)
+	}
+}
+
+func TestGuidedGatewayBindConsumesPersistedPrivateRouteWithoutLocalInference(t *testing.T) {
+	authority := testRemoteIncusAuthority(t)
+	hash, err := authority.AuthorityHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := core.SandboxProfile{
+		Name: "remote", Provider: core.SandboxProviderIncus,
+		IncusEndpointAuthorityHash: hash, IncusNetwork: "vpn0",
+		IncusGatewayURL: "http://100.64.0.10:8317/v1",
+	}
+	address, privateBridge, resolve, err := selectGuidedGatewayBind(
+		[]core.SandboxProfile{profile},
+		[]guidedProfilePlan{{Provider: core.SandboxProviderE2B, Name: "cloud-codex"}},
+		authority, "100.64.0.10", true,
+	)
+	if err != nil || resolve || address != "100.64.0.10" || privateBridge != "" {
+		t.Fatalf("address=%q private bridge=%q resolve=%t error=%v", address, privateBridge, resolve, err)
+	}
+}
+
+func TestGuidedGatewayBindRejectsNewIncusProfileOnRemoteAuthorityBeforeRouteReuse(t *testing.T) {
+	authority := testRemoteIncusAuthority(t)
+	hash, err := authority.AuthorityHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := core.SandboxProfile{
+		Name: "remote", Provider: core.SandboxProviderIncus,
+		IncusEndpointAuthorityHash: hash, IncusNetwork: guidedIncusNetwork,
+		IncusGatewayURL: "http://100.64.0.10:8317/v1",
+	}
+	address, privateBridge, resolve, err := selectGuidedGatewayBind(
+		[]core.SandboxProfile{profile},
+		[]guidedProfilePlan{{Provider: core.SandboxProviderIncus, Name: "new-local"}},
+		authority, "100.64.0.10", true,
+	)
+	if err == nil || !strings.Contains(err.Error(), "guided remote Incus setup is not supported") {
+		t.Fatalf("address=%q private bridge=%q resolve=%t error=%v", address, privateBridge, resolve, err)
+	}
+}
+
+func testRemoteIncusAuthority(t *testing.T) *deployment.Incus {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "incus.example"},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	privateKey := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
+	return &deployment.Incus{
+		Endpoint: "https://incus.example:8443", ServerCertificate: certificate,
+		ClientCertificate: certificate, ClientPrivateKey: privateKey,
+	}
+}
+
+func TestIncusReadinessIsScopedOnlyToASelectedIncusProfile(t *testing.T) {
+	if _, _, selected := guidedIncusReadinessScope([]guidedProfilePlan{{Provider: core.SandboxProviderE2B}}); selected {
+		t.Fatal("E2B-only setup inherited a configured Incus prerequisite")
+	}
+	existing := &core.SandboxProfile{IncusProject: "restricted", IncusStoragePool: "dorf-pool"}
+	project, pool, selected := guidedIncusReadinessScope([]guidedProfilePlan{{Provider: core.SandboxProviderIncus, Existing: existing}})
+	if !selected || project != "restricted" || pool != "dorf-pool" {
+		t.Fatalf("selected Incus readiness scope=%s/%s selected=%t", project, pool, selected)
+	}
+}
+
+func TestGuidedLegacyIncusProfilePlansAnExplicitLocalAuthorityUpgrade(t *testing.T) {
+	legacy := core.SandboxProfile{
+		Name: "local-codex", Provider: core.SandboxProviderIncus, Harness: "codex",
+		Artifact: strings.Repeat("a", 64), IncusNetwork: "incusbr0", IncusDiskSize: "40GiB",
+	}
+	plans := []guidedProfilePlan{{
+		Provider: core.SandboxProviderIncus, Name: legacy.Name, Harness: legacy.Harness, Existing: &legacy,
+	}}
+	authority := &deployment.Incus{Endpoint: "unix:///var/lib/incus/unix.socket"}
+	probed := false
+	err := setupGuidedIncusReadinessWith(context.Background(), plans, authority,
+		func(_ context.Context, got *deployment.Incus, project, storagePool string) error {
+			probed = true
+			if got != authority || project != incus.DefaultProject || storagePool != incus.DefaultStoragePool {
+				t.Fatalf("legacy readiness authority=%#v scope=%s/%s", got, project, storagePool)
+			}
+			return nil
+		})
+	if err != nil || !probed {
+		t.Fatalf("legacy local readiness probed=%t err=%v", probed, err)
+	}
+	address, bridge, resolve, err := selectGuidedGatewayBind(nil, plans, authority, "", false)
+	if err != nil || address != "" || bridge != legacy.IncusNetwork || !resolve {
+		t.Fatalf("legacy Gateway plan address=%q bridge=%q resolve=%t err=%v", address, bridge, resolve, err)
+	}
+}
+
+func TestGuidedIncusAuthorityDriftStopsBeforeReadinessHandoff(t *testing.T) {
+	profileAuthority := &deployment.Incus{Endpoint: "unix:///remote/incus/unix.socket"}
+	hash, err := profileAuthority.AuthorityHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing := &core.SandboxProfile{
+		Name: "remote", Provider: core.SandboxProviderIncus,
+		IncusEndpointAuthorityHash: hash,
+	}
+	configured := &deployment.Incus{Endpoint: "unix:///var/lib/incus/unix.socket"}
+	err = setupGuidedIncusReadiness(context.Background(), []guidedProfilePlan{{
+		Provider: core.SandboxProviderIncus, Name: existing.Name, Existing: existing,
+	}}, configured)
+	if err == nil || !strings.Contains(err.Error(), "different Incus endpoint authority") {
+		t.Fatalf("authority drift error=%v", err)
+	}
+	var readiness incusSetupReadinessError
+	if errors.As(err, &readiness) {
+		t.Fatalf("authority drift became a local Incus readiness handoff: %v", err)
+	}
+}
+
+func TestGuidedNewRemoteIncusStopsBeforeEndpointReadiness(t *testing.T) {
+	authority := &deployment.Incus{Endpoint: "https://unreachable.example:8443"}
+	probed := false
+	err := setupGuidedIncusReadinessWith(context.Background(), []guidedProfilePlan{{
+		Provider: core.SandboxProviderIncus, Name: "new-remote",
+	}}, authority, func(context.Context, *deployment.Incus, string, string) error {
+		probed = true
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "guided remote Incus setup is not supported") {
+		t.Fatalf("new remote guided setup error=%v", err)
+	}
+	if probed {
+		t.Fatalf("unsupported setup reached endpoint readiness")
+	}
+}
+
+func TestGuidedExistingVerifiedRemoteIncusReuseStopsBeforeEndpointReadiness(t *testing.T) {
+	authority := testRemoteIncusAuthority(t)
+	hash, err := authority.AuthorityHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifiedAt := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
+	profile := core.SandboxProfile{
+		Name: "existing-remote", Provider: core.SandboxProviderIncus, Harness: "codex",
+		Artifact: "dorf:verified", IncusEndpointAuthorityHash: hash,
+		IncusProject: "restricted", IncusStoragePool: "dorf-pool", IncusNetwork: "remote0",
+		IncusDiskSize: "40GiB", IncusGatewayURL: "https://gateway.example/v1",
+	}
+	profile.DefinitionHash = profile.CurrentDefinitionHash()
+	profile.Verification = &core.ProfileVerification{
+		ProfileName: profile.Name, ContractVersion: core.BaseProfileContract, DefinitionHash: profile.DefinitionHash,
+		ProbeCompletedAt: verifiedAt, CleanedAt: verifiedAt.Add(time.Second),
+	}
+	if !profile.BaseVerified() {
+		t.Fatal("test profile is not verified")
+	}
+
+	probed := false
+	err = setupGuidedIncusReadinessWith(context.Background(), []guidedProfilePlan{{
+		Provider: core.SandboxProviderIncus, Name: profile.Name, Existing: &profile,
+	}}, authority, func(context.Context, *deployment.Incus, string, string) error {
+		probed = true
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "guided remote Incus setup is not supported") {
+		t.Fatalf("existing remote guided setup error=%v", err)
+	}
+	if probed {
+		t.Fatal("existing remote profile reuse reached endpoint readiness")
+	}
+}
+
+func TestGuidedRemoteIncusRejectionPrecedesExistingProfileAuthorityValidation(t *testing.T) {
+	authority := &deployment.Incus{Endpoint: "https://unreachable.example:8443"}
+	profile := core.SandboxProfile{
+		Name: "existing-remote", Provider: core.SandboxProviderIncus,
+		IncusEndpointAuthorityHash: "different-authority",
+	}
+	probed := false
+	err := setupGuidedIncusReadinessWith(context.Background(), []guidedProfilePlan{{
+		Provider: core.SandboxProviderIncus, Name: profile.Name, Existing: &profile,
+	}}, authority, func(context.Context, *deployment.Incus, string, string) error {
+		probed = true
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "guided remote Incus setup is not supported") {
+		t.Fatalf("remote Incus rejection ordering error=%v", err)
+	}
+	if strings.Contains(err.Error(), "different Incus endpoint authority") {
+		t.Fatalf("profile authority validation ran before remote Incus rejection: %v", err)
+	}
+	if probed {
+		t.Fatal("remote Incus ordering test reached endpoint readiness")
+	}
+}
+
+func TestIncusProfilePublicationRequiresTheSameDeploymentEndpointAuthority(t *testing.T) {
+	authority := &deployment.Incus{Endpoint: "unix:///var/lib/incus/unix.socket"}
+	hash, err := authority.AuthorityHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := core.SandboxProfile{Name: "local", Provider: core.SandboxProviderIncus, IncusEndpointAuthorityHash: hash}
+	if err := validateIncusProfileEndpointAuthority(authority, profile); err != nil {
+		t.Fatal(err)
+	}
+	other := &deployment.Incus{Endpoint: "unix:///run/incus/unix.socket"}
+	if err := validateIncusProfileEndpointAuthority(other, profile); err == nil || !strings.Contains(err.Error(), "different Incus endpoint authority") {
+		t.Fatalf("endpoint mismatch error=%v", err)
+	}
+	if err := validateIncusProfileEndpointAuthority(nil, profile); err == nil || !strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("missing endpoint error=%v", err)
+	}
+}
+
+func TestGuidedIncusGatewayAcceptsPrivateAndSharedIPv4Only(t *testing.T) {
+	for raw, want := range map[string]bool{
+		"10.20.30.1":      true,
+		"172.20.0.1":      true,
+		"100.64.0.1":      true,
+		"100.127.255.254": true,
+		"100.128.0.1":     false,
+		"127.0.0.1":       false,
+		"192.0.2.1":       false,
+	} {
+		got := privateOrSharedIPv4(net.ParseIP(raw))
+		if got != want {
+			t.Fatalf("address %s accepted=%t want %t", raw, got, want)
+		}
 	}
 }
 
@@ -443,19 +1108,16 @@ func TestProfileInstallValidatesIdentityBeforeArtifactMutation(t *testing.T) {
 			t.Fatalf("args=%v error=%v", args, err)
 		}
 	}
+	var stdout, stderr strings.Builder
+	err := installOfficialIncusProfile(context.Background(), postgres.Store{}, []string{
+		"local", "--release", "v1.2.3", "--harness", "codex", "--gateway-url", "http://10.20.30.1:8317/v1",
+	}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "not configured in the Dorf Deployment") {
+		t.Fatalf("missing Deployment authority error=%v", err)
+	}
 }
 
 func TestSandboxForProfileSelectsOneConcreteAdapter(t *testing.T) {
-	local, err := sandboxForProfile(config.Config{Workspace: "/workspace/job"}, core.SandboxProfile{
-		Name: "local", Provider: core.SandboxProviderIncus, Artifact: strings.Repeat("a", 64),
-		IncusNetwork: "incusbr0", IncusDiskSize: "40GiB",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := local.(incus.Adapter); !ok {
-		t.Fatalf("local adapter = %T", local)
-	}
 	managedProfile := core.SandboxProfile{
 		Name: "managed", Provider: core.SandboxProviderE2B, Artifact: "dorf:exact-build",
 		E2BGatewayURL: "https://gateway.example/v1", E2BSandboxTimeout: 55 * time.Minute,

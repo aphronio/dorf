@@ -11,6 +11,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/core"
+	"github.com/aphronio/dorf/internal/deployment"
 	"github.com/aphronio/dorf/internal/doctor"
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/postgres"
@@ -25,12 +26,12 @@ func profileCommand(ctx context.Context, store postgres.Store, cfg config.Config
 	}
 	switch args[0] {
 	case "install":
-		return installOfficialIncusProfile(ctx, store, args[1:], stdout, stderr)
+		return installOfficialIncusProfileWithAuthority(ctx, store, cfg.Incus, args[1:], stdout, stderr)
 	case "create":
 		if len(args) < 2 {
 			return fmt.Errorf("profile create requires NAME")
 		}
-		profile, err := parseSandboxProfile(ctx, "create "+args[1], args[1], args[2:], stderr)
+		profile, err := parseSandboxProfile(ctx, "create "+args[1], args[1], cfg.Incus, args[2:], stderr)
 		if err != nil {
 			return err
 		}
@@ -47,9 +48,20 @@ func profileCommand(ctx context.Context, store postgres.Store, cfg config.Config
 		if err != nil {
 			return err
 		}
-		patch, err := parseSandboxProfilePatch(ctx, "update "+args[1], current.Provider, args[2:], stderr)
+		authorityHash := ""
+		if current.Provider == core.SandboxProviderIncus {
+			_, hash, err := incusProfileConnection(cfg.Incus, current.IncusProject, current.IncusStoragePool)
+			if err != nil {
+				return err
+			}
+			authorityHash = hash
+		}
+		patch, err := parseSandboxProfilePatch(ctx, "update "+args[1], current.Provider, cfg.Incus, current.IncusProject, current.IncusStoragePool, args[2:], stderr)
 		if err != nil {
 			return err
+		}
+		if current.Provider == core.SandboxProviderIncus {
+			patch.IncusEndpointAuthorityHash = &authorityHash
 		}
 		stored, updated, err := store.UpdateSandboxProfile(ctx, args[1], patch)
 		if err != nil {
@@ -60,7 +72,7 @@ func profileCommand(ctx context.Context, store postgres.Store, cfg config.Config
 		if len(args) != 2 {
 			return fmt.Errorf("profile verify requires NAME")
 		}
-		verified, err := profileapp.VerifyBase(ctx, store, func(profile core.SandboxProfile) (provider.Sandbox, error) {
+		verified, err := verifyProfileBaseLive(ctx, store, func(profile core.SandboxProfile) (provider.Sandbox, error) {
 			return sandboxForProfile(cfg, profile)
 		}, args[1])
 		if err != nil {
@@ -103,7 +115,34 @@ func profileCommand(ctx context.Context, store postgres.Store, cfg config.Config
 	}
 }
 
+// verifyProfileBaseLive permits one bounded compatibility cleanup pass for an
+// interrupted pre-007 verification, then requires a fresh current-definition
+// proof before reporting success. Ordinary profiles settle in the first pass.
+func verifyProfileBaseLive(
+	ctx context.Context,
+	store postgres.Store,
+	runtimeForProfile func(core.SandboxProfile) (provider.Sandbox, error),
+	name string,
+) (core.SandboxProfile, error) {
+	var profile core.SandboxProfile
+	for range 2 {
+		var err error
+		profile, err = profileapp.VerifyBase(ctx, store, runtimeForProfile, name)
+		if err != nil {
+			return core.SandboxProfile{}, err
+		}
+		if profile.BaseVerified() {
+			return profile, nil
+		}
+	}
+	return core.SandboxProfile{}, fmt.Errorf("Sandbox profile %q did not produce a current-definition verification receipt", name)
+}
+
 func installOfficialIncusProfile(ctx context.Context, store postgres.Store, args []string, stdout, stderr io.Writer) error {
+	return installOfficialIncusProfileWithAuthority(ctx, store, nil, args, stdout, stderr)
+}
+
+func installOfficialIncusProfileWithAuthority(ctx context.Context, store postgres.Store, authority *deployment.Incus, args []string, stdout, stderr io.Writer) error {
 	if len(args) < 1 {
 		return fmt.Errorf("profile install requires NAME")
 	}
@@ -111,8 +150,11 @@ func installOfficialIncusProfile(ctx context.Context, store postgres.Store, args
 	set := flag.NewFlagSet("profile install "+name, flag.ContinueOnError)
 	set.SetOutput(stderr)
 	harness := set.String("harness", "", "Harness: codex or pi")
+	project := set.String("project", "dorf", "restricted Incus project")
+	storagePool := set.String("storage-pool", "default", "Incus storage pool")
 	network := set.String("network", "incusbr0", "Incus network")
 	diskSize := set.String("disk-size", "40GiB", "Incus root disk size")
+	gatewayURL := set.String("gateway-url", "", "guest-reachable Provider Gateway /v1 URL")
 	manifestPath := set.String("manifest", "", "verified release image manifest")
 	archive := set.String("archive", "", "matching Incus VM archive")
 	releaseTag := set.String("release", "", "immutable Dorf GitHub release tag")
@@ -123,10 +165,8 @@ func installOfficialIncusProfile(ctx context.Context, store postgres.Store, args
 	if (*releaseTag == "" && !local) || (*releaseTag != "" && local) || (local && (*manifestPath == "" || *archive == "")) {
 		return fmt.Errorf("profile install requires exactly --release or both --manifest and --archive")
 	}
-	if err := postgres.ValidateSandboxProfileIdentity(name, *harness); err != nil {
-		return err
-	}
-	profile, created, installed, err := reconcileOfficialIncusProfile(ctx, store, name, *harness, *releaseTag, *manifestPath, *archive, *network, *diskSize)
+	profile, created, installed, err := reconcileOfficialIncusProfileDefinition(ctx, store, name, *harness, *releaseTag, *manifestPath, *archive,
+		authority, *project, *storagePool, *network, *diskSize, *gatewayURL)
 	if err != nil {
 		return err
 	}
@@ -136,21 +176,32 @@ func installOfficialIncusProfile(ctx context.Context, store postgres.Store, args
 	})
 }
 
-func reconcileOfficialIncusProfile(ctx context.Context, store postgres.Store, name, harness, releaseTag, manifestPath, archive, network, diskSize string) (core.SandboxProfile, bool, releaseapp.Manifest, error) {
+func reconcileOfficialIncusProfileDefinition(ctx context.Context, store postgres.Store, name, harness, releaseTag, manifestPath, archive string,
+	authority *deployment.Incus, project, storagePool, network, diskSize, gatewayURL string) (core.SandboxProfile, bool, releaseapp.Manifest, error) {
+	if err := postgres.ValidateSandboxProfileIdentity(name, harness); err != nil {
+		return core.SandboxProfile{}, false, releaseapp.Manifest{}, err
+	}
+	connection, authorityHash, err := incusProfileConnection(authority, project, storagePool)
+	if err != nil {
+		return core.SandboxProfile{}, false, releaseapp.Manifest{}, err
+	}
+	if err := postgres.ValidateIncusProfileSettings(authorityHash, project, storagePool, network, diskSize, gatewayURL); err != nil {
+		return core.SandboxProfile{}, false, releaseapp.Manifest{}, err
+	}
 	alias := "dorf-profile-" + name
 	var installed releaseapp.Manifest
-	var err error
 	if strings.TrimSpace(releaseTag) != "" {
-		installed, err = releaseapp.InstallPublishedImage(ctx, releaseTag, alias)
+		installed, err = releaseapp.InstallPublishedImage(ctx, connection, releaseTag, alias)
 	} else {
-		installed, err = releaseapp.InstallImage(ctx, manifestPath, archive, alias)
+		installed, err = releaseapp.InstallImage(ctx, connection, manifestPath, archive, alias)
 	}
 	if err != nil {
 		return core.SandboxProfile{}, false, installed, err
 	}
 	profile, created, err := store.CreateSandboxProfile(ctx, core.SandboxProfile{
 		Name: name, Provider: core.SandboxProviderIncus, Harness: harness,
-		Artifact: installed.ImageFingerprint, IncusNetwork: network, IncusDiskSize: diskSize,
+		Artifact: installed.ImageFingerprint, IncusEndpointAuthorityHash: authorityHash,
+		IncusProject: project, IncusStoragePool: storagePool, IncusNetwork: network, IncusDiskSize: diskSize, IncusGatewayURL: gatewayURL,
 	})
 	return profile, created, installed, err
 }
@@ -160,8 +211,13 @@ type sandboxProfileView struct {
 	Provider          core.SandboxProvider     `json:"provider"`
 	Harness           string                   `json:"harness"`
 	Artifact          string                   `json:"artifact"`
+	DefinitionHash    string                   `json:"definition_hash,omitempty"`
+	IncusAuthority    string                   `json:"incus_endpoint_authority_hash,omitempty"`
+	IncusProject      string                   `json:"incus_project,omitempty"`
+	IncusStoragePool  string                   `json:"incus_storage_pool,omitempty"`
 	IncusNetwork      string                   `json:"incus_network,omitempty"`
 	IncusDiskSize     string                   `json:"incus_disk_size,omitempty"`
+	IncusGatewayURL   string                   `json:"incus_gateway_url,omitempty"`
 	E2BGatewayURL     string                   `json:"e2b_gateway_url,omitempty"`
 	E2BSandboxTimeout string                   `json:"e2b_sandbox_timeout,omitempty"`
 	E2BAllowInternet  *bool                    `json:"e2b_allow_internet,omitempty"`
@@ -173,6 +229,7 @@ type sandboxProfileView struct {
 
 type profileVerificationView struct {
 	ContractVersion string    `json:"contract_version"`
+	DefinitionHash  string    `json:"definition_hash,omitempty"`
 	HarnessVersion  string    `json:"harness_version,omitempty"`
 	AttemptedAt     time.Time `json:"attempted_at"`
 	VerifiedAt      time.Time `json:"verified_at,omitempty"`
@@ -183,7 +240,9 @@ type profileVerificationView struct {
 func profileView(profile core.SandboxProfile) sandboxProfileView {
 	view := sandboxProfileView{
 		Name: profile.Name, Provider: profile.Provider, Harness: profile.Harness, Artifact: profile.Artifact,
-		IncusNetwork: profile.IncusNetwork, IncusDiskSize: profile.IncusDiskSize,
+		DefinitionHash: profile.DefinitionHash, IncusAuthority: profile.IncusEndpointAuthorityHash,
+		IncusProject: profile.IncusProject, IncusStoragePool: profile.IncusStoragePool,
+		IncusNetwork: profile.IncusNetwork, IncusDiskSize: profile.IncusDiskSize, IncusGatewayURL: profile.IncusGatewayURL,
 		E2BGatewayURL: profile.E2BGatewayURL,
 		Default:       profile.Default, Verified: profile.BaseVerified(), CreatedAt: profile.CreatedAt,
 	}
@@ -196,24 +255,27 @@ func profileView(profile core.SandboxProfile) sandboxProfileView {
 	}
 	if profile.Verification != nil {
 		view.Verification = &profileVerificationView{
-			ContractVersion: profile.Verification.ContractVersion, HarnessVersion: profile.Verification.HarnessVersion,
-			AttemptedAt: profile.Verification.AttemptedAt, VerifiedAt: profile.Verification.ProbeCompletedAt,
+			ContractVersion: profile.Verification.ContractVersion, DefinitionHash: profile.Verification.DefinitionHash,
+			HarnessVersion: profile.Verification.HarnessVersion,
+			AttemptedAt:    profile.Verification.AttemptedAt, VerifiedAt: profile.Verification.ProbeCompletedAt,
 			CleanedAt: profile.Verification.CleanedAt, LastError: profile.Verification.LastError,
 		}
 	}
 	return view
 }
 
-func parseSandboxProfile(ctx context.Context, command, name string, args []string, stderr io.Writer) (core.SandboxProfile, error) {
+func parseSandboxProfile(ctx context.Context, command, name string, authority *deployment.Incus, args []string, stderr io.Writer) (core.SandboxProfile, error) {
 	set := flag.NewFlagSet("profile "+command, flag.ContinueOnError)
 	set.SetOutput(stderr)
 	provider := set.String("sandbox-provider", "", "Sandbox provider: incus or e2b")
 	harness := set.String("harness", "", "Harness: codex or pi")
 	image := set.String("image", "", "existing Incus image alias or fingerprint")
+	project := set.String("project", "dorf", "restricted Incus project")
+	storagePool := set.String("storage-pool", "default", "Incus storage pool")
 	network := set.String("network", "incusbr0", "Incus network")
 	diskSize := set.String("disk-size", "40GiB", "Incus root disk size")
 	template := set.String("template", "", "exact E2B template build reference")
-	gatewayURL := set.String("gateway-url", "", "deployment-owned HTTPS Provider Gateway URL")
+	gatewayURL := set.String("gateway-url", "", "provider-reachable Provider Gateway /v1 URL")
 	sandboxTimeout := set.Duration("sandbox-timeout", 55*time.Minute, "E2B running timeout")
 	allowInternet := set.Bool("allow-internet", false, "allow E2B Sandbox internet egress")
 	if err := set.Parse(args); err != nil {
@@ -222,20 +284,34 @@ func parseSandboxProfile(ctx context.Context, command, name string, args []strin
 	if set.NArg() != 0 {
 		return core.SandboxProfile{}, fmt.Errorf("profile %s received unexpected arguments", command)
 	}
+	visited := map[string]bool{}
+	set.Visit(func(value *flag.Flag) { visited[value.Name] = true })
 	profile := core.SandboxProfile{Name: name, Provider: core.SandboxProvider(strings.TrimSpace(*provider)), Harness: strings.TrimSpace(*harness)}
 	switch profile.Provider {
 	case core.SandboxProviderIncus:
-		if strings.TrimSpace(*template) != "" || strings.TrimSpace(*gatewayURL) != "" {
-			return core.SandboxProfile{}, fmt.Errorf("Incus profile does not accept E2B template or Gateway flags")
+		if visited["template"] || visited["sandbox-timeout"] || visited["allow-internet"] {
+			return core.SandboxProfile{}, fmt.Errorf("Incus profile does not accept E2B fields")
 		}
-		fingerprint, err := incus.ResolveImageFingerprint(ctx, *image, nil)
+		if err := postgres.ValidateSandboxProfileIdentity(name, *harness); err != nil {
+			return core.SandboxProfile{}, err
+		}
+		connection, authorityHash, err := incusProfileConnection(authority, *project, *storagePool)
 		if err != nil {
 			return core.SandboxProfile{}, err
 		}
-		profile.Artifact, profile.IncusNetwork, profile.IncusDiskSize = fingerprint, *network, *diskSize
+		if err := postgres.ValidateIncusProfileSettings(authorityHash, *project, *storagePool, *network, *diskSize, *gatewayURL); err != nil {
+			return core.SandboxProfile{}, err
+		}
+		fingerprint, err := incus.ResolveImageFingerprint(ctx, connection, *image)
+		if err != nil {
+			return core.SandboxProfile{}, err
+		}
+		profile.Artifact, profile.IncusEndpointAuthorityHash = fingerprint, authorityHash
+		profile.IncusProject, profile.IncusStoragePool = *project, *storagePool
+		profile.IncusNetwork, profile.IncusDiskSize, profile.IncusGatewayURL = *network, *diskSize, *gatewayURL
 	case core.SandboxProviderE2B:
-		if strings.TrimSpace(*image) != "" {
-			return core.SandboxProfile{}, fmt.Errorf("E2B profile does not accept --image")
+		if visited["image"] || visited["project"] || visited["storage-pool"] || visited["network"] || visited["disk-size"] {
+			return core.SandboxProfile{}, fmt.Errorf("E2B profile does not accept Incus fields")
 		}
 		profile.Artifact, profile.E2BGatewayURL = *template, *gatewayURL
 		profile.E2BSandboxTimeout, profile.E2BAllowInternet = *sandboxTimeout, *allowInternet
@@ -245,15 +321,17 @@ func parseSandboxProfile(ctx context.Context, command, name string, args []strin
 	return profile, nil
 }
 
-func parseSandboxProfilePatch(ctx context.Context, command string, provider core.SandboxProvider, args []string, stderr io.Writer) (postgres.SandboxProfilePatch, error) {
+func parseSandboxProfilePatch(ctx context.Context, command string, provider core.SandboxProvider, authority *deployment.Incus, currentProject, currentStoragePool string, args []string, stderr io.Writer) (postgres.SandboxProfilePatch, error) {
 	set := flag.NewFlagSet("profile "+command, flag.ContinueOnError)
 	set.SetOutput(stderr)
 	harness := set.String("harness", "", "Harness: codex or pi")
 	image := set.String("image", "", "existing Incus image alias or fingerprint")
+	project := set.String("project", "", "restricted Incus project")
+	storagePool := set.String("storage-pool", "", "Incus storage pool")
 	network := set.String("network", "", "Incus network")
 	diskSize := set.String("disk-size", "", "Incus root disk size")
 	template := set.String("template", "", "exact E2B template build reference")
-	gatewayURL := set.String("gateway-url", "", "deployment-owned HTTPS Provider Gateway URL")
+	gatewayURL := set.String("gateway-url", "", "provider-reachable Provider Gateway /v1 URL")
 	sandboxTimeout := set.Duration("sandbox-timeout", 0, "E2B running timeout")
 	allowInternet := set.Bool("allow-internet", false, "allow E2B Sandbox internet egress")
 	if err := set.Parse(args); err != nil {
@@ -269,11 +347,11 @@ func parseSandboxProfilePatch(ctx context.Context, command string, provider core
 	}
 	switch provider {
 	case core.SandboxProviderIncus:
-		if visited["template"] || visited["gateway-url"] || visited["sandbox-timeout"] || visited["allow-internet"] {
+		if visited["template"] || visited["sandbox-timeout"] || visited["allow-internet"] {
 			return postgres.SandboxProfilePatch{}, fmt.Errorf("Incus profile update does not accept E2B fields")
 		}
 	case core.SandboxProviderE2B:
-		if visited["image"] || visited["network"] || visited["disk-size"] {
+		if visited["image"] || visited["project"] || visited["storage-pool"] || visited["network"] || visited["disk-size"] {
 			return postgres.SandboxProfilePatch{}, fmt.Errorf("E2B profile update does not accept Incus fields")
 		}
 	default:
@@ -284,7 +362,18 @@ func parseSandboxProfilePatch(ctx context.Context, command string, provider core
 		patch.Harness = harness
 	}
 	if visited["image"] {
-		fingerprint, err := incus.ResolveImageFingerprint(ctx, *image, nil)
+		projectScope, storagePoolScope := currentProject, currentStoragePool
+		if visited["project"] {
+			projectScope = *project
+		}
+		if visited["storage-pool"] {
+			storagePoolScope = *storagePool
+		}
+		connection, _, err := incusProfileConnection(authority, projectScope, storagePoolScope)
+		if err != nil {
+			return postgres.SandboxProfilePatch{}, err
+		}
+		fingerprint, err := incus.ResolveImageFingerprint(ctx, connection, *image)
 		if err != nil {
 			return postgres.SandboxProfilePatch{}, err
 		}
@@ -293,6 +382,12 @@ func parseSandboxProfilePatch(ctx context.Context, command string, provider core
 	if visited["network"] {
 		patch.IncusNetwork = network
 	}
+	if visited["project"] {
+		patch.IncusProject = project
+	}
+	if visited["storage-pool"] {
+		patch.IncusStoragePool = storagePool
+	}
 	if visited["disk-size"] {
 		patch.IncusDiskSize = diskSize
 	}
@@ -300,7 +395,11 @@ func parseSandboxProfilePatch(ctx context.Context, command string, provider core
 		patch.E2BArtifact = template
 	}
 	if visited["gateway-url"] {
-		patch.E2BGatewayURL = gatewayURL
+		if provider == core.SandboxProviderIncus {
+			patch.IncusGatewayURL = gatewayURL
+		} else {
+			patch.E2BGatewayURL = gatewayURL
+		}
 	}
 	if visited["sandbox-timeout"] {
 		patch.E2BSandboxTimeout = sandboxTimeout
@@ -309,6 +408,26 @@ func parseSandboxProfilePatch(ctx context.Context, command string, provider core
 		patch.E2BAllowInternet = allowInternet
 	}
 	return patch, nil
+}
+
+func incusProfileConnection(authority *deployment.Incus, project, storagePool string) (incus.ConnectionConfig, string, error) {
+	if authority == nil {
+		return incus.ConnectionConfig{}, "", fmt.Errorf("Incus endpoint is not configured in the Dorf Deployment")
+	}
+	authorityHash, err := authority.AuthorityHash()
+	if err != nil {
+		return incus.ConnectionConfig{}, "", err
+	}
+	connection := incus.ConnectionConfig{
+		Endpoint: authority.Endpoint, Project: project, StoragePool: storagePool,
+		TLSServerCertificate: authority.ServerCertificate,
+		TLSClientCertificate: authority.ClientCertificate,
+		TLSClientKey:         authority.ClientPrivateKey,
+	}
+	if err := connection.Validate(); err != nil {
+		return incus.ConnectionConfig{}, "", err
+	}
+	return connection, authorityHash, nil
 }
 
 func selectedSandboxProfile(ctx context.Context, store postgres.Store, name string) (core.SandboxProfile, error) {

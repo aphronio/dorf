@@ -75,11 +75,11 @@ func TestLifecycleReconcilesLostCreateResponseAndDeletesOnlyOwnedSandbox(t *test
 	if err != nil || commonEndpoint.DialURL != endpoint.DialURL || commonEndpoint.Headers().Get(trafficAccessHeader) != "scoped-traffic-token" {
 		t.Fatalf("common Sandbox endpoint = %#v, %v", commonEndpoint, err)
 	}
-	if _, err := adapter.ProviderRouteURL(context.Background(), "https://gateway.example/v1"); err == nil || !strings.Contains(err.Error(), "remote-provider-gateway-route") {
+	if _, err := adapter.ProviderRouteURL(context.Background()); err == nil || !strings.Contains(err.Error(), "remote-provider-gateway-route") {
 		t.Fatalf("unproved E2B route admission = %v", err)
 	}
 	adapter.Config.ProviderGatewayURL = "https://temporary-gateway.example/v1"
-	if routeURL, err := adapter.ProviderRouteURL(context.Background(), "http://10.42.0.1:8317/v1"); err != nil || routeURL != adapter.Config.ProviderGatewayURL {
+	if routeURL, err := adapter.ProviderRouteURL(context.Background()); err != nil || routeURL != adapter.Config.ProviderGatewayURL {
 		t.Fatalf("E2B Provider Gateway URL = %q, %v", routeURL, err)
 	}
 	for _, value := range []string{
@@ -90,7 +90,7 @@ func TestLifecycleReconcilesLostCreateResponseAndDeletesOnlyOwnedSandbox(t *test
 		"https://temporary-gateway.example/v1?token=secret",
 	} {
 		adapter.Config.ProviderGatewayURL = value
-		if _, err := adapter.ProviderRouteURL(context.Background(), "http://10.42.0.1:8317/v1"); err == nil {
+		if _, err := adapter.ProviderRouteURL(context.Background()); err == nil {
 			t.Fatalf("accepted unsafe E2B Provider Gateway URL %q", value)
 		}
 	}

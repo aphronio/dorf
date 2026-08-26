@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -25,6 +26,7 @@ import (
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/core"
+	"github.com/aphronio/dorf/internal/deployment"
 	"github.com/aphronio/dorf/internal/direct"
 	"github.com/aphronio/dorf/internal/doctor"
 	"github.com/aphronio/dorf/internal/gateway"
@@ -32,7 +34,6 @@ import (
 	"github.com/aphronio/dorf/internal/hostsetup"
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/investigation"
-	"github.com/aphronio/dorf/internal/managedservice"
 	outcomeapp "github.com/aphronio/dorf/internal/outcome"
 	"github.com/aphronio/dorf/internal/postgres"
 	profileapp "github.com/aphronio/dorf/internal/profile"
@@ -78,7 +79,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 			if result.Updated {
 				installed = result.Latest
 			}
-			return fmt.Errorf("Dorf %s is installed, but managed services were not reconciled: %w; run dorf service reconcile --yes", installed, err)
+			return fmt.Errorf("Dorf %s is installed, but Compose services were not reconciled: %w; run dorf service reconcile --yes", installed, err)
 		}
 		if result.Updated {
 			fmt.Fprintf(stdout, "Dorf update complete: %s -> %s\n", result.From, result.Latest)
@@ -89,7 +90,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 		return nil
 	}
-	if handled, err := managedServiceRootCommand(ctx, args, stdout, stderr); handled || err != nil {
+	if handled, err := composeForegroundCommand(ctx, args, stdout, stderr); handled || err != nil {
+		return err
+	}
+	if handled, err := composeServiceRootCommand(ctx, args, stdout, stderr); handled || err != nil {
 		return err
 	}
 	if handled, err := remoteCommand(ctx, args, stdout, stderr); handled || err != nil {
@@ -204,7 +208,7 @@ func runDirect(ctx context.Context, store postgres.Store, client *absurd.Client,
 	if generatedKey {
 		fmt.Fprintf(stderr, "Generated admission key %s; if this command is interrupted, retry with --key %s.\n", admissionKey, admissionKey)
 	}
-	providers := gateway.Gateway{StatePath: cfg.GatewayStatePath}
+	providers := configuredProviderGateway(cfg)
 	input := direct.AdmissionRequest{
 		AdmissionKey: admissionKey, Goal: goal, SandboxProfile: *profileName,
 		ProviderConnection: *connection, Model: *model, ReasoningEffort: *effort,
@@ -218,6 +222,10 @@ func runDirect(ctx context.Context, store postgres.Store, client *absurd.Client,
 		"job_id": job.ID, "admission_key": admissionKey, "client": "dorf-cli", "created": created,
 		"task_id": job.CurrentTaskID, "scheduled": job.AdmissionOpen && job.CurrentTaskID != "",
 	})
+}
+
+func configuredProviderGateway(cfg config.Config) gateway.Gateway {
+	return gateway.Gateway{StatePath: cfg.GatewayStatePath, InternalDialOrigin: cfg.GatewayInternalOrigin}
 }
 
 func directAdmissionKey(value string, source io.Reader) (string, bool, error) {
@@ -377,6 +385,7 @@ func providerCommand(ctx context.Context, store postgres.Store, cfg config.Confi
 	if err != nil {
 		return err
 	}
+	provider := "ChatGPT subscription"
 	if authMode == "openai" {
 		key, err := readSecretFile(*apiKeyFile, os.Stdin)
 		if err != nil {
@@ -385,65 +394,145 @@ func providerCommand(ctx context.Context, store postgres.Store, cfg config.Confi
 		if err := g.ConnectOpenAIAPIKey(ctx, *name, resolvedBind, key); err != nil {
 			return err
 		}
-		if err := g.SetDefaultConnection(*name); err != nil {
+		provider = "OpenAI API key"
+	} else {
+		if err := g.ConnectChatGPT(ctx, *name, resolvedBind, func(url, code string) {
+			fmt.Fprintf(stdout, "Open %s and enter %s\n", url, code)
+		}); err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "AI connection ready: %s (OpenAI API key; default; broker %s on %s)\n", *name, gateway.BackendVersion, resolvedBind)
-		return nil
 	}
-	if err := g.ConnectChatGPT(ctx, *name, resolvedBind, func(url, code string) {
-		fmt.Fprintf(stdout, "Open %s and enter %s\n", url, code)
-	}); err != nil {
+	if err := makeProviderConnectionReady(ctx, *name, func(ctx context.Context) error {
+		return reconcileExistingComposeServices(ctx, currentComposeServiceManager(), stdout, stderr)
+	}, g.FinalizeConnection, g.SetDefaultConnection); err != nil {
 		return err
 	}
-	if err := g.SetDefaultConnection(*name); err != nil {
-		return err
+	fmt.Fprintf(stdout, "AI connection ready: %s (%s; default; broker %s on %s)\n", *name, provider, gateway.BackendVersion, resolvedBind)
+	return nil
+}
+
+func makeProviderConnectionReady(
+	ctx context.Context,
+	name string,
+	reconcile func(context.Context) error,
+	finalize func(context.Context, string) error,
+	setDefault func(string) error,
+) error {
+	if err := reconcile(ctx); err != nil {
+		return fmt.Errorf("reconcile Compose deployment for AI connection %q: %w", name, err)
 	}
-	fmt.Fprintf(stdout, "AI connection ready: %s (ChatGPT subscription; default; broker %s on %s)\n", *name, gateway.BackendVersion, resolvedBind)
+	if err := finalize(ctx, name); err != nil {
+		return fmt.Errorf("verify AI connection %q through the Compose Gateway: %w", name, err)
+	}
+	if err := setDefault(name); err != nil {
+		return fmt.Errorf("select default AI connection %q: %w", name, err)
+	}
 	return nil
 }
 
 func providerGatewayForBind(ctx context.Context, store postgres.Store, cfg config.Config, bind, profileName string) (gateway.Gateway, string, error) {
-	privateBridge := ""
-	if strings.TrimSpace(bind) == "" || strings.TrimSpace(profileName) != "" {
-		profile, err := sandboxProfileByNameOrDefault(ctx, store, profileName)
-		if err != nil {
-			return gateway.Gateway{}, "", err
+	bind, profileName = strings.TrimSpace(bind), strings.TrimSpace(profileName)
+	parsedBind := net.ParseIP(bind)
+	if bind != "" && parsedBind != nil && parsedBind.To4() != nil && !parsedBind.IsLoopback() && profileName == "" {
+		return gateway.Gateway{}, "", fmt.Errorf("a non-loopback provider bind requires its matching Incus --profile")
+	}
+	profiles, err := store.SandboxProfiles(ctx)
+	if err != nil {
+		return gateway.Gateway{}, "", err
+	}
+	profile, err := providerGatewayProfile(profiles, profileName)
+	if err != nil {
+		return gateway.Gateway{}, "", err
+	}
+	g := configuredProviderGateway(cfg)
+	preparedAddress, prepared, err := g.PreparedComposePublishAddress()
+	if err != nil {
+		return gateway.Gateway{}, "", err
+	}
+	resolved, err := selectProviderGatewayBind(cfg, profiles, profile, bind, preparedAddress, prepared)
+	if err != nil {
+		return gateway.Gateway{}, "", err
+	}
+	return g, resolved, nil
+}
+
+func providerGatewayProfile(profiles []core.SandboxProfile, name string) (*core.SandboxProfile, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, nil
+	}
+	for i := range profiles {
+		if profiles[i].Name == name {
+			return &profiles[i], nil
 		}
-		if profile.Provider == core.SandboxProviderIncus {
-			privateBridge = profile.IncusNetwork
-		} else if strings.TrimSpace(bind) == "" {
-			profiles, listErr := store.SandboxProfiles(ctx)
-			if listErr != nil {
-				return gateway.Gateway{}, "", listErr
-			}
-			network, networkErr := gatewayIncusNetwork(profiles, nil)
-			if networkErr != nil {
-				return gateway.Gateway{}, "", networkErr
-			}
-			if network == "" {
-				bind = "127.0.0.1"
-			} else {
-				privateBridge = network
-				result, runErr := (incus.CommandRunner{}).Run(ctx, "incus", nil, "network", "get", network, "ipv4.address")
-				if runErr != nil || result.ExitCode != 0 {
-					return gateway.Gateway{}, "", fmt.Errorf("resolve private Incus bridge address; initialize %s or pass --bind", network)
+	}
+	return nil, postgres.ErrProfileNotFound
+}
+
+func selectProviderGatewayBind(cfg config.Config, profiles []core.SandboxProfile, selected *core.SandboxProfile, requested, preparedAddress string, prepared bool) (string, error) {
+	requested, preparedAddress = strings.TrimSpace(requested), strings.TrimSpace(preparedAddress)
+	if selected != nil && selected.Provider == core.SandboxProviderIncus {
+		if err := validateIncusProfileEndpointAuthority(cfg.Incus, *selected); err != nil {
+			return "", err
+		}
+	}
+	network, err := gatewayIncusNetwork(profiles, nil)
+	if err != nil {
+		return "", err
+	}
+	profileAddress, directRequired, err := guidedIncusBridgeAuthority(profiles, nil, network)
+	if err != nil {
+		return "", err
+	}
+	if directRequired {
+		for _, profile := range profiles {
+			if _, direct := guidedIncusProfilePublishAddress(profile); direct && profile.IncusNetwork == network {
+				if err := validateIncusProfileEndpointAuthority(cfg.Incus, profile); err != nil {
+					return "", err
 				}
-				bind = strings.Split(strings.TrimSpace(result.Stdout), "/")[0]
 			}
 		}
-		if strings.TrimSpace(bind) == "" {
-			result, err := (incus.CommandRunner{}).Run(ctx, "incus", nil, "network", "get", profile.IncusNetwork, "ipv4.address")
-			if err != nil || result.ExitCode != 0 {
-				return gateway.Gateway{}, "", fmt.Errorf("resolve private Incus bridge address; initialize %s or pass --bind", profile.IncusNetwork)
+	}
+	if requested != "" {
+		parsed := net.ParseIP(requested)
+		if parsed == nil || parsed.To4() == nil || parsed.IsUnspecified() || (!parsed.IsLoopback() && !privateOrSharedIPv4(parsed)) {
+			return "", fmt.Errorf("provider bind must be one loopback or private IPv4 address")
+		}
+		requested = parsed.To4().String()
+		if !parsed.IsLoopback() {
+			if selected == nil {
+				return "", fmt.Errorf("a non-loopback provider bind requires its matching Incus --profile")
 			}
-			bind = strings.Split(strings.TrimSpace(result.Stdout), "/")[0]
+			if selected.Provider != core.SandboxProviderIncus {
+				return "", fmt.Errorf("Sandbox profile %q is not an Incus profile and cannot authorize a non-loopback provider bind", selected.Name)
+			}
+			selectedAddress, direct := guidedIncusProfilePublishAddress(*selected)
+			if !direct || requested != selectedAddress {
+				return "", fmt.Errorf("provider bind %s does not match Sandbox profile %q exact Gateway URL", requested, selected.Name)
+			}
 		}
 	}
-	if strings.TrimSpace(bind) == "" {
-		bind = "127.0.0.1"
+	return selectGatewayPublishAddress(requested, preparedAddress, prepared, profileAddress, directRequired)
+}
+
+func selectGatewayPublishAddress(requested, preparedAddress string, prepared bool, profileAddress string, directRequired bool) (string, error) {
+	requested, preparedAddress, profileAddress = strings.TrimSpace(requested), strings.TrimSpace(preparedAddress), strings.TrimSpace(profileAddress)
+	if requested != "" {
+		if directRequired && requested != profileAddress {
+			return "", fmt.Errorf("provider bind %s conflicts with Sandbox Profile Gateway publication %s; update and re-verify those profiles explicitly first", requested, profileAddress)
+		}
+		return requested, nil
 	}
-	return gateway.Gateway{StatePath: cfg.GatewayStatePath, PrivateBridge: privateBridge}, bind, nil
+	if directRequired {
+		if prepared && preparedAddress != profileAddress {
+			return "", fmt.Errorf("prepared Compose Gateway publication %s conflicts with Sandbox Profile authority %s; update and re-verify the affected profile explicitly", preparedAddress, profileAddress)
+		}
+		return profileAddress, nil
+	}
+	if prepared {
+		return preparedAddress, nil
+	}
+	return "127.0.0.1", nil
 }
 
 func readSecretFile(path string, stdin io.Reader) (string, error) {
@@ -514,19 +603,30 @@ func providerStatusCommand(ctx context.Context, store postgres.Store, cfg config
 	if err != nil {
 		return err
 	}
-	g := gateway.Gateway{StatePath: cfg.GatewayStatePath}
+	g := configuredProviderGateway(cfg)
 	selectedConnection, err := selectedAIConnection(g, *connection)
 	if err != nil {
 		return err
 	}
 	authorityErr := g.Check(ctx, selectedConnection)
 	var sandboxPathErr error
-	if profile.Provider == core.SandboxProviderE2B {
+	switch profile.Provider {
+	case core.SandboxProviderE2B:
 		remote, gatewayErr := remoteGatewayForProviderStatus(cfg, profile)
 		if gatewayErr != nil {
 			sandboxPathErr = gatewayErr
 		} else {
 			sandboxPathErr = remote.CheckRemote(ctx, profile.E2BGatewayURL)
+		}
+	case core.SandboxProviderIncus:
+		sandboxPathErr = validateIncusComposePublication(g, profile)
+		if sandboxPathErr == nil {
+			remote, gatewayErr := remoteGatewayForProviderStatus(cfg, profile)
+			if gatewayErr != nil {
+				sandboxPathErr = gatewayErr
+			} else {
+				sandboxPathErr = remote.CheckRemote(ctx, profile.IncusGatewayURL)
+			}
 		}
 	}
 	view := newProviderGatewayStatusView(profile, selectedConnection, authorityErr, sandboxPathErr)
@@ -551,8 +651,14 @@ func selectedAIConnection(g gateway.Gateway, explicit string) (string, error) {
 }
 
 func remoteGatewayForProviderStatus(cfg config.Config, profile core.SandboxProfile) (gateway.Gateway, error) {
-	g := gateway.Gateway{StatePath: cfg.GatewayStatePath}
-	if profile.Provider != core.SandboxProviderE2B {
+	g := configuredProviderGateway(cfg)
+	gatewayURL := ""
+	switch profile.Provider {
+	case core.SandboxProviderE2B:
+		gatewayURL = profile.E2BGatewayURL
+	case core.SandboxProviderIncus:
+		gatewayURL = profile.IncusGatewayURL
+	default:
 		return g, nil
 	}
 	tunnel := cloudflareapp.Tunnel{StatePath: filepath.Join(cfg.GatewayStatePath, "cloudflare")}
@@ -567,7 +673,7 @@ func remoteGatewayForProviderStatus(cfg config.Config, profile core.SandboxProfi
 	if err != nil {
 		return g, err
 	}
-	if ownedURL == profile.E2BGatewayURL {
+	if ownedURL == gatewayURL {
 		client := freshDNSHTTPClient()
 		probeURL, err := state.ProbeURL()
 		if err != nil {
@@ -579,6 +685,24 @@ func remoteGatewayForProviderStatus(cfg config.Config, profile core.SandboxProfi
 	return g, nil
 }
 
+func validateIncusComposePublication(g gateway.Gateway, profile core.SandboxProfile) error {
+	profileAddress, direct := guidedIncusProfilePublishAddress(profile)
+	if !direct {
+		return nil
+	}
+	published, found, err := g.PreparedComposePublishAddress()
+	if err != nil {
+		return fmt.Errorf("inspect Compose Gateway publication: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("Compose Gateway publication is not prepared for Sandbox Profile %q", profile.Name)
+	}
+	if published != profileAddress {
+		return fmt.Errorf("Compose publishes %s but Sandbox Profile %q owns %s", published, profile.Name, profileAddress)
+	}
+	return nil
+}
+
 func newProviderGatewayStatusView(profile core.SandboxProfile, connection string, authorityErr, sandboxPathErr error) providerGatewayStatusView {
 	check := func(target string, err error) providerGatewayCheckView {
 		if err != nil {
@@ -588,26 +712,29 @@ func newProviderGatewayStatusView(profile core.SandboxProfile, connection string
 	}
 	view := providerGatewayStatusView{
 		Profile: profile.Name, SandboxProvider: profile.Provider, ProfileVerified: profile.BaseVerified(),
-		Connection: connection, Lifecycle: "persistent host process started by provider connect",
+		Connection: connection, Lifecycle: "Compose-owned Provider Gateway service",
 		Authority: check("private broker and named AI connection", authorityErr),
 	}
 	if profile.BaseVerified() {
 		verifiedAt := profile.Verification.ProbeCompletedAt
 		view.ProfileVerifiedAt = &verifiedAt
 	}
-	if profile.Provider == core.SandboxProviderE2B {
-		view.SandboxPath = check(profile.E2BGatewayURL, sandboxPathErr)
+	if profile.Provider == core.SandboxProviderE2B || profile.Provider == core.SandboxProviderIncus {
+		gatewayURL := profile.E2BGatewayURL
+		if profile.Provider == core.SandboxProviderIncus {
+			gatewayURL = profile.IncusGatewayURL
+		}
+		view.SandboxPath = check(gatewayURL, sandboxPathErr)
 		if sandboxPathErr == nil {
 			view.SandboxPath.Detail = "reachable; anonymous access rejected"
 		}
 	} else {
 		view.SandboxPath = providerGatewayCheckView{
-			Status: "historical", Target: "private Incus network " + profile.IncusNetwork,
-			Detail: "covered by profile verification; no Sandbox was created for this status check",
+			Status: "failed", Detail: "unsupported Sandbox provider",
 		}
 	}
 	view.Ready = view.ProfileVerified && view.Authority.Status == "ready" &&
-		(profile.Provider != core.SandboxProviderE2B || view.SandboxPath.Status == "ready")
+		view.SandboxPath.Status == "ready"
 	switch {
 	case !view.ProfileVerified:
 		detail, next := sandboxProfileNotReady(profile)
@@ -619,6 +746,9 @@ func newProviderGatewayStatusView(profile core.SandboxProfile, connection string
 	case profile.Provider == core.SandboxProviderE2B && view.SandboxPath.Status != "ready":
 		view.Impact = "remote Sandboxes using this profile cannot reach inference"
 		view.Next = "restore the configured HTTPS route, or update and reverify the profile"
+	case profile.Provider == core.SandboxProviderIncus && view.SandboxPath.Status != "ready":
+		view.Impact = "Incus Sandboxes using this profile cannot reach inference"
+		view.Next = "restore the exact Compose publication and Gateway route, or update and reverify the profile"
 	default:
 		view.Impact = "none"
 	}
@@ -672,7 +802,9 @@ type setupOptions struct {
 	Yes              bool
 	Connection       string
 	ProfileName      string
-	AbsurdSchema     string
+	LocalImage       string
+	IncusManifest    string
+	IncusArchive     string
 	SandboxProviders sandboxProviderFlags
 	Harness          string
 	ConnectionMode   setupConnectionMode
@@ -711,12 +843,14 @@ func (values *sandboxProviderFlags) Set(raw string) error {
 func parseSetupOptions(args []string, stderr io.Writer) (setupOptions, error) {
 	set := flag.NewFlagSet("setup", flag.ContinueOnError)
 	set.SetOutput(stderr)
-	yes := set.Bool("yes", false, "approve every host change shown by setup")
+	yes := set.Bool("yes", false, "approve the Compose deployment and guided setup choices")
 	connection := set.String("ai-connection", "", "named AI connection (default: deployment default)")
 	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
-	absurdSchema := set.String("absurd-schema", "", "optional local copy of the pinned Absurd schema")
+	localImage := set.String("local-image", "", "trust one already-loaded exact contributor/integration image reference")
+	incusManifest := set.String("incus-manifest", "", "verified local Incus image manifest")
+	incusArchive := set.String("incus-archive", "", "matching local Incus VM archive")
 	providers := sandboxProviderFlags{}
-	set.Var(&providers, "sandbox-provider", "prepare host requirements for incus or e2b; repeat to select both")
+	set.Var(&providers, "sandbox-provider", "configure incus or e2b; repeat to select both")
 	harness := set.String("harness", "", "Harness for guided profiles: codex or pi")
 	connectionMode := set.String("connection-auth", "", "create an AI connection with chatgpt or openai")
 	openAIKeyFile := set.String("openai-api-key-file", "", "OpenAI API key file for guided setup")
@@ -728,9 +862,13 @@ func parseSetupOptions(args []string, stderr io.Writer) (setupOptions, error) {
 	if err := set.Parse(args); err != nil {
 		return setupOptions{}, err
 	}
+	if set.NArg() != 0 {
+		return setupOptions{}, fmt.Errorf("setup does not accept positional arguments")
+	}
 	options := setupOptions{
 		Yes: *yes, Connection: strings.TrimSpace(*connection),
-		ProfileName: strings.TrimSpace(*profileName), AbsurdSchema: strings.TrimSpace(*absurdSchema),
+		ProfileName: strings.TrimSpace(*profileName), LocalImage: strings.TrimSpace(*localImage),
+		IncusManifest: strings.TrimSpace(*incusManifest), IncusArchive: strings.TrimSpace(*incusArchive),
 		SandboxProviders: providers,
 		Harness:          strings.TrimSpace(*harness), ConnectionMode: setupConnectionMode(strings.TrimSpace(*connectionMode)),
 		OpenAIKeyFile: strings.TrimSpace(*openAIKeyFile), E2BKeyFile: strings.TrimSpace(*e2bKeyFile),
@@ -744,7 +882,7 @@ func parseSetupOptions(args []string, stderr io.Writer) (setupOptions, error) {
 }
 
 func validateSetupOptions(options setupOptions) error {
-	if len(options.SandboxProviders) == 0 && (options.Connection != "" || options.ProfileName != "" || options.Harness != "" || options.ConnectionMode != "" || options.OpenAIKeyFile != "" || options.E2BKeyFile != "" || options.E2BTemplate != "" || options.GatewayURL != "" || options.CloudflareHost != "" || options.AllowInternet) {
+	if len(options.SandboxProviders) == 0 && (options.Connection != "" || options.ProfileName != "" || options.Harness != "" || options.ConnectionMode != "" || options.OpenAIKeyFile != "" || options.E2BKeyFile != "" || options.E2BTemplate != "" || options.GatewayURL != "" || options.CloudflareHost != "" || options.AllowInternet || options.IncusManifest != "" || options.IncusArchive != "") {
 		return fmt.Errorf("agent setup flags require at least one --sandbox-provider")
 	}
 	if options.ProfileName != "" && len(options.SandboxProviders) != 1 {
@@ -765,6 +903,12 @@ func validateSetupOptions(options setupOptions) error {
 	if options.Harness != "" && options.Harness != "codex" && options.Harness != "pi" {
 		return fmt.Errorf("--harness must be codex or pi")
 	}
+	if (options.IncusManifest == "") != (options.IncusArchive == "") {
+		return fmt.Errorf("setup requires both --incus-manifest and --incus-archive")
+	}
+	if options.IncusManifest != "" && !containsSandboxProvider(options.SandboxProviders, core.SandboxProviderIncus) {
+		return fmt.Errorf("Incus image transport flags require --sandbox-provider incus")
+	}
 	if len(options.SandboxProviders) > 0 && !containsSandboxProvider(options.SandboxProviders, core.SandboxProviderE2B) &&
 		(options.E2BKeyFile != "" || options.E2BTemplate != "" || options.GatewayURL != "" || options.CloudflareHost != "" || options.AllowInternet) {
 		return fmt.Errorf("E2B setup flags require --sandbox-provider e2b")
@@ -777,45 +921,45 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	if err != nil {
 		return err
 	}
+	if cfg.DatabaseExternal {
+		return fmt.Errorf("managed dorf setup does not accept DORF_DATABASE_URL; unset it or supervise the development deployment explicitly")
+	}
+	if err := requireOrdinaryComposeOperator(); err != nil {
+		return err
+	}
 	presenter := newSetupPresenter(stdout)
 	presenter.Welcome()
-	plan, err := hostsetup.ObserveHost(ctx, !cfg.DatabaseExternal, false)
+	manager := currentComposeServiceManager()
+	if err := manager.CheckDocker(ctx); err != nil {
+		return setupBootstrapHandoff(bootstrapDocker, err, stdout)
+	}
+	presenter.Ready("Host runtime", "Docker Engine · Compose")
+
+	database, err := hostsetup.InitializeDatabase(cfg.DeploymentPath)
 	if err != nil {
 		return err
 	}
-	if err := applySetupHostPlan(ctx, plan, options.Yes, stdout, stderr); err != nil {
+	cfg.DatabaseURL, err = database.URL()
+	if err != nil {
 		return err
 	}
-	runtimes := plan.RuntimeNames()
-	if len(runtimes) == 0 {
-		runtimes = []string{"No local runtime required"}
-	}
-	presenter.Ready("Host runtime", strings.Join(runtimes, " · "))
-
-	migrateArgs := []string{}
-	if options.AbsurdSchema != "" {
-		migrateArgs = append(migrateArgs, "--absurd-schema", options.AbsurdSchema)
+	image, err := reconcileSetupBaseServices(ctx, manager, options, stdout, stderr)
+	if err != nil {
+		return err
 	}
 	var db *sql.DB
 	var store postgres.Store
 	err = presenter.Run(ctx, "Preparing durable state", func(ctx context.Context) error {
-		if !cfg.DatabaseExternal {
-			database, err := hostsetup.EnsureDatabase(ctx, cfg.DeploymentPath)
-			if err != nil {
-				return err
-			}
-			cfg.DatabaseURL, err = database.URL()
-			if err != nil {
-				return err
-			}
-		}
 		var err error
 		db, err = sql.Open("pgx", cfg.DatabaseURL)
 		if err != nil {
 			return fmt.Errorf("open PostgreSQL: %w", err)
 		}
+		if err := db.PingContext(ctx); err != nil {
+			return fmt.Errorf("connect to Compose PostgreSQL on host loopback: %w", err)
+		}
 		store = postgres.Store{DB: db}
-		return migrate(ctx, store, migrateArgs, io.Discard, stderr)
+		return nil
 	})
 	if err != nil {
 		if db != nil {
@@ -824,11 +968,7 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 		return err
 	}
 	defer db.Close()
-	databaseDetail := "PostgreSQL"
-	if cfg.DatabaseExternal {
-		databaseDetail = "External PostgreSQL"
-	}
-	presenter.Ready("Durable state", databaseDetail)
+	presenter.Ready("Durable state", "PostgreSQL")
 	fmt.Fprintln(stdout)
 
 	providers, err := selectSetupSandboxProviders(ctx, cfg, options, presenter)
@@ -841,31 +981,40 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 		}
 	}
 	if containsSandboxProvider(providers, core.SandboxProviderIncus) {
-		providerPlan, err := hostsetup.ObserveHost(ctx, false, true)
+		if cfg.Incus == nil {
+			authority := deployment.Incus{Endpoint: "unix://" + incus.DefaultUnixSocket}
+			cfg.Incus = &authority
+		}
+	}
+	var prepared *guidedSetupPrepared
+	if len(providers) == 0 {
+		presenter.Note("Agent Sandboxes", "Skipped for now · run dorf setup again when you’re ready")
+	} else {
+		value, err := prepareGuidedSetup(ctx, store, &cfg, options, providers, presenter, stdout, stderr)
 		if err != nil {
-			if errors.Is(err, hostsetup.ErrKVMUnavailable) {
-				return errors.New("Local Sandboxes unavailable\n\nThis machine does not provide KVM hardware virtualization.\nChoose Cloud · E2B, or enable KVM and run setup again.")
+			var readiness incusSetupReadinessError
+			if errors.As(err, &readiness) {
+				return setupIncusReadinessHandoff(cfg.Incus, err, stdout)
 			}
 			return err
 		}
-		if err := applySetupHostPlan(ctx, providerPlan, options.Yes, stdout, stderr); err != nil {
+		prepared = &value
+		if value.PrivateIPv4 != "" {
+			presenter.Ready("Local Sandbox", "Incus · QEMU · KVM")
+		}
+	}
+	if prepared != nil {
+		if err := makeProviderConnectionReady(ctx, prepared.Connection, func(ctx context.Context) error {
+			return reconcileSetupFinalServices(ctx, manager, image, stdout, stderr)
+		}, prepared.Gateway.FinalizeConnection, prepared.Gateway.SetDefaultConnection); err != nil {
 			return err
 		}
-		presenter.Ready("Local Sandbox", "Incus · QEMU · KVM")
-	}
-	if len(providers) == 0 {
-		presenter.Note("Agent Sandboxes", "Skipped for now · run dorf setup again when you’re ready")
-	} else if err := completeGuidedSetup(ctx, store, &cfg, options, providers, presenter, stdout, stderr); err != nil {
-		return err
-	}
-	managed, err := reconcileSetupManagedServices(ctx, cfg, options.Yes, presenter, stdout, stderr)
-	if err != nil {
-		return err
+		if err := completeGuidedSetup(ctx, store, cfg, options, *prepared, presenter); err != nil {
+			return err
+		}
 	}
 	presenter.Section("Ready")
-	if !managed {
-		presenter.Ready("Dorf", "Deployment configured · start dorf serve and dorf worker under your supervisor")
-	} else if len(providers) == 0 {
+	if len(providers) == 0 {
 		presenter.Ready("Dorf", "Control plane ready · configure a Sandbox profile before admitting Jobs")
 	} else {
 		presenter.Ready("Dorf", "Control plane and durable Job worker ready")
@@ -876,7 +1025,7 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 var errSetupCancelled = errors.New("setup cancelled")
 
 func selectSetupSandboxProviders(ctx context.Context, cfg config.Config, options setupOptions, presenter setupPresenter) ([]core.SandboxProvider, error) {
-	kvmAvailable := hostsetup.KVMDevicePresent()
+	kvmAvailable := setupKVMDevicePresent()
 	selected, settled := deriveSetupSandboxProviders(cfg, options, presenter.interactive, kvmAvailable)
 	if settled {
 		return selected, nil
@@ -885,6 +1034,11 @@ func selectSetupSandboxProviders(ctx context.Context, cfg config.Config, options
 		return nil, fmt.Errorf("select Sandbox providers: %w", err)
 	}
 	return selected, nil
+}
+
+func setupKVMDevicePresent() bool {
+	device, err := os.Stat("/dev/kvm")
+	return err == nil && device.Mode()&os.ModeCharDevice != 0
 }
 
 func deriveSetupSandboxProviders(cfg config.Config, options setupOptions, interactive, kvmAvailable bool) ([]core.SandboxProvider, bool) {
@@ -907,35 +1061,6 @@ func containsSandboxProvider(values []core.SandboxProvider, wanted core.SandboxP
 	return false
 }
 
-func applySetupHostPlan(ctx context.Context, plan hostsetup.HostPlan, yes bool, stdout, stderr io.Writer) error {
-	if !plan.Empty() {
-		if err := approveHostPlan(ctx, plan, yes, stdout); err != nil {
-			return err
-		}
-	}
-	return hostsetup.ApplyHost(ctx, plan, stdout, stderr)
-}
-
-func approveHostPlan(ctx context.Context, plan hostsetup.HostPlan, yes bool, output io.Writer) error {
-	if yes || plan.Empty() {
-		return nil
-	}
-	presenter := newSetupPresenter(output)
-	if !presenter.interactive {
-		fmt.Fprintln(output, "Host changes required:")
-		fmt.Fprintln(output, plan.Description())
-		return fmt.Errorf("host changes require approval; rerun dorf setup --yes")
-	}
-	approved := false
-	if err := presenter.RunForm(ctx, presenter.ConfirmGroup("Apply these host changes?", plan.Description(), &approved)); err != nil {
-		return fmt.Errorf("confirm host changes: %w", err)
-	}
-	if !approved {
-		return errSetupCancelled
-	}
-	return nil
-}
-
 func isTerminal(file *os.File) bool {
 	return file != nil && term.IsTerminal(file.Fd())
 }
@@ -952,7 +1077,7 @@ func runDoctor(ctx context.Context, db *sql.DB, cfg config.Config, args []string
 	if err != nil {
 		return err
 	}
-	selectedConnection, err := selectedAIConnection(gateway.Gateway{StatePath: cfg.GatewayStatePath}, *connection)
+	selectedConnection, err := selectedAIConnection(configuredProviderGateway(cfg), *connection)
 	if err != nil {
 		return err
 	}
@@ -1133,12 +1258,6 @@ func worker(ctx context.Context, store postgres.Store, client *absurd.Client, cf
 	go func() {
 		workerDone <- client.RunWorker(runCtx, absurd.WorkerOptions{WorkerID: workerID(), ClaimTimeout: claimTimeout, BatchSize: *concurrency, Concurrency: *concurrency})
 	}()
-	if err := managedservice.NotifyReady(); err != nil {
-		cancel()
-		<-workerDone
-		<-recoveryDone
-		return err
-	}
 	fmt.Fprintln(stdout, "Dorf durable worker started")
 	err := <-workerDone
 	cancel()

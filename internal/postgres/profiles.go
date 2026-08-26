@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"regexp"
 	"strings"
@@ -18,16 +19,24 @@ import (
 var ErrProfileNotFound = errors.New("Dorf Sandbox profile not found")
 var profileNamePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 var incusFingerprintPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var incusIdentifierPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+var incusDiskSizePattern = regexp.MustCompile(`^[1-9][0-9]*(MiB|GiB|TiB)$`)
+
+const legacyAdoptionVerificationContract = core.BaseProfileContract + "-legacy-adoption"
 
 type SandboxProfilePatch struct {
-	Harness           *string
-	IncusArtifact     *string
-	IncusNetwork      *string
-	IncusDiskSize     *string
-	E2BArtifact       *string
-	E2BGatewayURL     *string
-	E2BSandboxTimeout *time.Duration
-	E2BAllowInternet  *bool
+	Harness                    *string
+	IncusArtifact              *string
+	IncusEndpointAuthorityHash *string
+	IncusProject               *string
+	IncusStoragePool           *string
+	IncusNetwork               *string
+	IncusDiskSize              *string
+	IncusGatewayURL            *string
+	E2BArtifact                *string
+	E2BGatewayURL              *string
+	E2BSandboxTimeout          *time.Duration
+	E2BAllowInternet           *bool
 }
 
 func (s Store) WithSandboxProfileVerification(ctx context.Context, name string, work func(context.Context) error) (resultErr error) {
@@ -148,6 +157,113 @@ func (s Store) UpdateSandboxProfile(ctx context.Context, name string, patch Sand
 	return stored, true, nil
 }
 
+// AdoptLegacySandboxProfile fills only definition facts that migration 007
+// could not derive from the former schema. Unlike an ordinary profile update,
+// adoption may proceed while Jobs still pin the profile: those Jobs predate
+// the new custody columns and need the adopted definition to recover. Exact
+// semantic equality and row locking keep this a one-way, replayable migration
+// operation rather than a second profile-mutation path.
+func (s Store) AdoptLegacySandboxProfile(ctx context.Context, desired core.SandboxProfile) (core.SandboxProfile, bool, error) {
+	desired, err := normalizeSandboxProfile(desired)
+	if err != nil {
+		return core.SandboxProfile{}, false, err
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return core.SandboxProfile{}, false, err
+	}
+	defer tx.Rollback()
+	queries := dbsql.New(tx)
+	_, err = queries.LockSandboxProfile(ctx, desired.Name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return core.SandboxProfile{}, false, ErrProfileNotFound
+	} else if err != nil {
+		return core.SandboxProfile{}, false, err
+	}
+	currentRow, err := queries.GetSandboxProfile(ctx, desired.Name)
+	if err != nil {
+		return core.SandboxProfile{}, false, err
+	}
+	current := profileFromGetRow(currentRow)
+	if current.DefinitionHash != "" {
+		if !sameProfileDefinition(current, desired) {
+			return core.SandboxProfile{}, false, fmt.Errorf("Sandbox profile %q is not the same adopted legacy definition", desired.Name)
+		}
+		row, err := queries.GetSandboxProfile(ctx, desired.Name)
+		if err != nil {
+			return core.SandboxProfile{}, false, err
+		}
+		stored := profileFromGetRow(row)
+		if err := tx.Commit(); err != nil {
+			return core.SandboxProfile{}, false, err
+		}
+		return stored, false, nil
+	}
+	if !sameLegacyProfileDefinition(current, desired) {
+		return core.SandboxProfile{}, false, fmt.Errorf("Sandbox profile %q does not match the migration 007 legacy definition", desired.Name)
+	}
+	needsCleanup, err := queries.ProfileVerificationNeedsCleanup(ctx, desired.Name)
+	if err != nil {
+		return core.SandboxProfile{}, false, err
+	}
+	if !needsCleanup {
+		if err := queries.DeleteProfileVerification(ctx, desired.Name); err != nil {
+			return core.SandboxProfile{}, false, err
+		}
+	} else {
+		rows, err := queries.BindLegacyProfileVerificationForAdoption(ctx, dbsql.BindLegacyProfileVerificationForAdoptionParams{
+			DefinitionHash: nullableString(desired.DefinitionHash), ContractVersion: legacyAdoptionVerificationContract,
+			ProfileName: desired.Name, PreviousContractVersion: core.BaseProfileContract,
+		})
+		if err != nil {
+			return core.SandboxProfile{}, false, err
+		}
+		if rows != 1 {
+			return core.SandboxProfile{}, false, fmt.Errorf("bind legacy Sandbox profile %q verification affected %d rows", desired.Name, rows)
+		}
+	}
+	rows, err := queries.UpdateSandboxProfile(ctx, updateProfileParams(desired))
+	if err != nil {
+		return core.SandboxProfile{}, false, err
+	}
+	if rows != 1 {
+		return core.SandboxProfile{}, false, fmt.Errorf("adopt legacy Sandbox profile %q affected %d rows", desired.Name, rows)
+	}
+	row, err := queries.GetSandboxProfile(ctx, desired.Name)
+	if err != nil {
+		return core.SandboxProfile{}, false, err
+	}
+	stored := profileFromGetRow(row)
+	if err := tx.Commit(); err != nil {
+		return core.SandboxProfile{}, false, err
+	}
+	return stored, true, nil
+}
+
+func sameLegacyProfileDefinition(current, desired core.SandboxProfile) bool {
+	if current.DefinitionHash != "" || current.Provider != desired.Provider ||
+		current.Verification != nil && (current.Verification.DefinitionHash != "" || current.Verification.ContractVersion != core.BaseProfileContract) {
+		return false
+	}
+	legacy := desired
+	legacy.DefinitionHash = ""
+	switch current.Provider {
+	case core.SandboxProviderIncus:
+		if current.IncusEndpointAuthorityHash != "" || current.IncusProject != "" ||
+			current.IncusStoragePool != "" || current.IncusGatewayURL != "" {
+			return false
+		}
+		legacy.IncusEndpointAuthorityHash = ""
+		legacy.IncusProject = ""
+		legacy.IncusStoragePool = ""
+		legacy.IncusGatewayURL = ""
+	case core.SandboxProviderE2B:
+	default:
+		return false
+	}
+	return sameProfileDefinition(current, legacy)
+}
+
 func applySandboxProfilePatch(profile core.SandboxProfile, patch SandboxProfilePatch) (core.SandboxProfile, error) {
 	if patch.Harness != nil {
 		profile.Harness = *patch.Harness
@@ -160,14 +276,27 @@ func applySandboxProfilePatch(profile core.SandboxProfile, patch SandboxProfileP
 		if patch.IncusArtifact != nil {
 			profile.Artifact = *patch.IncusArtifact
 		}
+		if patch.IncusEndpointAuthorityHash != nil {
+			profile.IncusEndpointAuthorityHash = *patch.IncusEndpointAuthorityHash
+		}
+		if patch.IncusProject != nil {
+			profile.IncusProject = *patch.IncusProject
+		}
+		if patch.IncusStoragePool != nil {
+			profile.IncusStoragePool = *patch.IncusStoragePool
+		}
 		if patch.IncusNetwork != nil {
 			profile.IncusNetwork = *patch.IncusNetwork
 		}
 		if patch.IncusDiskSize != nil {
 			profile.IncusDiskSize = *patch.IncusDiskSize
 		}
+		if patch.IncusGatewayURL != nil {
+			profile.IncusGatewayURL = *patch.IncusGatewayURL
+		}
 	case core.SandboxProviderE2B:
-		if patch.IncusArtifact != nil || patch.IncusNetwork != nil || patch.IncusDiskSize != nil {
+		if patch.IncusArtifact != nil || patch.IncusEndpointAuthorityHash != nil || patch.IncusProject != nil ||
+			patch.IncusStoragePool != nil || patch.IncusNetwork != nil || patch.IncusDiskSize != nil || patch.IncusGatewayURL != nil {
 			return core.SandboxProfile{}, fmt.Errorf("E2B profile update does not accept Incus fields")
 		}
 		if patch.E2BArtifact != nil {
@@ -240,6 +369,9 @@ func (s Store) SetDefaultSandboxProfile(ctx context.Context, name string) (core.
 		return core.SandboxProfile{}, err
 	}
 	profile := profileFromGetRow(row)
+	if profile.DefinitionHash == "" || profile.DefinitionHash != profile.CurrentDefinitionHash() {
+		return core.SandboxProfile{}, fmt.Errorf("Sandbox profile %q has an incomplete definition; update it explicitly before verification", name)
+	}
 	if !profile.BaseVerified() {
 		return core.SandboxProfile{}, fmt.Errorf("Sandbox profile %q has not completed Dorf %s verification and cleanup", name, core.BaseProfileContract)
 	}
@@ -281,6 +413,9 @@ func (s Store) BeginSandboxProfileVerification(ctx context.Context, name string)
 		return core.SandboxProfile{}, core.ProfileVerification{}, err
 	}
 	profile := profileFromGetRow(row)
+	if profile.DefinitionHash == "" || profile.DefinitionHash != profile.CurrentDefinitionHash() {
+		return core.SandboxProfile{}, core.ProfileVerification{}, fmt.Errorf("Sandbox profile %q has an incomplete definition; update it explicitly before verification", name)
+	}
 	if profile.Verification != nil && !profile.Verification.ProbeCompletedAt.IsZero() && profile.Verification.CleanedAt.IsZero() {
 		if err := tx.Commit(); err != nil {
 			return core.SandboxProfile{}, core.ProfileVerification{}, err
@@ -296,7 +431,7 @@ func (s Store) BeginSandboxProfileVerification(ctx context.Context, name string)
 	digest := sha256.Sum256([]byte(name))
 	sandboxID := fmt.Sprintf("dorf-profile-%x", digest[:10])
 	verificationRow, err := queries.BeginSandboxProfileVerification(ctx, dbsql.BeginSandboxProfileVerificationParams{
-		ProfileName: profile.Name, ContractVersion: core.BaseProfileContract,
+		ProfileName: profile.Name, ContractVersion: core.BaseProfileContract, DefinitionHash: nullableString(profile.DefinitionHash),
 		SandboxID: sandboxID, OwnershipNonce: nonce,
 	})
 	if err != nil {
@@ -316,14 +451,15 @@ func (s Store) RecordSandboxProfileProbe(ctx context.Context, verification core.
 	}
 	rows, err := dbsql.New(s.DB).RecordSandboxProfileProbe(ctx, dbsql.RecordSandboxProfileProbeParams{
 		HarnessVersion: nullableString(harnessVersion), ProfileName: verification.ProfileName,
-		ContractVersion: verification.ContractVersion, SandboxID: verification.SandboxID, OwnershipNonce: verification.OwnershipNonce,
+		ContractVersion: verification.ContractVersion, DefinitionHash: nullableString(verification.DefinitionHash),
+		SandboxID: verification.SandboxID, OwnershipNonce: verification.OwnershipNonce,
 	})
 	return expectOneRows(rows, err)
 }
 
 func (s Store) RecordSandboxProfileVerificationCleanup(ctx context.Context, verification core.ProfileVerification) error {
 	rows, err := dbsql.New(s.DB).RecordSandboxProfileVerificationCleanup(ctx, dbsql.RecordSandboxProfileVerificationCleanupParams{
-		ProfileName: verification.ProfileName, ContractVersion: verification.ContractVersion,
+		ProfileName: verification.ProfileName, ContractVersion: verification.ContractVersion, DefinitionHash: nullableString(verification.DefinitionHash),
 		SandboxID: verification.SandboxID, OwnershipNonce: verification.OwnershipNonce,
 	})
 	return expectOneRows(rows, err)
@@ -339,7 +475,8 @@ func (s Store) RecordSandboxProfileVerificationError(ctx context.Context, verifi
 	}
 	rows, err := dbsql.New(s.DB).RecordSandboxProfileVerificationError(ctx, dbsql.RecordSandboxProfileVerificationErrorParams{
 		LastError: nullableString(detail), ProfileName: verification.ProfileName,
-		ContractVersion: verification.ContractVersion, SandboxID: verification.SandboxID, OwnershipNonce: verification.OwnershipNonce,
+		ContractVersion: verification.ContractVersion, DefinitionHash: nullableString(verification.DefinitionHash),
+		SandboxID: verification.SandboxID, OwnershipNonce: verification.OwnershipNonce,
 	})
 	return expectOneRows(rows, err)
 }
@@ -402,10 +539,14 @@ func normalizeSandboxProfile(profile core.SandboxProfile) (core.SandboxProfile, 
 	profile.Name = strings.TrimSpace(profile.Name)
 	profile.Harness = strings.TrimSpace(profile.Harness)
 	profile.Artifact = strings.TrimSpace(profile.Artifact)
+	profile.IncusEndpointAuthorityHash = strings.TrimSpace(profile.IncusEndpointAuthorityHash)
+	profile.IncusProject = strings.TrimSpace(profile.IncusProject)
+	profile.IncusStoragePool = strings.TrimSpace(profile.IncusStoragePool)
 	profile.IncusNetwork = strings.TrimSpace(profile.IncusNetwork)
 	profile.IncusDiskSize = strings.TrimSpace(profile.IncusDiskSize)
+	profile.IncusGatewayURL = strings.TrimSpace(profile.IncusGatewayURL)
 	profile.E2BGatewayURL = strings.TrimSpace(profile.E2BGatewayURL)
-	profile.Default, profile.CreatedAt, profile.Verification = false, time.Time{}, nil
+	profile.DefinitionHash, profile.Default, profile.CreatedAt, profile.Verification = "", false, time.Time{}, nil
 	if err := ValidateSandboxProfileIdentity(profile.Name, profile.Harness); err != nil {
 		return core.SandboxProfile{}, err
 	}
@@ -417,8 +558,9 @@ func normalizeSandboxProfile(profile core.SandboxProfile) (core.SandboxProfile, 
 		if !incusFingerprintPattern.MatchString(profile.Artifact) {
 			return core.SandboxProfile{}, fmt.Errorf("Incus profile artifact must be an exact lowercase 64-hex image fingerprint")
 		}
-		if profile.IncusNetwork == "" || profile.IncusDiskSize == "" {
-			return core.SandboxProfile{}, fmt.Errorf("Incus profile requires network and disk size")
+		if err := ValidateIncusProfileSettings(profile.IncusEndpointAuthorityHash, profile.IncusProject, profile.IncusStoragePool,
+			profile.IncusNetwork, profile.IncusDiskSize, profile.IncusGatewayURL); err != nil {
+			return core.SandboxProfile{}, err
 		}
 		profile.E2BGatewayURL, profile.E2BSandboxTimeout, profile.E2BAllowInternet = "", 0, false
 	case core.SandboxProviderE2B:
@@ -432,11 +574,67 @@ func normalizeSandboxProfile(profile core.SandboxProfile) (core.SandboxProfile, 
 		if err != nil || gatewayURL.Scheme != "https" || gatewayURL.Host == "" || gatewayURL.User != nil || gatewayURL.RawQuery != "" || gatewayURL.Fragment != "" || gatewayURL.Path != "/v1" {
 			return core.SandboxProfile{}, fmt.Errorf("E2B profile Gateway URL must be an exact HTTPS /v1 endpoint")
 		}
-		profile.IncusNetwork, profile.IncusDiskSize = "", ""
+		profile.IncusEndpointAuthorityHash, profile.IncusProject, profile.IncusStoragePool = "", "", ""
+		profile.IncusNetwork, profile.IncusDiskSize, profile.IncusGatewayURL = "", "", ""
 	default:
 		return core.SandboxProfile{}, fmt.Errorf("unsupported Sandbox provider %q", profile.Provider)
 	}
+	profile.DefinitionHash = profile.CurrentDefinitionHash()
 	return profile, nil
+}
+
+// ValidateIncusProfileSettings validates the complete provider definition
+// before profile tooling performs an external image lookup or import.
+func ValidateIncusProfileSettings(authorityHash, project, storagePool, network, diskSize, gatewayURL string) error {
+	authorityHash, project, storagePool = strings.TrimSpace(authorityHash), strings.TrimSpace(project), strings.TrimSpace(storagePool)
+	network, diskSize, gatewayURL = strings.TrimSpace(network), strings.TrimSpace(diskSize), strings.TrimSpace(gatewayURL)
+	if !incusFingerprintPattern.MatchString(authorityHash) {
+		return fmt.Errorf("Incus profile requires the exact Deployment endpoint authority hash")
+	}
+	for _, field := range []struct{ label, value string }{
+		{label: "project", value: project},
+		{label: "storage pool", value: storagePool},
+		{label: "network", value: network},
+	} {
+		if !incusIdentifierPattern.MatchString(field.value) {
+			return fmt.Errorf("Incus profile %s must match %s", field.label, incusIdentifierPattern)
+		}
+	}
+	if !incusDiskSizePattern.MatchString(diskSize) {
+		return fmt.Errorf("Incus profile disk size must use canonical MiB, GiB, or TiB units")
+	}
+	return validateIncusGatewayURL(gatewayURL)
+}
+
+func validateIncusGatewayURL(value string) error {
+	gateway, err := url.Parse(value)
+	if err != nil || gateway.Host == "" || gateway.User != nil || gateway.Path != "/v1" || gateway.RawPath != "" ||
+		gateway.RawQuery != "" || gateway.ForceQuery || gateway.Fragment != "" || gateway.Opaque != "" {
+		return fmt.Errorf("Incus profile Gateway URL must be exact HTTPS /v1 or HTTP /v1 on a private non-loopback IP")
+	}
+	switch gateway.Scheme {
+	case "https":
+		return nil
+	case "http":
+		ip := net.ParseIP(gateway.Hostname())
+		if ip == nil || !privateGatewayIP(ip) || ip.IsLoopback() {
+			return fmt.Errorf("Incus profile HTTP Gateway URL must use a private non-loopback IP and exact /v1 path")
+		}
+		return nil
+	default:
+		return fmt.Errorf("Incus profile Gateway URL must be exact HTTPS /v1 or HTTP /v1 on a private non-loopback IP")
+	}
+}
+
+func privateGatewayIP(ip net.IP) bool {
+	ipv4 := ip.To4()
+	if ipv4 == nil {
+		return false
+	}
+	if ipv4.IsPrivate() {
+		return true
+	}
+	return ipv4[0] == 100 && ipv4[1]&0xc0 == 64 // RFC 6598, including common VPN addressing.
 }
 
 // ValidateSandboxProfileIdentity validates the provider-independent fields
@@ -456,8 +654,11 @@ func ValidateSandboxProfileIdentity(name, harness string) error {
 func insertProfileParams(profile core.SandboxProfile) dbsql.InsertSandboxProfileParams {
 	return dbsql.InsertSandboxProfileParams{
 		Name: profile.Name, Provider: string(profile.Provider), Harness: profile.Harness, Artifact: profile.Artifact,
+		DefinitionHash: nullableString(profile.DefinitionHash), IncusEndpointAuthorityHash: nullableString(profile.IncusEndpointAuthorityHash),
+		IncusProject: nullableString(profile.IncusProject), IncusStoragePool: nullableString(profile.IncusStoragePool),
 		IncusNetwork: nullableString(profile.IncusNetwork), IncusDiskSize: nullableString(profile.IncusDiskSize),
-		E2bGatewayURL: nullableString(profile.E2BGatewayURL), E2bSandboxTimeoutSeconds: nullableInt64(int64(profile.E2BSandboxTimeout / time.Second)),
+		IncusGatewayURL: nullableString(profile.IncusGatewayURL),
+		E2bGatewayURL:   nullableString(profile.E2BGatewayURL), E2bSandboxTimeoutSeconds: nullableInt64(int64(profile.E2BSandboxTimeout / time.Second)),
 		E2bAllowInternet: nullableBool(profile.Provider == core.SandboxProviderE2B, profile.E2BAllowInternet),
 	}
 }
@@ -466,8 +667,11 @@ func updateProfileParams(profile core.SandboxProfile) dbsql.UpdateSandboxProfile
 	insert := insertProfileParams(profile)
 	return dbsql.UpdateSandboxProfileParams{
 		Provider: insert.Provider, Harness: insert.Harness, Artifact: insert.Artifact,
+		DefinitionHash: insert.DefinitionHash, IncusEndpointAuthorityHash: insert.IncusEndpointAuthorityHash,
+		IncusProject: insert.IncusProject, IncusStoragePool: insert.IncusStoragePool,
 		IncusNetwork: insert.IncusNetwork, IncusDiskSize: insert.IncusDiskSize,
-		E2bGatewayURL: insert.E2bGatewayURL, E2bSandboxTimeoutSeconds: insert.E2bSandboxTimeoutSeconds,
+		IncusGatewayURL: insert.IncusGatewayURL,
+		E2bGatewayURL:   insert.E2bGatewayURL, E2bSandboxTimeoutSeconds: insert.E2bSandboxTimeoutSeconds,
 		E2bAllowInternet: insert.E2bAllowInternet, Name: profile.Name,
 	}
 }
@@ -489,39 +693,48 @@ func sameProfileDefinition(left, right core.SandboxProfile) bool {
 }
 
 func profileFromGetRow(row dbsql.GetSandboxProfileRow) core.SandboxProfile {
-	return profileFromColumns(row.Name, row.Provider, row.Harness, row.Artifact, row.IncusNetwork, row.IncusDiskSize,
+	return profileFromColumns(row.Name, row.Provider, row.Harness, row.Artifact, row.DefinitionHash,
+		row.IncusEndpointAuthorityHash, row.IncusProject, row.IncusStoragePool, row.IncusNetwork, row.IncusDiskSize, row.IncusGatewayURL,
 		row.E2bGatewayURL, row.E2bSandboxTimeoutSeconds, row.E2bAllowInternet, row.IsDefault, row.CreatedAt,
-		row.VerificationContract, row.VerificationSandboxID, row.VerificationOwnershipNonce, row.VerificationHarnessVersion,
+		row.VerificationContract, row.VerificationDefinitionHash, row.VerificationSandboxID, row.VerificationOwnershipNonce, row.VerificationHarnessVersion,
 		row.AttemptedAt, row.ProbeCompletedAt, row.CleanedAt, row.VerificationLastError)
 }
 
 func profileFromListRow(row dbsql.ListSandboxProfilesRow) core.SandboxProfile {
-	return profileFromColumns(row.Name, row.Provider, row.Harness, row.Artifact, row.IncusNetwork, row.IncusDiskSize,
+	return profileFromColumns(row.Name, row.Provider, row.Harness, row.Artifact, row.DefinitionHash,
+		row.IncusEndpointAuthorityHash, row.IncusProject, row.IncusStoragePool, row.IncusNetwork, row.IncusDiskSize, row.IncusGatewayURL,
 		row.E2bGatewayURL, row.E2bSandboxTimeoutSeconds, row.E2bAllowInternet, row.IsDefault, row.CreatedAt,
-		row.VerificationContract, row.VerificationSandboxID, row.VerificationOwnershipNonce, row.VerificationHarnessVersion,
+		row.VerificationContract, row.VerificationDefinitionHash, row.VerificationSandboxID, row.VerificationOwnershipNonce, row.VerificationHarnessVersion,
 		row.AttemptedAt, row.ProbeCompletedAt, row.CleanedAt, row.VerificationLastError)
 }
 
 func profileFromLockRow(row dbsql.LockSandboxProfileRow) core.SandboxProfile {
 	return core.SandboxProfile{
 		Name: row.Name, Provider: core.SandboxProvider(row.Provider), Harness: row.Harness, Artifact: row.Artifact,
+		DefinitionHash: row.DefinitionHash, IncusEndpointAuthorityHash: row.IncusEndpointAuthorityHash,
+		IncusProject: row.IncusProject, IncusStoragePool: row.IncusStoragePool,
 		IncusNetwork: row.IncusNetwork, IncusDiskSize: row.IncusDiskSize,
-		E2BGatewayURL: row.E2bGatewayURL, E2BSandboxTimeout: time.Duration(row.E2bSandboxTimeoutSeconds) * time.Second,
+		IncusGatewayURL: row.IncusGatewayURL,
+		E2BGatewayURL:   row.E2bGatewayURL, E2BSandboxTimeout: time.Duration(row.E2bSandboxTimeoutSeconds) * time.Second,
 		E2BAllowInternet: row.E2bAllowInternet, Default: row.IsDefault, CreatedAt: row.CreatedAt,
 	}
 }
 
-func profileFromColumns(name, provider, harness, artifact, network, disk, gatewayURL string, timeoutSeconds int64, allowInternet, isDefault bool, createdAt time.Time,
-	contract, sandboxID, nonce, harnessVersion string, attemptedAt, probeAt, cleanedAt sql.NullTime, lastError string) core.SandboxProfile {
+func profileFromColumns(name, provider, harness, artifact, definitionHash, incusAuthorityHash, incusProject, incusStoragePool, network, disk, incusGatewayURL, e2bGatewayURL string,
+	timeoutSeconds int64, allowInternet, isDefault bool, createdAt time.Time,
+	contract, verificationDefinitionHash, sandboxID, nonce, harnessVersion string, attemptedAt, probeAt, cleanedAt sql.NullTime, lastError string) core.SandboxProfile {
 	profile := core.SandboxProfile{
 		Name: name, Provider: core.SandboxProvider(provider), Harness: harness, Artifact: artifact,
-		IncusNetwork: network, IncusDiskSize: disk, E2BGatewayURL: gatewayURL,
+		DefinitionHash: definitionHash, IncusEndpointAuthorityHash: incusAuthorityHash,
+		IncusProject: incusProject, IncusStoragePool: incusStoragePool,
+		IncusNetwork: network, IncusDiskSize: disk, IncusGatewayURL: incusGatewayURL, E2BGatewayURL: e2bGatewayURL,
 		E2BSandboxTimeout: time.Duration(timeoutSeconds) * time.Second, E2BAllowInternet: allowInternet,
 		Default: isDefault, CreatedAt: createdAt,
 	}
 	if contract != "" {
 		profile.Verification = &core.ProfileVerification{
-			ProfileName: name, ContractVersion: contract, SandboxID: sandboxID, OwnershipNonce: nonce,
+			ProfileName: name, ContractVersion: contract, DefinitionHash: verificationDefinitionHash,
+			SandboxID: sandboxID, OwnershipNonce: nonce,
 			HarnessVersion: harnessVersion, AttemptedAt: timeValue(attemptedAt), ProbeCompletedAt: timeValue(probeAt),
 			CleanedAt: timeValue(cleanedAt), LastError: lastError,
 		}
@@ -531,7 +744,7 @@ func profileFromColumns(name, provider, harness, artifact, network, disk, gatewa
 
 func verificationFromBeginRow(row dbsql.BeginSandboxProfileVerificationRow) core.ProfileVerification {
 	return core.ProfileVerification{
-		ProfileName: row.ProfileName, ContractVersion: row.ContractVersion, SandboxID: row.SandboxID,
+		ProfileName: row.ProfileName, ContractVersion: row.ContractVersion, DefinitionHash: row.DefinitionHash.String, SandboxID: row.SandboxID,
 		OwnershipNonce: row.OwnershipNonce, HarnessVersion: row.HarnessVersion, AttemptedAt: row.AttemptedAt,
 		ProbeCompletedAt: timeValue(row.ProbeCompletedAt), CleanedAt: timeValue(row.CleanedAt), LastError: row.LastError,
 	}

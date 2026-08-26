@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 )
 
@@ -40,13 +41,26 @@ type Endpoint struct {
 	ListenURL string
 	DialURL   string
 	headers   http.Header
+	dial      DialContextFunc
 }
+
+// DialContextFunc is a transient provider data-plane capability. Providers
+// use it when the worker cannot route directly to a Sandbox address. Each call
+// must return a fresh connection and stop waiting when the supplied context
+// ends, closing any connection that arrives after cancellation.
+type DialContextFunc func(context.Context, string, string) (net.Conn, error)
 
 func NewEndpoint(listenURL, dialURL string, headers http.Header) Endpoint {
 	return Endpoint{ListenURL: listenURL, DialURL: dialURL, headers: headers.Clone()}
 }
 
+func NewDialEndpoint(listenURL, dialURL string, headers http.Header, dial DialContextFunc) Endpoint {
+	return Endpoint{ListenURL: listenURL, DialURL: dialURL, headers: headers.Clone(), dial: dial}
+}
+
 func (e Endpoint) Headers() http.Header { return e.headers.Clone() }
+
+func (e Endpoint) DialContext() DialContextFunc { return e.dial }
 
 func (e Endpoint) String() string {
 	return fmt.Sprintf("Sandbox endpoint %s -> %s (provider capabilities redacted)", e.ListenURL, e.DialURL)
@@ -69,7 +83,7 @@ type Sandbox interface {
 	ReadFile(context.Context, Ownership, string) ([]byte, error)
 	Exec(context.Context, Ownership, []byte, ...string) (Result, error)
 	Endpoint(context.Context, Ownership, int) (Endpoint, error)
-	ProviderRouteURL(context.Context, string) (string, error)
+	ProviderRouteURL(context.Context) (string, error)
 }
 
 type OwnershipError struct{ Reason string }

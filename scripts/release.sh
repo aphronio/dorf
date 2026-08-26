@@ -13,28 +13,46 @@ fi
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+readonly MISE="$PROJECT_ROOT/.dorf/bin/mise"
 readonly GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-aphronio/dorf}"
 readonly OUTPUT_DIR="${OUTPUT_DIR:-$PROJECT_ROOT/dist/release}"
-readonly SOURCE_COMMIT="$(git -C "$PROJECT_ROOT" rev-parse HEAD)"
 readonly IMAGE_DESCRIPTOR="$PROJECT_ROOT/internal/release/official_image.json"
+notes_path=""
 
-for command in git go jq; do
+cleanup() {
+  [[ -z "$notes_path" ]] || rm -f -- "$notes_path"
+}
+trap cleanup EXIT
+
+for command in git jq; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "Required release command is unavailable: $command" >&2
     exit 1
   fi
 done
-if [[ -n "$(git -C "$PROJECT_ROOT" status --porcelain --untracked-files=all)" ]]; then
+if [[ ! -x "$MISE" ]]; then
+  echo "Repository toolchain is unavailable; run scripts/dev/setup.sh first." >&2
+  exit 1
+fi
+readonly SOURCE_COMMIT="$(git -C "$PROJECT_ROOT" rev-parse HEAD)"
+source_is_exact_and_clean() {
+  [[ "$(git -C "$PROJECT_ROOT" rev-parse HEAD)" == "$SOURCE_COMMIT" ]] &&
+    [[ -z "$(git -C "$PROJECT_ROOT" status --porcelain --untracked-files=all)" ]]
+}
+if ! source_is_exact_and_clean; then
   echo "Release validation requires the exact clean source commit." >&2
   exit 1
 fi
 
-"$PROJECT_ROOT/scripts/incus/check-image-inputs.sh"
-readonly PRODUCT_VERSION="$(go -C "$PROJECT_ROOT" run ./cmd/dorf version | awk '{print $2}')"
+"$MISE" -C "$PROJECT_ROOT" exec -- "$PROJECT_ROOT/scripts/incus/check-image-inputs.sh"
+readonly PRODUCT_VERSION="$("$MISE" -C "$PROJECT_ROOT" exec -- \
+  go run ./cmd/dorf version | awk '{print $2}')"
 readonly RELEASE_TAG="v$PRODUCT_VERSION"
 readonly OFFICIAL_IMAGE_RELEASE="$(jq -er .release_tag "$IMAGE_DESCRIPTOR")"
-readonly APP_ARCHIVE="$OUTPUT_DIR/dorf_${PRODUCT_VERSION}_linux_x86_64.tar.gz"
-readonly APP_CHECKSUMS="$OUTPUT_DIR/dorf_${PRODUCT_VERSION}_checksums.txt"
+readonly ARTIFACT_BASENAME="dorf_${PRODUCT_VERSION}_linux_x86_64"
+readonly APP_ARCHIVE="$OUTPUT_DIR/${ARTIFACT_BASENAME}.tar.gz"
+readonly CONTAINER_ARCHIVE="$OUTPUT_DIR/${ARTIFACT_BASENAME}_container-image.docker.tar"
+readonly CHECKSUMS="$OUTPUT_DIR/dorf_${PRODUCT_VERSION}_checksums.txt"
 readonly INSTALLER="$OUTPUT_DIR/install.sh"
 readonly IMAGE_ARCHIVE="$OUTPUT_DIR/dorf-incus-vm-v5-x86_64.tar.gz"
 readonly IMAGE_MANIFEST="$OUTPUT_DIR/dorf-incus-vm-v5-x86_64.json"
@@ -73,25 +91,38 @@ if [[ "$PUBLISH" == true ]]; then
 fi
 
 mkdir -p "$OUTPUT_DIR"
-rm -f "$INSTALLER" "$APP_ARCHIVE" "$APP_CHECKSUMS" "$IMAGE_ARCHIVE" "$IMAGE_MANIFEST"
+rm -f \
+  "$INSTALLER" \
+  "$APP_ARCHIVE" \
+  "$CONTAINER_ARCHIVE" \
+  "$CHECKSUMS" \
+  "$IMAGE_ARCHIVE" \
+  "$IMAGE_MANIFEST"
 "$PROJECT_ROOT/scripts/build-release.sh" "$OUTPUT_DIR"
 
-assets=("$INSTALLER" "$APP_ARCHIVE" "$APP_CHECKSUMS")
+assets=("$INSTALLER" "$APP_ARCHIVE" "$CONTAINER_ARCHIVE" "$CHECKSUMS")
 image_promoted=false
 if [[ "$OFFICIAL_IMAGE_RELEASE" == "$RELEASE_TAG" ]]; then
   if [[ -z "${AI_CONNECTION:-}" ]]; then
     echo "Set AI_CONNECTION to one ready AI connection name for Incus image promotion." >&2
     exit 2
   fi
-  OUTPUT_DIR="$OUTPUT_DIR" RELEASE_TAG="$RELEASE_TAG" \
-    "$PROJECT_ROOT/scripts/incus/release-dorf-image.sh"
+  env OUTPUT_DIR="$OUTPUT_DIR" RELEASE_TAG="$RELEASE_TAG" \
+    "$MISE" -C "$PROJECT_ROOT" exec -- "$PROJECT_ROOT/scripts/incus/release-dorf-image.sh"
   assets+=("$IMAGE_ARCHIVE" "$IMAGE_MANIFEST")
   image_promoted=true
+fi
+
+(cd "$OUTPUT_DIR" && sha256sum --check --strict "$(basename "$CHECKSUMS")")
+if ! source_is_exact_and_clean; then
+  echo "Source changed while release artifacts were being prepared." >&2
+  exit 1
 fi
 
 printf '%s\n' \
   "Application candidate ready: $RELEASE_TAG" \
   "Archive: $APP_ARCHIVE" \
+  "Container image archive: $CONTAINER_ARCHIVE" \
   "Installer: $INSTALLER" \
   "Official Incus image release: $OFFICIAL_IMAGE_RELEASE"
 
@@ -114,13 +145,13 @@ verify_release_attestation() {
 }
 
 notes_path="$(mktemp)"
-cleanup() { rm -f -- "$notes_path"; }
-trap cleanup EXIT
 {
   printf '%s\n' \
     "Dorf $PRODUCT_VERSION" \
     "" \
     "Go x86_64 Linux application with an immutable release installer." \
+    "Docker-loadable Linux/amd64 container image archive: $(basename "$CONTAINER_ARCHIVE")" \
+    "Embedded container image: ghcr.io/aphronio/dorf:$PRODUCT_VERSION" \
     "Official Incus image release: $OFFICIAL_IMAGE_RELEASE"
   if [[ "$image_promoted" == true ]]; then
     printf '%s\n' \
@@ -139,14 +170,16 @@ trap cleanup EXIT
 gh release create "$RELEASE_TAG" \
   --repo "$GITHUB_REPOSITORY" \
   --draft \
+  --latest=false \
   --generate-notes \
   --target "$SOURCE_COMMIT" \
   --title "Dorf $RELEASE_TAG" \
   --notes-file "$notes_path" \
   "${assets[@]}"
-gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
 verify_release_attestation "$RELEASE_TAG"
 for asset in "${assets[@]}"; do
   gh release verify-asset "$RELEASE_TAG" "$asset" --repo "$GITHUB_REPOSITORY"
 done
+gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --latest
 echo "Published verified Dorf release: $RELEASE_TAG"

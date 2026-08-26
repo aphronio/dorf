@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,6 +14,59 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestInternalDialOriginIsExact(t *testing.T) {
+	state := t.TempDir()
+	if err := os.Mkdir(filepath.Join(state, "credentials"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "broker.yaml"), []byte("host: \"127.0.0.2\"\nport: 8317\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "authority.json"), []byte(`{"guard_key":"guard-secret","management_key":"control-secret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "connections.json"), []byte(`[{"name":"primary","provider":"openai","auth_mode":"api_key","credential_ref":"openai-0123456789abcdef.key"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "credentials", "openai-0123456789abcdef.key"), []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() != "http://provider-gateway:8317/v1/models" {
+			t.Fatalf("internal dial URL=%s", request.URL)
+		}
+		if request.Header.Get("Authorization") != "Bearer guard-secret" {
+			t.Fatalf("internal dial authorization=%q", request.Header.Get("Authorization"))
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("{}")), Header: make(http.Header)}, nil
+	})}
+	g := Gateway{StatePath: state, InternalDialOrigin: "http://provider-gateway:8317", Client: client}
+	if err := g.Check(context.Background(), "primary"); err != nil {
+		t.Fatal(err)
+	}
+
+	invalid := []string{
+		"https://provider-gateway:8317",
+		"http://provider-gateway",
+		"http://provider-gateway:80",
+		"http://user:secret@provider-gateway:8317",
+		"http://provider-gateway:8317/",
+		"http://provider-gateway:8317/path",
+		"http://provider-gateway:8317?query=value",
+		"http://provider-gateway:8317#fragment",
+		" http://provider-gateway:8317",
+	}
+	for _, value := range invalid {
+		t.Run(value, func(t *testing.T) {
+			invalidGateway := g
+			invalidGateway.InternalDialOrigin = value
+			if err := invalidGateway.Check(context.Background(), "primary"); err == nil {
+				t.Fatalf("invalid internal origin %q was accepted", value)
+			}
+		})
+	}
+}
 
 func TestRouteReconciliationIsStableAndRevocationIsIdempotent(t *testing.T) {
 	var active [][]string
@@ -368,6 +422,36 @@ func TestDefaultAIConnectionIsExplicitAndUnique(t *testing.T) {
 	}
 	if _, err := g.DefaultConnection(); err == nil || !strings.Contains(err.Error(), "multiple default") {
 		t.Fatalf("ambiguous default error=%v", err)
+	}
+}
+
+func TestConfiguredConnectionLookupIsReadOnly(t *testing.T) {
+	configured, err := (Gateway{StatePath: filepath.Join(t.TempDir(), "new")}).ConfiguredConnection("openai-api")
+	if err != nil || configured {
+		t.Fatalf("fresh state configured=%t error=%v", configured, err)
+	}
+
+	state := gatewayState(t, "http://127.0.0.1:8317")
+	g := Gateway{StatePath: state}
+	path := filepath.Join(state, "connections.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configured, err = g.ConfiguredConnection("primary")
+	if err != nil || !configured {
+		t.Fatalf("primary configured=%t error=%v", configured, err)
+	}
+	configured, err = g.ConfiguredConnection("absent")
+	if err != nil || configured {
+		t.Fatalf("absent configured=%t error=%v", configured, err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("configured connection lookup mutated Gateway state")
 	}
 }
 

@@ -1,11 +1,14 @@
 package release
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/aphronio/dorf/internal/incus"
 )
 
 func TestCreateManifestRequiresAndRetainsCombinedHarnessIdentity(t *testing.T) {
@@ -110,6 +113,40 @@ func TestPublishedImageAssetAuthorityIsExact(t *testing.T) {
 	asset.URL = "https://example.com/asset"
 	if _, err := exactAsset([]githubAsset{asset}, manifestName, "v0.2.0"); err == nil {
 		t.Fatal("unexpected release download authority was accepted")
+	}
+}
+
+func TestInstallValidatesTheCompleteLocalArtifactBeforeOpeningIncus(t *testing.T) {
+	directory := t.TempDir()
+	archive := filepath.Join(directory, ArchiveName)
+	original := []byte("exact verified Incus archive")
+	if err := os.WriteFile(archive, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	metadata := filepath.Join(directory, "metadata.json")
+	contents, _ := json.Marshal(completeImageMetadata())
+	if err := os.WriteFile(metadata, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(directory, manifestName)
+	if err := CreateManifest(archive, metadata, "v0.2.0", strings.Repeat("c", 40), "2026-08-08T00:00:00Z", manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(archive, []byte("tampered archive same length!!"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := InstallImage(context.Background(), incus.ConnectionConfig{}, manifest, archive, "dorf-profile-local")
+	if err == nil || !strings.Contains(err.Error(), "archive does not match") || strings.Contains(err.Error(), "endpoint") {
+		t.Fatalf("pre-connection archive validation error=%v", err)
+	}
+
+	if err := os.WriteFile(archive, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = InstallImage(context.Background(), incus.ConnectionConfig{}, manifest, archive, "dorf-profile-local")
+	if err == nil || !strings.Contains(err.Error(), "endpoint is required") {
+		t.Fatalf("valid local artifact did not reach explicit endpoint validation: %v", err)
 	}
 }
 

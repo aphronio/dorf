@@ -24,9 +24,10 @@ import (
 )
 
 const (
-	BinaryVersion = "2026.8.2"
-	binarySHA256  = "fcfb02b575a52ca1af2e3267af4e1517bcdeb30ac48c834c69abaed3c0576ad2"
-	binaryURL     = "https://github.com/cloudflare/cloudflared/releases/download/" + BinaryVersion + "/cloudflared-linux-amd64"
+	BinaryVersion        = "2026.8.2"
+	ComposeGatewayOrigin = "http://provider-gateway:8317"
+	binarySHA256         = "fcfb02b575a52ca1af2e3267af4e1517bcdeb30ac48c834c69abaed3c0576ad2"
+	binaryURL            = "https://github.com/cloudflare/cloudflared/releases/download/" + BinaryVersion + "/cloudflared-linux-amd64"
 )
 
 var hostnamePattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
@@ -91,21 +92,27 @@ type Tunnel struct {
 	Runner     CommandRunner
 	HTTPClient *http.Client
 	Resolver   DNSResolver
-	RootPrefix []string
+	// binarySHA256 is a package-private test seam. Production always uses the
+	// compiled cloudflared digest above.
+	binarySHA256 string
 }
 
 type State struct {
-	SchemaVersion    int    `json:"schema_version"`
-	TunnelName       string `json:"tunnel_name"`
-	TunnelID         string `json:"tunnel_id,omitempty"`
-	Hostname         string `json:"hostname"`
-	Origin           string `json:"origin"`
-	CredentialPath   string `json:"credential_path,omitempty"`
-	ConfigPath       string `json:"config_path,omitempty"`
-	ProbeID          string `json:"probe_id,omitempty"`
-	DNSConfigured    bool   `json:"dns_configured"`
-	ServiceInstalled bool   `json:"service_installed"`
-	Complete         bool   `json:"complete"`
+	SchemaVersion  int    `json:"schema_version"`
+	TunnelName     string `json:"tunnel_name"`
+	TunnelID       string `json:"tunnel_id,omitempty"`
+	Hostname       string `json:"hostname"`
+	Origin         string `json:"origin"`
+	CredentialPath string `json:"credential_path,omitempty"`
+	ConfigPath     string `json:"config_path,omitempty"`
+	BinaryPath     string `json:"binary_path,omitempty"`
+	ProbeID        string `json:"probe_id,omitempty"`
+	DNSConfigured  bool   `json:"dns_configured"`
+}
+
+type ComposeState struct {
+	StatePath string
+	Digest    string
 }
 
 func (s State) ProbeURL() (string, error) {
@@ -131,6 +138,220 @@ func (t Tunnel) Current() (State, bool, error) {
 	return t.load()
 }
 
+// ComposeState returns the exact prepared runtime authority. It never creates
+// or repairs Tunnel state.
+func (t Tunnel) ComposeState() (ComposeState, bool, error) {
+	statePath := filepath.Clean(strings.TrimSpace(t.StatePath))
+	if !filepath.IsAbs(statePath) || statePath == "/" || statePath != t.StatePath {
+		return ComposeState{}, false, fmt.Errorf("Cloudflare Tunnel state path must be one clean absolute path")
+	}
+	state, found, err := t.load()
+	if err != nil || !found {
+		return ComposeState{}, false, err
+	}
+	if !state.DNSConfigured || state.TunnelID == "" || state.CredentialPath == "" || state.ConfigPath == "" || state.BinaryPath == "" {
+		return ComposeState{}, false, nil
+	}
+	if err := t.attestPreparedRuntime(state); err != nil {
+		return ComposeState{}, false, err
+	}
+	digest := sha256.New()
+	for _, item := range []struct {
+		name string
+		path string
+	}{{"state.json", t.statePath()}, {"credential", state.CredentialPath}, {"config", state.ConfigPath}, {"cloudflared", state.BinaryPath}} {
+		path := filepath.Clean(item.path)
+		if !pathWithin(statePath, path) {
+			return ComposeState{}, false, fmt.Errorf("Cloudflare Tunnel %s path leaves its protected state directory", item.name)
+		}
+		contents, err := readProtectedRuntimeFile(path, 128<<20)
+		if err != nil {
+			return ComposeState{}, false, fmt.Errorf("attest Cloudflare Tunnel %s: %w", item.name, err)
+		}
+		fmt.Fprintf(digest, "%s\x00%d\x00", item.name, len(contents))
+		_, _ = digest.Write(contents)
+	}
+	return ComposeState{StatePath: statePath, Digest: hex.EncodeToString(digest.Sum(nil))}, true, nil
+}
+
+func pathWithin(parent, child string) bool {
+	relative, err := filepath.Rel(parent, child)
+	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func readProtectedRuntimeFile(path string, limit int64) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 || info.Size() < 1 || info.Size() > limit {
+		return nil, fmt.Errorf("must be one protected nonempty regular file")
+	}
+	return os.ReadFile(path)
+}
+
+// RunForeground runs the prepared Tunnel in the caller's foreground. Process
+// supervision belongs to the caller (for example, Docker Compose).
+func (t Tunnel) RunForeground(ctx context.Context, stdout, stderr io.Writer) error {
+	if strings.TrimSpace(t.StatePath) == "" {
+		return fmt.Errorf("Cloudflare Tunnel state path is empty")
+	}
+	state, found, err := t.load()
+	if err != nil {
+		return err
+	}
+	if !found || !state.DNSConfigured || strings.TrimSpace(state.TunnelID) == "" || strings.TrimSpace(state.CredentialPath) == "" || strings.TrimSpace(state.ConfigPath) == "" || strings.TrimSpace(state.BinaryPath) == "" {
+		return fmt.Errorf("Cloudflare Tunnel is not prepared; rerun dorf setup")
+	}
+	if err := t.attestPreparedRuntime(state); err != nil {
+		return err
+	}
+	runner := t.Runner
+	if runner == nil {
+		runner = ExecRunner{}
+	}
+	if err := runner.Run(ctx, nil, stdout, stderr, state.BinaryPath, "--no-autoupdate", "--config", state.ConfigPath, "tunnel", "run"); err != nil {
+		return fmt.Errorf("run Cloudflare Tunnel: %w", err)
+	}
+	return nil
+}
+
+// PrepareRuntimeBinary installs and verifies the current pinned cloudflared
+// executable for an already retained Tunnel and converges its deterministic
+// local config. It performs no browser, account, DNS, credential, or external
+// ingress mutation. Approved update reconciliation calls it before deriving
+// ComposeState.
+func (t Tunnel) PrepareRuntimeBinary(ctx context.Context) (bool, error) {
+	statePath := filepath.Clean(strings.TrimSpace(t.StatePath))
+	if !filepath.IsAbs(statePath) || statePath == "/" || statePath != t.StatePath {
+		return false, fmt.Errorf("Cloudflare Tunnel state path must be one clean absolute path")
+	}
+	state, found, err := t.load()
+	if err != nil || !found {
+		return false, err
+	}
+	if !state.DNSConfigured || state.TunnelID == "" || state.CredentialPath == "" || state.ConfigPath == "" {
+		return false, nil
+	}
+	lock, err := os.OpenFile(filepath.Join(statePath, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return false, err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return false, err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	state, found, err = t.load()
+	if err != nil || !found {
+		return false, err
+	}
+	if !state.DNSConfigured || state.TunnelID == "" || state.CredentialPath == "" || state.ConfigPath == "" {
+		return false, nil
+	}
+	if err := t.repairRetainedConfig(state); err != nil {
+		return false, err
+	}
+	binary, err := t.ensureBinary(ctx)
+	if err != nil {
+		return false, err
+	}
+	if state.BinaryPath != binary {
+		state.BinaryPath = binary
+		if err := t.save(state); err != nil {
+			return false, err
+		}
+	}
+	if err := t.attestPreparedRuntime(state); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (t Tunnel) attestPreparedRuntime(state State) error {
+	if err := t.attestRetainedConfig(state); err != nil {
+		return err
+	}
+	return t.verifyPinnedBinary(state.BinaryPath)
+}
+
+func (t Tunnel) attestRetainedConfig(state State) error {
+	if err := t.attestRetainedCredential(state); err != nil {
+		return err
+	}
+	config, err := readProtectedRuntimeFile(state.ConfigPath, 1<<20)
+	if err != nil {
+		return fmt.Errorf("attest Cloudflare Tunnel config: %w", err)
+	}
+	actual := sha256.Sum256(config)
+	expected := sha256.Sum256([]byte(t.config(state)))
+	if actual != expected {
+		return fmt.Errorf("Cloudflare Tunnel config checksum mismatch; rerun dorf setup")
+	}
+	return nil
+}
+
+func (t Tunnel) attestRetainedCredential(state State) error {
+	statePath := filepath.Clean(strings.TrimSpace(t.StatePath))
+	for _, item := range []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"credential", state.CredentialPath, filepath.Join(statePath, "credentials", state.TunnelID+".json")},
+		{"config", state.ConfigPath, filepath.Join(statePath, "config.yml")},
+	} {
+		if item.got != item.want {
+			return fmt.Errorf("Cloudflare Tunnel %s path does not match its exact retained path", item.name)
+		}
+		if !pathWithin(statePath, item.got) {
+			return fmt.Errorf("Cloudflare Tunnel %s path leaves its protected state directory", item.name)
+		}
+	}
+	if _, err := readProtectedRuntimeFile(state.CredentialPath, 16<<20); err != nil {
+		return fmt.Errorf("attest exact Cloudflare Tunnel credential: %w", err)
+	}
+	return nil
+}
+
+func (t Tunnel) repairRetainedConfig(state State) error {
+	if err := t.attestRetainedCredential(state); err != nil {
+		return err
+	}
+	return writePrivate(state.ConfigPath, []byte(t.config(state)))
+}
+
+func (t Tunnel) verifyPinnedBinary(path string) error {
+	statePath := filepath.Clean(strings.TrimSpace(t.StatePath))
+	path = filepath.Clean(strings.TrimSpace(path))
+	if !pathWithin(statePath, path) {
+		return fmt.Errorf("Cloudflare Tunnel binary path leaves its protected state directory")
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("attest cloudflared executable: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 || info.Mode().Perm()&0o100 == 0 {
+		return fmt.Errorf("attest cloudflared executable: must be one protected owner-executable regular file")
+	}
+	raw, err := readProtectedRuntimeFile(path, 128<<20)
+	if err != nil {
+		return fmt.Errorf("attest cloudflared executable: %w", err)
+	}
+	digest := sha256.Sum256(raw)
+	if hex.EncodeToString(digest[:]) != t.expectedBinarySHA256() {
+		return fmt.Errorf("cloudflared %s checksum mismatch; rerun dorf service reconcile", BinaryVersion)
+	}
+	return nil
+}
+
+func (t Tunnel) expectedBinarySHA256() string {
+	if strings.TrimSpace(t.binarySHA256) != "" {
+		return strings.ToLower(strings.TrimSpace(t.binarySHA256))
+	}
+	return binarySHA256
+}
+
 func GatewayURL(hostname string) (string, error) {
 	hostname = strings.ToLower(strings.TrimSpace(hostname))
 	if !hostnamePattern.MatchString(hostname) || net.ParseIP(hostname) != nil {
@@ -144,7 +365,11 @@ func GatewayURL(hostname string) (string, error) {
 }
 
 func validateOrigin(raw string) (string, error) {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
+	raw = strings.TrimSpace(raw)
+	if raw == ComposeGatewayOrigin {
+		return raw, nil
+	}
+	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme != "http" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Port() != "8317" {
 		return "", fmt.Errorf("Cloudflare Tunnel origin must be one private HTTP address on port 8317")
 	}
@@ -155,11 +380,17 @@ func validateOrigin(raw string) (string, error) {
 	return parsed.String(), nil
 }
 
-// Reconcile creates one locally managed, outbound-only Cloudflare Tunnel. A
-// broad account certificate exists only while the external Tunnel and DNS
+// Prepare creates one locally managed, outbound-only Cloudflare Tunnel and
+// retains only the credential and config needed to run that exact Tunnel. It
+// does not install or start a host service.
+func (t Tunnel) Prepare(ctx context.Context, hostname string, stdout, stderr io.Writer) (State, error) {
+	return t.reconcile(ctx, hostname, stdout, stderr)
+}
+
+// A broad account certificate exists only while the external Tunnel and DNS
 // route are being reconciled. The retained credential can run only the exact
 // Tunnel recorded in state.
-func (t Tunnel) Reconcile(ctx context.Context, hostname string, stdout, stderr io.Writer) (State, error) {
+func (t Tunnel) reconcile(ctx context.Context, hostname string, stdout, stderr io.Writer) (State, error) {
 	gatewayURL, err := GatewayURL(hostname)
 	if err != nil {
 		return State{}, err
@@ -235,7 +466,7 @@ func (t Tunnel) Reconcile(ctx context.Context, hostname string, stdout, stderr i
 			return state, err
 		}
 		if !present {
-			state.DNSConfigured, state.Complete = false, false
+			state.DNSConfigured = false
 			if err := t.save(state); err != nil {
 				return state, err
 			}
@@ -243,6 +474,10 @@ func (t Tunnel) Reconcile(ctx context.Context, hostname string, stdout, stderr i
 	}
 	binary, err := t.ensureBinary(ctx)
 	if err != nil {
+		return state, err
+	}
+	state.BinaryPath = binary
+	if err := t.save(state); err != nil {
 		return state, err
 	}
 	managementHome := filepath.Join(t.StatePath, "management")
@@ -330,42 +565,17 @@ func (t Tunnel) Reconcile(ctx context.Context, hostname string, stdout, stderr i
 		return state, fmt.Errorf("validate Cloudflare Tunnel ingress: %w", err)
 	}
 	if !state.DNSConfigured {
-		if err := t.Runner.Run(ctx, env, stdout, stderr, binary, "tunnel", "--origincert", certificate, "route", "dns", "--overwrite-dns", state.TunnelID, state.Hostname); err != nil {
+		// Cloudflare atomically creates an absent record, accepts the existing
+		// CNAME only when it already targets this exact Tunnel, and rejects every
+		// foreign record. Never turn the availability preflight into permission to
+		// replace DNS that changed ownership before this mutation.
+		if err := t.Runner.Run(ctx, env, stdout, stderr, binary, "tunnel", "--origincert", certificate, "route", "dns", state.TunnelID, state.Hostname); err != nil {
 			return state, fmt.Errorf("route Cloudflare hostname: %w", err)
 		}
 		state.DNSConfigured = true
 		if err := t.save(state); err != nil {
 			return state, err
 		}
-	}
-	servicePath := filepath.Join(t.StatePath, "dorf-cloudflared.service")
-	if err := writePrivate(servicePath, []byte(t.service(binary, state.ConfigPath))); err != nil {
-		return state, err
-	}
-	owned, err := t.serviceOwned(ctx, binary, state.ConfigPath)
-	if err != nil {
-		return state, err
-	}
-	if !owned {
-		if err := t.runRoot(ctx, stdout, stderr, "install", "-m", "0644", servicePath, "/etc/systemd/system/dorf-cloudflared.service"); err != nil {
-			return state, fmt.Errorf("install Cloudflare Tunnel service: %w", err)
-		}
-		if err := t.runRoot(ctx, stdout, stderr, "systemctl", "daemon-reload"); err != nil {
-			return state, fmt.Errorf("reload Cloudflare Tunnel service: %w", err)
-		}
-	}
-	if err := t.runRoot(ctx, stdout, stderr, "systemctl", "enable", "dorf-cloudflared.service"); err != nil {
-		return state, fmt.Errorf("enable Cloudflare Tunnel service: %w", err)
-	}
-	// Restart on every reconciliation. This is intentionally stronger than
-	// checking the unit alone: after process loss, the config file may already
-	// contain the desired origin while the live process still has the old one.
-	if err := t.runRoot(ctx, stdout, stderr, "systemctl", "restart", "dorf-cloudflared.service"); err != nil {
-		return state, fmt.Errorf("start Cloudflare Tunnel service: %w", err)
-	}
-	state.ServiceInstalled, state.Complete = true, true
-	if err := t.save(state); err != nil {
-		return state, err
 	}
 	if err := os.RemoveAll(managementHome); err != nil {
 		return state, fmt.Errorf("remove temporary Cloudflare account authority: %w", err)
@@ -407,41 +617,6 @@ func (t Tunnel) listByName(ctx context.Context, binary string, env []string, cer
 	return matches, nil
 }
 
-func (t Tunnel) serviceOwned(ctx context.Context, binary, config string) (bool, error) {
-	output, err := t.Runner.Output(ctx, nil, "systemctl", "cat", "dorf-cloudflared.service")
-	if err != nil {
-		return false, nil
-	}
-	if !strings.Contains(output, "Description=Dorf Cloudflare Tunnel") {
-		return false, fmt.Errorf("dorf-cloudflared.service exists without Dorf ownership; refusing to replace it")
-	}
-	for _, exact := range []string{
-		binary,
-		config,
-		fmt.Sprintf("User=%d", os.Getuid()),
-		fmt.Sprintf("Group=%d", os.Getgid()),
-		"NoNewPrivileges=true",
-	} {
-		if !strings.Contains(output, exact) {
-			return false, nil
-		}
-	}
-	return true, nil
-}
-
-func (t Tunnel) runRoot(ctx context.Context, stdout, stderr io.Writer, name string, args ...string) error {
-	var prefix []string
-	if t.RootPrefix != nil {
-		prefix = append([]string{}, t.RootPrefix...)
-	} else if os.Geteuid() != 0 {
-		prefix = []string{"sudo"}
-	}
-	if len(prefix) == 0 {
-		return t.Runner.Run(ctx, nil, stdout, stderr, name, args...)
-	}
-	return t.Runner.Run(ctx, nil, stdout, stderr, prefix[0], append(append(prefix[1:], name), args...)...)
-}
-
 func (t Tunnel) config(state State) string {
 	return fmt.Sprintf("tunnel: %q\ncredentials-file: %q\nno-autoupdate: true\ningress:\n  - hostname: %q\n    path: ^/\\.dorf/probe/%s$\n    service: http_status:204\n  - hostname: %q\n    path: ^/v1(/.*)?$\n    service: %q\n  - service: http_status:404\n", state.TunnelID, state.CredentialPath, state.Hostname, state.ProbeID, state.Hostname, state.Origin)
 }
@@ -454,35 +629,17 @@ func randomHex(bytes int) (string, error) {
 	return hex.EncodeToString(raw), nil
 }
 
-func (t Tunnel) service(binary, config string) string {
-	return fmt.Sprintf(`[Unit]
-Description=Dorf Cloudflare Tunnel
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=notify
-User=%d
-Group=%d
-NoNewPrivileges=true
-ExecStart=%q --no-autoupdate --config %q tunnel run
-Restart=on-failure
-RestartSec=5s
-
-[Install]
-WantedBy=multi-user.target
-`, os.Getuid(), os.Getgid(), binary, config)
-}
-
 func (t Tunnel) ensureBinary(ctx context.Context) (string, error) {
 	if strings.TrimSpace(t.Binary) != "" {
+		if err := t.verifyPinnedBinary(t.Binary); err != nil {
+			return "", err
+		}
 		return t.Binary, nil
 	}
 	destination := filepath.Join(t.StatePath, "bin", BinaryVersion, "cloudflared")
-	if raw, err := os.ReadFile(destination); err == nil {
-		hash := sha256.Sum256(raw)
-		if hex.EncodeToString(hash[:]) != binarySHA256 {
-			return "", fmt.Errorf("installed cloudflared %s checksum mismatch", BinaryVersion)
+	if _, err := os.Lstat(destination); err == nil {
+		if err := t.verifyPinnedBinary(destination); err != nil {
+			return "", err
 		}
 		return destination, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -509,7 +666,7 @@ func (t Tunnel) ensureBinary(ctx context.Context) (string, error) {
 		return "", err
 	}
 	hash := sha256.Sum256(raw)
-	if hex.EncodeToString(hash[:]) != binarySHA256 {
+	if hex.EncodeToString(hash[:]) != t.expectedBinarySHA256() {
 		return "", fmt.Errorf("cloudflared %s checksum mismatch", BinaryVersion)
 	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
@@ -518,16 +675,27 @@ func (t Tunnel) ensureBinary(ctx context.Context) (string, error) {
 	if err := writePrivateMode(destination, raw, 0o700); err != nil {
 		return "", err
 	}
+	if err := t.verifyPinnedBinary(destination); err != nil {
+		return "", err
+	}
 	return destination, nil
 }
 
 func (t Tunnel) statePath() string { return filepath.Join(t.StatePath, "state.json") }
 
 func (t Tunnel) load() (State, bool, error) {
-	raw, err := os.ReadFile(t.statePath())
+	path := t.statePath()
+	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return State{}, false, nil
 	}
+	if err != nil {
+		return State{}, false, err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 || info.Size() < 1 || info.Size() > 64<<10 {
+		return State{}, false, fmt.Errorf("Cloudflare Tunnel state must be one protected nonempty regular file")
+	}
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return State{}, false, err
 	}

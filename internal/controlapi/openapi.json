@@ -992,6 +992,7 @@
       },
       "MessageResult": {
         "type": "object",
+        "description": "A settled result whose internal encoded observation is limited to 16 MiB.",
         "additionalProperties": false,
         "required": ["outcome", "output"],
         "properties": {

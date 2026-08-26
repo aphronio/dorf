@@ -6,9 +6,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -40,8 +42,14 @@ type authority struct {
 }
 
 type Gateway struct {
-	StatePath          string
-	PrivateBridge      string
+	StatePath     string
+	PrivateBridge string
+	// backendSHA256 is a package-private test seam. Production always uses the
+	// compiled executable digest in provision.go.
+	backendSHA256 string
+	// InternalDialOrigin overrides broker.yaml only for sibling-container
+	// management calls. It never changes the route advertised to a Sandbox.
+	InternalDialOrigin string
 	DeploymentProbeURL string
 	Client             *http.Client
 	UpstreamClient     *http.Client
@@ -53,14 +61,6 @@ func (e modelUnavailableError) Error() string {
 	return fmt.Sprintf("provider route does not currently advertise model %q", e.model)
 }
 func (modelUnavailableError) AttentionNeeded() bool { return true }
-
-func (g Gateway) BaseURL() (string, error) {
-	origin, err := g.origin()
-	if err != nil {
-		return "", err
-	}
-	return origin + "/v1", nil
-}
 
 func (g Gateway) ReconcileCreate(ctx context.Context, connectionName, consumer, routeID string) (Route, error) {
 	if strings.TrimSpace(routeID) == "" {
@@ -193,7 +193,7 @@ func (g Gateway) Check(ctx context.Context, connectionName string) error {
 	if err != nil {
 		return err
 	}
-	origin, err := g.origin()
+	origin, err := g.internalDialOrigin()
 	if err != nil {
 		return err
 	}
@@ -263,6 +263,33 @@ func (g Gateway) DefaultConnection() (string, error) {
 		return "", err
 	}
 	return name, nil
+}
+
+// ConfiguredConnection reports whether one authenticated connection is
+// retained without selecting it as the deployment default or contacting the
+// live Gateway.
+func (g Gateway) ConfiguredConnection(name string) (bool, error) {
+	name = strings.TrimSpace(name)
+	if !connectionName.MatchString(name) {
+		return false, fmt.Errorf("AI connection name must be 1-64 safe characters")
+	}
+	records, err := g.connections()
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("AI connections are unreadable: %w", err)
+	}
+	for _, record := range records {
+		if record.Name != name {
+			continue
+		}
+		if _, err := g.requireConnection(name); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 // SetDefaultConnection selects one existing authenticated connection for new
@@ -444,7 +471,7 @@ func (g Gateway) chatGPTWebSocketsEnabled(ctx context.Context, record connection
 	if err != nil {
 		return false, err
 	}
-	origin, err := g.origin()
+	origin, err := g.internalDialOrigin()
 	if err != nil {
 		return false, err
 	}
@@ -490,7 +517,7 @@ func (g Gateway) activate(ctx context.Context, routes []Route) error {
 		keys = append(keys, route.APIKey)
 	}
 	payload, _ := json.Marshal(keys)
-	origin, err := g.origin()
+	origin, err := g.internalDialOrigin()
 	if err != nil {
 		return err
 	}
@@ -534,6 +561,33 @@ func (g Gateway) origin() (string, error) {
 		return "", fmt.Errorf("provider gateway host/port is invalid")
 	}
 	return fmt.Sprintf("http://%s:%d", host, port), nil
+}
+
+func (g Gateway) internalDialOrigin() (string, error) {
+	if g.InternalDialOrigin != "" {
+		return validateInternalDialOrigin(g.InternalDialOrigin)
+	}
+	var launch composeLaunchState
+	err := readJSON(filepath.Join(g.StatePath, "compose.json"), &launch)
+	if err == nil {
+		address, validateErr := validateComposePublishAddress(launch.PublishAddress)
+		if validateErr != nil {
+			return "", validateErr
+		}
+		return fmt.Sprintf("http://%s:%d", address, defaultPort), nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("provider gateway Compose launch state is unreadable: %w", err)
+	}
+	return g.origin()
+}
+
+func validateInternalDialOrigin(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil || raw != strings.TrimSpace(raw) || parsed.Scheme != "http" || parsed.Hostname() == "" || parsed.Port() != strconv.Itoa(defaultPort) || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return "", fmt.Errorf("provider gateway internal dial origin must be an exact HTTP origin on port %d without credentials, path, query, or fragment", defaultPort)
+	}
+	return raw, nil
 }
 
 func (g Gateway) readRoutes() ([]Route, error) {

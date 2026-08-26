@@ -218,10 +218,10 @@ func TestAdmissionServiceValidatesAndRequiresRemoteGitBeforeExternalAuthority(t 
 
 func verifiedAdmissionProfile(name string, internet bool) core.SandboxProfile {
 	now := time.Unix(1, 0)
-	return core.SandboxProfile{
-		Name: name, Provider: core.SandboxProviderE2B, E2BAllowInternet: internet,
-		Verification: &core.ProfileVerification{
-			ContractVersion: core.BaseProfileContract, ProbeCompletedAt: now, CleanedAt: now,
-		},
+	profile := core.SandboxProfile{Name: name, Provider: core.SandboxProviderE2B, E2BAllowInternet: internet}
+	profile.DefinitionHash = profile.CurrentDefinitionHash()
+	profile.Verification = &core.ProfileVerification{
+		ContractVersion: core.BaseProfileContract, DefinitionHash: profile.DefinitionHash, ProbeCompletedAt: now, CleanedAt: now,
 	}
+	return profile
 }
