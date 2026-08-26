@@ -1,0 +1,1053 @@
+{
+  "openapi": "3.1.0",
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "info": {
+    "title": "Dorf Remote Control API",
+    "version": "1.0.0",
+    "description": "The authenticated, purpose-built remote boundary for one Dorf Deployment. A Job is the long-running resource; internal Tasks, AgentRuns, Threads, Turns, Actions, providers, and Harnesses are not exposed."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "The connected Dorf Deployment"
+    }
+  ],
+  "security": [
+    {
+      "clientBearer": []
+    }
+  ],
+  "tags": [
+    { "name": "Discovery" },
+    { "name": "Authentication" },
+    { "name": "Jobs" },
+    { "name": "Messages" },
+    { "name": "Sandboxes" }
+  ],
+  "x-dorf-problems": [],
+  "paths": {
+    "/v1": {
+      "get": {
+        "operationId": "discoverDeployment",
+        "summary": "Discover the Deployment and its capabilities",
+        "tags": ["Discovery"],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Deployment discovery",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Discovery" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/openapi.json": {
+      "get": {
+        "operationId": "getOpenAPI",
+        "summary": "Read the canonical OpenAPI document and Problem catalog",
+        "tags": ["Discovery"],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1 JSON document",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OpenAPIDocument" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/auth/enrollments/redeem": {
+      "post": {
+        "operationId": "redeemEnrollment",
+        "summary": "Redeem one short-lived Enrollment for a Client",
+        "tags": ["Authentication"],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RedeemRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Exact replay of an already redeemed Client binding",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Identity" }
+              }
+            }
+          },
+          "201": {
+            "description": "Client binding created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Identity" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "operationId": "getIdentity",
+        "summary": "Inspect the effective Principal and Client",
+        "tags": ["Authentication"],
+        "responses": {
+          "200": {
+            "description": "Authenticated identity",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Identity" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/jobs": {
+      "get": {
+        "operationId": "listJobs",
+        "summary": "List one newest-first page of Jobs",
+        "description": "This is keyset traversal of current Job facts, not a frozen snapshot. Pass next_cursor unchanged to retrieve the next page.",
+        "tags": ["Jobs"],
+        "parameters": [
+          { "$ref": "#/components/parameters/PageLimit" },
+          { "$ref": "#/components/parameters/PageCursor" }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of narrow Job summaries",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/JobList" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "post": {
+        "operationId": "admitDirectJob",
+        "summary": "Admit or exactly replay a direct Job",
+        "tags": ["Jobs"],
+        "parameters": [
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AdmitDirectJobRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Exact replay of the admitted Job",
+            "headers": {
+              "ETag": { "$ref": "#/components/headers/ETag" }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DirectJob" }
+              }
+            }
+          },
+          "201": {
+            "description": "Job admitted",
+            "headers": {
+              "ETag": { "$ref": "#/components/headers/ETag" }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DirectJob" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/workflows/coding/jobs": {
+      "post": {
+        "operationId": "admitCodingJob",
+        "summary": "Admit or exactly replay a coding Job",
+        "tags": ["Jobs"],
+        "parameters": [
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AdmitCodingJobRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Exact replay of the admitted Job",
+            "headers": {
+              "ETag": { "$ref": "#/components/headers/ETag" }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CodingJob" }
+              }
+            }
+          },
+          "201": {
+            "description": "Job admitted",
+            "headers": {
+              "ETag": { "$ref": "#/components/headers/ETag" }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CodingJob" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/workflows/codebase-investigation/jobs": {
+      "post": {
+        "operationId": "admitInvestigationJob",
+        "summary": "Admit or exactly replay a codebase-investigation Job",
+        "tags": ["Jobs"],
+        "parameters": [
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AdmitInvestigationJobRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Exact replay of the admitted Job",
+            "headers": {
+              "ETag": { "$ref": "#/components/headers/ETag" }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/InvestigationJob" }
+              }
+            }
+          },
+          "201": {
+            "description": "Job admitted",
+            "headers": {
+              "ETag": { "$ref": "#/components/headers/ETag" }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/InvestigationJob" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/jobs/{job}": {
+      "get": {
+        "operationId": "getJob",
+        "summary": "Read one canonical Job snapshot",
+        "tags": ["Jobs"],
+        "parameters": [
+          { "$ref": "#/components/parameters/JobID" },
+          { "$ref": "#/components/parameters/IfNoneMatch" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current complete Job representation",
+            "headers": {
+              "ETag": { "$ref": "#/components/headers/ETag" }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Job" }
+              }
+            }
+          },
+          "304": {
+            "description": "The supplied representation ETag is still current",
+            "headers": {
+              "ETag": { "$ref": "#/components/headers/ETag" }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/jobs/{job}/watch": {
+      "get": {
+        "operationId": "watchJob",
+        "summary": "Watch newer complete Job snapshots",
+        "description": "A non-durable server-sent event stream. Each snapshot event carries an id equal to the canonical representation digest and data containing one complete Job JSON object. Keepalives are comments. Reconnect by reading the canonical Job or by supplying the last event id; the stream closes for bounded reauthentication.",
+        "tags": ["Jobs"],
+        "parameters": [
+          { "$ref": "#/components/parameters/JobID" },
+          { "$ref": "#/components/parameters/SSEAccept" },
+          { "$ref": "#/components/parameters/LastEventID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-sent snapshot events and keepalive comments",
+            "content": {
+              "text/event-stream": {
+                "schema": { "type": "string" },
+                "x-dorf-event": {
+                  "name": "snapshot",
+                  "id": "SHA-256 hex digest of data",
+                  "dataSchema": { "$ref": "#/components/schemas/Job" }
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/jobs/{job}/messages": {
+      "post": {
+        "operationId": "sendJobMessage",
+        "summary": "Admit or exactly replay a follow or steer Message",
+        "tags": ["Messages"],
+        "parameters": [
+          { "$ref": "#/components/parameters/JobID" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SendMessageRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Exact replay of the accepted Message",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Message" }
+              }
+            }
+          },
+          "201": {
+            "description": "Message accepted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Message" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/jobs/{job}/messages/{message}": {
+      "get": {
+        "operationId": "getJobMessage",
+        "summary": "Inspect one accepted Message delivery",
+        "tags": ["Messages"],
+        "parameters": [
+          { "$ref": "#/components/parameters/JobID" },
+          { "$ref": "#/components/parameters/MessageID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current retained Message delivery",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Message" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/jobs/{job}/retries": {
+      "post": {
+        "operationId": "retryJob",
+        "summary": "Retry the Job's eligible failed execution",
+        "tags": ["Jobs"],
+        "parameters": [
+          { "$ref": "#/components/parameters/JobID" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exact replay of the retry request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Retry" }
+              }
+            }
+          },
+          "201": {
+            "description": "Retry scheduled",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Retry" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/jobs/{job}/evidence": {
+      "get": {
+        "operationId": "listJobEvidence",
+        "summary": "List verified immutable Evidence metadata",
+        "tags": ["Jobs"],
+        "parameters": [
+          { "$ref": "#/components/parameters/JobID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Verified Evidence metadata; direct Jobs may return an empty array",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/EvidenceList" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/jobs/{job}/cleanup": {
+      "put": {
+        "operationId": "requestJobCleanup",
+        "summary": "Request Job cleanup idempotently",
+        "tags": ["Jobs"],
+        "parameters": [
+          { "$ref": "#/components/parameters/JobID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current complete Job representation after accepting the request",
+            "headers": {
+              "ETag": { "$ref": "#/components/headers/ETag" }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Job" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/sandboxes/{sandbox}/files": {
+      "get": {
+        "operationId": "getSandboxFile",
+        "summary": "Read exact bytes from one Job-owned Sandbox",
+        "description": "Reads one clean workspace-relative regular file while Job cleanup still permits Sandbox reads. The client must verify Content-Digest before using or writing the bytes.",
+        "tags": ["Sandboxes"],
+        "parameters": [
+          { "$ref": "#/components/parameters/SandboxID" },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "description": "Clean workspace-relative file path",
+            "schema": { "type": "string", "minLength": 1 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exact file bytes",
+            "headers": {
+              "Content-Length": {
+                "description": "Exact byte length",
+                "schema": { "type": "integer", "minimum": 0 }
+              },
+              "Content-Digest": {
+                "description": "RFC 9530 SHA-256 digest in structured-field form",
+                "schema": { "type": "string", "pattern": "^sha-256=:[A-Za-z0-9+/]{43}=:$" }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": { "type": "string", "format": "binary" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "clientBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "One opaque, individually expiring and revocable Dorf Client credential."
+      }
+    },
+    "parameters": {
+      "JobID": {
+        "name": "job",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "minLength": 1 }
+      },
+      "MessageID": {
+        "name": "message",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "minLength": 1 }
+      },
+      "SandboxID": {
+        "name": "sandbox",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "minLength": 1 }
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "description": "Caller-retained request identity. Exact replay returns the same resource; changed input returns idempotency_conflict.",
+        "schema": { "type": "string", "minLength": 1, "maxLength": 255 }
+      },
+      "IfNoneMatch": {
+        "name": "If-None-Match",
+        "in": "header",
+        "required": false,
+        "description": "One or more canonical representation ETags",
+        "schema": { "type": "string" }
+      },
+      "SSEAccept": {
+        "name": "Accept",
+        "in": "header",
+        "required": true,
+        "schema": { "type": "string", "const": "text/event-stream" }
+      },
+      "LastEventID": {
+        "name": "Last-Event-ID",
+        "in": "header",
+        "required": false,
+        "description": "Exact 64-character lowercase hexadecimal representation digest",
+        "schema": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      },
+      "PageLimit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "description": "Maximum summaries in this page",
+        "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 }
+      },
+      "PageCursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "description": "Opaque cursor returned as next_cursor by the preceding page",
+        "schema": { "type": "string", "minLength": 1 }
+      }
+    },
+    "headers": {
+      "ETag": {
+        "description": "Strong SHA-256 identity of the complete canonical Job representation",
+        "schema": { "type": "string" }
+      }
+    },
+    "responses": {
+      "Problem": {
+        "description": "A Dorf-origin failure. The top-level x-dorf-problems catalog defines every stable code. An ingress failure may not use this representation.",
+        "headers": {
+          "Allow": {
+            "description": "Allowed method or methods when code is method_not_allowed",
+            "schema": { "type": "string" }
+          },
+          "Retry-After": {
+            "description": "Seconds until another attempt when code is rate_limited",
+            "schema": { "type": "integer", "minimum": 1 }
+          },
+          "WWW-Authenticate": {
+            "description": "Bearer challenge when code is unauthenticated",
+            "schema": { "type": "string" }
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/Problem" }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "OpenAPIDocument": {
+        "type": "object",
+        "description": "The canonical OpenAPI 3.1 document. Its full recursive shape is defined by the OpenAPI specification.",
+        "required": ["openapi", "info", "paths", "components", "x-dorf-problems"]
+      },
+      "Discovery": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["product", "version", "capabilities", "links"],
+        "properties": {
+          "product": { "type": "string", "const": "dorf" },
+          "version": { "type": "string", "minLength": 1 },
+          "capabilities": {
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true,
+            "description": "Supported feature names for this Deployment. Clients must ignore names they do not recognize; openapi identifies this document and job_list identifies paginated Job listing."
+          },
+          "links": { "$ref": "#/components/schemas/DiscoveryLinks" }
+        }
+      },
+      "DiscoveryLinks": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["openapi"],
+        "properties": {
+          "openapi": { "type": "string", "const": "/v1/openapi.json" }
+        }
+      },
+      "RedeemRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["enrollment_code", "client_name", "credential"],
+        "properties": {
+          "enrollment_code": { "type": "string", "minLength": 1 },
+          "client_name": { "type": "string", "minLength": 1 },
+          "credential": {
+            "type": "string",
+            "minLength": 1,
+            "writeOnly": true,
+            "description": "Client-generated secret; Dorf stores only its digest and never returns it."
+          }
+        }
+      },
+      "Principal": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 }
+        }
+      },
+      "Client": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "expires_at"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 },
+          "expires_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Identity": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["principal", "client"],
+        "properties": {
+          "principal": { "$ref": "#/components/schemas/Principal" },
+          "client": { "$ref": "#/components/schemas/Client" }
+        }
+      },
+      "AdmitDirectJobRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["goal", "model"],
+        "properties": {
+          "goal": { "type": "string", "minLength": 1 },
+          "profile": { "type": "string", "description": "Named verified profile; omitted or empty selects the Deployment default" },
+          "model": { "type": "string", "minLength": 1 },
+          "reasoning": { "$ref": "#/components/schemas/ReasoningEffort" }
+        }
+      },
+      "AdmitCodingJobRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["goal", "repository", "revision", "base_branch", "model"],
+        "properties": {
+          "goal": { "type": "string", "minLength": 1 },
+          "repository": { "type": "string", "minLength": 1 },
+          "revision": { "$ref": "#/components/schemas/GitCommitOID" },
+          "base_branch": { "type": "string", "minLength": 1 },
+          "branch": { "type": "string", "description": "Omitted or empty derives dorf/<Job ID>" },
+          "profile": { "type": "string", "description": "Named verified profile; omitted or empty selects the Deployment default" },
+          "model": { "type": "string", "minLength": 1 },
+          "reasoning": { "$ref": "#/components/schemas/ReasoningEffort" }
+        }
+      },
+      "AdmitInvestigationJobRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["brief", "repository", "revision", "model"],
+        "properties": {
+          "brief": { "type": "string", "minLength": 1 },
+          "repository": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://",
+            "description": "Credential-free HTTPS Git remote"
+          },
+          "revision": { "$ref": "#/components/schemas/GitCommitOID" },
+          "profile": { "type": "string", "description": "Named verified profile; omitted or empty selects the Deployment default" },
+          "model": { "type": "string", "minLength": 1 },
+          "reasoning": { "$ref": "#/components/schemas/ReasoningEffort" }
+        }
+      },
+      "JobList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["jobs", "next_cursor"],
+        "properties": {
+          "jobs": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/JobSummary" }
+          },
+          "next_cursor": {
+            "oneOf": [
+              { "type": "string", "minLength": 1 },
+              { "type": "null" }
+            ]
+          }
+        }
+      },
+      "JobSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "admitted_at"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "kind": { "$ref": "#/components/schemas/JobKind" },
+          "admitted_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Job": {
+        "oneOf": [
+          { "$ref": "#/components/schemas/DirectJob" },
+          { "$ref": "#/components/schemas/CodingJob" },
+          { "$ref": "#/components/schemas/InvestigationJob" }
+        ],
+        "discriminator": {
+          "propertyName": "kind",
+          "mapping": {
+            "direct": "#/components/schemas/DirectJob",
+            "coding": "#/components/schemas/CodingJob",
+            "codebase-investigation": "#/components/schemas/InvestigationJob"
+          }
+        }
+      },
+      "JobKind": {
+        "type": "string",
+        "enum": ["direct", "coding", "codebase-investigation"]
+      },
+      "GitCommitOID": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$",
+        "description": "Exact lowercase full Git commit OID: 40 hexadecimal characters for SHA-1 or 64 for SHA-256"
+      },
+      "ReasoningEffort": {
+        "type": "string",
+        "enum": ["low", "medium", "high", "xhigh"],
+        "default": "high",
+        "description": "Omitted admission input defaults to high; Job responses always contain the effective value"
+      },
+      "JobCommon": {
+        "type": "object",
+        "required": ["id", "kind", "goal", "profile", "model", "reasoning", "initial_message_id", "admission", "execution", "attention", "cleanup", "sandboxes"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "kind": { "$ref": "#/components/schemas/JobKind" },
+          "goal": { "type": "string" },
+          "profile": { "type": "string", "minLength": 1 },
+          "model": { "type": "string", "minLength": 1 },
+          "reasoning": { "$ref": "#/components/schemas/ReasoningEffort" },
+          "initial_message_id": { "type": "string", "minLength": 1 },
+          "admission": { "$ref": "#/components/schemas/Admission" },
+          "execution": { "$ref": "#/components/schemas/ExecutionState" },
+          "attention": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/Attention" },
+              { "type": "null" }
+            ]
+          },
+          "cleanup": { "$ref": "#/components/schemas/CleanupState" },
+          "sandboxes": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Sandbox" }
+          }
+        }
+      },
+      "DirectJob": {
+        "allOf": [
+          { "$ref": "#/components/schemas/JobCommon" },
+          {
+            "type": "object",
+            "properties": {
+              "kind": { "const": "direct" }
+            }
+          }
+        ],
+        "unevaluatedProperties": false
+      },
+      "CodingJob": {
+        "allOf": [
+          { "$ref": "#/components/schemas/JobCommon" },
+          {
+            "type": "object",
+            "required": ["workflow_revision", "repository", "starting_revision", "revision", "branch", "base_branch", "proposal", "outcome"],
+            "properties": {
+              "kind": { "const": "coding" },
+              "workflow_revision": { "type": "string", "minLength": 1 },
+              "repository": { "type": "string", "minLength": 1 },
+              "starting_revision": { "$ref": "#/components/schemas/GitCommitOID" },
+              "revision": { "$ref": "#/components/schemas/GitCommitOID" },
+              "branch": { "type": "string", "minLength": 1 },
+              "base_branch": { "type": "string", "minLength": 1 },
+              "proposal": {
+                "oneOf": [
+                  { "$ref": "#/components/schemas/CodingProposal" },
+                  { "type": "null" }
+                ]
+              },
+              "outcome": {
+                "oneOf": [
+                  { "$ref": "#/components/schemas/CodingOutcome" },
+                  { "type": "null" }
+                ]
+              }
+            }
+          }
+        ],
+        "unevaluatedProperties": false
+      },
+      "InvestigationJob": {
+        "allOf": [
+          { "$ref": "#/components/schemas/JobCommon" },
+          {
+            "type": "object",
+            "required": ["workflow_revision", "source", "report"],
+            "properties": {
+              "kind": { "const": "codebase-investigation" },
+              "workflow_revision": { "type": "string", "minLength": 1 },
+              "source": { "$ref": "#/components/schemas/InvestigationSource" },
+              "report": { "$ref": "#/components/schemas/InvestigationReport" }
+            }
+          }
+        ],
+        "unevaluatedProperties": false
+      },
+      "Admission": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["open"],
+        "properties": {
+          "open": { "type": "boolean" }
+        }
+      },
+      "ExecutionState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["state"],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": ["provisioning_sandbox", "connecting_model_access", "awaiting_agent", "running", "idle", "complete", "stopped", "failed"]
+          }
+        }
+      },
+      "CleanupState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["state"],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": ["not_requested", "requested", "running", "complete", "failed"]
+          }
+        }
+      },
+      "Attention": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "detail"],
+        "properties": {
+          "code": { "type": "string", "minLength": 1 },
+          "detail": { "type": "string", "minLength": 1 }
+        }
+      },
+      "Sandbox": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 }
+        }
+      },
+      "CodingProposal": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["number", "url", "revision"],
+        "properties": {
+          "number": { "type": "integer", "minimum": 1 },
+          "url": { "type": "string", "format": "uri" },
+          "revision": { "$ref": "#/components/schemas/GitCommitOID" }
+        }
+      },
+      "CodingOutcome": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "observed_state", "observed_at"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["accepted", "rejected", "abandoned"] },
+          "observed_state": { "type": "string", "minLength": 1 },
+          "merge_commit_oid": { "$ref": "#/components/schemas/GitCommitOID" },
+          "observed_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "InvestigationSource": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "repository", "revision"],
+        "properties": {
+          "kind": { "type": "string", "const": "remote" },
+          "repository": { "type": "string", "format": "uri", "pattern": "^https://" },
+          "revision": { "$ref": "#/components/schemas/GitCommitOID" }
+        }
+      },
+      "InvestigationReport": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sandbox_id", "path"],
+        "properties": {
+          "sandbox_id": { "type": "string", "minLength": 1 },
+          "path": { "type": "string", "minLength": 1 }
+        }
+      },
+      "SendMessageRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text", "intent"],
+        "properties": {
+          "text": { "type": "string", "minLength": 1 },
+          "intent": { "type": "string", "enum": ["follow", "steer"] }
+        }
+      },
+      "Message": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "job_id", "sequence", "intent", "delivery", "result", "attention", "admitted_at"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "job_id": { "type": "string", "minLength": 1 },
+          "sequence": { "type": "integer", "minimum": 1 },
+          "intent": { "type": "string", "enum": ["follow", "steer"] },
+          "delivery": { "$ref": "#/components/schemas/MessageDeliveryState" },
+          "result": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/MessageResult" },
+              { "type": "null" }
+            ]
+          },
+          "attention": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/Attention" },
+              { "type": "null" }
+            ]
+          },
+          "admitted_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "MessageDeliveryState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["state"],
+        "properties": {
+          "state": { "type": "string", "enum": ["accepted", "running", "completed", "failed"] }
+        }
+      },
+      "MessageResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["outcome", "output"],
+        "properties": {
+          "outcome": { "type": "string", "minLength": 1 },
+          "output": { "type": "string" }
+        }
+      },
+      "Retry": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["job_id", "state"],
+        "properties": {
+          "job_id": { "type": "string", "minLength": 1 },
+          "state": { "type": "string", "const": "scheduled" }
+        }
+      },
+      "EvidenceList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["evidence"],
+        "properties": {
+          "evidence": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Evidence" }
+          }
+        }
+      },
+      "Evidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "sha256", "byte_size", "media_type", "producer", "kind"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "byte_size": { "type": "integer", "minimum": 0 },
+          "media_type": { "type": "string", "minLength": 1 },
+          "producer": { "type": "string", "minLength": 1 },
+          "kind": { "type": "string", "minLength": 1 },
+          "revision": { "$ref": "#/components/schemas/GitCommitOID" },
+          "started_at": { "type": "string", "format": "date-time" },
+          "finished_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "title", "status", "code", "retryable", "details"],
+        "properties": {
+          "type": { "type": "string", "format": "uri" },
+          "title": { "type": "string", "minLength": 1 },
+          "status": { "type": "integer", "minimum": 400, "maximum": 599 },
+          "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+          "retryable": { "type": "boolean" },
+          "details": { "type": "object", "additionalProperties": true }
+        }
+      }
+    }
+  }
+}

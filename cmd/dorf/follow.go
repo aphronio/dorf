@@ -12,6 +12,7 @@ import (
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/core"
+	"github.com/aphronio/dorf/internal/direct"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -100,16 +101,16 @@ func loadFollowSnapshot(ctx context.Context, store postgres.Store, client *absur
 		if job.WorkflowRevision != "" {
 			return followSnapshot{}, fmt.Errorf("client-directed Job %s has a workflow revision without a workflow", job.ID)
 		}
-		facts, err := loadDirectJobFacts(ctx, store, jobID)
+		snapshot, err := direct.LoadSnapshot(ctx, store, job)
 		if err != nil {
 			return followSnapshot{}, err
 		}
-		operation, detail, attention, _ := directCurrent(job, facts.MainSandbox, facts.Actions, facts.Deliveries)
+		operation, detail, attention, _ := directOperation(snapshot.Project())
 		return followSnapshot{
-			Job: job, Profile: profile, Presentation: coreJobPresentation{}, History: directJobHistory(job, facts.Deliveries, facts.Actions),
+			Job: job, Profile: profile, Presentation: coreJobPresentation{}, History: directJobHistory(job, snapshot.Deliveries, snapshot.Actions),
 			Operation: operation, OperationDetail: detail, NeedsAttention: attention,
-			AgentRuns: deliveryAgentRuns(facts.Deliveries), Sandboxes: facts.Sandboxes,
-			Actions: facts.Actions, Execution: execution,
+			AgentRuns: deliveryAgentRuns(snapshot.Deliveries), Sandboxes: snapshot.Sandboxes,
+			Actions: snapshot.Actions, Execution: execution,
 		}.withCleanupOperation(), nil
 	case coding.Workflow:
 		snapshot, err := coding.LoadSnapshot(ctx, store, jobID)

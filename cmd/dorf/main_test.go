@@ -15,6 +15,7 @@ import (
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/core"
+	"github.com/aphronio/dorf/internal/deployment"
 	"github.com/aphronio/dorf/internal/e2b"
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/incus"
@@ -54,6 +55,33 @@ func TestOpenAIConnectionReadsAProtectedFileOrStandardInput(t *testing.T) {
 	}
 	if _, err := readSecretFile("-", strings.NewReader(" \n")); err == nil || !strings.Contains(err.Error(), "empty") {
 		t.Fatalf("empty secret error=%v", err)
+	}
+}
+
+func TestSetupRetainsVerifiedE2BCredentialForManagedServices(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "deployment.json")
+	durable := deployment.Config{Database: deployment.Database{
+		Host: "127.0.0.1", Port: 5432, Name: "dorf", User: "dorf", Password: "secret",
+		Image: "postgres:17", ImageID: "sha256:test",
+	}}
+	if err := deployment.Save(path, durable); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{DeploymentPath: path, E2BAPIKey: "verified-environment-key"}
+	if err := retainSetupE2BCredential(&cfg, cfg.E2BAPIKey, false); err != nil {
+		t.Fatal(err)
+	}
+	stored, found, err := deployment.Load(path)
+	if err != nil || !found || stored.E2B == nil || stored.E2B.APIKey != cfg.E2BAPIKey {
+		t.Fatalf("retained E2B credential: found=%t config=%#v err=%v", found, stored, err)
+	}
+
+	external := config.Config{DatabaseExternal: true, E2BAPIKey: "environment-key"}
+	if err := retainSetupE2BCredential(&external, external.E2BAPIKey, false); err != nil {
+		t.Fatalf("existing external credential: %v", err)
+	}
+	if err := retainSetupE2BCredential(&external, "new-key", true); err == nil {
+		t.Fatal("setup accepted an E2B credential it could not retain for an external deployment")
 	}
 }
 
@@ -626,7 +654,7 @@ func TestInvestigationReportAccessIsExplicitlyWorkspaceOwnedAndCleanupBound(t *t
 	var output strings.Builder
 	renderInvestigationReportAccess(&output, job)
 	want := "  report: " + investigation.ReportPath + " (agent-owned workspace file; existence not checked; not durably retained)\n" +
-		"  retrieve before cleanup: dorf sandbox file get job-report " + investigation.ReportPath + " --output " + investigation.ReportPath + "\n" +
+		"  retrieve before cleanup: dorf sandbox file get " + core.MainSandboxName(job.ID) + " " + investigation.ReportPath + " --output " + investigation.ReportPath + "\n" +
 		"  revise: dorf message --job job-report --id REQUEST_ID --input-file FOLLOW_UP.md\n" +
 		"  release resources: dorf cleanup job-report\n"
 	if output.String() != want {
@@ -648,20 +676,5 @@ func TestSandboxProfileNotReadyDetailSurfacesUnavailableArtifact(t *testing.T) {
 	if !strings.Contains(detail, `Sandbox profile "cloud-codex" is unavailable: E2B template is unavailable`) ||
 		!strings.Contains(detail, "repair or update it, then run dorf profile verify cloud-codex") {
 		t.Fatalf("detail = %q", detail)
-	}
-}
-
-func TestRemoteGitAdmissionRejectsOnlyOfflineE2BProfiles(t *testing.T) {
-	offline := core.SandboxProfile{Name: "cloud-codex", Provider: core.SandboxProviderE2B}
-	if err := requireRemoteGitAccess(offline); err == nil || !strings.Contains(err.Error(), "use --local-repo") || !strings.Contains(err.Error(), "update and reverify") {
-		t.Fatalf("offline E2B error=%v", err)
-	}
-	for _, profile := range []core.SandboxProfile{
-		{Name: "cloud-online", Provider: core.SandboxProviderE2B, E2BAllowInternet: true},
-		{Name: "local", Provider: core.SandboxProviderIncus},
-	} {
-		if err := requireRemoteGitAccess(profile); err != nil {
-			t.Fatalf("profile %#v rejected remote Git: %v", profile, err)
-		}
 	}
 }

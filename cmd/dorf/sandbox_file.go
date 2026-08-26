@@ -13,14 +13,32 @@ import (
 
 func sandboxCommand(ctx context.Context, application core.Application, args []string, stdout, _ io.Writer) error {
 	if len(args) < 2 || args[0] != "file" || args[1] != "get" {
-		return fmt.Errorf("sandbox requires: file get JOB_ID RELATIVE_PATH --output DESTINATION")
+		return fmt.Errorf("sandbox requires: file get SANDBOX_ID RELATIVE_PATH --output DESTINATION")
 	}
 	return sandboxFileGet(ctx, application, args[2:], stdout)
 }
 
 func sandboxFileGet(ctx context.Context, application core.Application, args []string, stdout io.Writer) error {
-	var output, sandboxID string
-	var sandboxSet bool
+	sandboxID, relativePath, output, err := parseSandboxFileGet(args)
+	if err != nil {
+		return err
+	}
+	owned, err := application.Store.Sandbox(ctx, sandboxID)
+	if err != nil {
+		return err
+	}
+	job, err := application.OpenJob(ctx, owned.JobID)
+	if err != nil {
+		return err
+	}
+	sandbox, err := job.Sandbox(ctx, owned.ID)
+	if err != nil {
+		return err
+	}
+	return downloadSandboxFile(ctx, sandboxID, relativePath, output, stdout, sandbox.ReadFile)
+}
+
+func parseSandboxFileGet(args []string) (sandboxID, relativePath, output string, err error) {
 	positionals := make([]string, 0, 2)
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
@@ -31,47 +49,29 @@ func sandboxFileGet(ctx context.Context, application core.Application, args []st
 		case argument == "--output":
 			index++
 			if index == len(args) {
-				return fmt.Errorf("sandbox file get --output requires a destination")
+				return "", "", "", fmt.Errorf("sandbox file get --output requires a destination")
 			}
 			output = args[index]
 		case strings.HasPrefix(argument, "--output="):
 			output = strings.TrimPrefix(argument, "--output=")
-		case argument == "--sandbox":
-			sandboxSet = true
-			index++
-			if index == len(args) {
-				return fmt.Errorf("sandbox file get --sandbox requires an exact Sandbox ID")
-			}
-			sandboxID = args[index]
-		case strings.HasPrefix(argument, "--sandbox="):
-			sandboxSet = true
-			sandboxID = strings.TrimPrefix(argument, "--sandbox=")
 		case strings.HasPrefix(argument, "-"):
-			return fmt.Errorf("sandbox file get does not support option %q", argument)
+			return "", "", "", fmt.Errorf("sandbox file get does not support option %q", argument)
 		default:
 			positionals = append(positionals, argument)
 		}
 	}
 	if len(positionals) != 2 || strings.TrimSpace(output) == "" {
-		return fmt.Errorf("sandbox file get requires JOB_ID RELATIVE_PATH --output DESTINATION")
+		return "", "", "", fmt.Errorf("sandbox file get requires SANDBOX_ID RELATIVE_PATH --output DESTINATION")
 	}
-	if sandboxSet && strings.TrimSpace(sandboxID) == "" {
-		return fmt.Errorf("sandbox file get --sandbox requires an exact Sandbox ID")
-	}
-	job, err := application.OpenJob(ctx, positionals[0])
-	if err != nil {
-		return err
-	}
-	var sandbox core.SandboxHandle
+	sandboxID, relativePath = strings.TrimSpace(positionals[0]), positionals[1]
 	if sandboxID == "" {
-		sandbox, err = job.DefaultSandbox(ctx)
-	} else {
-		sandbox, err = job.Sandbox(ctx, sandboxID)
+		return "", "", "", fmt.Errorf("sandbox file get requires an exact Sandbox ID")
 	}
-	if err != nil {
-		return err
-	}
-	contents, err := sandbox.ReadFile(ctx, positionals[1])
+	return sandboxID, relativePath, output, nil
+}
+
+func downloadSandboxFile(ctx context.Context, sandboxID, relativePath, output string, stdout io.Writer, read func(context.Context, string) ([]byte, error)) error {
+	contents, err := read(ctx, relativePath)
 	if err != nil {
 		return err
 	}
@@ -80,7 +80,7 @@ func sandboxFileGet(ctx context.Context, application core.Application, args []st
 		return err
 	}
 	if err := writeDownloadedFile(output, contents); err != nil {
-		return fmt.Errorf("write Sandbox file to %s: %w", output, err)
+		return fmt.Errorf("write Sandbox %s file to %s: %w", sandboxID, output, err)
 	}
 	return nil
 }

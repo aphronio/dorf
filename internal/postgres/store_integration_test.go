@@ -48,6 +48,14 @@ func codingDelivery(ctx context.Context, store postgres.Store, jobID string) (*c
 
 func (p providerCheck) Check(context.Context, string) error { return p.err }
 
+func (providerCheck) DefaultConnection() (string, error) { return "primary", nil }
+
+type installationDiscovery string
+
+func (i installationDiscovery) DiscoverInstallation(context.Context, string) (string, error) {
+	return string(i), nil
+}
+
 type failOnceWorkflowBarrier struct {
 	mu     sync.Mutex
 	point  string
@@ -396,13 +404,20 @@ func codingJobInput(key, goal, revision, branch string) coding.Admission {
 	}
 }
 
+func codingAdmissionRequest(input coding.Admission) coding.AdmissionRequest {
+	return coding.AdmissionRequest{
+		AdmissionKey: input.AdmissionKey, Goal: input.Goal, SandboxProfile: input.SandboxProfile,
+		ProviderConnection: input.ProviderConnection, Model: input.Model, ReasoningEffort: input.ReasoningEffort,
+		Repository: input.Repository, Revision: input.Revision, Branch: input.Branch, BaseBranch: input.BaseBranch,
+	}
+}
+
 func TestPostgresDirectBootstrapFollowAndExplicitCleanup(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
-	profile := profileapp.Runtime{SandboxProfile: "incus"}
-	job, created, err := direct.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{}, profile, core.JobAdmission{
+	job, created, err := direct.NewAdmissionService(store, core.Application{Store: store, Tasks: client}, providerCheck{}).Admit(ctx, direct.AdmissionRequest{
 		AdmissionKey: fmt.Sprintf("direct-execution-%d", time.Now().UnixNano()),
-		Goal:         "prove the direct client execution boundary", SandboxProfile: profile.SandboxProfile,
+		Goal:         "prove the direct client execution boundary", SandboxProfile: "incus",
 		ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
 	})
 	if err != nil || !created || job.CurrentTaskID == "" {
@@ -496,19 +511,21 @@ func TestPostgresDirectAdmissionReplayRecoversTaskAttachment(t *testing.T) {
 	if err != nil || !created || job.Workflow != "" || job.WorkflowRevision != "" {
 		t.Fatalf("direct admission job=%#v created=%t err=%v", job, created, err)
 	}
-	recovered, created, err := direct.Admit(
-		ctx, store, core.Application{Store: store, Tasks: client},
+	request := direct.AdmissionRequest{
+		AdmissionKey: input.AdmissionKey, Goal: input.Goal, SandboxProfile: input.SandboxProfile,
+		ProviderConnection: input.ProviderConnection, Model: input.Model, ReasoningEffort: input.ReasoningEffort,
+	}
+	recovered, created, err := direct.NewAdmissionService(
+		store, core.Application{Store: store, Tasks: client},
 		providerCheck{err: errors.New("provider unavailable during admission recovery")},
-		profileapp.Runtime{SandboxProfile: "unavailable-during-admission-recovery"}, input,
-	)
+	).Admit(ctx, request)
 	if err != nil || created || recovered.ID != job.ID || recovered.CurrentTaskID == "" {
 		t.Fatalf("client scheduling recovery job=%#v created=%t err=%v", recovered, created, err)
 	}
-	replayed, created, err := direct.Admit(
-		ctx, store, core.Application{Store: store, Tasks: client},
+	replayed, created, err := direct.NewAdmissionService(
+		store, core.Application{Store: store, Tasks: client},
 		providerCheck{err: errors.New("provider unavailable during replay")},
-		profileapp.Runtime{SandboxProfile: "unavailable-during-replay"}, input,
-	)
+	).Admit(ctx, request)
 	if err != nil || created || replayed.ID != job.ID || replayed.CurrentTaskID != recovered.CurrentTaskID {
 		t.Fatalf("client scheduled replay job=%#v created=%t err=%v", replayed, created, err)
 	}
@@ -543,53 +560,35 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	input := codingJobInput(key, "initial input", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/integration")
 	blocked := input
 	blocked.AdmissionKey += "-provider-blocked"
-	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("provider is not ready")}, profileapp.Runtime{SandboxProfile: blocked.SandboxProfile}, blocked); err == nil {
+	application := core.Application{Store: store, Tasks: client}
+	if _, _, err := coding.NewAdmissionService(store, application, providerCheck{err: errors.New("provider is not ready")}, installationDiscovery("42")).Admit(ctx, codingAdmissionRequest(blocked)); err == nil {
 		t.Fatal("new Job bypassed provider readiness")
 	}
 	if _, err := store.Job(ctx, core.JobID(blocked.AdmissionKey)); !errors.Is(err, postgres.ErrNotFound) {
 		t.Fatalf("failed provider preflight persisted Job: %v", err)
 	}
-	job, created, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{}, profileapp.Runtime{SandboxProfile: input.SandboxProfile}, input)
+	admissions := coding.NewAdmissionService(store, application, providerCheck{}, installationDiscovery("42"))
+	request := codingAdmissionRequest(input)
+	job, created, err := admissions.Admit(ctx, request)
 	if err != nil || !created {
 		t.Fatalf("admit created=%v err=%v", created, err)
 	}
 	if job.SandboxProfile != "incus" || job.Workflow != coding.Workflow || job.WorkflowRevision != coding.WorkflowRevision {
 		t.Fatalf("admitted Job profile/Workflow=%#v", job)
 	}
-	repeatedJob, created, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: input.SandboxProfile}, input)
+	repeatedJob, created, err := coding.NewAdmissionService(store, application, providerCheck{err: errors.New("Gateway unavailable during retry")}, installationDiscovery("unavailable")).Admit(ctx, request)
 	if err != nil || created || repeatedJob.ID != job.ID || repeatedJob.CurrentTaskID != job.CurrentTaskID {
 		t.Fatalf("same-key replay with the same complete authority=%#v created=%v err=%v", repeatedJob, created, err)
 	}
-	changedJob := input
-	changedJob.Goal = "changed complete input"
-	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: changedJob.SandboxProfile}, changedJob); err == nil {
-		t.Fatal("changed complete Job input under the same admission key did not conflict")
-	}
-	changedProfile := input
-	changedProfile.SandboxProfile = "e2b"
-	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: changedProfile.SandboxProfile}, changedProfile); err == nil {
-		t.Fatal("changed Sandbox profile under the same admission key did not conflict")
-	}
-	changedBase := input
+	changedBase := request
 	changedBase.BaseBranch = "changed-base"
-	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: changedBase.SandboxProfile}, changedBase); err == nil {
-		t.Fatal("changed caller base under the same admission key did not conflict")
+	if _, _, err := admissions.Admit(ctx, changedBase); !errors.Is(err, coding.ErrAdmissionConflict) {
+		t.Fatalf("changed caller base under the same admission key err=%v, want admission conflict", err)
 	}
-	changedRepository := input
-	changedRepository.Repository = "https://github.com/aphronio/other.git"
-	changedRepository.GitHubRepository = "aphronio/other"
-	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: changedRepository.SandboxProfile}, changedRepository); err == nil {
-		t.Fatal("changed caller repository under the same admission key did not conflict")
-	}
-	changedInstallation := input
-	changedInstallation.GitHubInstallation = "43"
-	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: changedInstallation.SandboxProfile}, changedInstallation); err == nil {
-		t.Fatal("changed derived GitHub installation under the same admission key did not conflict")
-	}
-	changedRevision := input
-	changedRevision.Revision = strings.Repeat("b", 40)
-	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: changedRevision.SandboxProfile}, changedRevision); err == nil {
-		t.Fatal("changed caller Revision under the same admission key did not conflict")
+	changedStoredBase := input
+	changedStoredBase.BaseBranch = changedBase.BaseBranch
+	if _, _, err := store.AdmitCoding(ctx, changedStoredBase); !errors.Is(err, postgres.ErrAdmissionConflict) || !errors.Is(err, coding.ErrAdmissionConflict) {
+		t.Fatalf("durable changed base error=%v, want storage and coding admission conflict", err)
 	}
 	storedAuthority, err := store.CodingJob(ctx, job.ID)
 	if err != nil || storedAuthority.GitHubInstallation != input.GitHubInstallation || storedAuthority.StartingRevision != input.Revision || storedAuthority.Revision != input.Revision {
@@ -613,14 +612,14 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	if err != nil || repeated.Created || repeated.Message != first.Message {
 		t.Fatalf("idempotent message=%#v err=%v", repeated, err)
 	}
-	if admitted, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.NamedSandboxID(job.ID, "other"), FromKind: "human", FromID: "client-retry", Input: "same text"}); err == nil || admitted.Created || !strings.Contains(err.Error(), "different complete Sandbox delivery request") {
+	if admitted, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.NamedSandboxID(job.ID, "other"), FromKind: "human", FromID: "client-retry", Input: "same text"}); !errors.Is(err, core.ErrMessageReplayConflict) || admitted.Created {
 		t.Fatalf("same send key replayed through another Sandbox: admitted=%#v err=%v", admitted, err)
 	}
-	if _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-retry", Input: "changed"}); err == nil {
-		t.Fatal("changed input under the same source identity did not conflict")
+	if _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-retry", Input: "changed"}); !errors.Is(err, core.ErrMessageReplayConflict) {
+		t.Fatalf("changed input replay error=%v", err)
 	}
-	if _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-retry", Input: "same text "}); err == nil {
-		t.Fatal("byte-distinct complete input under the same source identity did not conflict")
+	if _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-retry", Input: "same text "}); !errors.Is(err, core.ErrMessageReplayConflict) {
+		t.Fatalf("byte-distinct input replay error=%v", err)
 	}
 	distinct, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-distinct", Input: "same text"})
 	if err != nil || !distinct.Created || distinct.Message.ID == first.Message.ID || distinct.Message.Sequence != 3 {
@@ -633,7 +632,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 
 	const concurrent = 12
 	sequences := make(chan int64, concurrent)
-	errors := make(chan error, concurrent)
+	errResults := make(chan error, concurrent)
 	var wg sync.WaitGroup
 	for i := range concurrent {
 		wg.Add(1)
@@ -643,13 +642,13 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 			if err == nil {
 				sequences <- admitted.Message.Sequence
 			}
-			errors <- err
+			errResults <- err
 		}(i)
 	}
 	wg.Wait()
 	close(sequences)
-	close(errors)
-	for err := range errors {
+	close(errResults)
+	for err := range errResults {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -750,8 +749,8 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	if retry, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-retry", Input: "same text"}); err != nil || retry.Created || retry.Message != first.Message {
 		t.Fatalf("closed admission did not preserve idempotent retry: %#v %v", retry, err)
 	}
-	if _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "after-cleanup", Input: "late"}); err == nil {
-		t.Fatal("cleanup allowed a new message")
+	if _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "after-cleanup", Input: "late"}); !errors.Is(err, core.ErrMessageAdmissionClosed) {
+		t.Fatalf("cleanup admission error=%v", err)
 	}
 }
 
@@ -1177,8 +1176,8 @@ func TestExplicitSteerTargetsAndAcknowledgesExactActiveTurn(t *testing.T) {
 	}
 	changed := steerInput
 	changed.Intent = core.MessageFollow
-	if _, err := store.AdmitCodingMessage(ctx, changed); err == nil {
-		t.Fatal("same caller identity accepted a changed delivery intent")
+	if _, err := store.AdmitCodingMessage(ctx, changed); !errors.Is(err, core.ErrMessageReplayConflict) {
+		t.Fatalf("changed delivery replay error=%v", err)
 	}
 	delivery, err := codingDelivery(ctx, store, job.ID)
 	if err != nil || delivery == nil || delivery.Message.ID != steer.Message.ID || delivery.AgentRun.ThreadID != threadID {
@@ -1209,7 +1208,7 @@ func TestExplicitSteerTargetsAndAcknowledgesExactActiveTurn(t *testing.T) {
 		t.Fatalf("delivery after steer=%#v err=%v, want active Turn observation", next, err)
 	}
 	other, _ := prepareTransportIntegrationJob(t, store, "steer-without-active-turn")
-	if _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: other.ID, SandboxID: core.MainSandboxName(other.ID), FromKind: "human", FromID: "invalid-steer", Input: "cannot target", Intent: core.MessageSteer}); err == nil || !strings.Contains(err.Error(), "one exact active Harness Turn") {
+	if _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: other.ID, SandboxID: core.MainSandboxName(other.ID), FromKind: "human", FromID: "invalid-steer", Input: "cannot target", Intent: core.MessageSteer}); !errors.Is(err, core.ErrMessageSteerUnavailable) {
 		t.Fatalf("steer without active turn error=%v", err)
 	}
 }
@@ -2430,7 +2429,7 @@ func TestSandboxActionAttentionPersistsAcrossRetryAndClearsOnSuccess(t *testing.
 		t.Fatalf("unsettled route Action=%#v err=%v", unsettled, err)
 	}
 
-	if _, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID); err != nil {
+	if _, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID, "action-attention-retry-"+job.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "action-attention-retry", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
@@ -2586,7 +2585,7 @@ func TestSandboxCleanupRequiresRouteRevoke(t *testing.T) {
 	if err != nil || unsettled.State != core.ActionUnsettled || len(externals.effectKinds()) != 1 {
 		t.Fatalf("lost provider receipt action=%#v effects=%v err=%v", unsettled, externals.effectKinds(), err)
 	}
-	if _, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID); err != nil {
+	if _, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID, "lost-provider-receipt-retry-"+job.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "lost-provider-receipt-retry", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {

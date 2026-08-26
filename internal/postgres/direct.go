@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -20,13 +21,17 @@ func (s Store) AdmitDirect(ctx context.Context, input core.JobAdmission) (core.J
 	if err != nil {
 		return core.Job{}, false, err
 	}
-	return admitJob(ctx, s, normalized, func(ctx context.Context, queries *dbsql.Queries, ids admittedJobIDs) error {
+	job, created, err := admitJob(ctx, s, normalized, func(ctx context.Context, queries *dbsql.Queries, ids admittedJobIDs) error {
 		_, err := queries.InsertAdmittedAgentRun(ctx, dbsql.InsertAdmittedAgentRunParams{
 			ID: core.AgentRunID(ids.messageID), JobID: ids.jobID, MessageID: ids.messageID,
 			Role: direct.DirectAgentRole, SandboxID: ids.sandboxID,
 		})
 		return err
 	})
+	if errors.Is(err, ErrAdmissionConflict) {
+		err = fmt.Errorf("%w: %w", direct.ErrAdmissionConflict, err)
+	}
+	return job, created, err
 }
 
 func (s Store) AdmitDirectMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {

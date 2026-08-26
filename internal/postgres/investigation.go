@@ -50,7 +50,7 @@ func (s Store) CodebaseInvestigationMessages(ctx context.Context, jobID string) 
 			continue
 		}
 		work = append(work, investigation.MessageRecord{
-			MessageID: delivery.Message.ID, SandboxID: run.SandboxID,
+			MessageID: delivery.Message.ID, Sequence: delivery.Message.Sequence, SandboxID: run.SandboxID,
 			Outcome: agentRunOutcome(run.State, run.TurnOutcome), Attention: run.Attention,
 		})
 	}

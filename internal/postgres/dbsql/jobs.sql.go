@@ -698,6 +698,84 @@ func (q *Queries) ListRevisions(ctx context.Context, jobID string) ([]ListRevisi
 	return items, nil
 }
 
+const listSupportedJobs = `-- name: ListSupportedJobs :many
+select j.id,j.workflow_name,j.workflow_revision,j.admitted_at
+from dorf.jobs j
+where (
+        (j.workflow_name='' and j.workflow_revision='') or
+        (j.workflow_name=$1::text and j.workflow_revision=$2::text) or
+        (j.workflow_name=$3::text and j.workflow_revision=$4::text and
+         exists(
+             select 1 from dorf.codebase_investigation_sources source
+             where source.job_id=j.id and source.kind=$5::text
+         ))
+      )
+  and (
+        not $6::boolean or
+        j.admitted_at < $7::timestamptz or
+        (j.admitted_at=$7::timestamptz and j.id < $8::text)
+      )
+order by j.admitted_at desc,j.id desc
+limit $9
+`
+
+type ListSupportedJobsParams struct {
+	CodingWorkflow          string
+	CodingRevision          string
+	InvestigationWorkflow   string
+	InvestigationRevision   string
+	InvestigationSourceKind string
+	HasCursor               bool
+	CursorAdmittedAt        time.Time
+	CursorID                string
+	PageSize                int32
+}
+
+type ListSupportedJobsRow struct {
+	ID               string
+	WorkflowName     core.WorkflowName
+	WorkflowRevision string
+	AdmittedAt       time.Time
+}
+
+func (q *Queries) ListSupportedJobs(ctx context.Context, arg ListSupportedJobsParams) ([]ListSupportedJobsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSupportedJobs,
+		arg.CodingWorkflow,
+		arg.CodingRevision,
+		arg.InvestigationWorkflow,
+		arg.InvestigationRevision,
+		arg.InvestigationSourceKind,
+		arg.HasCursor,
+		arg.CursorAdmittedAt,
+		arg.CursorID,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSupportedJobsRow
+	for rows.Next() {
+		var i ListSupportedJobsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkflowName,
+			&i.WorkflowRevision,
+			&i.AdmittedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markCleanupScheduled = `-- name: MarkCleanupScheduled :execrows
 update dorf.jobs
 set cleanup_state='scheduled'

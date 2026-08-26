@@ -59,9 +59,14 @@ func TestReadFileViaExecReturnsExactBytesAndRefusesWorkspaceEscape(t *testing.T)
 	if info, err := os.Lstat(racePath); err != nil || info.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("race replacement did not occur: info=%v err=%v", info, err)
 	}
-	for _, relativePath := range []string{"", ".", "../outside", "/etc/passwd", "nested/../first.txt", "escape", "nested"} {
-		if _, err := ReadFileViaExec(context.Background(), Ownership{}, workspace, relativePath, localExec(t, nil)); err == nil {
-			t.Fatalf("ReadFileViaExec accepted %q", relativePath)
+	for _, relativePath := range []string{"", ".", "../outside", "/etc/passwd", "nested/../first.txt"} {
+		if _, err := ReadFileViaExec(context.Background(), Ownership{}, workspace, relativePath, localExec(t, nil)); !errors.Is(err, ErrInvalidFilePath) {
+			t.Fatalf("ReadFileViaExec invalid path %q error=%v", relativePath, err)
+		}
+	}
+	for _, relativePath := range []string{"escape", "nested", "missing"} {
+		if _, err := ReadFileViaExec(context.Background(), Ownership{}, workspace, relativePath, localExec(t, nil)); !errors.Is(err, ErrFileUnavailable) {
+			t.Fatalf("ReadFileViaExec unavailable path %q error=%v", relativePath, err)
 		}
 	}
 }

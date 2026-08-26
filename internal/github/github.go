@@ -145,15 +145,24 @@ type Client struct {
 }
 
 func ValidateAuthority(cloneURL, repository, installation, base, head string) error {
+	if err := ValidateRepositoryAuthority(cloneURL, repository, base, head); err != nil {
+		return err
+	}
+	if !installationID.MatchString(installation) {
+		return fmt.Errorf("GitHub App installation identity must be a positive decimal integer")
+	}
+	return nil
+}
+
+// ValidateRepositoryAuthority validates the caller-owned repository and
+// branch boundary without manufacturing deployment-owned installation state.
+func ValidateRepositoryAuthority(cloneURL, repository, base, head string) error {
 	if !canonicalRepository.MatchString(repository) {
 		return fmt.Errorf("canonical GitHub repository must be lower-case owner/repository")
 	}
 	resolved, err := RepositoryFromCloneURL(cloneURL)
 	if err != nil || resolved != repository {
 		return fmt.Errorf("clone repository %q does not resolve to canonical GitHub repository %q", cloneURL, repository)
-	}
-	if !installationID.MatchString(installation) {
-		return fmt.Errorf("GitHub App installation identity must be a positive decimal integer")
 	}
 	if err := validateBranch(base); err != nil {
 		return fmt.Errorf("invalid explicit GitHub base branch: %w", err)

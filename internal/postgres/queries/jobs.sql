@@ -12,6 +12,26 @@ left join lateral (
 ) current_task on true
 where j.id=sqlc.arg(job_id);
 
+-- name: ListSupportedJobs :many
+select j.id,j.workflow_name,j.workflow_revision,j.admitted_at
+from dorf.jobs j
+where (
+        (j.workflow_name='' and j.workflow_revision='') or
+        (j.workflow_name=sqlc.arg(coding_workflow)::text and j.workflow_revision=sqlc.arg(coding_revision)::text) or
+        (j.workflow_name=sqlc.arg(investigation_workflow)::text and j.workflow_revision=sqlc.arg(investigation_revision)::text and
+         exists(
+             select 1 from dorf.codebase_investigation_sources source
+             where source.job_id=j.id and source.kind=sqlc.arg(investigation_source_kind)::text
+         ))
+      )
+  and (
+        not sqlc.arg(has_cursor)::boolean or
+        j.admitted_at < sqlc.arg(cursor_admitted_at)::timestamptz or
+        (j.admitted_at=sqlc.arg(cursor_admitted_at)::timestamptz and j.id < sqlc.arg(cursor_id)::text)
+      )
+order by j.admitted_at desc,j.id desc
+limit sqlc.arg(page_size);
+
 -- name: GetCodingJob :one
 select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.goal,
        c.repository,c.starting_revision,c.revision,c.branch,

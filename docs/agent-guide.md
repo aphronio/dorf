@@ -1,87 +1,79 @@
 # Agent guide
 
-Use this runbook when a human delegates Dorf installation or operation to an agent. The supported
-deployment and command details remain authoritative in [Getting started](getting-started.md), while
+Use this runbook when a human delegates Dorf installation or operation to an agent. First determine
+whether this machine is the deployment host or a remote CLI client; those roles have different
+authority. [Getting started](getting-started.md) owns procedures and
 [Support and diagnostics](support.md) owns platform limits and fault attribution.
 
-## Suggested handoff
+## Role boundary
 
-```text
-Install and operate Dorf on this machine by following docs/agent-guide.md. Coordinate the supported
-dorf CLI instead of configuring its database, containers, Sandboxes, Gateway, or tunnels by hand.
-Pause for every password, secret, browser authorization, or consequential provider choice. Never
-read, print, or copy credentials into chat. Finish by reporting only observed readiness, Job,
-attention, caller-requested output, and cleanup facts.
-```
+The **deployment-host agent** may install Dorf, run setup, manage Profiles and optional integrations,
+operate diagnostics, reconcile Dorf's managed API and worker units, and coordinate storage,
+provider, Harness, and operator-owned ingress boundaries. It must pause for every password, secret,
+browser authorization, paid service, or consequential infrastructure choice.
 
-## Installation protocol
+The **remote-client agent** installs and uses only the Dorf CLI. It may connect, check its own
+authentication, admit a direct Job or either documented built-in workflow, inspect and watch the
+Job, list bounded Job references, send or inspect Messages, request eligible retry, read an exact
+Sandbox file, inspect Evidence, and request cleanup. It must not run deployment-host commands such
+as `dorf setup`, `dorf serve`, `dorf worker`, `dorf service`, `dorf client`, database or migration
+commands, `dorf provider`, `dorf profile`, or GitHub integration setup. It must not use SSH or
+local-only commands to work around a missing remote capability. The deployment host owns all of
+those operations.
 
-1. Confirm that this is a supported x86_64 Linux host and read the two documents linked above. Do
-   not infer requirements from `docs/research/` or `docs/history/`.
-2. Use the installer from an immutable release, or the manual attested-release fallback documented
-   in Getting started. In a contributor checkout, use the repository-owned build commands in
-   [CONTRIBUTING.md](../CONTRIBUTING.md) only when the human explicitly wants a source build. Follow
-   any printed `PATH` handoff and run `dorf version` before setup. The installer must not run setup.
-   Use `dorf update` for later upgrades through the same verified installer path.
-3. Run `dorf setup`. Let its interactive flow select local Incus, cloud E2B, both, or neither. Do not
-   add `--yes` until the human has approved the exact displayed host or Cloudflare changes.
-4. Pause and let the human perform these boundaries personally:
+## Common installation protocol
 
-   - enter a sudo password;
-   - complete ChatGPT, Cloudflare, or optional-integration browser authorization;
-   - enter an OpenAI or E2B key through the masked prompt or an explicitly supplied protected file;
-   - choose infrastructure, a DNS hostname, paid services, or broader network access.
+1. Confirm this is a supported client or deployment platform and read the two authorities linked
+   above. Do not infer requirements from `docs/research/` or `docs/history/`.
+2. Use the immutable-release installer or attested manual fallback from Getting started. Use the
+   contributor build only when the human explicitly requests a source build. Follow any printed
+   `PATH` handoff and prove `dorf version`; the installer itself must not run setup.
+3. Never read, print, or copy a credential or one-time Enrollment into chat. Let the human enter it
+   at the CLI prompt, or consume an explicitly supplied protected file or standard input.
 
-5. If setup requests a new login or stops after a recoverable failure, preserve its state and rerun
-   the same `dorf setup` command. Do not replace its recovery with direct Docker, Incus, PostgreSQL,
-   systemd, E2B, or Cloudflare mutations.
-6. Prove the resulting named profile and model route with the exact names selected during setup:
+## Deployment-host protocol
 
-   ```bash
-   dorf profile list
-   dorf provider status --profile PROFILE --ai-connection AI_CONNECTION --json
-   dorf doctor --profile PROFILE
-   ```
+Follow the complete setup and readiness procedure in Getting started. Let `dorf setup` select and
+prepare the approved Sandbox and Harness path; do not substitute direct Docker, Incus, PostgreSQL,
+systemd, E2B, Cloudflare, or Gateway mutations for its recovery. Prove the managed pair with the
+[service diagnostic](support.md), and use only its documented reconcile, restart, and bounded-log
+commands. Run the documented Profile, Provider Gateway, and `dorf doctor` checks with the exact
+selected names.
 
-   When the requested operation needs an optional external integration, use that integration's
-   setup command after the shared foundation is ready. Pause while the human approves any browser
-   form, and return any short-lived redirected URL or code only to the waiting command. Never copy it
-   into chat. For GitHub, leave the setup command waiting while the human completes both browser
-   steps described in Getting started, and report readiness only when the command does. Let the
-   runtime operation prove its own exact authority; do not put optional
-   integration settings in Job requests because the selected profile's runtime composition supplies
-   them.
+Optional integrations remain host concerns. Pause while the human completes browser authorization,
+and return a short-lived code only to its waiting command. Let runtime composition supply integration
+authority instead of putting credentials or integration settings in a Job request.
 
-## Operating protocol
+Keep the operator-owned HTTPS ingress distinct from both the managed private control API and the
+Provider Gateway origin. Do not infer service readiness from a process or terminal merely remaining
+open; use the factual status result.
 
-- Start with `dorf help` and the relevant subcommand help. Treat those commands and their current
-  output as the CLI authority; do not copy workflow-specific recipes into this guide or reproduce
-  workflow policy with ad-hoc Sandbox commands.
-- Put complete goals, briefs, and follow-up Messages in files. Use a stable caller key or request ID
-  so a lost response can be retried without creating competing work.
-- Keep one Dorf worker running in a persistent terminal. Watching is optional; inspect the Job when
-  the human wants a live view or when a command reports attention.
-- An open Job may have no current operation while retaining its execution owner for later input. Do
-  not retry or create a replacement Job merely because it is idle.
-- Repair the reported cause before retrying attention. Retry delegates eligibility to the same
-  durable task; it does not create replacement work.
-- Read any caller-required Sandbox files before requesting cleanup. Never treat agent prose alone as
-  verification. Cleanup is explicit and separate from workflow outcome.
+## Remote-client protocol
+
+Receive the exact HTTPS Deployment origin and Enrollment through the human-approved private handoff,
+then follow the remote-client procedure in Getting started. One successful `dorf connect` saves one
+Deployment; there are no contexts to choose or switch. Prove the binding with `dorf auth status`.
+Use `--output json` for a non-interactive receipt, and use `dorf job list` with its opaque returned
+cursor when the human has not supplied a Job ID.
+
+Put the complete goal or Message in a file and use the exact remote commands in Getting started.
+Mutation retry identity is automatic; do not invent or ask the human to manage a key in the ordinary
+flow. Follow may queue, while steer requires the exact active Turn and must not be resent as Follow
+after `steer_unavailable`. Retrieve needed Sandbox files before cleanup. An open Job may be idle after
+a successful Turn; do not create a replacement merely because it has no active execution. Remote
+investigation accepts only its documented credential-free HTTPS source; never upload, copy, or
+reconstruct a host-local retained bundle through the remote boundary. Use the Deployment-published
+OpenAPI and Problem catalog for direct code-mode HTTP; do not invent an MCP or SDK layer.
 
 ## Safety and handback
 
-Never expose credentials, environment dumps, Gateway state, or Harness transcripts. Never delete
-provider resources or PostgreSQL rows directly, and never substitute a disposable Quick Tunnel for
-the stable Gateway contract. Stop and report the exact failed check when a repair needs authority
-the human has not granted.
+Never expose Enrollment codes, Client credentials or configuration, environment dumps, Gateway
+state, provider credentials, or unrequested Harness transcripts. A caller-requested Message result
+may be returned narrowly; do not dump complete inspection, watch, or Message output. Never delete
+provider resources or PostgreSQL rows directly. Stop and report the exact failed check when repair
+needs authority the human has not granted.
 
-At handback, report:
-
-- installed Dorf version and selected Sandbox profile and AI connection;
-- readiness checks that are actually `ready`;
-- Job ID and current work or attention, if a Job was admitted;
-- any output the human explicitly asked the agent to retrieve; and
-- cleanup state.
-
-Do not say installation, work, or cleanup succeeded merely because a command was started. Use the
-facts returned by `dorf provider status`, `dorf doctor`, and `dorf inspect`.
+Report only the installed version, the role operated, readiness actually observed, Job identity and
+current state, caller-requested output, and cleanup state. A deployment-host handback may also name
+the selected Profile and AI connection. Do not claim installation, work, authentication, or cleanup
+succeeded merely because a command was started; use the factual CLI result for that role.

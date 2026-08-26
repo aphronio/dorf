@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"path"
 	"path/filepath"
@@ -11,12 +12,17 @@ import (
 	"strings"
 )
 
+var (
+	ErrInvalidFilePath = errors.New("invalid Sandbox file path")
+	ErrFileUnavailable = errors.New("Sandbox file is unavailable")
+)
+
 // ValidateWorkspaceRelativePath accepts one exact Linux path beneath a
 // Sandbox workspace. Discovery and directory semantics remain ordinary Exec
 // concerns rather than growing this one-file API.
 func ValidateWorkspaceRelativePath(relativePath string) error {
 	if relativePath == "" || strings.IndexByte(relativePath, 0) >= 0 || path.IsAbs(relativePath) || path.Clean(relativePath) != relativePath || relativePath == "." || relativePath == ".." || strings.HasPrefix(relativePath, "../") {
-		return fmt.Errorf("Sandbox file path must be a clean workspace-relative file path")
+		return fmt.Errorf("%w: path must be clean and workspace-relative", ErrInvalidFilePath)
 	}
 	return nil
 }
@@ -54,7 +60,7 @@ base64 -w0 <&3`
 		if detail == "" {
 			detail = fmt.Sprintf("exit %d", result.ExitCode)
 		}
-		return nil, fmt.Errorf("read regular Sandbox workspace file %q: %s", relativePath, detail)
+		return nil, fmt.Errorf("%w: read regular workspace file %q: %s", ErrFileUnavailable, relativePath, detail)
 	}
 	contents, err := base64.StdEncoding.Strict().DecodeString(result.Stdout)
 	if err != nil {

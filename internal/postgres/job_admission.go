@@ -70,7 +70,7 @@ func admitJob(ctx context.Context, store Store, coreInput core.JobAdmission, rec
 		Model: storedRow.Model, ReasoningEffort: storedRow.ReasoningEffort,
 	}
 	if storedRow.ID != id || storedCore != coreInput {
-		return core.Job{}, false, fmt.Errorf("admission key %q is already bound to different complete Job input", coreInput.AdmissionKey)
+		return core.Job{}, false, fmt.Errorf("%w: %q", ErrAdmissionConflict, coreInput.AdmissionKey)
 	}
 	messageID := core.MessageID(id, core.MessageFromHuman, initialFromID)
 	if err := queries.InsertInitialMessage(ctx, dbsql.InsertInitialMessageParams{ID: messageID, JobID: id, FromID: initialFromID, Input: coreInput.Goal}); err != nil {

@@ -41,17 +41,19 @@ func (w Work) Description() string {
 }
 
 type Snapshot struct {
-	Job         core.Job
-	MainSandbox core.Sandbox
-	Actions     []core.Action
-	Message     MessageRecord
-	Source      Source
+	Job              core.Job
+	MainSandbox      core.Sandbox
+	Actions          []core.Action
+	InitialMessageID string
+	Message          MessageRecord
+	Source           Source
 }
 
 // MessageRecord is investigation's read-only projection of an admitted
 // investigator Message. Core owns its hidden AgentRun and Harness lifecycle.
 type MessageRecord struct {
 	MessageID string
+	Sequence  int64
 	SandboxID string
 	Outcome   string
 	Attention string
@@ -99,12 +101,21 @@ func LoadSnapshot(ctx context.Context, store Store, jobID string) (Snapshot, err
 		return snapshot, fmt.Errorf("codebase-investigation Job has no exact investigator Message")
 	}
 	for _, message := range messages {
-		if message.MessageID == "" || message.SandboxID != snapshot.MainSandbox.ID {
+		if message.MessageID == "" || message.Sequence <= 0 || message.SandboxID != snapshot.MainSandbox.ID {
 			return snapshot, fmt.Errorf("codebase-investigation Message does not use the exact main Sandbox")
+		}
+		if message.Sequence == 1 {
+			if snapshot.InitialMessageID != "" {
+				return snapshot, fmt.Errorf("codebase-investigation Job has conflicting initial Messages")
+			}
+			snapshot.InitialMessageID = message.MessageID
 		}
 		if snapshot.Message.MessageID == "" && message.Outcome == "" && message.Attention == "" {
 			snapshot.Message = message
 		}
+	}
+	if snapshot.InitialMessageID == "" {
+		return snapshot, fmt.Errorf("codebase-investigation Job has no exact initial Message")
 	}
 	if snapshot.Message.MessageID == "" {
 		snapshot.Message = messages[len(messages)-1]

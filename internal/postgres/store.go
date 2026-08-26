@@ -23,6 +23,7 @@ import (
 var migrationFiles embed.FS
 
 var ErrNotFound = errors.New("Dorf Job not found")
+var ErrAdmissionConflict = errors.New("admission key is bound to different complete Job input")
 var ErrRevisionObservationSuperseded = errors.New("Revision observation is no longer current; retry derived workflow")
 var fullCommitOID = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 var sha256Digest = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -35,7 +36,7 @@ const (
 	initialFromID       = "dorf:initial"
 )
 
-var dorfMigrations = []string{"001_baseline.sql", "002_sandbox_custody.sql", "003_client_directed_jobs.sql"}
+var dorfMigrations = []string{"001_baseline.sql", "002_sandbox_custody.sql", "003_client_directed_jobs.sql", "004_control_auth.sql", "005_job_retry_requests.sql", "006_job_listing.sql"}
 
 type Store struct{ DB *sql.DB }
 
@@ -275,14 +276,14 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 		message := messageFromValues(row.ID, row.JobID, row.FromKind, row.FromID, row.Sequence, row.Input, row.DeliveryIntent, row.SteerTargetTurnID)
 		message.AdmittedAt = row.AdmittedAt
 		if message.Input != input.Input || message.Intent != input.Intent {
-			return core.Message{}, false, fmt.Errorf("sender %s/%q is already bound to different complete message input or delivery intent", input.FromKind, input.FromID)
+			return core.Message{}, false, fmt.Errorf("%w: sender %s/%q", core.ErrMessageReplayConflict, input.FromKind, input.FromID)
 		}
 		run, runErr := queries.GetAgentRunByMessage(ctx, message.ID)
 		if runErr != nil {
 			return core.Message{}, false, fmt.Errorf("load durable AgentRun for Message replay: %w", runErr)
 		}
 		if run.JobID != input.JobID || run.MessageID != message.ID || run.SandboxID != input.SandboxID {
-			return core.Message{}, false, fmt.Errorf("sender %s/%q is already bound to a different complete Sandbox delivery request", input.FromKind, input.FromID)
+			return core.Message{}, false, fmt.Errorf("%w: sender %s/%q changed Sandbox delivery", core.ErrMessageReplayConflict, input.FromKind, input.FromID)
 		}
 		return message, false, nil
 	}
@@ -290,7 +291,7 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 		return core.Message{}, false, err
 	}
 	if !job.AdmissionOpen {
-		return core.Message{}, false, fmt.Errorf("Job %s admission is closed for cleanup", input.JobID)
+		return core.Message{}, false, fmt.Errorf("%w for Job %s", core.ErrMessageAdmissionClosed, input.JobID)
 	}
 	if resolveEnvelope == nil {
 		return core.Message{}, false, fmt.Errorf("Message execution-envelope resolution is not configured")
@@ -308,7 +309,7 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 			JobID: input.JobID, Role: run.Role, SandboxID: run.SandboxID,
 		})
 		if errors.Is(err, sql.ErrNoRows) {
-			return core.Message{}, false, fmt.Errorf("steer delivery requires one exact active Harness Turn in its Agent lane")
+			return core.Message{}, false, core.ErrMessageSteerUnavailable
 		}
 		if err != nil {
 			return core.Message{}, false, err
@@ -624,6 +625,9 @@ func (s Store) GetOrCreateSandboxAction(ctx context.Context, sandboxID string, k
 
 func (s Store) Sandbox(ctx context.Context, id string) (core.Sandbox, error) {
 	row, err := dbsql.New(s.DB).GetSandbox(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return core.Sandbox{}, ErrNotFound
+	}
 	if err != nil {
 		return core.Sandbox{}, err
 	}

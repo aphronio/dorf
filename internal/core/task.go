@@ -32,7 +32,7 @@ func (a Application) ScheduleJobTask(ctx context.Context, job Job, taskName, tas
 		if !current.AdmissionOpen || current.CleanupState != CleanupPending {
 			return fmt.Errorf("Job %s cannot schedule ordinary work after cleanup begins", job.ID)
 		}
-		spawned, err := a.Tasks.Spawn(ctx, taskName, JobTaskParams{JobID: job.ID, PreviousTaskID: current.CurrentTaskID}, absurdruntime.TaskSpawnOptions(taskKey))
+		spawned, err := a.Tasks.Spawn(ctx, taskName, JobTaskParams{JobID: job.ID, PreviousTaskID: current.CurrentTaskID}, absurdruntime.TaskSpawnOptions(a.Tasks.QueueName(), taskKey))
 		if err != nil {
 			return fmt.Errorf("schedule admitted Job in Absurd: %w", err)
 		}
@@ -81,30 +81,34 @@ func resolveMessageWake(jobID string, sequence int64, wake MessageWakeV1, err er
 // RetryReceipt reports only facts committed by Absurd. It is not a claim that
 // a worker has resumed or completed the Job.
 type RetryReceipt struct {
-	JobID   string `json:"job_id"`
-	TaskID  string `json:"task_id"`
-	Retry   string `json:"retry"`
-	RunID   string `json:"run_id"`
-	Attempt int    `json:"attempt"`
+	RequestKey string `json:"request_key"`
+	JobID      string `json:"job_id"`
+	TaskID     string `json:"task_id"`
+	Retry      string `json:"retry"`
+	RunID      string `json:"run_id"`
+	Attempt    int    `json:"attempt"`
+	Created    bool   `json:"created"`
+}
+
+type atomicJobRetry interface {
+	RetryFailedJob(context.Context, string, string, string) (RetryReceipt, error)
 }
 
 // RetryFailedJob schedules one additional bounded attempt on the Job's current
-// attached execution task. Absurd remains the task, checkpoint, and retry authority.
-func (a Application) RetryFailedJob(ctx context.Context, jobID string) (RetryReceipt, error) {
+// attached execution task. The caller-retained request key and Absurd retry are
+// committed atomically by the durable Store.
+func (a Application) RetryFailedJob(ctx context.Context, jobID, requestKey string) (RetryReceipt, error) {
 	jobID = strings.TrimSpace(jobID)
-	if jobID == "" {
-		return RetryReceipt{}, fmt.Errorf("retry requires one Job ID")
+	requestKey = strings.TrimSpace(requestKey)
+	if jobID == "" || requestKey == "" {
+		return RetryReceipt{}, fmt.Errorf("retry requires one Job ID and caller-retained request key")
 	}
-	job, err := a.Store.Job(ctx, jobID)
-	if err != nil {
-		return RetryReceipt{}, err
+	if len(requestKey) > 255 {
+		return RetryReceipt{}, fmt.Errorf("retry request key must be at most 255 characters")
 	}
-	if job.CurrentTaskID == "" {
-		return RetryReceipt{}, fmt.Errorf("Job %s has no attached execution task", job.ID)
+	retries, ok := a.Store.(atomicJobRetry)
+	if !ok || a.Tasks == nil {
+		return RetryReceipt{}, fmt.Errorf("atomic Job retry is not configured")
 	}
-	scheduled, err := a.Tasks.RetryTask(ctx, a.Tasks.QueueName(), job.CurrentTaskID)
-	if err != nil {
-		return RetryReceipt{}, fmt.Errorf("retry Job %s attached task %s: %w", job.ID, job.CurrentTaskID, err)
-	}
-	return RetryReceipt{JobID: job.ID, TaskID: scheduled.TaskID, Retry: "scheduled", RunID: scheduled.RunID, Attempt: scheduled.Attempt}, nil
+	return retries.RetryFailedJob(ctx, a.Tasks.QueueName(), jobID, requestKey)
 }

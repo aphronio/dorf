@@ -51,7 +51,7 @@ func TestPostgresCodebaseInvestigationIdentityAndFollowUps(t *testing.T) {
 		Kind: investigation.SourceGitBundle, Revision: input.Source.Revision,
 		BundleDigest: strings.Repeat("e", 64), BundleByteSize: 123,
 	}
-	if _, _, err := store.AdmitInvestigation(ctx, changedSource); err == nil || !strings.Contains(err.Error(), "different complete Job input") {
+	if _, _, err := store.AdmitInvestigation(ctx, changedSource); !errors.Is(err, postgres.ErrAdmissionConflict) || !errors.Is(err, investigation.ErrAdmissionConflict) {
 		t.Fatalf("same admission key changed source identity: %v", err)
 	}
 	changedWorkflow := codingJobInput(key, input.Goal, input.Source.Revision, "dorf/cross-workflow")
@@ -294,12 +294,10 @@ func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *test
 	}
 	application.RegisterCleanup()
 	investigation.Register(application, store, resolver)
-	job, created, err := investigation.Admit(ctx, store, application, providerCheck{}, runtimeProfile, investigation.Admission{
-		JobAdmission: core.JobAdmission{
-			AdmissionKey: "investigation-terminal-" + suffix,
-			Goal:         "Find one concrete simplification.", SandboxProfile: "incus",
-			ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
-		},
+	job, created, err := investigation.NewAdmissionService(store, application, providerCheck{}).Admit(ctx, investigation.AdmissionRequest{
+		AdmissionKey: "investigation-terminal-" + suffix,
+		Brief:        "Find one concrete simplification.", SandboxProfile: "incus",
+		ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
 		Source: investigation.Source{
 			Kind: investigation.SourceGitBundle, Revision: strings.Repeat("d", 40),
 			BundleDigest: retained.Digest, BundleByteSize: retained.ByteSize,
@@ -339,7 +337,7 @@ func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if work := snapshot.Project(); work.Kind != "" || !snapshot.Job.AdmissionOpen || snapshot.Job.CleanupState != core.CleanupPending || snapshot.Job.WorkflowAttention != "" {
+	if work := snapshot.Project(); work.Kind != "" || snapshot.InitialMessageID != core.MessageID(job.ID, core.MessageFromHuman, "dorf:initial") || !snapshot.Job.AdmissionOpen || snapshot.Job.CleanupState != core.CleanupPending || snapshot.Job.WorkflowAttention != "" {
 		t.Fatalf("completed run without REPORT.md was not honestly open-idle: snapshot=%#v work=%#v", snapshot, work)
 	}
 	if _, err := reportSandbox.ReadFile(ctx, investigation.ReportPath); !errors.Is(err, os.ErrNotExist) || err.Error() != `workspace file "REPORT.md": file does not exist` {

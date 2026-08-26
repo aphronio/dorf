@@ -11,8 +11,9 @@ const (
 // TaskSpawnOptions applies Dorf's bounded retry policy at the Absurd
 // authority boundary. Absurd persists the schedule; Dorf does not mirror it
 // in product facts.
-func TaskSpawnOptions(idempotencyKey string) absurd.SpawnOptions {
+func TaskSpawnOptions(queueName, idempotencyKey string) absurd.SpawnOptions {
 	return absurd.SpawnOptions{
+		QueueName:      queueName,
 		IdempotencyKey: idempotencyKey,
 		RetryStrategy: &absurd.RetryStrategy{
 			Kind:        "exponential",

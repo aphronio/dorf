@@ -31,7 +31,7 @@ as_root() {
 
 ensure_bootstrap_packages() {
   local missing=false
-  for command in curl sha256sum psql; do
+  for command in curl jq sha256sum psql; do
     if ! command -v "$command" >/dev/null 2>&1; then
       missing=true
     fi
@@ -54,7 +54,7 @@ ensure_bootstrap_packages() {
     echo "Missing bootstrap tools and no supported apt package manager was found." >&2
     exit 1
   fi
-  local packages=(ca-certificates coreutils curl postgresql-client)
+  local packages=(ca-certificates coreutils curl jq postgresql-client)
   if [[ -z "${DORF_TEST_DATABASE_URL:-}" ]]; then
     packages+=(postgresql util-linux)
   fi

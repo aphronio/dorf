@@ -18,6 +18,9 @@ import (
 
 func TestAuthorityRequiresCanonicalRepositoryInstallationBaseAndDistinctHead(t *testing.T) {
 	valid := func() error {
+		if err := ValidateRepositoryAuthority("https://github.com/aphronio/dorf.git", "aphronio/dorf", "greenfield", "dorf/issue-43"); err != nil {
+			return err
+		}
 		return ValidateAuthority("https://github.com/aphronio/dorf.git", "aphronio/dorf", "42", "greenfield", "dorf/issue-43")
 	}
 	if err := valid(); err != nil {

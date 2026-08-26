@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -55,7 +56,7 @@ func TestSandboxHandleReadFileReturnsExactRepeatedBytesAndEnforcesOwnership(t *t
 	cleaning := store
 	cleaning.job.AdmissionOpen, cleaning.job.CleanupState = false, CleanupRequested
 	cleaningApplication := Application{Store: cleaning, SandboxRuntimes: handleTestRuntimeResolver{files: reader}}
-	if _, err := cleaningApplication.jobHandle(job.ID).sandboxHandle(owned.ID).ReadFile(context.Background(), "result.txt"); err == nil || !strings.Contains(err.Error(), "after cleanup begins") {
+	if _, err := cleaningApplication.jobHandle(job.ID).sandboxHandle(owned.ID).ReadFile(context.Background(), "result.txt"); !errors.Is(err, ErrSandboxFileCleanupFenced) {
 		t.Fatalf("cleanup read error=%v", err)
 	}
 }

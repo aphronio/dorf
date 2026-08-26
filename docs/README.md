@@ -9,6 +9,7 @@
 | Understand product direction, vocabulary, and workflow examples | [North Star](project/north-star.md) |
 | Apply enduring product and engineering judgment | [Principles](project/principles.md) |
 | Understand durable authority, composition, and recovery | [Architecture](project/architecture.md) |
+| Integrate with or operate the authenticated HTTPS boundary | [Remote Control API](control-api.md) |
 | Understand accepted choices | [Decision log](project/decisions.md) |
 | Operate the Provider Gateway | [Provider Gateway](project/provider-gateway.md) |
 | Operate the persistent Buzz deployment | [Buzz deployment](implementation/buzz.md) |

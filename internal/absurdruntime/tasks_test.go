@@ -3,11 +3,11 @@ package absurdruntime
 import "testing"
 
 func TestTaskSpawnOptionsUseBoundedExponentialRetry(t *testing.T) {
-	first := TaskSpawnOptions("job-key")
-	second := TaskSpawnOptions("cleanup-key")
+	first := TaskSpawnOptions("jobs", "job-key")
+	second := TaskSpawnOptions("jobs", "cleanup-key")
 
 	if first.IdempotencyKey != "job-key" {
-		t.Fatalf("idempotency key = %q", first.IdempotencyKey)
+		t.Fatalf("idempotency = %q", first.IdempotencyKey)
 	}
 	if first.RetryStrategy == nil {
 		t.Fatal("retry strategy is missing")

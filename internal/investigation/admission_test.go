@@ -33,3 +33,31 @@ func TestNormalizeAdmissionRejectsForeignIdentityAndInvalidSource(t *testing.T) 
 		t.Fatal("remote investigation admission accepted bundle custody fields")
 	}
 }
+
+func TestNormalizeAdmissionRequiresCredentialFreeHTTPSRemote(t *testing.T) {
+	valid := Admission{
+		JobAdmission: core.JobAdmission{AdmissionKey: "job", Goal: "goal"},
+		Source:       Source{Kind: SourceRemote, Repository: "  https://example.test/owner/repository.git  ", Revision: strings.Repeat("a", 40)},
+	}
+	normalized, err := NormalizeAdmission(valid)
+	if err != nil {
+		t.Fatalf("credential-free HTTPS repository was rejected: %v", err)
+	}
+	if normalized.Source.Repository != "https://example.test/owner/repository.git" {
+		t.Fatalf("repository was not trimmed: %q", normalized.Source.Repository)
+	}
+	for _, repository := range []string{
+		"http://example.test/owner/repository.git",
+		"https://user@example.test/owner/repository.git",
+		"https://example.test/owner/repository.git?token=secret",
+		"https://example.test/owner/repository.git#revision",
+		"https://example.test/owner/repository.git#",
+		"https://example.test/",
+	} {
+		input := valid
+		input.Source.Repository = repository
+		if _, err := NormalizeAdmission(input); err == nil {
+			t.Fatalf("accepted remote repository %q", repository)
+		}
+	}
+}
