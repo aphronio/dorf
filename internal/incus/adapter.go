@@ -58,6 +58,9 @@ func (a Adapter) ReadFile(ctx context.Context, owner provider.Ownership, relativ
 }
 
 func (a Adapter) Exec(ctx context.Context, owner provider.Ownership, input []byte, args ...string) (provider.Result, error) {
+	if err := a.Sandbox.AttestOwnership(ctx, owner); err != nil {
+		return provider.Result{}, err
+	}
 	return a.Sandbox.Exec(ctx, owner.SandboxID, input, args...)
 }
 

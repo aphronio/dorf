@@ -11,12 +11,16 @@ import (
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
-func testSandbox(runner incustest.Runner) incus.Adapter {
+func testSandbox(runner incustest.Runner, owner provider.Ownership) incus.Adapter {
+	return incus.Adapter{Sandbox: incustest.OwnedSandbox(runner, incus.Config{}, owner)}
+}
+
+func testReviewSandbox(runner incustest.Runner) incus.Adapter {
 	return incus.Adapter{Sandbox: incustest.Sandbox(runner, incus.Config{})}
 }
 
 func testOwner(sandboxID string) provider.Ownership {
-	return provider.Ownership{SandboxID: sandboxID}
+	return provider.Ownership{JobID: "job-" + sandboxID, SandboxID: sandboxID, OwnershipNonce: strings.Repeat("a", 64)}
 }
 
 func reviewOwner(sandboxID string, review provider.ReviewMetadata) provider.Ownership {
@@ -65,7 +69,7 @@ type emptyStrictReviewRunner struct {
 func (r *emptyStrictReviewRunner) Run(_ context.Context, _ string, _ []byte, args ...string) (incus.Result, error) {
 	command := strings.Join(args, " ")
 	if command == "list --format=json" {
-		return incus.Result{Stdout: `[{"name":"dorf-review-owned","config":{"user.dorf.owner":"review","user.dorf.job":"` + r.owner.JobID + `","user.dorf.agent_run":"` + r.owner.AgentRunID + `","user.dorf.revision":"` + r.owner.Revision + `","user.dorf.ownership_nonce":"` + r.owner.OwnershipNonce + `"}}]`}, nil
+		return incus.Result{Stdout: `[{"name":"dorf-review-owned","config":{"user.dorf.owner":"sandbox","user.dorf.job":"` + r.owner.JobID + `","user.dorf.sandbox":"dorf-review-owned","user.dorf.agent_run":"` + r.owner.AgentRunID + `","user.dorf.revision":"` + r.owner.Revision + `","user.dorf.ownership_nonce":"` + r.owner.OwnershipNonce + `"}}]`}, nil
 	}
 	if strings.Contains(command, "ambiguous Pi session identity") {
 		return incus.Result{}, nil
@@ -124,7 +128,7 @@ func (r *recordingRunner) Run(_ context.Context, _ string, input []byte, args ..
 
 func TestInstallRouteUsesScopedGatewayKeyWithResponsesAPI(t *testing.T) {
 	runner := &recordingRunner{}
-	agent := Agent{Sandbox: testSandbox(runner)}
+	agent := Agent{Sandbox: testSandbox(runner, testOwner("sandbox"))}
 	if err := agent.InstallRoute(context.Background(), testOwner("sandbox"), "http://10.0.0.1:8317/v1", "scoped-key", "gpt-test"); err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +178,7 @@ func TestReadInitialTurnsAdoptsNativeTurnAfterLostBinding(t *testing.T) {
 	runner := &recordingRunner{result: incus.Result{Stdout: `{"type":"session","version":3,"id":"dorf-job"}
 {"type":"message","id":"user0001","parentId":null,"message":{"role":"user","content":"inspect"}}
 {"type":"message","id":"assist01","parentId":"user0001","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"stop"}}`}}
-	agent := Agent{Sandbox: testSandbox(runner)}
+	agent := Agent{Sandbox: testSandbox(runner, testOwner("dorf-job"))}
 
 	history, err := agent.ReadInitialTurns(context.Background(), testOwner("dorf-job"), "/workspace/job")
 	if err != nil {
@@ -199,7 +203,7 @@ func TestStartTurnAppendsExactlyOneNativeTurn(t *testing.T) {
 {"type":"message","id":"user0002","parentId":"assist01","message":{"role":"user","content":"second"}}
 {"type":"message","id":"assist02","parentId":"user0002","message":{"role":"assistant","content":[{"type":"text","text":"second done"}],"stopReason":"stop"}}`
 	runner := &acceptedRPCPromptRunner{before: oneTurn, after: twoTurns, requestID: "run-2"}
-	agent := Agent{Sandbox: testSandbox(runner)}
+	agent := Agent{Sandbox: testSandbox(runner, testOwner("sandbox"))}
 
 	binding, err := agent.StartTurn(context.Background(), testOwner("sandbox"), "/workspace/job", "dorf-job", "run-2", "second", "gpt-test", "low")
 	if err != nil {
@@ -215,7 +219,7 @@ func TestStartTurnAppendsExactlyOneNativeTurn(t *testing.T) {
 
 func TestActiveTurnSteerAcknowledgesExactTarget(t *testing.T) {
 	runner := &acceptedRPCSteerRunner{}
-	agent := Agent{Sandbox: testSandbox(runner)}
+	agent := Agent{Sandbox: testSandbox(runner, testOwner("sandbox"))}
 
 	accepted, err := agent.SteerTurn(context.Background(), testOwner("sandbox"), "thread", "turn-active", "run-steer", "change direction")
 	if err != nil {
@@ -231,7 +235,7 @@ func TestActiveTurnSteerAcknowledgesExactTarget(t *testing.T) {
 
 func TestStrictReviewRecoveryWithoutNativeTurnAllowsOriginalSubmission(t *testing.T) {
 	owner := incus.ReviewMetadata{JobID: "job-review", AgentRunID: "run-review", Revision: strings.Repeat("b", 40), OwnershipNonce: strings.Repeat("c", 64)}
-	agent := Agent{Sandbox: testSandbox(&emptyStrictReviewRunner{owner: owner})}
+	agent := Agent{Sandbox: testReviewSandbox(&emptyStrictReviewRunner{owner: owner})}
 
 	binding, err := agent.RecoverStrictReviewTurn(context.Background(), reviewOwner("dorf-review-owned", owner), "/workspace/job", owner, strings.Repeat("a", 64), "review", "gpt-test", "low")
 	if err != nil {
@@ -243,7 +247,7 @@ func TestStrictReviewRecoveryWithoutNativeTurnAllowsOriginalSubmission(t *testin
 }
 
 func TestInitialTurnReportsRPCPreflightRejectionAsDefinitelyNotSubmitted(t *testing.T) {
-	agent := Agent{Sandbox: testSandbox(&rejectedRPCPromptRunner{})}
+	agent := Agent{Sandbox: testSandbox(&rejectedRPCPromptRunner{}, testOwner("sandbox"))}
 
 	_, err := agent.StartInitialTurn(context.Background(), testOwner("sandbox"), "/workspace/job", "run-1", "inspect", "gpt-test", "low")
 	if err == nil || !strings.Contains(err.Error(), "prompt rejected") {
@@ -257,7 +261,7 @@ func TestInitialTurnReportsRPCPreflightRejectionAsDefinitelyNotSubmitted(t *test
 
 func TestWaitTurnObservesExactNativeTurnUntilTerminal(t *testing.T) {
 	runner := &progressingHistoryRunner{}
-	agent := Agent{Sandbox: testSandbox(runner), Timeout: time.Second}
+	agent := Agent{Sandbox: testSandbox(runner, testOwner("sandbox")), Timeout: time.Second}
 
 	binding, err := agent.WaitTurn(context.Background(), testOwner("sandbox"), "dorf-job", "user0001")
 	if err != nil {

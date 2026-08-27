@@ -36,7 +36,8 @@ type localReviewBoundaryRunner struct {
 	reviewerName       string
 	implementationPath string
 	reviewerPath       string
-	metadata           map[string]string
+	implementation     map[string]string
+	reviewer           map[string]string
 	calls              [][]string
 }
 
@@ -46,11 +47,18 @@ func (r *localReviewBoundaryRunner) Run(ctx context.Context, command string, inp
 		return incus.Result{}, nil
 	}
 	if len(args) >= 2 && args[0] == "list" {
-		payload, _ := json.Marshal([]map[string]any{{"name": r.reviewerName, "config": r.metadata}})
+		payload, _ := json.Marshal([]map[string]any{
+			{"name": r.implementationName, "config": r.implementation},
+			{"name": r.reviewerName, "config": r.reviewer},
+		})
 		return incus.Result{Stdout: string(payload)}, nil
 	}
 	if len(args) == 5 && args[0] == "config" && args[1] == "set" {
-		r.metadata[args[3]] = args[4]
+		metadata := r.reviewer
+		if args[2] == r.implementationName {
+			metadata = r.implementation
+		}
+		metadata[args[3]] = args[4]
 		return incus.Result{}, nil
 	}
 	if len(args) < 4 || args[0] != "exec" || args[2] != "--" {
@@ -120,12 +128,23 @@ func TestPrepareReviewCheckoutRealGitIgnoresImplementationForgedWorktree(t *test
 		ID: "agent-run-real-boundary", JobID: job.ID, InputRevision: revision, SandboxID: "dorf-review-real",
 		Sandbox: core.Sandbox{ID: "dorf-review-real", JobID: job.ID, OwnershipNonce: strings.Repeat("d", 64)},
 	}
-	metadata := map[string]string{
+	reviewerMetadata := map[string]string{
 		"user.dorf.owner": "sandbox", "user.dorf.job": job.ID, "user.dorf.sandbox": run.Sandbox.ID, "user.dorf.agent_run": run.ID,
 		"user.dorf.revision": revision, "user.dorf.ownership_nonce": run.Sandbox.OwnershipNonce,
 	}
 	baseSandbox := incus.Sandbox{Config: incus.Config{Workspace: "/workspace/job"}}
-	runner := &localReviewBoundaryRunner{implementationName: baseSandbox.Name(job.ID), reviewerName: run.Sandbox.ID, implementationPath: implementationPath, reviewerPath: reviewerPath, metadata: metadata}
+	implementationOwner := provider.Ownership{
+		JobID: job.ID, SandboxID: baseSandbox.Name(job.ID), OwnershipNonce: strings.Repeat("e", 64),
+	}
+	implementationMetadata := map[string]string{
+		"user.dorf.owner": "sandbox", "user.dorf.job": job.ID, "user.dorf.sandbox": implementationOwner.SandboxID,
+		"user.dorf.ownership_nonce": implementationOwner.OwnershipNonce,
+	}
+	runner := &localReviewBoundaryRunner{
+		implementationName: implementationOwner.SandboxID, reviewerName: run.Sandbox.ID,
+		implementationPath: implementationPath, reviewerPath: reviewerPath,
+		implementation: implementationMetadata, reviewer: reviewerMetadata,
+	}
 	sandbox := incustest.Sandbox(runner, incus.Config{Workspace: "/workspace/job"})
 	controller := ReviewController{
 		Transport: incus.Adapter{Sandbox: sandbox},
@@ -133,7 +152,7 @@ func TestPrepareReviewCheckoutRealGitIgnoresImplementationForgedWorktree(t *test
 			if sandboxID == run.Sandbox.ID {
 				return reviewOwnership(run.Sandbox), nil
 			}
-			return provider.Ownership{JobID: job.ID, SandboxID: sandboxID}, nil
+			return implementationOwner, nil
 		},
 	}
 	withoutSandbox := run

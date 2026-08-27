@@ -22,22 +22,38 @@ func Sandbox(runner Runner, config incus.Config) incus.Sandbox {
 	return incus.Sandbox{Config: config, ClientFactory: factory{runner: runner}}
 }
 
-type factory struct{ runner Runner }
+func OwnedSandbox(runner Runner, config incus.Config, owner incus.OwnershipMetadata) incus.Sandbox {
+	return incus.Sandbox{Config: config, ClientFactory: factory{runner: runner, owner: &owner}}
+}
+
+type factory struct {
+	runner Runner
+	owner  *incus.OwnershipMetadata
+}
 
 func (f factory) Open(context.Context, incus.ConnectionConfig) (incus.Client, error) {
 	if f.runner == nil {
 		return nil, errors.New("test Incus runner is required")
 	}
-	return client{runner: f.runner}, nil
+	return client{runner: f.runner, owner: f.owner}, nil
 }
 
-type client struct{ runner Runner }
+type client struct {
+	runner Runner
+	owner  *incus.OwnershipMetadata
+}
 
 func (c client) run(ctx context.Context, input []byte, args ...string) (incus.Result, error) {
 	return c.runner.Run(ctx, "incus", input, args...)
 }
 
 func (c client) Instances(ctx context.Context) ([]incus.Instance, error) {
+	if c.owner != nil {
+		return []incus.Instance{{Name: c.owner.SandboxID, Running: true, Config: map[string]string{
+			"user.dorf.owner": "sandbox", "user.dorf.job": c.owner.JobID, "user.dorf.sandbox": c.owner.SandboxID,
+			"user.dorf.ownership_nonce": c.owner.OwnershipNonce,
+		}}}, nil
+	}
 	result, err := c.run(ctx, nil, "list", "--format=json")
 	if err != nil {
 		return nil, err

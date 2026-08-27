@@ -23,12 +23,15 @@ func (f sandboxRunner) Run(ctx context.Context, command string, input []byte, ar
 	return f(ctx, command, input, args...)
 }
 
-func publicationSandbox(runner incustest.Runner) incus.Adapter {
-	return incus.Adapter{Sandbox: incustest.Sandbox(runner, incus.Config{})}
+func publicationSandbox(runner incustest.Runner, jobID string) incus.Adapter {
+	owner, _ := publicationOwner(jobID)(context.Background(), core.MainSandboxName(jobID))
+	return incus.Adapter{Sandbox: incustest.OwnedSandbox(runner, incus.Config{}, owner)}
 }
 
-func publicationOwner(_ context.Context, sandboxID string) (provider.Ownership, error) {
-	return provider.Ownership{SandboxID: sandboxID}, nil
+func publicationOwner(jobID string) func(context.Context, string) (provider.Ownership, error) {
+	return func(_ context.Context, sandboxID string) (provider.Ownership, error) {
+		return provider.Ownership{JobID: jobID, SandboxID: sandboxID, OwnershipNonce: strings.Repeat("a", 64)}, nil
+	}
 }
 
 func TestPublicationIntentKeepsLaterAcceptedInputOutOfInFlightProof(t *testing.T) {
@@ -49,14 +52,14 @@ func TestGitRepositoryPushUsesRecordedOIDAndRefWithoutCredentialInArgvOrSandbox(
 	var hostArgs, hostEnv [][]string
 	repository := GitRepository{
 		Workspace: "/workspace/job",
-		Ownership: publicationOwner,
+		Ownership: publicationOwner("job-exact"),
 		Sandbox: publicationSandbox(sandboxRunner(func(_ context.Context, command string, input []byte, args ...string) (incus.Result, error) {
 			joined := command + " " + strings.Join(args, " ") + string(input)
 			if strings.Contains(joined, token) {
 				t.Fatal("ephemeral token crossed the Incus execution seam")
 			}
 			return incus.Result{Stdout: "fake-bundle"}, nil
-		})),
+		}), "job-exact"),
 		Run: func(_ context.Context, env, args []string) ([]byte, []byte, error) {
 			hostEnv = append(hostEnv, append([]string(nil), env...))
 			hostArgs = append(hostArgs, append([]string(nil), args...))
@@ -87,11 +90,11 @@ func TestGitRepositoryRelationAllowsOnlyBehindAndClassifiesAheadDivergent(t *tes
 	for name, exits := range map[string][]int{"behind": {0, 0}, "ahead": {0, 1, 0}, "divergent": {0, 1, 1}} {
 		t.Run(name, func(t *testing.T) {
 			index := 0
-			repository := GitRepository{Workspace: "/workspace/job", Ownership: publicationOwner, Sandbox: publicationSandbox(sandboxRunner(func(context.Context, string, []byte, ...string) (incus.Result, error) {
+			repository := GitRepository{Workspace: "/workspace/job", Ownership: publicationOwner("job"), Sandbox: publicationSandbox(sandboxRunner(func(context.Context, string, []byte, ...string) (incus.Result, error) {
 				result := incus.Result{ExitCode: exits[index]}
 				index++
 				return result, nil
-			}))}
+			}), "job")}
 			job := coding.Job{Job: core.Job{ID: "job"}, Revision: strings.Repeat("b", 40)}
 			got, err := repository.Relation(context.Background(), job, strings.Repeat("a", 40))
 			if err != nil || got != name {
@@ -99,9 +102,9 @@ func TestGitRepositoryRelationAllowsOnlyBehindAndClassifiesAheadDivergent(t *tes
 			}
 		})
 	}
-	repository := GitRepository{Workspace: "/workspace/job", Ownership: publicationOwner, Sandbox: publicationSandbox(sandboxRunner(func(context.Context, string, []byte, ...string) (incus.Result, error) {
+	repository := GitRepository{Workspace: "/workspace/job", Ownership: publicationOwner("job"), Sandbox: publicationSandbox(sandboxRunner(func(context.Context, string, []byte, ...string) (incus.Result, error) {
 		return incus.Result{ExitCode: 1}, nil
-	}))}
+	}), "job")}
 	if _, err := repository.Relation(context.Background(), coding.Job{Job: core.Job{ID: "job"}, Revision: strings.Repeat("b", 40)}, strings.Repeat("a", 40)); err == nil {
 		t.Fatal("unknown remote object did not fail closed")
 	}
@@ -109,13 +112,13 @@ func TestGitRepositoryRelationAllowsOnlyBehindAndClassifiesAheadDivergent(t *tes
 
 func TestGitRepositoryRelationTreatsMergeBaseOperationalFailureAsError(t *testing.T) {
 	calls := 0
-	repository := GitRepository{Workspace: "/workspace/job", Ownership: publicationOwner, Sandbox: publicationSandbox(sandboxRunner(func(context.Context, string, []byte, ...string) (incus.Result, error) {
+	repository := GitRepository{Workspace: "/workspace/job", Ownership: publicationOwner("job"), Sandbox: publicationSandbox(sandboxRunner(func(context.Context, string, []byte, ...string) (incus.Result, error) {
 		calls++
 		if calls == 1 {
 			return incus.Result{ExitCode: 0}, nil
 		}
 		return incus.Result{ExitCode: 128, Stderr: strings.Repeat("fatal ancestry failure ", 80)}, nil
-	}))}
+	}), "job")}
 	_, err := repository.Relation(context.Background(), coding.Job{Job: core.Job{ID: "job"}, Revision: strings.Repeat("b", 40)}, strings.Repeat("a", 40))
 	if err == nil || !strings.Contains(err.Error(), "exited 128") || !strings.Contains(err.Error(), "[truncated]") || len(err.Error()) > 620 {
 		t.Fatalf("merge-base operational error=%q", err)
