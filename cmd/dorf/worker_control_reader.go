@@ -23,13 +23,13 @@ type workerControlReader struct {
 }
 
 func controlReaderService(store postgres.Store, tasks *absurd.Client, cfg config.Config) controlreader.Service {
+	githubClient := githubapi.Client{APIURL: cfg.GitHubAPIURL, Credentials: cfg.GitHubCredentials}
 	return controlreader.Service{
-		Store:    store,
-		Runtimes: profileRuntimeResolver{cfg: cfg, store: store, client: tasks},
-		Provider: configuredProviderGateway(cfg),
-		Installations: githubapi.Client{
-			APIURL: cfg.GitHubAPIURL, Credentials: cfg.GitHubCredentials,
-		},
+		Store:         store,
+		Runtimes:      profileRuntimeResolver{cfg: cfg, store: store, client: tasks},
+		Provider:      configuredProviderGateway(cfg),
+		Installations: githubClient,
+		PullRequests:  githubClient,
 	}
 }
 

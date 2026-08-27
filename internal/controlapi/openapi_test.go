@@ -55,6 +55,7 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 		"/v1/jobs/{job}/messages/{message}": {"get"},
 		"/v1/jobs/{job}/retries":            {"post"},
 		"/v1/jobs/{job}/evidence":           {"get"},
+		"/v1/jobs/{job}/abandon":            {"put"},
 		"/v1/jobs/{job}/cleanup":            {"put"},
 		"/v1/sandboxes/{sandbox}/files":     {"get"},
 	}
@@ -108,10 +109,17 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 	}
 
 	assertRef(t, document, "#/components/schemas/JobList", "paths", "/v1/jobs", "get", "responses", "200", "content", "application/json", "schema", "$ref")
+	assertRef(t, document, "#/components/schemas/Job", "paths", "/v1/jobs/{job}/abandon", "put", "responses", "200", "content", "application/json", "schema", "$ref")
 	assertRef(t, document, "#/components/schemas/Job", "paths", "/v1/jobs/{job}/watch", "get", "responses", "200", "content", "text/event-stream", "x-dorf-event", "dataSchema", "$ref")
 	assertRef(t, document, "#/components/schemas/Problem", "components", "responses", "Problem", "content", "application/problem+json", "schema", "$ref")
 	if _, ok := objectAt(t, document, "paths", "/v1/sandboxes/{sandbox}/files", "get", "responses", "200", "content")["application/octet-stream"]; !ok {
 		t.Fatal("Sandbox file response does not describe application/octet-stream")
+	}
+	for _, schema := range []string{"AdmitDirectJobRequest", "AdmitCodingJobRequest", "AdmitInvestigationJobRequest"} {
+		properties := objectAt(t, document, "components", "schemas", schema, "properties")
+		if _, ok := properties["ai_connection"]; !ok {
+			t.Fatalf("%s does not publish ai_connection", schema)
+		}
 	}
 
 	var published struct {

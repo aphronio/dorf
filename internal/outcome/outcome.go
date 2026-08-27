@@ -2,12 +2,15 @@ package outcome
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/aphronio/dorf/internal/coding"
 	githubapi "github.com/aphronio/dorf/internal/github"
 )
+
+var ErrUnavailable = errors.New("outcome unavailable")
 
 type Store interface {
 	CodingJob(context.Context, string) (coding.Job, error)
@@ -56,7 +59,7 @@ func (s Service) recordFenced(ctx context.Context, jobID string, requested codin
 	}
 	if existing != nil {
 		if existing.Kind != requested {
-			return coding.Outcome{}, false, fmt.Errorf("Job %s already has immutable %s outcome; refusing conflicting %s outcome", jobID, existing.Kind, requested)
+			return coding.Outcome{}, false, fmt.Errorf("%w: Job %s already has immutable %s outcome; refusing conflicting %s outcome", ErrUnavailable, jobID, existing.Kind, requested)
 		}
 		return *existing, false, nil
 	}
@@ -96,7 +99,7 @@ func (s Service) recordFenced(ctx context.Context, jobID string, requested codin
 			}
 		case coding.OutcomeAbandoned:
 			if pull.Merged {
-				return coding.Outcome{}, false, fmt.Errorf("abandoned outcome refuses exact pull request #%d because it is already merged", pull.Number)
+				return coding.Outcome{}, false, fmt.Errorf("%w: abandoned outcome refuses exact pull request #%d because it is already merged", ErrUnavailable, pull.Number)
 			}
 		}
 		receipt.ObservedState = pull.State

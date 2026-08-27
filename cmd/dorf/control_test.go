@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aphronio/dorf/internal/clientconfig"
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlapi"
@@ -24,6 +25,7 @@ import (
 	"github.com/aphronio/dorf/internal/controlclient"
 	"github.com/aphronio/dorf/internal/controlreader"
 	"github.com/aphronio/dorf/internal/core"
+	"github.com/aphronio/dorf/internal/hostclientconfig"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -50,6 +52,13 @@ func TestServeAllowsWildcardOnlyWithExplicitContainerOptIn(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "http://"+address) {
 		t.Fatalf("serve output %q does not report container listener %s", stdout.String(), address)
+	}
+}
+
+func TestHostControlGuidanceDoesNotMaskLocalErrors(t *testing.T) {
+	local := errors.New("invalid local arguments")
+	if got := jobControlError(hostclientconfig.HostOrigin, local); !errors.Is(got, local) || got.Error() != local.Error() {
+		t.Fatalf("host local error=%v", got)
 	}
 }
 
@@ -121,6 +130,32 @@ func TestConfiguredControlReaderUsesOnlyCompleteInternalCapability(t *testing.T)
 	})
 }
 
+func TestJobControlTargetPrefersExplicitRemoteThenFallsBackToHost(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(root, "data"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	paths, err := config.CurrentOperatorPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hostclientconfig.Save(hostclientconfig.Path(paths.StateDir), hostclientconfig.Config{Credential: "host-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	configured, _, client, err := loadConnectedClient()
+	if err != nil || configured.DeploymentURL != hostclientconfig.HostOrigin || !strings.Contains(client.String(), hostclientconfig.HostOrigin) {
+		t.Fatalf("host config=%#v client=%v err=%v", configured, client, err)
+	}
+	remote := clientconfig.Config{DeploymentURL: "https://remote.example.test", Credential: "remote-secret"}
+	if err := clientconfig.Save(clientconfig.Path(root), remote); err != nil {
+		t.Fatal(err)
+	}
+	configured, _, client, err = loadConnectedClient()
+	if err != nil || configured.DeploymentURL != remote.DeploymentURL || !strings.Contains(client.String(), remote.DeploymentURL) {
+		t.Fatalf("remote config=%#v client=%v err=%v", configured, client, err)
+	}
+}
+
 func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	auth := &remoteCLIAuth{client: controlauth.Client{
 		ID: "client-1", Name: "laptop",
@@ -184,7 +219,7 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	commands := [][]string{
 		{"connect", "--name", "laptop", "--enrollment-file", enrollmentFile, deploymentURL},
 		{"auth", "status"},
-		{"run", "--goal-file", goalFile, "--model", jobs.job.Model},
+		{"run", "--goal-file", goalFile, "--ai-connection", "personal", "--model", jobs.job.Model},
 		{"job", "list"},
 		{"job", "inspect", jobs.job.ID},
 		{"job", "message", "--input-file", messageFile, jobs.job.ID},
@@ -192,6 +227,7 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 		{"job", "retry", jobs.job.ID},
 		{"job", "evidence", jobs.job.ID},
 		{"sandbox", "file", "get", "sandbox-1", "REPORT.md", "--output", download},
+		{"job", "abandon", jobs.job.ID},
 		{"job", "cleanup", jobs.job.ID},
 	}
 	var output strings.Builder
@@ -223,7 +259,7 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	if code != "one-time-code" || name != "laptop" || len(credential) != 43 {
 		t.Fatalf("enrollment code=%q name=%q credential length=%d", code, name, len(credential))
 	}
-	wantAdmission := controlapi.AdmitJobRequest{Goal: jobs.job.Goal, Model: jobs.job.Model, Reasoning: jobs.job.Reasoning}
+	wantAdmission := controlapi.AdmitJobRequest{Goal: jobs.job.Goal, AIConnection: "personal", Model: jobs.job.Model, Reasoning: jobs.job.Reasoning}
 	if admission != wantAdmission {
 		t.Fatalf("Job admission=%#v, want %#v", admission, wantAdmission)
 	}
@@ -238,7 +274,7 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 		t.Fatalf("downloaded exact Sandbox file=%q err=%v", contents, err)
 	}
 	if !strings.Contains(output.String(), "Job job-1 accepted") || !strings.Contains(output.String(), "Message message-2 accepted") ||
-		!strings.Contains(output.String(), "Retry scheduled") || !strings.Contains(output.String(), "Cleanup requested for Job job-1") {
+		!strings.Contains(output.String(), "Retry scheduled") || !strings.Contains(output.String(), "Job job-1 abandoned") || !strings.Contains(output.String(), "Cleanup requested for Job job-1") {
 		t.Fatalf("remote CLI journey output omitted its Job result:\n%s", output.String())
 	}
 	for _, secret := range []string{code, credential, requestKey, messageAttempts[0], retryAttempts[0]} {
@@ -279,7 +315,7 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	}
 }
 
-func TestRemoteWorkflowCLIUsesExplicitRoutesAndFencesLocalRepositories(t *testing.T) {
+func TestRemoteWorkflowCLIUsesExplicitTypedRoutes(t *testing.T) {
 	goal, brief := "  exact coding goal\n", "  exact investigation brief\n"
 	goalFile, briefFile := filepath.Join(t.TempDir(), "goal"), filepath.Join(t.TempDir(), "brief")
 	if err := os.WriteFile(goalFile, []byte(goal), 0o600); err != nil {
@@ -314,7 +350,7 @@ func TestRemoteWorkflowCLIUsesExplicitRoutesAndFencesLocalRepositories(t *testin
 			_ = json.NewEncoder(response).Encode(controlapi.InvestigationJob{
 				Job:              controlapi.Job{ID: "investigation-job", Kind: controlapi.JobKindInvestigation, Goal: investigationRequest.Brief},
 				WorkflowRevision: "codebase-investigation/v1",
-				Source:           controlapi.InvestigationSource{Kind: "remote", Repository: investigationRequest.Repository, Revision: investigationRequest.Revision},
+				Source:           controlapi.InvestigationSource{Repository: investigationRequest.Repository, Revision: investigationRequest.Revision},
 				Report:           controlapi.InvestigationReport{SandboxID: "sandbox-investigation", Path: "REPORT.md"},
 			})
 		default:
@@ -328,27 +364,22 @@ func TestRemoteWorkflowCLIUsesExplicitRoutesAndFencesLocalRepositories(t *testin
 	revision := strings.Repeat("a", 40)
 	var codingOutput, investigationOutput strings.Builder
 	if err := remoteWorkflowCommand(context.Background(), client, "https://dorf.example.test",
-		[]string{"run", "coding", "--key", "coding-key", "--goal-file", goalFile, "--repo", "https://github.com/aphronio/dorf.git", "--revision", revision, "--base", "main", "--model", "model"},
+		[]string{"run", "coding", "--key", "coding-key", "--goal-file", goalFile, "--repo", "https://github.com/aphronio/dorf.git", "--revision", revision, "--base", "main", "--ai-connection", "coding-connection", "--model", "model"},
 		&codingOutput, &strings.Builder{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := remoteWorkflowCommand(context.Background(), client, "https://dorf.example.test",
-		[]string{"run", "codebase-investigation", "--key", "investigation-key", "--brief-file", briefFile, "--repo", "https://github.com/aphronio/dorf.git", "--revision", revision, "--model", "model", "--output", "json"},
+		[]string{"run", "codebase-investigation", "--key", "investigation-key", "--brief-file", briefFile, "--repo", "https://github.com/aphronio/dorf.git", "--revision", revision, "--ai-connection", "investigation-connection", "--model", "model", "--output", "json"},
 		&investigationOutput, &strings.Builder{}); err != nil {
 		t.Fatal(err)
 	}
-	if codingRequest.Goal != goal || investigationRequest.Brief != brief || !slices.Equal(paths, []string{"/v1/workflows/coding/jobs", "/v1/workflows/codebase-investigation/jobs"}) ||
+	if codingRequest.Goal != goal || codingRequest.AIConnection != "coding-connection" || investigationRequest.Brief != brief || investigationRequest.AIConnection != "investigation-connection" || !slices.Equal(paths, []string{"/v1/workflows/coding/jobs", "/v1/workflows/codebase-investigation/jobs"}) ||
 		!slices.Equal(keys, []string{"coding-key", "investigation-key"}) {
 		t.Fatalf("coding=%#v investigation=%#v paths=%q keys=%q", codingRequest, investigationRequest, paths, keys)
 	}
 	if !strings.Contains(codingOutput.String(), "repository: https://github.com/aphronio/dorf.git") ||
 		!strings.Contains(investigationOutput.String(), `"kind": "codebase-investigation"`) {
 		t.Fatalf("coding output=%q investigation output=%q", codingOutput.String(), investigationOutput.String())
-	}
-	if err := remoteWorkflowCommand(context.Background(), client, "https://dorf.example.test",
-		[]string{"run", "codebase-investigation", "--local-repo", "/deployment-only"}, &strings.Builder{}, &strings.Builder{}); err == nil ||
-		!strings.Contains(err.Error(), "deployment host") || len(paths) != 2 {
-		t.Fatalf("remote local-repo fence err=%v paths=%q", err, paths)
 	}
 }
 
@@ -635,6 +666,10 @@ func (j *remoteCLIJobs) RequestCleanup(_ context.Context, id string) (controlapi
 	}
 	j.job.Cleanup.State = "requested"
 	return j.job, nil
+}
+
+func (j *remoteCLIJobs) Abandon(ctx context.Context, id string) (controlapi.JobView, error) {
+	return j.Get(ctx, id)
 }
 
 func (j *remoteCLIJobs) SendMessage(_ context.Context, jobID, _ string, input controlapi.SendMessageRequest) (controlapi.Message, bool, error) {

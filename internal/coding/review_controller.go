@@ -167,7 +167,7 @@ func reviewOwnership(sandbox core.Sandbox) provider.Ownership {
 }
 
 func reviewEffort(role, implementationEffort string) string {
-	if role == "auth-authority" || role == "critical-boundary" {
+	if role == "auth-authority" {
 		return implementationEffort
 	}
 	return "medium"

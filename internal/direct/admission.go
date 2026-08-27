@@ -47,8 +47,6 @@ type AdmissionProvider interface {
 	Check(context.Context, string) error
 }
 
-// AdmissionService is the single direct admission authority used by every
-// local and remote adapter in a deployment.
 type AdmissionService struct {
 	store     AdmissionStore
 	scheduler AdmissionScheduler

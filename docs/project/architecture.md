@@ -12,8 +12,8 @@ Product direction and vocabulary live in the [North Star](north-star.md).
 flowchart LR
     Remote["Remote client"] --> Ingress["HTTPS ingress · guided or custom"]
     Ingress --> API["Control API · fixed Job projections"]
+    Host["Deployment-host Client"] -->|fixed loopback| API
     API -->|direct| Core["In-process Core application boundary"]
-    Client["Host-local client adapter"] --> Core
     Workflow["Native Dorf workflow"] --> Core
     API -->|typed workflow| Workflow
     Core --> Custody["Durable execution custody"]
@@ -26,9 +26,10 @@ flowchart LR
     Sandbox --> Harness["Agent Harness"]
 ```
 
-Dorf runs as a stateful control-plane deployment. Native workflows and host-local client adapters
-compose one small application boundary in-process. A separate API service projects a deliberately
-narrow closed set over authenticated HTTPS: direct Jobs and typed admission for the compiled coding
+Dorf runs as a stateful control-plane deployment. Native workflows compose one small application
+boundary in-process. Remote and deployment-host CLI clients use the same authenticated API through
+guided Cloudflare, operator-owned HTTPS ingress, or the fixed host-loopback HTTP listener. The API
+projects a deliberately narrow closed set: direct Jobs and typed admission for the compiled coding
 and codebase-investigation workflows, followed by their common Job interaction surface. This is not
 a network exposure of Core itself, a workflow registry, a client SDK, or an embeddable-runtime
 contract. One versioned static Docker Compose project supervises the accepted deployment; the
@@ -199,8 +200,8 @@ composition boundary.
 Trusted client adapters may drive bounded execution directly or delegate policy to a predefined
 workflow. Direct clients decide what agent work to request, what results mean, whether more work is
 needed, and when to request cleanup. Workflow clients delegate those decisions to the selected
-workflow. Native workflows and host-local adapters compose the in-process Core contract and observe
-its durable facts.
+workflow. Native workflows compose the in-process Core contract. CLI clients, including the
+deployment-host CLI, use the authenticated control projection.
 
 The external projection serves one configured Dorf Deployment over authenticated HTTPS. It admits a
 direct Job or either of two fixed typed workflows—coding and codebase investigation—and returns one
@@ -215,32 +216,34 @@ MCP, a control-plane UI, language SDKs, and a generic public workflow API remain
 
 The deployment has one operator Principal. An operator-issued, short-lived, one-use Enrollment lets
 a Client register a client-generated opaque credential; only its digest is retained server-side,
-and each Client can be revoked independently. The CLI retains one Deployment origin and Client
-credential rather than implementing multi-deployment context selection. Compose maps the API's
-HTTP listener to host port `8745` for custom HTTPS ingress. The guided Cloudflare Tunnel instead
-reaches it over the Compose ingress network; the
+and each Client can be revoked independently. Setup creates one ordinary Client for the deployment
+host and stores its proof separately from the remote `client.json`. The host Client uses the fixed
+`http://127.0.0.1:8745` origin. An explicit remote `client.json` takes precedence. Compose maps the
+API's HTTP listener only to host loopback; operator-owned HTTPS ingress on the host fronts that
+port, while the guided Cloudflare Tunnel reaches it over the Compose ingress network. The
 [Provider Gateway authority](provider-gateway.md) owns the exact two-origin mapping. The API admits
-and projects Jobs but does not register execution handlers; a separate durable worker claims and
-reconciles the attached Absurd tasks and hosts the fixed authenticated reads the API cannot perform
-without provider authority. The static Compose project supervises both long-running responsibilities
-after its one-shot migration completes. Setup prepares protected `.env`, applies that exact project,
-waits for its services, and verifies readiness. The operator or deployment agent uses ordinary
-Compose directly only for advanced observation and process operations.
+and projects Jobs but does not register execution handlers; a separate durable
+worker claims and reconciles the attached Absurd tasks and hosts the fixed authenticated reads the
+API cannot perform without provider authority. The static Compose project supervises both
+long-running responsibilities after its one-shot migration completes. Setup prepares protected
+`.env`, applies that exact project, waits for its services, and verifies readiness. The operator or
+deployment agent uses ordinary Compose directly only for advanced observation and process
+operations.
 General ingress management, multi-user identity, roles, organizations, billing, and quotas remain
 separate work.
 
 A direct Job has no workflow identity. Its first Message carries the caller's exact prompt through
 the `direct` Agent role, and successful work remains open and idle until a caller requests cleanup.
-The HTTPS projection reuses Core's Follow, Steer, retry, and exact Sandbox file mechanisms without
-changing their invariants or transferring result meaning and cleanup timing into Core. The
+The authenticated projection reuses Core's Follow, Steer, retry, and exact Sandbox file mechanisms
+without changing their invariants or transferring result meaning and cleanup timing into Core. The
 client—not Core—decides what the work means and when retained resources may be released.
 
-The two remote workflow routes invoke the same compiled typed workflow admissions used on the host;
+The two workflow routes invoke the compiled typed workflow admissions;
 they do not make the workflow module contract public. Coding retains its Proposal, Outcome, and
 policy that requests cleanup once a terminal Outcome is observed. Investigation retains its exact
-source and report-path policy and accepts only a credential-free HTTPS remote source through this
-boundary; retained local Git bundles remain host-local input. Their Job views add only their typed
-fields to the common projection.
+source and report-path policy. Investigation admission accepts only a credential-free reachable
+HTTPS repository and an exact Revision. Their Job views add only their typed fields to the common
+projection.
 
 ## Native workflow composition
 
@@ -267,8 +270,8 @@ operations discover their exact repository installation, verify any
 repository or base authority they need, and mint short-lived repository-scoped tokens with the least
 required subset of the App's admitted permissions. A selected profile's coding runtime composes that
 deployment integration; the durable profile definition stores no GitHub credentials or scope, and
-Job requests do not repeat them. Core knows nothing about GitHub. Plain Git access, including public
-clones and retained Git input, does not require the integration.
+Job requests do not repeat them. Core knows nothing about GitHub. Credential-free access to a public
+Git repository does not require the integration.
 
 ## Failure and code evolution
 
@@ -280,7 +283,7 @@ clones and retained Git input, does not require the integration.
   blindly.
 - **Poison work:** bounded attempts, time, cost, and attention stop infinite agent or provider spend.
 - **Operator retry:** after repairing the cause of the Job's latest attached execution task's
-  terminal failure, `dorf retry JOB_ID` uses Absurd's public retry API to add exactly one bounded
+  terminal failure, `dorf job retry JOB_ID` uses Absurd's public retry API to add exactly one bounded
   attempt to that same task. Existing checkpoints and Dorf facts remain authoritative; scheduling
   is not reported as successful resumption.
 - **Code changes:** prefer short-lived Jobs, additive compatible task results where practical, and

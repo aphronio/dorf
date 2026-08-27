@@ -40,23 +40,26 @@ type handler struct {
 	shutdown  context.Context
 }
 
+type authenticatedRoute func(http.ResponseWriter, *http.Request, controlauth.Client)
+
 func newHandlerContext(discovery Discovery, auth Auth, jobs Jobs, shutdown context.Context) http.Handler {
 	h := &handler{discovery: discovery, auth: auth, jobs: jobs, mux: http.NewServeMux(), shutdown: shutdown}
 	h.mux.HandleFunc("/v1", h.discoveryRoute)
 	h.mux.HandleFunc(OpenAPIPath, h.openAPIRoute)
 	h.mux.HandleFunc("/v1/auth/enrollments/redeem", h.redeemRoute)
-	h.mux.HandleFunc("/v1/me", h.protectedRoute)
-	h.mux.HandleFunc("/v1/jobs", h.protectedRoute)
-	h.mux.HandleFunc("/v1/workflows/coding/jobs", h.protectedRoute)
-	h.mux.HandleFunc("/v1/workflows/codebase-investigation/jobs", h.protectedRoute)
-	h.mux.HandleFunc("/v1/jobs/{job}/watch", h.protectedRoute)
-	h.mux.HandleFunc("/v1/jobs/{job}/messages", h.protectedRoute)
-	h.mux.HandleFunc("/v1/jobs/{job}/messages/{message}", h.protectedRoute)
-	h.mux.HandleFunc("/v1/jobs/{job}/retries", h.protectedRoute)
-	h.mux.HandleFunc("/v1/jobs/{job}/evidence", h.protectedRoute)
-	h.mux.HandleFunc("/v1/jobs/{job}/cleanup", h.protectedRoute)
-	h.mux.HandleFunc("/v1/jobs/{job}", h.protectedRoute)
-	h.mux.HandleFunc("/v1/sandboxes/{sandbox}/files", h.protectedRoute)
+	h.mux.HandleFunc("/v1/me", h.authenticate(h.meRoute))
+	h.mux.HandleFunc("/v1/jobs", h.authenticate(h.jobsRoute))
+	h.mux.HandleFunc("/v1/workflows/coding/jobs", h.authenticate(h.admitCodingRoute))
+	h.mux.HandleFunc("/v1/workflows/codebase-investigation/jobs", h.authenticate(h.admitInvestigationRoute))
+	h.mux.HandleFunc("/v1/jobs/{job}/watch", h.authenticate(h.watchRoute))
+	h.mux.HandleFunc("/v1/jobs/{job}/messages", h.authenticate(h.sendMessageRoute))
+	h.mux.HandleFunc("/v1/jobs/{job}/messages/{message}", h.authenticate(h.messageRoute))
+	h.mux.HandleFunc("/v1/jobs/{job}/retries", h.authenticate(h.retryRoute))
+	h.mux.HandleFunc("/v1/jobs/{job}/evidence", h.authenticate(h.evidenceRoute))
+	h.mux.HandleFunc("/v1/jobs/{job}/abandon", h.authenticate(h.abandonRoute))
+	h.mux.HandleFunc("/v1/jobs/{job}/cleanup", h.authenticate(h.cleanupRoute))
+	h.mux.HandleFunc("/v1/jobs/{job}", h.authenticate(h.jobRoute))
+	h.mux.HandleFunc("/v1/sandboxes/{sandbox}/files", h.authenticate(h.fileRoute))
 	h.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		h.fail(w, problem("not_found"))
 	})
@@ -140,157 +143,184 @@ func (l *redemptionLimiter) take(now time.Time) time.Duration {
 	return 0
 }
 
-func (h *handler) protectedRoute(w http.ResponseWriter, r *http.Request) {
-	values := r.Header.Values("Authorization")
-	if len(values) != 1 {
-		h.authError(w)
+func (h *handler) authenticate(route authenticatedRoute) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		values := r.Header.Values("Authorization")
+		if len(values) != 1 {
+			h.authError(w)
+			return
+		}
+		parts := strings.Fields(values[0])
+		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+			h.authError(w)
+			return
+		}
+		client, err := h.auth.Authenticate(r.Context(), parts[1])
+		if err != nil {
+			h.serviceError(w, r, err)
+			return
+		}
+		route(w, r, client)
+	}
+}
+
+func (h *handler) meRoute(w http.ResponseWriter, r *http.Request, client controlauth.Client) {
+	if h.exact(w, r, http.MethodGet, false) {
+		h.reply(w, http.StatusOK, identity(client))
+	}
+}
+
+func (h *handler) jobsRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
+	switch r.Method {
+	case http.MethodGet:
+		h.jobListRoute(w, r)
+	case http.MethodPost:
+		h.admitDirectRoute(w, r)
+	default:
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+		h.fail(w, problem("method_not_allowed"))
+	}
+}
+
+func (h *handler) admitDirectRoute(w http.ResponseWriter, r *http.Request) {
+	if !h.exact(w, r, http.MethodPost, true) {
 		return
 	}
-	parts := strings.Fields(values[0])
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-		h.authError(w)
+	key, ok := h.idempotencyKey(w, r)
+	if !ok {
 		return
 	}
-	client, err := h.auth.Authenticate(r.Context(), parts[1])
+	var input AdmitJobRequest
+	if !h.decode(w, r, &input) {
+		return
+	}
+	job, created, err := h.jobs.AdmitDirect(r.Context(), key, input)
 	if err != nil {
 		h.serviceError(w, r, err)
 		return
 	}
+	h.jobResponseStatus(w, r, job, nil, createdStatus(created))
+}
 
-	switch r.Pattern {
-	case "/v1/me":
-		if h.exact(w, r, http.MethodGet, false) {
-			h.reply(w, http.StatusOK, identity(client))
-		}
-	case "/v1/jobs":
-		switch r.Method {
-		case http.MethodGet:
-			h.jobListRoute(w, r)
-		case http.MethodPost:
-			if !h.exact(w, r, http.MethodPost, true) {
-				return
-			}
-			key, ok := h.idempotencyKey(w, r)
-			if !ok {
-				return
-			}
-			var input AdmitJobRequest
-			if !h.decode(w, r, &input) {
-				return
-			}
-			job, created, err := h.jobs.AdmitDirect(r.Context(), key, input)
-			if err != nil {
-				h.serviceError(w, r, err)
-				return
-			}
-			h.jobResponseStatus(w, r, job, nil, createdStatus(created))
-		default:
-			w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
-			h.fail(w, problem("method_not_allowed"))
-		}
-	case "/v1/workflows/coding/jobs":
-		if !h.exact(w, r, http.MethodPost, true) {
-			return
-		}
-		key, ok := h.idempotencyKey(w, r)
-		if !ok {
-			return
-		}
-		var input AdmitCodingJobRequest
-		if !h.decode(w, r, &input) {
-			return
-		}
-		job, created, err := h.jobs.AdmitCoding(r.Context(), key, input)
+func (h *handler) admitCodingRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
+	if !h.exact(w, r, http.MethodPost, true) {
+		return
+	}
+	key, ok := h.idempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	var input AdmitCodingJobRequest
+	if !h.decode(w, r, &input) {
+		return
+	}
+	job, created, err := h.jobs.AdmitCoding(r.Context(), key, input)
+	if err != nil {
+		h.serviceError(w, r, err)
+		return
+	}
+	h.jobResponseStatus(w, r, job, nil, createdStatus(created))
+}
+
+func (h *handler) admitInvestigationRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
+	if !h.exact(w, r, http.MethodPost, true) {
+		return
+	}
+	key, ok := h.idempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	var input AdmitInvestigationJobRequest
+	if !h.decode(w, r, &input) {
+		return
+	}
+	job, created, err := h.jobs.AdmitInvestigation(r.Context(), key, input)
+	if err != nil {
+		h.serviceError(w, r, err)
+		return
+	}
+	h.jobResponseStatus(w, r, job, nil, createdStatus(created))
+}
+
+func (h *handler) sendMessageRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
+	if !h.exact(w, r, http.MethodPost, true) {
+		return
+	}
+	key, ok := h.idempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	var input SendMessageRequest
+	if !h.decode(w, r, &input) {
+		return
+	}
+	message, created, err := h.jobs.SendMessage(r.Context(), r.PathValue("job"), key, input)
+	if err != nil {
+		h.serviceError(w, r, err)
+		return
+	}
+	h.reply(w, createdStatus(created), message)
+}
+
+func (h *handler) messageRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
+	if h.exact(w, r, http.MethodGet, false) {
+		message, err := h.jobs.GetMessage(r.Context(), r.PathValue("job"), r.PathValue("message"))
 		if err != nil {
 			h.serviceError(w, r, err)
 			return
 		}
-		h.jobResponseStatus(w, r, job, nil, createdStatus(created))
-	case "/v1/workflows/codebase-investigation/jobs":
-		if !h.exact(w, r, http.MethodPost, true) {
-			return
-		}
-		key, ok := h.idempotencyKey(w, r)
-		if !ok {
-			return
-		}
-		var input AdmitInvestigationJobRequest
-		if !h.decode(w, r, &input) {
-			return
-		}
-		job, created, err := h.jobs.AdmitInvestigation(r.Context(), key, input)
+		h.reply(w, http.StatusOK, message)
+	}
+}
+
+func (h *handler) retryRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
+	if !h.exact(w, r, http.MethodPost, false) {
+		return
+	}
+	key, ok := h.idempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	retry, created, err := h.jobs.Retry(r.Context(), r.PathValue("job"), key)
+	if err != nil {
+		h.serviceError(w, r, err)
+		return
+	}
+	h.reply(w, createdStatus(created), retry)
+}
+
+func (h *handler) evidenceRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
+	if h.exact(w, r, http.MethodGet, false) {
+		evidence, err := h.jobs.Evidence(r.Context(), r.PathValue("job"))
 		if err != nil {
 			h.serviceError(w, r, err)
 			return
 		}
-		h.jobResponseStatus(w, r, job, nil, createdStatus(created))
-	case "/v1/jobs/{job}/watch":
-		h.watchRoute(w, r, client.CredentialExpiresAt)
-	case "/v1/jobs/{job}/messages":
-		if !h.exact(w, r, http.MethodPost, true) {
-			return
+		if evidence == nil {
+			evidence = []Evidence{}
 		}
-		key, ok := h.idempotencyKey(w, r)
-		if !ok {
-			return
-		}
-		var input SendMessageRequest
-		if !h.decode(w, r, &input) {
-			return
-		}
-		message, created, err := h.jobs.SendMessage(r.Context(), r.PathValue("job"), key, input)
-		if err != nil {
-			h.serviceError(w, r, err)
-			return
-		}
-		h.reply(w, createdStatus(created), message)
-	case "/v1/jobs/{job}/messages/{message}":
-		if h.exact(w, r, http.MethodGet, false) {
-			message, err := h.jobs.GetMessage(r.Context(), r.PathValue("job"), r.PathValue("message"))
-			if err != nil {
-				h.serviceError(w, r, err)
-				return
-			}
-			h.reply(w, http.StatusOK, message)
-		}
-	case "/v1/jobs/{job}/retries":
-		if !h.exact(w, r, http.MethodPost, false) {
-			return
-		}
-		key, ok := h.idempotencyKey(w, r)
-		if !ok {
-			return
-		}
-		retry, created, err := h.jobs.Retry(r.Context(), r.PathValue("job"), key)
-		if err != nil {
-			h.serviceError(w, r, err)
-			return
-		}
-		h.reply(w, createdStatus(created), retry)
-	case "/v1/jobs/{job}/evidence":
-		if h.exact(w, r, http.MethodGet, false) {
-			evidence, err := h.jobs.Evidence(r.Context(), r.PathValue("job"))
-			if err != nil {
-				h.serviceError(w, r, err)
-				return
-			}
-			if evidence == nil {
-				evidence = []Evidence{}
-			}
-			h.reply(w, http.StatusOK, EvidenceList{Evidence: evidence})
-		}
-	case "/v1/jobs/{job}/cleanup":
-		if h.exact(w, r, http.MethodPut, false) {
-			job, err := h.jobs.RequestCleanup(r.Context(), r.PathValue("job"))
-			h.jobResponse(w, r, job, err)
-		}
-	case "/v1/sandboxes/{sandbox}/files":
-		h.fileRoute(w, r)
-	default:
-		if h.exact(w, r, http.MethodGet, false) {
-			job, err := h.jobs.Get(r.Context(), r.PathValue("job"))
-			h.jobResponse(w, r, job, err)
-		}
+		h.reply(w, http.StatusOK, EvidenceList{Evidence: evidence})
+	}
+}
+
+func (h *handler) abandonRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
+	if h.exact(w, r, http.MethodPut, false) {
+		job, err := h.jobs.Abandon(r.Context(), r.PathValue("job"))
+		h.jobResponse(w, r, job, err)
+	}
+}
+
+func (h *handler) cleanupRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
+	if h.exact(w, r, http.MethodPut, false) {
+		job, err := h.jobs.RequestCleanup(r.Context(), r.PathValue("job"))
+		h.jobResponse(w, r, job, err)
+	}
+}
+
+func (h *handler) jobRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
+	if h.exact(w, r, http.MethodGet, false) {
+		job, err := h.jobs.Get(r.Context(), r.PathValue("job"))
+		h.jobResponse(w, r, job, err)
 	}
 }
 
@@ -404,7 +434,7 @@ func (h *handler) idempotencyKey(w http.ResponseWriter, r *http.Request) (string
 	return keys[0], true
 }
 
-func (h *handler) watchRoute(w http.ResponseWriter, r *http.Request, credentialExpiresAt time.Time) {
+func (h *handler) watchRoute(w http.ResponseWriter, r *http.Request, client controlauth.Client) {
 	if !h.exact(w, r, http.MethodGet, false) {
 		return
 	}
@@ -428,8 +458,8 @@ func (h *handler) watchRoute(w http.ResponseWriter, r *http.Request, credentialE
 		}
 	}
 	authenticationDeadline := time.Now().Add(watchAuthenticationTTL)
-	if !credentialExpiresAt.IsZero() && credentialExpiresAt.Before(authenticationDeadline) {
-		authenticationDeadline = credentialExpiresAt
+	if !client.CredentialExpiresAt.IsZero() && client.CredentialExpiresAt.Before(authenticationDeadline) {
+		authenticationDeadline = client.CredentialExpiresAt
 	}
 	ctx, cancel := context.WithDeadline(r.Context(), authenticationDeadline)
 	stopShutdown := context.AfterFunc(h.shutdown, cancel)
@@ -538,7 +568,7 @@ func streamWrite(controller *http.ResponseController, write func() error) error 
 	return clearErr
 }
 
-func (h *handler) fileRoute(w http.ResponseWriter, r *http.Request) {
+func (h *handler) fileRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		h.fail(w, problem("method_not_allowed"))
@@ -665,6 +695,8 @@ func (h *handler) serviceError(w http.ResponseWriter, r *http.Request, err error
 		value = problem("message_unavailable")
 	case errors.Is(err, ErrRetryUnavailable):
 		value = problem("retry_unavailable")
+	case errors.Is(err, ErrAbandonUnavailable):
+		value = problem("abandon_unavailable")
 	case errors.Is(err, ErrEvidenceUnverified):
 		log.Printf("Dorf control API Evidence verification failure: method=%s path=%q error_type=%T", r.Method, r.URL.Path, err)
 		value = problem("evidence_unverified")

@@ -12,13 +12,13 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-func TestCurrentBaselineIsImmutable(t *testing.T) {
-	baseline, err := migrationFiles.ReadFile("migrations/001_baseline.sql")
+func TestCurrentBaselineInventory(t *testing.T) {
+	baseline, err := migrationFiles.ReadFile("migrations/001_greenfield.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := fmt.Sprintf("%x", sha256.Sum256(baseline)); got != "3db2b68dc915569b756fcde0493688425f4996ee1c35b361fa959e9afbc22c00" {
-		t.Fatalf("current 001_baseline.sql checksum=%s", got)
+	if got := fmt.Sprintf("%x", sha256.Sum256(baseline)); got != "57ec6537431bb0484231b01f930d50dc1a835e4108329ce3020b7e7a86298948" {
+		t.Fatalf("current 001_greenfield.sql checksum=%s", got)
 	}
 	files, err := migrationFiles.ReadDir("migrations")
 	if err != nil {
@@ -35,7 +35,7 @@ func TestCurrentBaselineIsImmutable(t *testing.T) {
 	}
 }
 
-func TestCurrentBaselineReplaysIdempotently(t *testing.T) {
+func TestCurrentBaselineReplaysIdempotentlyAndRejectsRetiredIdentity(t *testing.T) {
 	dsn := os.Getenv("DORF_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("DORF_TEST_DATABASE_URL is not configured")
@@ -58,7 +58,19 @@ func TestCurrentBaselineReplaysIdempotently(t *testing.T) {
 	if _, err := tx.ExecContext(ctx, `drop schema if exists dorf cascade`); err != nil {
 		t.Fatal(err)
 	}
-	baseline, err := migrationFiles.ReadFile("migrations/001_baseline.sql")
+	if _, err := tx.ExecContext(ctx, `
+create schema dorf;
+create table dorf.schema_migrations(name text primary key);
+insert into dorf.schema_migrations(name) values ('001_baseline.sql')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateDorf(ctx, tx); err == nil || err.Error() != "existing Dorf schema has no baseline identity; recreate this prototype database" {
+		t.Fatalf("retired baseline identity error=%v", err)
+	}
+	if _, err := tx.ExecContext(ctx, `drop schema dorf cascade`); err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := migrationFiles.ReadFile("migrations/001_greenfield.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

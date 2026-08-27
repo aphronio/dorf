@@ -21,7 +21,7 @@ where (
         (j.workflow_name=sqlc.arg(investigation_workflow)::text and j.workflow_revision=sqlc.arg(investigation_revision)::text and
          exists(
              select 1 from dorf.codebase_investigation_sources source
-             where source.job_id=j.id and source.kind=sqlc.arg(investigation_source_kind)::text
+             where source.job_id=j.id
          ))
       )
   and (

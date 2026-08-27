@@ -140,7 +140,7 @@ func TestOutcomeSameRequestIsIdempotentAndConflictAvoidsGitHub(t *testing.T) {
 	if err != nil || created || repeated != first || github.calls != 1 || store.writes != 1 {
 		t.Fatalf("repeat=%#v created=%t calls=%d writes=%d err=%v", repeated, created, github.calls, store.writes, err)
 	}
-	if _, _, err := service.Record(context.Background(), store.job.ID, coding.OutcomeRejected); err == nil || github.calls != 1 || store.writes != 1 {
+	if _, _, err := service.Record(context.Background(), store.job.ID, coding.OutcomeRejected); !errors.Is(err, ErrUnavailable) || github.calls != 1 || store.writes != 1 {
 		t.Fatalf("conflict calls=%d writes=%d err=%v", github.calls, store.writes, err)
 	}
 }

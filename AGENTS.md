@@ -38,6 +38,8 @@ requirements.
 - Execute deterministic setup and verification through repository-owned commands before spending
   agent context. Keep Dorf integration at the development-tooling seam and out of managed product
   code.
+- For fast feedback on Go changes, run `mise run lint` and `mise run complexity`. Use
+  `mise run complexity:report` to locate the remaining complexity debt before simplifying it.
 - When installation, setup prompts, profile or AI connection readiness, Job operation,
   Messages, retry, file retrieval, or cleanup UX changes, update its existing operator authority and the
   [Agent Guide](docs/agent-guide.md) in the same slice. Keep the guide concise and link to authority
@@ -55,7 +57,7 @@ Keep every slice runnable with the repository contract:
 
 ```bash
 mise trust --yes
-mise install --locked go sqlc github:earendil-works/absurd
+mise install --locked
 docker compose -f compose.dev.yaml up --detach --wait postgres
 mise run db:init
 mise run check

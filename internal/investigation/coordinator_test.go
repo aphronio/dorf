@@ -15,7 +15,7 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 	job := core.Job{ID: "job-1", Workflow: Workflow, WorkflowRevision: WorkflowRevision, AdmissionOpen: true}
 	sandbox := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
 	message := MessageRecord{MessageID: "message-1", SandboxID: sandbox.ID}
-	snapshot := Snapshot{Job: job, MainSandbox: sandbox, Message: message, Source: Source{JobID: job.ID, Kind: SourceRemote, Repository: "https://example.test/repo.git", Revision: revision}}
+	snapshot := Snapshot{Job: job, MainSandbox: sandbox, Message: message, Source: Source{JobID: job.ID, Repository: "https://example.test/repo.git", Revision: revision}}
 
 	steps := []core.ActionKind{core.ActionSandboxCreate, gitworkspace.ActionRepositoryClone, core.ActionRouteCreate}
 	for _, want := range steps {
@@ -57,22 +57,6 @@ func TestTaskAndWakeIdentitiesRemainStable(t *testing.T) {
 	}
 }
 
-func TestCodebaseInvestigationProjectsRetainedBundleRestore(t *testing.T) {
-	revision := strings.Repeat("b", 40)
-	job := core.Job{ID: "job-local", Workflow: Workflow, WorkflowRevision: WorkflowRevision, AdmissionOpen: true}
-	sandbox := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
-	snapshot := Snapshot{
-		Job: job, MainSandbox: sandbox,
-		Source:  Source{JobID: job.ID, Kind: SourceGitBundle, Revision: revision, BundleDigest: strings.Repeat("c", 64), BundleByteSize: 42},
-		Message: MessageRecord{MessageID: "message-local", SandboxID: sandbox.ID},
-		Actions: []core.Action{{Kind: core.ActionSandboxCreate, Scope: sandbox.ID, State: core.ActionSucceeded}},
-	}
-	work := snapshot.Project()
-	if work.Kind != WorkAction || work.ActionKind != ActionRepositoryRestore || work.Description() != "Restoring retained repository" {
-		t.Fatalf("work=%#v description=%q", work, work.Description())
-	}
-}
-
 func TestCodebaseInvestigationSurfacesSandboxActionAttention(t *testing.T) {
 	job := core.Job{ID: "job-attention", Workflow: Workflow, WorkflowRevision: WorkflowRevision, AdmissionOpen: true}
 	sandbox := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
@@ -81,7 +65,7 @@ func TestCodebaseInvestigationSurfacesSandboxActionAttention(t *testing.T) {
 	job.WorkflowAttention = "the exact Sandbox profile artifact is unavailable"
 	snapshot := Snapshot{
 		Job: job, MainSandbox: sandbox,
-		Source:  Source{JobID: job.ID, Kind: SourceRemote, Repository: "https://example.test/repo.git", Revision: strings.Repeat("a", 40)},
+		Source:  Source{JobID: job.ID, Repository: "https://example.test/repo.git", Revision: strings.Repeat("a", 40)},
 		Message: MessageRecord{MessageID: "message-attention", SandboxID: sandbox.ID},
 	}
 	work := snapshot.Project()

@@ -19,7 +19,7 @@ func (s Store) CodebaseInvestigationSource(ctx context.Context, jobID string) (i
 	if err != nil {
 		return investigation.Source{}, err
 	}
-	return investigationSourceFromValues(row.JobID, row.Kind, row.Repository, row.Revision, row.BundleDigest, row.BundleByteSize), nil
+	return investigationSourceFromValues(row.JobID, row.Repository, row.Revision), nil
 }
 
 // resolveInvestigationMessageEnvelope resolves only the investigation execution

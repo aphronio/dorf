@@ -3,6 +3,7 @@ package controlreader
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -11,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/core"
+	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/postgres"
 )
 
@@ -241,7 +244,54 @@ func TestAuthenticatedClientUsesFixedAdmissionObservations(t *testing.T) {
 	}
 }
 
-func TestHandlerRejectsOversizedAndUnknownRequestsBeforeAuthority(t *testing.T) {
+func TestAuthenticatedClientObservesOnlyExactStoredPullRequest(t *testing.T) {
+	job := coding.Job{
+		Job:                core.Job{ID: "job-1"},
+		Revision:           strings.Repeat("a", 40),
+		Branch:             "dorf/job-1",
+		GitHubRepository:   "aphronio/dorf",
+		GitHubInstallation: "42",
+		BaseBranch:         "main",
+	}
+	proposal := &coding.Proposal{JobID: job.ID, Number: 17, URL: "https://github.com/aphronio/dorf/pull/17", ProposedRevision: job.Revision}
+	want := githubapi.PullRequest{
+		Number: 17, URL: proposal.URL, State: "open", Repository: job.GitHubRepository,
+		Head: job.Branch, HeadSHA: job.Revision, Base: job.BaseBranch,
+	}
+	pulls := &readerTestPullRequests{pull: want}
+	handler, err := NewHandler(strings.Repeat("f", 64), Service{
+		Store: &readerTestStore{codingJob: job, proposal: proposal}, PullRequests: pulls,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient("http://control-reader.test:8756", strings.Repeat("f", 64), &http.Client{Transport: readerHandlerTransport{handler: handler}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.ObservePullRequest(context.Background(), job.ID)
+	if err != nil || got != want {
+		t.Fatalf("ObservePullRequest()=%+v err=%v", got, err)
+	}
+	if pulls.authority != (githubapi.Authority{Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation}) || pulls.number != proposal.Number {
+		t.Fatalf("GitHub call authority=%+v number=%d", pulls.authority, pulls.number)
+	}
+
+	pulls.pull.HeadSHA = strings.Repeat("b", 40)
+	if _, err := client.ObservePullRequest(context.Background(), job.ID); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("conflicting ObservePullRequest() error=%v", err)
+	}
+	pulls.calls = 0
+	proposal.ProposedRevision = strings.Repeat("c", 40)
+	if _, err := client.ObservePullRequest(context.Background(), job.ID); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("stale proposal ObservePullRequest() error=%v", err)
+	}
+	if pulls.calls != 0 {
+		t.Fatal("stale durable proposal reached GitHub authority")
+	}
+}
+
+func TestHandlerRejectsInvalidBoundaryRequestsBeforeAuthority(t *testing.T) {
 	store := &readerTestStore{}
 	handler, err := NewHandler(strings.Repeat("e", 64), Service{Store: store})
 	if err != nil {
@@ -291,6 +341,36 @@ func TestHandlerRejectsOversizedAndUnknownRequestsBeforeAuthority(t *testing.T) 
 	}
 	if store.sandboxCalls != 0 {
 		t.Fatal("encoded internal route reached durable custody")
+	}
+
+	for _, test := range []struct {
+		name, method, path, contentType, wantCode string
+		wantStatus                                int
+	}{
+		{name: "unknown path", method: http.MethodPost, path: "/v1/unknown", contentType: "application/json", wantStatus: http.StatusNotFound, wantCode: "not_found"},
+		{name: "wrong method", method: http.MethodGet, path: FileReadPath, contentType: "application/json", wantStatus: http.StatusMethodNotAllowed, wantCode: "method_not_allowed"},
+		{name: "invalid content type", method: http.MethodPost, path: FileReadPath, contentType: "text/plain", wantStatus: http.StatusUnsupportedMediaType, wantCode: "invalid_content_type"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(test.method, test.path, strings.NewReader(`{"sandbox_id":"sandbox-1","path":"result.bin"}`))
+			request.Header.Set("Authorization", "Bearer "+strings.Repeat("e", 64))
+			request.Header.Set("Content-Type", test.contentType)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.wantStatus {
+				t.Fatalf("status=%d want=%d body=%s", response.Code, test.wantStatus, response.Body.String())
+			}
+			var got problem
+			if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil || got.Code != test.wantCode || response.Header().Get("Content-Type") != "application/json" {
+				t.Fatalf("problem=%+v content_type=%q err=%v", got, response.Header().Get("Content-Type"), err)
+			}
+			if test.wantStatus == http.StatusMethodNotAllowed && response.Header().Get("Allow") != http.MethodPost {
+				t.Fatalf("Allow=%q", response.Header().Get("Allow"))
+			}
+			if store.sandboxCalls != 0 {
+				t.Fatal("rejected request reached durable custody")
+			}
+		})
 	}
 }
 
@@ -370,6 +450,7 @@ func TestClientRequiresExactJSONMessageResponse(t *testing.T) {
 	}{
 		{name: "content type", contentType: "text/plain", body: `{"message_id":"message-1","outcome":"completed"}`},
 		{name: "trailing JSON", contentType: "application/json", body: `{"message_id":"message-1","outcome":"completed"}{}`},
+		{name: "unknown field", contentType: "application/json", body: `{"message_id":"message-1","outcome":"completed","provider":"incus"}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client, err := NewClient("http://control-reader:8756", strings.Repeat("a", 64), &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -423,6 +504,8 @@ func TestClientRequiresExactProblemResponse(t *testing.T) {
 
 type readerTestStore struct {
 	job                core.Job
+	codingJob          coding.Job
+	proposal           *coding.Proposal
 	sandbox            core.Sandbox
 	sandboxInsideFence *core.Sandbox
 	inFence            bool
@@ -437,6 +520,21 @@ func (s *readerTestStore) Job(_ context.Context, id string) (core.Job, error) {
 		return core.Job{}, postgres.ErrNotFound
 	}
 	return s.job, nil
+}
+
+func (s *readerTestStore) CodingJob(_ context.Context, id string) (coding.Job, error) {
+	if s.codingJob.ID == "" || s.codingJob.ID != id {
+		return coding.Job{}, postgres.ErrNotFound
+	}
+	return s.codingJob, nil
+}
+
+func (s *readerTestStore) Proposal(_ context.Context, id string) (*coding.Proposal, error) {
+	if s.proposal == nil || s.proposal.JobID != id {
+		return nil, nil
+	}
+	copy := *s.proposal
+	return &copy, nil
 }
 
 func (s *readerTestStore) Sandbox(_ context.Context, id string) (core.Sandbox, error) {
@@ -550,4 +648,17 @@ type readerTestInstallations struct {
 func (i *readerTestInstallations) DiscoverInstallation(_ context.Context, repository string) (string, error) {
 	i.repository = repository
 	return i.installation, nil
+}
+
+type readerTestPullRequests struct {
+	pull      githubapi.PullRequest
+	authority githubapi.Authority
+	number    int64
+	calls     int
+}
+
+func (p *readerTestPullRequests) PullRequest(_ context.Context, authority githubapi.Authority, number int64) (githubapi.PullRequest, error) {
+	p.authority, p.number = authority, number
+	p.calls++
+	return p.pull, nil
 }

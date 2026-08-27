@@ -19,17 +19,17 @@ forwarding, and guest-to-Gateway path pass one live terminal. Docker authority
 follows the deployment-host setup procedure, and the socket is never mounted into a Dorf workload
 or Sandbox. Custom Sandbox artifacts may be admitted through an explicitly created and functionally
 verified profile, but carry no Dorf release provenance. An E2B profile that blocks general internet
-access can consume a retained local Git source, but cannot run coding or investigation work that
-must clone a remote Git source; Dorf rejects that combination before admitting a Job.
+access cannot run coding or investigation work that must clone its remote Git source; Dorf rejects
+that combination before admitting a Job.
 
 The remote control API is a separate authority on a separate hostname from the Provider Gateway.
 Its public boundary is one exact HTTPS Deployment origin. Guided Cloudflare reaches container port
 `8745` over the Compose ingress network and publishes the exact pair selected during setup; custom
-operator-owned ingress reaches the API's published host port. The Compose-managed worker separately
-owns durable task execution and recovery. After Enrollment, a remote CLI Client needs network and
-TLS access to the Control API origin and only its own Dorf Client credential; it never needs
-PostgreSQL, provider, Harness, Gateway, or Sandbox credentials. Fixed remote coding and investigation
-admission reuse the same boundary. The
+operator-owned ingress reaches the API's published loopback host port. The Compose-managed worker
+separately owns durable task execution and recovery. After Enrollment, a remote CLI Client needs
+network and TLS access to the Control API origin and only its own Dorf Client credential; it never
+needs PostgreSQL, provider, Harness, Gateway, or Sandbox credentials. Fixed remote coding and
+investigation admission reuse the same boundary. The
 [remote-client setup procedure](getting-started.md#3-connect-one-remote-cli-client) owns the current
 workflow inputs; the [Remote Control API](control-api.md) owns the service and transport contract.
 
@@ -52,10 +52,11 @@ one installation; a missing installation resumes the operator handoff at its reu
 repository access and least permission scope are verified by the runtime operation that needs them.
 [Getting started](getting-started.md) contains the setup procedure.
 
-For a remote Client, start with `dorf auth status`. If `dorf connect` fails during discovery, the
+For any Client, start with `dorf auth status`. If `dorf connect` fails during discovery, the
 failure belongs to DNS, TLS, ingress, or the control API on host port `8745`. An `unauthenticated`
-response means the saved Client credential is invalid, expired, or revoked; a deployment-host
-operator must issue a new Enrollment. Use `dorf auth status --output json` for automation.
+response means the saved Client credential is invalid, expired, or revoked. Rerun `dorf setup` for
+the setup-owned host Client, or issue a new Enrollment for a remote Client. Use
+`dorf auth status --output json` for automation.
 `invalid_cursor` means a Job-list cursor was not passed back unchanged; begin a fresh traversal
 rather than altering it.
 

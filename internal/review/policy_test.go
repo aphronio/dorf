@@ -20,6 +20,7 @@ func TestReviewPolicyTable(t *testing.T) {
 		{"browser UI", []string{"web/app.tsx"}, "selected", []Role{RoleBrowserUI}},
 		{"authentication authority", []string{"internal/auth/policy.go"}, "selected", []Role{RoleAuthAuthority}},
 		{"docs markers plus real UI and auth", []string{"docs/web/guide.md", "docs/auth/README.md", "web/app.tsx", "internal/auth/policy.go"}, "selected", []Role{RoleAuthAuthority, RoleBrowserUI}},
+		{"auth UI and unknown keep canonical role order", []string{"internal/core/service.go", "web/app.tsx", "internal/auth/policy.go"}, "selected", []Role{RoleAuthAuthority, RoleBrowserUI, RoleGeneral}},
 		{"unknown", []string{"internal/core/service.go"}, "selected", []Role{RoleGeneral}},
 	}
 	for _, test := range tests {

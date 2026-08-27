@@ -128,7 +128,7 @@ services:
     tmpfs:
       - /tmp:rw,nosuid,nodev,mode=1777
     ports:
-      - "8745:8745"
+      - "127.0.0.1:8745:8745"
     volumes:
       - type: bind
         source: "${DORF_STATE_DIR}"

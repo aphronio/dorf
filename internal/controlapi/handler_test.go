@@ -54,12 +54,17 @@ func TestHandlerBoundary(t *testing.T) {
 		path   string
 		body   io.Reader
 	}{
+		{http.MethodDelete, "/v1/jobs", nil},
+		{http.MethodGet, "/v1/jobs/job-1", nil},
+		{http.MethodDelete, "/v1/jobs/job-1", nil},
 		{http.MethodGet, "/v1/jobs/job-1/watch", nil},
 		{http.MethodGet, "/v1/jobs?limit=1", nil},
 		{http.MethodPost, "/v1/jobs/job-1/messages", strings.NewReader(`{}`)},
 		{http.MethodGet, "/v1/jobs/job-1/messages/message-1", nil},
 		{http.MethodPost, "/v1/jobs/job-1/retries", nil},
 		{http.MethodGet, "/v1/jobs/job-1/evidence", nil},
+		{http.MethodPut, "/v1/jobs/job-1/abandon", nil},
+		{http.MethodPut, "/v1/jobs/job-1/cleanup", nil},
 		{http.MethodGet, "/v1/sandboxes/sandbox-1/files?path=REPORT.md", nil},
 		{http.MethodPost, "/v1/workflows/coding/jobs", strings.NewReader(`{}`)},
 		{http.MethodPost, "/v1/workflows/codebase-investigation/jobs", strings.NewReader(`{}`)},
@@ -99,10 +104,61 @@ func TestHandlerBoundary(t *testing.T) {
 	}
 	wrongMethod := do(http.MethodDelete, "/v1/jobs/job-1", credential, "", nil)
 	requireProblem(t, wrongMethod, http.StatusMethodNotAllowed, "method_not_allowed")
+	jobsWrongMethod := do(http.MethodDelete, "/v1/jobs", credential, "", nil)
+	requireProblem(t, jobsWrongMethod, http.StatusMethodNotAllowed, "method_not_allowed")
+	if allow := jobsWrongMethod.Header().Get("Allow"); allow != "GET, POST" {
+		t.Fatalf("jobs Allow=%q, want GET, POST", allow)
+	}
 	redirectSpelling := do(http.MethodGet, "/v1/", "", "", nil)
 	requireProblem(t, redirectSpelling, http.StatusNotFound, "not_found")
 	if redirectSpelling.Header().Get("Location") != "" {
 		t.Fatalf("non-canonical path redirected to %q", redirectSpelling.Header().Get("Location"))
+	}
+}
+
+func TestAdmissionsAcceptExplicitAIConnection(t *testing.T) {
+	credential := "dcr_admission-connection"
+	base := controlapi.Job{ID: "job-1"}
+	tests := []struct {
+		name   string
+		target string
+		body   string
+		jobs   *fakeJobs
+		got    func(*fakeJobs) string
+	}{
+		{
+			name: "direct", target: "/v1/jobs",
+			body: `{"goal":"ship","model":"model-1","ai_connection":"work-openai"}`,
+			jobs: &fakeJobs{job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindDirect}},
+			got:  func(j *fakeJobs) string { return j.gotInput.AIConnection },
+		},
+		{
+			name: "coding", target: "/v1/workflows/coding/jobs",
+			body: `{"goal":"ship","repository":"https://github.com/acme/widget.git","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","base_branch":"main","model":"model-1","ai_connection":"work-openai"}`,
+			jobs: &fakeJobs{job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindCoding}, view: controlapi.CodingJob{Job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindCoding}}},
+			got:  func(j *fakeJobs) string { return j.codingInput.AIConnection },
+		},
+		{
+			name: "investigation", target: "/v1/workflows/codebase-investigation/jobs",
+			body: `{"brief":"trace it","repository":"https://github.com/acme/widget.git","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","model":"model-1","ai_connection":"work-openai"}`,
+			jobs: &fakeJobs{job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindInvestigation}, view: controlapi.InvestigationJob{Job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindInvestigation}}},
+			got:  func(j *fakeJobs) string { return j.investigationInput.AIConnection },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, test.jobs).Handler
+			request := httptest.NewRequest(http.MethodPost, test.target, strings.NewReader(test.body))
+			request.Header.Set("Authorization", "Bearer "+credential)
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Idempotency-Key", "admit-1")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			requireStatusType(t, response, http.StatusCreated, "application/json")
+			if got := test.got(test.jobs); got != "work-openai" {
+				t.Fatalf("AIConnection=%q, want work-openai", got)
+			}
+		})
 	}
 }
 
@@ -254,6 +310,32 @@ func TestJobConditionalGetAndDirectInteractionRoutes(t *testing.T) {
 	if jobs.cleanupCalls != 0 {
 		t.Fatal("unsupported cleanup precondition reached the mutation")
 	}
+}
+
+func TestAbandonIsAuthenticatedIdempotentAndReturnsCanonicalJob(t *testing.T) {
+	credential := "dcr_abandon"
+	job := controlapi.CodingJob{Job: controlapi.Job{ID: "job-coding", Kind: controlapi.JobKindCoding, Goal: "ship"}}
+	jobs := &fakeJobs{job: job.Job, view: job}
+	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs).Handler
+	put := func() *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPut, "/v1/jobs/job-coding/abandon", nil)
+		request.Header.Set("Authorization", "Bearer "+credential)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	for call := 1; call <= 2; call++ {
+		response := put()
+		requireStatusType(t, response, http.StatusOK, "application/json")
+		var got controlapi.CodingJob
+		decode(t, response, &got)
+		if got.ID != job.ID || got.Kind != controlapi.JobKindCoding || response.Header().Get("ETag") == "" || jobs.abandonCalls != call {
+			t.Fatalf("call %d: job/etag/calls=%#v/%q/%d", call, got, response.Header().Get("ETag"), jobs.abandonCalls)
+		}
+	}
+
+	jobs.abandonErr = controlapi.ErrAbandonUnavailable
+	requireProblem(t, put(), http.StatusConflict, "abandon_unavailable")
 }
 
 func TestConcreteWorkflowJobRepresentationDrivesETag(t *testing.T) {
@@ -561,25 +643,29 @@ func (a *fakeAuth) Redeem(_ context.Context, code, name, credential string) (con
 }
 
 type fakeJobs struct {
-	mu                sync.Mutex
-	job               controlapi.Job
-	view              controlapi.JobView
-	list              controlapi.JobList
-	listErr           error
-	listLimit         int
-	listCursor        string
-	gotInput          controlapi.AdmitJobRequest
-	message           controlapi.Message
-	retry             controlapi.Retry
-	file              []byte
-	filePath          string
-	messageKey        string
-	retryKey          string
-	messageInput      controlapi.SendMessageRequest
-	messageCreated    bool
-	retryCreated      bool
-	cleanupCalls      int
-	waitForGetContext bool
+	mu                 sync.Mutex
+	job                controlapi.Job
+	view               controlapi.JobView
+	list               controlapi.JobList
+	listErr            error
+	listLimit          int
+	listCursor         string
+	gotInput           controlapi.AdmitJobRequest
+	codingInput        controlapi.AdmitCodingJobRequest
+	investigationInput controlapi.AdmitInvestigationJobRequest
+	message            controlapi.Message
+	retry              controlapi.Retry
+	file               []byte
+	filePath           string
+	messageKey         string
+	retryKey           string
+	messageInput       controlapi.SendMessageRequest
+	messageCreated     bool
+	retryCreated       bool
+	abandonCalls       int
+	abandonErr         error
+	cleanupCalls       int
+	waitForGetContext  bool
 }
 
 func (j *fakeJobs) List(_ context.Context, limit int, cursor string) (controlapi.JobList, error) {
@@ -596,16 +682,18 @@ func (j *fakeJobs) AdmitDirect(_ context.Context, _ string, input controlapi.Adm
 	return controlapi.DirectJob{Job: j.job}, true, nil
 }
 
-func (j *fakeJobs) AdmitCoding(_ context.Context, _ string, _ controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, bool, error) {
+func (j *fakeJobs) AdmitCoding(_ context.Context, _ string, input controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, bool, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	j.codingInput = input
 	job, _ := j.current().(controlapi.CodingJob)
 	return job, true, nil
 }
 
-func (j *fakeJobs) AdmitInvestigation(_ context.Context, _ string, _ controlapi.AdmitInvestigationJobRequest) (controlapi.InvestigationJob, bool, error) {
+func (j *fakeJobs) AdmitInvestigation(_ context.Context, _ string, input controlapi.AdmitInvestigationJobRequest) (controlapi.InvestigationJob, bool, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	j.investigationInput = input
 	job, _ := j.current().(controlapi.InvestigationJob)
 	return job, true, nil
 }
@@ -654,6 +742,19 @@ func (j *fakeJobs) Retry(_ context.Context, jobID, key string) (controlapi.Retry
 	}
 	j.retryKey = key
 	return j.retry, j.retryCreated, nil
+}
+
+func (j *fakeJobs) Abandon(_ context.Context, id string) (controlapi.JobView, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.abandonCalls++
+	if id != j.job.ID {
+		return nil, controlapi.ErrJobNotFound
+	}
+	if j.abandonErr != nil {
+		return nil, j.abandonErr
+	}
+	return j.current(), nil
 }
 
 func (j *fakeJobs) ReadSandboxFile(_ context.Context, sandboxID, path string) ([]byte, error) {

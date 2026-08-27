@@ -15,6 +15,7 @@ type ProblemDescriptor struct {
 }
 
 var problemCatalog = []ProblemDescriptor{
+	describeProblem(409, "abandon_unavailable", "Only an unfinished coding Job can be abandoned", false),
 	describeProblem(415, "body_not_allowed", "This operation does not accept a body or Content-Type", false),
 	describeProblem(413, "body_too_large", "Request body is too large", false),
 	describeProblem(409, "client_conflict", "Client credential is already registered", false),

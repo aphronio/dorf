@@ -10,13 +10,12 @@ import (
 type Role string
 
 const (
-	RoleBrowserUI        Role = "browser-ui"
-	RoleAuthAuthority    Role = "auth-authority"
-	RoleCriticalBoundary Role = "critical-boundary"
-	RoleGeneral          Role = "general"
+	RoleAuthAuthority Role = "auth-authority"
+	RoleBrowserUI     Role = "browser-ui"
+	RoleGeneral       Role = "general"
 )
 
-var allowedRoles = []Role{RoleAuthAuthority, RoleBrowserUI, RoleCriticalBoundary, RoleGeneral}
+var allowedRoles = []Role{RoleAuthAuthority, RoleBrowserUI, RoleGeneral}
 
 type ChangeFacts struct {
 	Revision          string   `json:"revision"`
@@ -86,36 +85,19 @@ func ReviewPolicy(facts ChangeFacts) (ReviewPlan, error) {
 	if facts.Revision == "" || facts.BaseRevision == "" || len(facts.Paths) == 0 {
 		return ReviewPlan{}, fmt.Errorf("incomplete ChangeFacts cannot select review")
 	}
-	selected := map[Role]bool{}
+	var roles []Role
 	var reasons []Reason
-	add := func(role Role, source, detail string) {
-		if !selected[role] {
-			selected[role] = true
-			reasons = append(reasons, Reason{Role: role, Source: source, Detail: detail})
-		}
+	if facts.Authentication {
+		roles = append(roles, RoleAuthAuthority)
+		reasons = append(reasons, Reason{Role: RoleAuthAuthority, Source: "mandatory", Detail: "authentication or authority paths changed"})
 	}
 	if facts.BrowserUI {
-		add(RoleBrowserUI, "mandatory", "browser/UI paths changed")
-	}
-	if facts.Authentication {
-		add(RoleAuthAuthority, "mandatory", "authentication or authority paths changed")
+		roles = append(roles, RoleBrowserUI)
+		reasons = append(reasons, Reason{Role: RoleBrowserUI, Source: "mandatory", Detail: "browser/UI paths changed"})
 	}
 	if facts.Unknown {
-		add(RoleGeneral, "unknown", "change risk could not be classified mechanically")
-	}
-	roles := make([]Role, 0, len(selected))
-	for role := range selected {
-		roles = append(roles, role)
-	}
-	sort.Slice(roles, func(i, j int) bool { return roles[i] < roles[j] })
-	sort.Slice(reasons, func(i, j int) bool {
-		if reasons[i].Role == reasons[j].Role {
-			return reasons[i].Source < reasons[j].Source
-		}
-		return reasons[i].Role < reasons[j].Role
-	})
-	if len(roles) == 0 {
-		roles = nil
+		roles = append(roles, RoleGeneral)
+		reasons = append(reasons, Reason{Role: RoleGeneral, Source: "unknown", Detail: "change risk could not be classified mechanically"})
 	}
 	decision := "selected"
 	if len(roles) == 0 {

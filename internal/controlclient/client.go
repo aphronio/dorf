@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/clientconfig"
 	"github.com/aphronio/dorf/internal/controlapi"
+	"github.com/aphronio/dorf/internal/hostclientconfig"
 )
 
 // A valid 1 MiB goal can occupy more than 6 MiB after JSON escaping.
@@ -36,6 +38,22 @@ type Client struct {
 // server prose or structured details in its printable error text.
 type ProblemError struct {
 	Problem controlapi.Problem
+}
+
+type serviceError struct{ error }
+
+func (e *serviceError) Unwrap() error { return e.error }
+
+func IsServiceError(err error) bool {
+	var service *serviceError
+	return errors.As(err, &service)
+}
+
+func asServiceError(err error) error {
+	if err == nil || IsServiceError(err) {
+		return err
+	}
+	return &serviceError{error: err}
 }
 
 func (e *ProblemError) Error() string {
@@ -61,6 +79,31 @@ func New(deploymentURL, credential string, transport http.RoundTripper) (*Client
 	if transport == nil {
 		transport = http.DefaultTransport
 	}
+	return newClient(base, credential, transport), nil
+}
+
+func NewLoopback(credential string) (*Client, error) {
+	if credential == "" {
+		return nil, fmt.Errorf("Dorf client credential is empty")
+	}
+	base, err := url.Parse(hostclientconfig.HostOrigin)
+	if err != nil {
+		return nil, fmt.Errorf("parse Dorf host origin")
+	}
+	const address = "127.0.0.1:8745"
+	dialer := &net.Dialer{}
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, requestedAddress string) (net.Conn, error) {
+			if network != "tcp" || requestedAddress != address {
+				return nil, fmt.Errorf("Dorf host client refused a non-loopback destination")
+			}
+			return dialer.DialContext(ctx, "tcp4", address)
+		},
+	}
+	return newClient(base, credential, transport), nil
+}
+
+func newClient(base *url.URL, credential string, transport http.RoundTripper) *Client {
 	checkRedirect := func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
@@ -73,7 +116,7 @@ func New(deploymentURL, credential string, transport http.RoundTripper) (*Client
 			CheckRedirect: checkRedirect,
 		},
 		stream: &http.Client{Transport: transport, CheckRedirect: checkRedirect},
-	}, nil
+	}
 }
 
 // String deliberately excludes the Client credential.
@@ -184,11 +227,11 @@ func (c *Client) ListJobs(ctx context.Context, limit int, cursor string) (contro
 	request.URL.RawQuery = query.Encode()
 	response, err := send(c.http, request)
 	if err != nil {
-		return controlapi.JobList{}, err
+		return controlapi.JobList{}, asServiceError(err)
 	}
 	var list controlapi.JobList
 	if err := decodeJSONResponse(response, &list); err != nil {
-		return controlapi.JobList{}, err
+		return controlapi.JobList{}, asServiceError(err)
 	}
 	return list, nil
 }
@@ -282,30 +325,30 @@ func (c *Client) SandboxFile(ctx context.Context, sandboxID, path string) ([]byt
 	request.Header.Set("Accept-Encoding", "identity")
 	response, err := send(c.http, request)
 	if err != nil {
-		return nil, err
+		return nil, asServiceError(err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, responseProblem(response)
+		return nil, asServiceError(responseProblem(response))
 	}
 	if response.StatusCode != http.StatusOK {
 		if response.Body != nil {
 			response.Body.Close()
 		}
-		return nil, fmt.Errorf("Dorf API file response has unexpected HTTP %d", response.StatusCode)
+		return nil, asServiceError(fmt.Errorf("Dorf API file response has unexpected HTTP %d", response.StatusCode))
 	}
 	if response.Body == nil {
-		return nil, fmt.Errorf("Dorf API response has no body")
+		return nil, asServiceError(fmt.Errorf("Dorf API response has no body"))
 	}
 	defer response.Body.Close()
 	contents, err := io.ReadAll(response.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read Dorf API file response")
+		return nil, asServiceError(fmt.Errorf("read Dorf API file response"))
 	}
 	if response.ContentLength >= 0 && response.ContentLength != int64(len(contents)) {
-		return nil, fmt.Errorf("Dorf API file response length does not match Content-Length")
+		return nil, asServiceError(fmt.Errorf("Dorf API file response length does not match Content-Length"))
 	}
 	if err := verifyContentDigest(response.Header.Values("Content-Digest"), contents); err != nil {
-		return nil, err
+		return nil, asServiceError(err)
 	}
 	return contents, nil
 }
@@ -318,6 +361,15 @@ func (c *Client) Evidence(ctx context.Context, jobID string) (controlapi.Evidenc
 	var response controlapi.EvidenceList
 	err := c.do(ctx, http.MethodGet, []string{"v1", "jobs", jobID, "evidence"}, nil, true, "", &response)
 	return response, err
+}
+
+func (c *Client) Abandon(ctx context.Context, id string) (controlapi.JobView, error) {
+	if id == "" {
+		return nil, fmt.Errorf("Job ID is empty")
+	}
+	var response jobResponse
+	err := c.do(ctx, http.MethodPut, []string{"v1", "jobs", id, "abandon"}, nil, true, "", &response)
+	return response.JobView, err
 }
 
 // Cleanup idempotently requests exact cleanup of one Job.
@@ -347,9 +399,9 @@ func (c *Client) do(ctx context.Context, method string, path []string, input any
 	}
 	response, err := send(c.http, request)
 	if err != nil {
-		return err
+		return asServiceError(err)
 	}
-	return decodeJSONResponse(response, output)
+	return asServiceError(decodeJSONResponse(response, output))
 }
 
 func (c *Client) request(ctx context.Context, method string, path []string, input any, authenticated bool, key string) (*http.Request, error) {
@@ -455,7 +507,7 @@ func (c *Client) watchJobOnce(ctx context.Context, id string, lastEventID *strin
 	}
 	response, err := send(c.stream, request)
 	if err != nil {
-		return ctx.Err() == nil, err
+		return ctx.Err() == nil, asServiceError(err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		status := response.StatusCode
@@ -465,14 +517,14 @@ func (c *Client) watchJobOnce(ctx context.Context, id string, lastEventID *strin
 		if errors.As(err, &problem) {
 			retryable = retryable || problem.Problem.Retryable
 		}
-		return retryable, err
+		return retryable, asServiceError(err)
 	}
 	if response.Body == nil {
-		return false, fmt.Errorf("Dorf API response has no body")
+		return false, asServiceError(fmt.Errorf("Dorf API response has no body"))
 	}
 	defer response.Body.Close()
 	if mediaType, _, _ := strings.Cut(response.Header.Get("Content-Type"), ";"); strings.TrimSpace(mediaType) != "text/event-stream" {
-		return false, fmt.Errorf("Dorf API watch response is not an event stream")
+		return false, asServiceError(fmt.Errorf("Dorf API watch response is not an event stream"))
 	}
 	scanner := bufio.NewScanner(response.Body)
 	scanner.Buffer(make([]byte, 64<<10), maxResponseBytes+1024)
@@ -486,7 +538,7 @@ func (c *Client) watchJobOnce(ctx context.Context, id string, lastEventID *strin
 			if len(data) != 0 && (eventType == "" || eventType == "snapshot") {
 				job, err := decodeJob([]byte(strings.Join(data, "\n")))
 				if err != nil {
-					return false, fmt.Errorf("decode Dorf API watch snapshot")
+					return false, asServiceError(fmt.Errorf("decode Dorf API watch snapshot"))
 				}
 				if err := deliver(job); err != nil {
 					return false, err
@@ -520,7 +572,7 @@ func (c *Client) watchJobOnce(ctx context.Context, id string, lastEventID *strin
 				dataBytes++
 			}
 			if dataBytes > maxResponseBytes {
-				return false, fmt.Errorf("Dorf API watch snapshot exceeds %d bytes", maxResponseBytes)
+				return false, asServiceError(fmt.Errorf("Dorf API watch snapshot exceeds %d bytes", maxResponseBytes))
 			}
 			data = append(data, value)
 		case "retry":
@@ -534,7 +586,7 @@ func (c *Client) watchJobOnce(ctx context.Context, id string, lastEventID *strin
 		return false, ctx.Err()
 	}
 	if scanner.Err() != nil {
-		return true, fmt.Errorf("read Dorf API watch stream")
+		return true, asServiceError(fmt.Errorf("read Dorf API watch stream"))
 	}
 	return true, nil
 }

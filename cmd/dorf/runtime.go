@@ -93,32 +93,13 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 	}, nil
 }
 
-func (r profileRuntimeResolver) CodingAdmissions() coding.AdmissionService {
-	application := coreApplication(r.store, r.client)
-	return coding.NewAdmissionService(
-		r.store,
-		application,
-		configuredProviderGateway(r.cfg),
-		githubapi.Client{APIURL: r.cfg.GitHubAPIURL, Credentials: r.cfg.GitHubCredentials},
-	)
-}
-
-func (r profileRuntimeResolver) InvestigationAdmissions() investigation.AdmissionService {
-	return investigation.NewAdmissionService(
-		r.store,
-		coreApplication(r.store, r.client),
-		configuredProviderGateway(r.cfg),
-	)
-}
-
 func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, name string) (investigation.Runtime, error) {
 	resolved, err := r.resolveBase(ctx, name)
 	if err != nil {
 		return investigation.Runtime{}, err
 	}
 	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, gitworkspace.Workspace{Transport: resolved.Sandbox, Workspace: resolved.Sandbox.Workspace()}, resolved.Ownership)
-	restore := investigation.RetainedRestore{Transport: resolved.Sandbox, Workspace: resolved.Sandbox.Workspace()}
-	service := investigation.NewService(workspaceExecutor, restore, blob.Store{Root: r.cfg.BlobRoot})
+	service := investigation.NewService(workspaceExecutor)
 	return investigation.Runtime{Profile: resolved.Profile, Agent: resolved.Execution, Investigation: service}, nil
 }
 

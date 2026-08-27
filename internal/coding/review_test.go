@@ -93,7 +93,7 @@ func TestReviewEvidenceObservesAgentRunAndExactCheckoutTreeWithoutCopyingFeedbac
 	revision := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	post := ReviewCheckoutObservation{Revision: revision, Tree: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
 	run := ReviewRunView{
-		ID: "agent-run-review", JobID: "job-1", InputRevision: revision, Role: "critical-boundary",
+		ID: "agent-run-review", JobID: "job-1", InputRevision: revision, Role: "general",
 		Capability: ReviewReadOnlyCapability, Harness: "codex", ThreadID: "thread-1", TurnID: "turn-1",
 		Outcome: "completed", StartedAt: now, FinishedAt: now.Add(time.Second),
 	}

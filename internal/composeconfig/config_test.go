@@ -263,8 +263,8 @@ func TestStaticComposeManifestKeepsThePublicTopologyAndCapabilityBoundary(t *tes
 	if got := serviceMap(t, services, "cloudflared")["networks"]; !jsonEqual(got, []any{"ingress"}) {
 		t.Fatalf("cloudflared networks=%v, want public ingress only", got)
 	}
-	if got := controlAPI["ports"]; !jsonEqual(got, []any{"8745:8745"}) {
-		t.Fatalf("control API ports=%v, want direct host mapping", got)
+	if got := controlAPI["ports"]; !jsonEqual(got, []any{"127.0.0.1:8745:8745"}) {
+		t.Fatalf("control API ports=%v, want loopback-only host mapping", got)
 	}
 	if condition(t, serviceMap(t, services, "worker"), "depends_on", "migrate") != "service_completed_successfully" {
 		t.Fatal("worker does not wait for the one-shot migration")

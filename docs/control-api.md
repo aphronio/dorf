@@ -17,8 +17,11 @@ credential. Dorf stores only the credential digest. Enrollment codes and credent
 in URLs, Jobs, Profiles, logs, or provider configuration.
 
 The remote CLI retains one normalized Deployment URL and its credential in an owner-only file. It
-has no named contexts. `dorf auth status --output json` returns the Deployment, effective Principal,
-Client, and credential source without returning the credential. Client lifecycle remains host-owned:
+has no named contexts. Setup also enrolls one ordinary deployment-host Client and stores its proof
+in protected host state. That Client uses only the fixed `http://127.0.0.1:8745` origin. A saved
+remote `client.json` takes precedence over the host Client. `dorf auth status --output json` returns
+the Deployment, effective Principal, Client, and credential source without returning the credential.
+Client lifecycle remains host-owned:
 
 ```text
 dorf client enroll [--output json]
@@ -38,7 +41,7 @@ Agents use this same boundary: an ordinary skill or runbook can invoke the struc
 code mode can consume the OpenAPI document and call HTTPS directly. Dorf does not require a second
 agent-specific protocol.
 
-## Resources and compatibility
+## Resources
 
 The published OpenAPI document is the exact authority for request and response schemas, required
 headers, enum values, content types, status codes, and the closed `direct`, `coding`, and
@@ -60,6 +63,7 @@ POST  /v1/jobs/{job}/messages
 GET   /v1/jobs/{job}/messages/{message}
 POST  /v1/jobs/{job}/retries
 GET   /v1/jobs/{job}/evidence
+PUT   /v1/jobs/{job}/abandon
 PUT   /v1/jobs/{job}/cleanup
 GET   /v1/sandboxes/{sandbox}/files?path=PATH
 ```
@@ -68,10 +72,12 @@ Job listing is newest-first keyset traversal of current facts, not a frozen snap
 defaults to 50 and accepts 1–100. Each item is deliberately only `id`, `kind`, and `admitted_at`;
 read the Job for mutable execution and cleanup state. Pass `next_cursor` back unchanged. Cursors are
 opaque, and malformed or altered cursors return the published `invalid_cursor` Problem. The index
-contains only Job kinds understood by this API revision; a retained host-local investigation bundle
-does not cross the remote boundary.
+contains only Job kinds understood by this API revision. Investigation admission requires a
+credential-free reachable HTTPS repository and an exact Revision.
 
-Job and Message admission and explicit retry take caller-known request identity before transmission.
+Direct and workflow admission may select a named AI connection. Omission uses the deployment
+default, and the admitted Job retains the resolved connection. Job and Message admission and
+explicit retry take caller-known request identity before transmission.
 Direct HTTP callers supply `Idempotency-Key`; the CLI generates it, retries one ambiguous transport
 or server failure with the same key, and includes it in structured receipts. Exact replay returns the
 same resource, while changed input returns `idempotency_conflict`. Cleanup is inherently idempotent.
@@ -81,8 +87,9 @@ Job inspection is the canonical snapshot and supports representation ETags. Watc
 optimization over complete canonical snapshots: it may coalesce intermediate values and reconnects
 by reading current truth rather than replaying a second event log. Follow is durable FIFO input;
 steer remains bound to the exact active Turn and never degrades into Follow. Retry accepts only an
-eligible failed execution. Cleanup is an explicit idempotent request, separate from execution or a
-workflow Outcome. A settled Message whose internal encoded JSON observation exceeds 16 MiB returns
+eligible failed execution. Abandon records an idempotent `abandoned` Outcome only for a coding Job,
+then requests cleanup. Cleanup remains separate from execution and Outcome. A settled Message whose
+internal encoded JSON observation exceeds 16 MiB returns
 the published `message_unavailable` Problem rather than a partial result.
 
 Sandbox files are exact, caller-selected, workspace-relative regular-file reads at Sandbox level.
@@ -102,8 +109,10 @@ terminal remains gated by
 [D101's live proof](project/decisions.md#d101--compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit):
 
 ```text
-Remote Client -> guided cloudflared -> control-api:8745
-Sandbox       -> same Tunnel        -> provider-gateway:8317
+Remote Client -> HTTPS Deployment origin
+                 | guided cloudflared -> control-api:8745 (Compose ingress)
+                 ` custom host ingress -> 127.0.0.1:8745
+Sandbox       -> HTTPS model origin -> same Tunnel -> provider-gateway:8317
 
 PostgreSQL -> migrate -> worker + authenticated narrow reads <- control-api
 ```
@@ -118,18 +127,18 @@ attaches only the control API and Provider Gateway to the Tunnel's ingress netwo
 The API receives its database URL, read-only API state, and an independently derived reader token
 through the protected Compose environment. It receives no Incus socket or identity, E2B key,
 GitHub credential, Gateway state, or provider configuration. The worker's narrow reader answers
-only default and named AI-connection observation, GitHub installation discovery, an exact
-Job-owned Sandbox file read, and one settled Message result. It has no generic proxy, provider
-selector, credential response, or mutation operation.
+only default and named AI-connection observation, GitHub installation discovery, one exact stored
+Job Proposal observation, an exact Job-owned Sandbox file read, and one settled Message result. It
+has no generic proxy, provider selector, credential response, or mutation operation.
 
 Bridge networks keep database access, API-to-worker reads, worker-to-Gateway calls, runtime egress,
-and Gateway ingress explicit. PostgreSQL publishes only on host loopback, while the control API maps
-host port `8745` for custom ingress and joins the optional guided ingress network; the Gateway
-publishes only an explicitly selected Profile route. The one-shot migration uses runtime egress only
-to retrieve its checksum-pinned Absurd schema before exiting. The project uses no host networking
-and mounts no host Docker socket. The optional local-Incus overlay gives only the worker the exact
-configured Incus Unix socket; a remote Incus endpoint uses its explicit HTTPS and mTLS adapter
-instead, but guided remote deployment remains unsupported.
+and Gateway ingress explicit. PostgreSQL and the control API publish only on host loopback; the
+control API also joins the optional guided ingress network. The Gateway publishes only an explicitly
+selected Profile route. The one-shot
+migration uses runtime egress only to retrieve its checksum-pinned Absurd schema before exiting. The
+project uses no host networking and mounts no host Docker socket. The optional local-Incus overlay
+gives only the worker the exact configured Incus Unix socket; a remote Incus endpoint uses its
+explicit HTTPS and mTLS adapter instead, but guided remote deployment remains unsupported.
 
 The release installs static `dorf-compose.yaml` and `dorf-compose-incus.yaml` manifests beside the
 binary. One continuous `dorf setup` flow writes the protected `.env`, applies only those exact

@@ -138,12 +138,8 @@ func (s Snapshot) Project() Work {
 	if !core.HasSucceededAction(s.Actions, core.ActionSandboxCreate, s.MainSandbox.ID) {
 		return action(core.ActionSandboxCreate)
 	}
-	materializationAction := gitworkspace.ActionRepositoryClone
-	if s.Source.Kind == SourceGitBundle {
-		materializationAction = ActionRepositoryRestore
-	}
-	if !core.HasSucceededAction(s.Actions, materializationAction, s.MainSandbox.ID) {
-		return action(materializationAction)
+	if !core.HasSucceededAction(s.Actions, gitworkspace.ActionRepositoryClone, s.MainSandbox.ID) {
+		return action(gitworkspace.ActionRepositoryClone)
 	}
 	if !core.HasSucceededAction(s.Actions, core.ActionRouteCreate, s.MainSandbox.ID) {
 		return action(core.ActionRouteCreate)
@@ -221,9 +217,6 @@ func runInvestigationAction(ctx context.Context, custody core.JobHandle, service
 			return fmt.Errorf("ensured Sandbox %s changed selected identity %s", ensured.ID(), snapshot.MainSandbox.ID)
 		}
 		return nil
-	}
-	if work.ActionKind == ActionRepositoryRestore {
-		return service.ExecuteRepositoryRestore(ctx, snapshot.Job, snapshot.MainSandbox, snapshot.Source)
 	}
 	if work.ActionKind == gitworkspace.ActionRepositoryClone {
 		return service.ExecuteRepositoryClone(ctx, snapshot.Job, snapshot.MainSandbox, snapshot.Source.Repository, snapshot.Source.Revision, "")

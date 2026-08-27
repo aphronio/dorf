@@ -7,67 +7,44 @@ package dbsql
 
 import (
 	"context"
-	"database/sql"
 )
 
 const getCodebaseInvestigationSource = `-- name: GetCodebaseInvestigationSource :one
-select s.job_id,s.kind,s.repository,s.revision,
-       coalesce(s.bundle_digest,'') as bundle_digest,coalesce(s.bundle_byte_size,0) as bundle_byte_size
+select s.job_id,s.repository,s.revision
 from dorf.codebase_investigation_sources s
 where s.job_id=$1
 `
 
 type GetCodebaseInvestigationSourceRow struct {
-	JobID          string
-	Kind           string
-	Repository     string
-	Revision       string
-	BundleDigest   string
-	BundleByteSize int64
+	JobID      string
+	Repository string
+	Revision   string
 }
 
 func (q *Queries) GetCodebaseInvestigationSource(ctx context.Context, jobID string) (GetCodebaseInvestigationSourceRow, error) {
 	row := q.db.QueryRowContext(ctx, getCodebaseInvestigationSource, jobID)
 	var i GetCodebaseInvestigationSourceRow
-	err := row.Scan(
-		&i.JobID,
-		&i.Kind,
-		&i.Repository,
-		&i.Revision,
-		&i.BundleDigest,
-		&i.BundleByteSize,
-	)
+	err := row.Scan(&i.JobID, &i.Repository, &i.Revision)
 	return i, err
 }
 
 const insertCodebaseInvestigationSource = `-- name: InsertCodebaseInvestigationSource :execrows
 insert into dorf.codebase_investigation_sources(
-    job_id,workflow_name,kind,repository,revision,bundle_digest,bundle_byte_size
+    job_id,workflow_name,repository,revision
 ) values(
-    $1,'codebase-investigation',$2,$3,$4,
-    $5,$6
+    $1,'codebase-investigation',$2,$3
 )
 on conflict(job_id) do nothing
 `
 
 type InsertCodebaseInvestigationSourceParams struct {
-	JobID          string
-	Kind           string
-	Repository     string
-	Revision       string
-	BundleDigest   sql.NullString
-	BundleByteSize sql.NullInt64
+	JobID      string
+	Repository string
+	Revision   string
 }
 
 func (q *Queries) InsertCodebaseInvestigationSource(ctx context.Context, arg InsertCodebaseInvestigationSourceParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertCodebaseInvestigationSource,
-		arg.JobID,
-		arg.Kind,
-		arg.Repository,
-		arg.Revision,
-		arg.BundleDigest,
-		arg.BundleByteSize,
-	)
+	result, err := q.db.ExecContext(ctx, insertCodebaseInvestigationSource, arg.JobID, arg.Repository, arg.Revision)
 	if err != nil {
 		return 0, err
 	}

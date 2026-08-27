@@ -34,7 +34,6 @@ func (s Store) ListSupportedJobs(ctx context.Context, limit int, cursorAt time.T
 		CodingRevision:          coding.WorkflowRevision,
 		InvestigationWorkflow:   string(investigation.Workflow),
 		InvestigationRevision:   investigation.WorkflowRevision,
-		InvestigationSourceKind: string(investigation.SourceRemote),
 		HasCursor:               cursorID != "",
 		CursorAdmittedAt:        cursorAt,
 		CursorID:                cursorID,

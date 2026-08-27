@@ -214,7 +214,7 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 	workspaceExecutor := gitworkspace.NewExecutor(execution, externals, nil)
 	codingService := coding.NewService(workspaceExecutor, store, externals, blob.Store{}, func(context.Context) error { return nil })
 	runtimeProfile := profileapp.Runtime{SandboxProfile: "incus"}
-	investigationService := investigation.NewService(workspaceExecutor, externals, blob.Store{})
+	investigationService := investigation.NewService(workspaceExecutor)
 	resolver := integrationRuntimeResolver{
 		execution:            execution,
 		profile:              runtimeProfile,
@@ -3170,9 +3170,6 @@ func (e *integrationExternals) SandboxCreate(context.Context, core.Job, core.San
 }
 func (e *integrationExternals) ReconcileClone(context.Context, provider.Ownership, string, string, string) error {
 	return e.effect(gitworkspace.ActionRepositoryClone)
-}
-func (e *integrationExternals) Reconcile(context.Context, core.Job, core.Sandbox, investigation.Source, []byte) error {
-	return e.effect(investigation.ActionRepositoryRestore)
 }
 func (e *integrationExternals) RouteCreate(context.Context, core.Job, core.Sandbox, core.Route) error {
 	return e.effect(core.ActionRouteCreate)

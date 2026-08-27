@@ -63,6 +63,9 @@ Keep the Control API and Provider Gateway origins distinct even when guided setu
 one Tunnel. Custom ingress remains operator-owned. Do not infer service readiness from a process or
 terminal merely remaining open; use Compose state and setup's factual readiness result.
 
+Setup enrolls an ordinary deployment-host Client for Job commands. Use the documented `dorf job`
+commands on the host. Never bypass an unavailable API by reading or mutating Job rows directly.
+
 ## Remote-client protocol
 
 Receive the exact HTTPS Deployment origin and Enrollment through the human-approved private handoff,
@@ -78,7 +81,7 @@ after `steer_unavailable`. Retrieve needed Sandbox files before cleanup. An open
 a successful Turn; do not create a replacement merely because it has no active execution. For a
 remote investigation, run the report retrieval command printed by `dorf job inspect` before its
 printed cleanup command. Remote investigation accepts only its documented credential-free HTTPS
-source. Never upload, copy, or reconstruct a host-local retained bundle through the remote boundary.
+source at an exact Revision.
 Use the Deployment-published OpenAPI and Problem catalog for direct code-mode HTTP. Do not invent an
 MCP or SDK layer.
 

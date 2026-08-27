@@ -149,8 +149,8 @@ Outcome and Core's cleanup execution. Core never infers the request from complet
 
 ### Codebase investigation to a repository-grounded report
 
-A client delegates an exact reachable or locally committed repository Revision and an unstructured
-investigation brief. The workflow creates an isolated exact checkout, uses a bounded agent for
+A client delegates an unstructured investigation brief and a credential-free reachable HTTPS
+repository at an exact Revision. The workflow creates an isolated exact checkout, uses a bounded agent for
 inspection and synthesis, and asks it to write the current report to workspace-root `REPORT.md`.
 The workflow accepts follow-up Messages in the same Harness Thread; the agent may update the same
 file. A client reads the exact bytes it needs before cleanup and decides whether to request another

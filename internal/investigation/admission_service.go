@@ -46,8 +46,6 @@ type AdmissionProvider interface {
 	Check(context.Context, string) error
 }
 
-// AdmissionService is the single investigation admission authority used by
-// every local and remote adapter in a deployment.
 type AdmissionService struct {
 	store     AdmissionStore
 	scheduler AdmissionScheduler
@@ -91,10 +89,8 @@ func (s AdmissionService) admitNew(ctx context.Context, request AdmissionRequest
 	if err != nil {
 		return core.Job{}, false, err
 	}
-	if admission.Source.Kind == SourceRemote {
-		if err := requireRemoteGitCapability(profile); err != nil {
-			return core.Job{}, false, fmt.Errorf("%w: %v", ErrInvalidAdmission, err)
-		}
+	if err := requireRemoteGitCapability(profile); err != nil {
+		return core.Job{}, false, fmt.Errorf("%w: %v", ErrInvalidAdmission, err)
 	}
 	admission.SandboxProfile = profile.Name
 	if s.provider == nil {
@@ -182,7 +178,7 @@ func normalizeAdmissionRequest(request AdmissionRequest) (Admission, error) {
 	}
 	if invalidAdmissionText(request.Brief, 1<<20, true) || invalidAdmissionText(request.Model, 1024, true) ||
 		invalidAdmissionText(request.SandboxProfile, 255, false) || invalidAdmissionText(request.ProviderConnection, 255, false) ||
-		request.Source.Kind == SourceRemote && invalidAdmissionText(request.Source.Repository, 4096, true) ||
+		invalidAdmissionText(request.Source.Repository, 4096, true) ||
 		(request.ReasoningEffort != "low" && request.ReasoningEffort != "medium" && request.ReasoningEffort != "high" && request.ReasoningEffort != "xhigh") {
 		return Admission{}, ErrInvalidAdmission
 	}
@@ -214,7 +210,7 @@ func invalidAdmissionText(value string, limit int, required bool) bool {
 
 func requireRemoteGitCapability(profile core.SandboxProfile) error {
 	if profile.Provider == core.SandboxProviderE2B && !profile.E2BAllowInternet {
-		return fmt.Errorf("Sandbox profile %q blocks internet access and cannot use a remote Git source; use a retained local source when supported, or update and reverify the profile with internet access", profile.Name)
+		return fmt.Errorf("Sandbox profile %q blocks internet access and cannot use a remote Git source; update and reverify the profile with internet access", profile.Name)
 	}
 	return nil
 }

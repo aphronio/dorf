@@ -56,7 +56,7 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	}
 
 	key := fmt.Sprintf("control-api-replay-%d", time.Now().UnixNano())
-	input := controlapi.AdmitJobRequest{Goal: "prove remote durable replay", Model: "model-test", Reasoning: "high"}
+	input := controlapi.AdmitJobRequest{Goal: "prove remote durable replay", AIConnection: "primary", Model: "model-test", Reasoning: "high"}
 	// The response is deliberately discarded after the handler commits, matching
 	// a client that cannot know whether its first request succeeded.
 	lost := controlTestRequest(t, first, http.MethodPost, "/v1/jobs", credential, key, input)
@@ -64,7 +64,7 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 		t.Fatalf("first admission status=%d body=%s", lost.Code, lost.Body.String())
 	}
 	committed, err := store.Job(ctx, core.JobID(key))
-	if err != nil || committed.CurrentTaskID == "" {
+	if err != nil || committed.CurrentTaskID == "" || committed.ProviderConnection != input.AIConnection {
 		t.Fatalf("committed Job=%#v err=%v", committed, err)
 	}
 	// Replay must use the retained profile and AI connection even when the
@@ -193,7 +193,7 @@ func TestControlAPIWorkflowAdmissionsProjectAndReplay(t *testing.T) {
 	codingKey := fmt.Sprintf("control-coding-%d", time.Now().UnixNano())
 	codingInput := controlapi.AdmitCodingJobRequest{
 		Goal: "  preserve this exact coding goal\n", Repository: "https://github.com/aphronio/dorf.git",
-		Revision: strings.Repeat("a", 40), BaseBranch: "main", Profile: profileName, Model: "model-test",
+		Revision: strings.Repeat("a", 40), BaseBranch: "main", Profile: profileName, AIConnection: "primary", Model: "model-test",
 	}
 	codingResponse := controlTestRequest(t, handler, http.MethodPost, "/v1/workflows/coding/jobs", credential, codingKey, codingInput)
 	var codingJob controlapi.CodingJob
@@ -207,7 +207,7 @@ func TestControlAPIWorkflowAdmissionsProjectAndReplay(t *testing.T) {
 		t.Fatalf("coding installation discoveries=%d, want 1", installations.calls)
 	}
 	codingFact, err := store.Job(ctx, codingJob.ID)
-	if err != nil || codingFact.CurrentTaskID == "" {
+	if err != nil || codingFact.CurrentTaskID == "" || codingFact.ProviderConnection != codingInput.AIConnection {
 		t.Fatalf("coding durable Job=%#v err=%v", codingFact, err)
 	}
 
@@ -235,7 +235,7 @@ func TestControlAPIWorkflowAdmissionsProjectAndReplay(t *testing.T) {
 	investigationKey := fmt.Sprintf("control-investigation-%d", time.Now().UnixNano())
 	investigationInput := controlapi.AdmitInvestigationJobRequest{
 		Brief: "  preserve this exact investigation brief\n", Repository: "https://github.com/aphronio/dorf.git",
-		Revision: strings.Repeat("b", 40), Profile: profileName, Model: "model-test",
+		Revision: strings.Repeat("b", 40), Profile: profileName, AIConnection: "primary", Model: "model-test",
 	}
 	investigationResponse := controlTestRequest(t, restarted, http.MethodPost, "/v1/workflows/codebase-investigation/jobs", credential, investigationKey, investigationInput)
 	var investigationJob controlapi.InvestigationJob
@@ -275,17 +275,16 @@ func TestControlAPIWorkflowAdmissionsProjectAndReplay(t *testing.T) {
 		t.Fatalf("workflow Message=%#v", accepted)
 	}
 
-	retainedOutcome, created, err := store.RecordOutcome(ctx, coding.Outcome{
-		JobID: codingJob.ID, Kind: coding.OutcomeAbandoned, ObservedAt: time.Now().UTC(),
-	})
-	if err != nil || !created || retainedOutcome.Kind != coding.OutcomeAbandoned {
-		t.Fatalf("record coding Outcome=%#v created=%t err=%v", retainedOutcome, created, err)
-	}
-	completedCodingResponse := controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+codingJob.ID, credential, "", nil)
+	completedCodingResponse := controlTestRequest(t, restarted, http.MethodPut, "/v1/jobs/"+codingJob.ID+"/abandon", credential, "", nil)
 	var completedCoding controlapi.CodingJob
 	controlTestJSON(t, completedCodingResponse, http.StatusOK, &completedCoding)
-	if completedCoding.Execution.State != "complete" || completedCoding.Outcome == nil || completedCoding.Outcome.Kind != string(coding.OutcomeAbandoned) {
+	if completedCoding.Execution.State != "complete" || completedCoding.Cleanup.State != "running" || completedCoding.Outcome == nil || completedCoding.Outcome.Kind != string(coding.OutcomeAbandoned) {
 		t.Fatalf("completed coding Job=%#v", completedCoding)
+	}
+	var replayedAbandon controlapi.CodingJob
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodPut, "/v1/jobs/"+codingJob.ID+"/abandon", credential, "", nil), http.StatusOK, &replayedAbandon)
+	if replayedAbandon.Outcome == nil || replayedAbandon.Outcome.Kind != string(coding.OutcomeAbandoned) {
+		t.Fatalf("replayed abandon=%#v", replayedAbandon)
 	}
 	cleanupInvestigation := controlTestRequest(t, restarted, http.MethodPut, "/v1/jobs/"+investigationJob.ID+"/cleanup", credential, "", nil)
 	var cleaningInvestigation controlapi.InvestigationJob
@@ -317,18 +316,16 @@ func TestControlAPIJobListKeepsKeysetContinuity(t *testing.T) {
 		id       string
 		workflow string
 		revision string
-		source   string
+		source   bool
 		at       time.Time
 	}
 	fixtures := []listedFixture{
-		{base + "-z", "", "", "", tiedAt},
-		{base + "-y", string(coding.Workflow), coding.WorkflowRevision, "", tiedAt},
-		{base + "-x", string(investigation.Workflow), investigation.WorkflowRevision, string(investigation.SourceRemote), tiedAt.Add(-time.Second)},
-		{base + "-w", "", "", "", tiedAt.Add(-2 * time.Second)},
+		{base + "-z", "", "", false, tiedAt},
+		{base + "-y", string(coding.Workflow), coding.WorkflowRevision, false, tiedAt},
+		{base + "-x", string(investigation.Workflow), investigation.WorkflowRevision, true, tiedAt.Add(-time.Second)},
+		{base + "-w", "", "", false, tiedAt.Add(-2 * time.Second)},
 		// A retained but unrecognized workflow revision must not consume a page slot.
-		{base + "-unsupported", string(coding.Workflow), "unrecognized", "", tiedAt.Add(time.Second)},
-		// Host-local retained bundles are intentionally absent from the remote API.
-		{base + "-local", string(investigation.Workflow), investigation.WorkflowRevision, string(investigation.SourceGitBundle), tiedAt.Add(2 * time.Second)},
+		{base + "-unsupported", string(coding.Workflow), "unrecognized", false, tiedAt.Add(time.Second)},
 	}
 	insert := func(fixture listedFixture) {
 		t.Helper()
@@ -341,18 +338,11 @@ insert into dorf.jobs(
 		if err != nil {
 			t.Fatalf("insert Job list fixture %s: %v", fixture.id, err)
 		}
-		switch fixture.source {
-		case string(investigation.SourceRemote):
+		if fixture.source {
 			_, err = store.DB.ExecContext(ctx, `
-insert into dorf.codebase_investigation_sources(job_id,workflow_name,kind,repository,revision)
-values($1,$2,'remote','https://github.com/aphronio/dorf.git',$3)
+insert into dorf.codebase_investigation_sources(job_id,workflow_name,repository,revision)
+values($1,$2,'https://github.com/aphronio/dorf.git',$3)
 `, fixture.id, string(investigation.Workflow), strings.Repeat("a", 40))
-		case string(investigation.SourceGitBundle):
-			_, err = store.DB.ExecContext(ctx, `
-insert into dorf.codebase_investigation_sources(
-    job_id,workflow_name,kind,repository,revision,bundle_digest,bundle_byte_size
-) values($1,$2,'git-bundle','',$3,$4,1)
-`, fixture.id, string(investigation.Workflow), strings.Repeat("b", 40), strings.Repeat("c", 64))
 		}
 		if err != nil {
 			t.Fatalf("insert Job list source fixture %s: %v", fixture.id, err)
@@ -373,12 +363,6 @@ insert into dorf.codebase_investigation_sources(
 	})
 
 	handler := controlapi.NewServer(controlapi.Discovery{Product: "dorf"}, auth, controlAPIJobs{store: store}).Handler
-	hidden := controlTestRequest(t, handler, http.MethodGet, "/v1/jobs/"+fixtures[5].id, credential, "", nil)
-	var hiddenProblem controlapi.Problem
-	controlTestJSON(t, hidden, http.StatusNotFound, &hiddenProblem)
-	if hiddenProblem.Code != "job_not_found" {
-		t.Fatalf("local-bundle Job Problem=%#v", hiddenProblem)
-	}
 	unsupported := controlTestRequest(t, handler, http.MethodGet, "/v1/jobs/"+fixtures[4].id, credential, "", nil)
 	var unsupportedProblem controlapi.Problem
 	controlTestJSON(t, unsupported, http.StatusNotFound, &unsupportedProblem)
@@ -393,7 +377,7 @@ insert into dorf.codebase_investigation_sources(
 		t.Fatalf("first Job page=%#v", first)
 	}
 
-	newer := listedFixture{base + "-new", "", "", "", tiedAt.Add(3 * time.Second)}
+	newer := listedFixture{base + "-new", "", "", false, tiedAt.Add(3 * time.Second)}
 	fixtures = append(fixtures, newer)
 	insert(newer)
 	secondResponse := controlTestRequest(t, handler, http.MethodGet,

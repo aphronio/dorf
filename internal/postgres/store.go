@@ -36,7 +36,7 @@ const (
 	initialFromID       = "dorf:initial"
 )
 
-var dorfMigrations = []string{"001_baseline.sql"}
+var dorfMigrations = []string{"001_greenfield.sql"}
 
 type Store struct{ DB *sql.DB }
 
@@ -147,7 +147,7 @@ func migrateDorf(ctx context.Context, tx *sql.Tx) error {
 		if err := rows.Close(); err != nil {
 			return err
 		}
-		if !applied["001_baseline.sql"] {
+		if !applied["001_greenfield.sql"] {
 			return fmt.Errorf("existing Dorf schema has no baseline identity; recreate this prototype database")
 		}
 		for name := range applied {
@@ -179,14 +179,12 @@ func ValidRevision(value string) bool { return fullCommitOID.MatchString(value) 
 
 func investigationSourceParams(jobID string, source investigation.Source) dbsql.InsertCodebaseInvestigationSourceParams {
 	return dbsql.InsertCodebaseInvestigationSourceParams{
-		JobID: jobID, Kind: string(source.Kind), Repository: source.Repository, Revision: source.Revision,
-		BundleDigest:   nullableString(source.BundleDigest),
-		BundleByteSize: sql.NullInt64{Int64: source.BundleByteSize, Valid: source.BundleByteSize > 0},
+		JobID: jobID, Repository: source.Repository, Revision: source.Revision,
 	}
 }
 
-func investigationSourceFromValues(jobID, kind, repository, revision, digest string, byteSize int64) investigation.Source {
-	return investigation.Source{JobID: jobID, Kind: investigation.SourceKind(kind), Repository: repository, Revision: revision, BundleDigest: digest, BundleByteSize: byteSize}
+func investigationSourceFromValues(jobID, repository, revision string) investigation.Source {
+	return investigation.Source{JobID: jobID, Repository: repository, Revision: revision}
 }
 
 type admittedAgentRun struct {

@@ -18,13 +18,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/deployment"
 	"github.com/aphronio/dorf/internal/e2b"
 	"github.com/aphronio/dorf/internal/gateway"
-	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
@@ -1113,98 +1111,6 @@ func TestSandboxForProfileSelectsOneConcreteAdapter(t *testing.T) {
 	}
 }
 
-func TestWorkflowHistorySortsNaturalFactsAndIncludesRunsAndRevisions(t *testing.T) {
-	base := time.Date(2026, 8, 10, 10, 0, 0, 0, time.UTC)
-	job := core.Job{ID: "job-1", AdmittedAt: base, SandboxProfile: "e2b"}
-	mainSandbox := core.MainSandboxName(job.ID)
-	deliveries := []core.Delivery{{
-		Message:  core.Message{ID: "message-1", Sequence: 1, FromKind: core.MessageFromHuman, AdmittedAt: base.Add(time.Second)},
-		AgentRun: core.AgentRun{ID: "run-secret", MessageID: "message-1", Role: "implement", State: core.AgentRunCompleted, InputRevision: "revision-0", StartedAt: base.Add(4 * time.Second), FinishedAt: base.Add(5 * time.Second)},
-	}}
-	entries := workflowHistory(coding.Snapshot{
-		Job: coding.Job{Job: job},
-		Actions: []core.Action{
-			{ID: "action-secret", Kind: core.ActionSandboxCreate, Scope: mainSandbox, State: core.ActionSucceeded, CreatedAt: base.Add(2 * time.Second), SettledAt: base.Add(3 * time.Second)},
-			{Kind: coding.ActionGitHubPullRequest, State: core.ActionSucceeded, Scope: "revision-1", CreatedAt: base.Add(7 * time.Second), SettledAt: base.Add(8 * time.Second)},
-		},
-		Revisions: []coding.Revision{
-			{Generation: 0, OID: "revision-0", ObservedAt: base},
-			{Generation: 1, OID: "revision-1", ComparisonBase: "revision-0", ObservedAt: base.Add(6 * time.Second)},
-		},
-		Evidence: []core.Evidence{{ID: "evidence-secret", Kind: "git-revision", Revision: "revision-1", FinishedAt: base.Add(6500 * time.Millisecond)}},
-		Proposal: &coding.Proposal{Number: 42, ProposedRevision: "revision-1"},
-	}, deliveries)
-	for i := 1; i < len(entries); i++ {
-		if entries[i].At.Before(entries[i-1].At) {
-			t.Fatalf("history is not chronological: %#v", entries)
-		}
-	}
-	if len(entries) != 12 {
-		t.Fatalf("history has %d entries, want 12 human events: %#v", len(entries), entries)
-	}
-	var story strings.Builder
-	for _, entry := range entries {
-		story.WriteString(entry.Text + "\n")
-	}
-	for _, want := range []string{
-		"Job admitted",
-		"Starting Revision accepted · revision-0",
-		"Message 1 received from Human",
-		"Creating primary Sandbox · E2B",
-		"Primary Sandbox ready · E2B · 1s",
-		"Implementation agent started",
-		"Implementation agent completed · 1s",
-		"Revision generation 1 observed · revision-1",
-		"Git revision evidence recorded · Revision revision-1",
-		"Creating pull request",
-		"Pull request created · 1s",
-		"Pull request #42 ready · Revision revision-1",
-	} {
-		if !strings.Contains(story.String(), want) {
-			t.Fatalf("history is missing factual token %q:\n%s", want, story.String())
-		}
-	}
-	for _, plumbing := range []string{"action-secret", "run-secret", "message-1", "evidence-secret"} {
-		if strings.Contains(story.String(), plumbing) {
-			t.Fatalf("human history leaked plumbing %q:\n%s", plumbing, story.String())
-		}
-	}
-	abandoned := workflowHistory(coding.Snapshot{
-		Job:     coding.Job{Job: core.Job{AdmittedAt: base}},
-		Outcome: &coding.Outcome{Kind: coding.OutcomeAbandoned, ObservedAt: base.Add(time.Second)},
-	}, nil)
-	last := abandoned[len(abandoned)-1]
-	if !strings.Contains(last.Text, "Outcome Abandoned") || strings.Contains(last.Text, "GitHub") {
-		t.Fatalf("pre-Proposal abandonment history = %#v", last)
-	}
-}
-
-func TestRenderHistoryGroupsLocalDatesAndHidesFactCategories(t *testing.T) {
-	first := time.Date(2026, 8, 18, 15, 31, 57, 0, time.Local)
-	entries := []historyEntry{
-		{At: first, Text: "Job admitted"},
-		{At: first.Add(time.Minute), Text: "Creating primary Sandbox · Incus"},
-		{At: first.Add(24 * time.Hour), Text: "Cleanup complete"},
-	}
-	var output strings.Builder
-	renderHistory(&output, entries)
-	got := output.String()
-	for _, want := range []string{
-		"  18 Aug 2026\n    15:31  Job admitted",
-		"    15:32  Creating primary Sandbox · Incus",
-		"  19 Aug 2026\n    15:31  Cleanup complete",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("human history is missing %q:\n%s", want, got)
-		}
-	}
-	for _, machineCopy := range []string{"2026-08-18T", "Action       ", "AgentRun     "} {
-		if strings.Contains(got, machineCopy) {
-			t.Fatalf("human history exposed machine copy %q:\n%s", machineCopy, got)
-		}
-	}
-}
-
 func TestTaskResultProjectionPublishesOnlyBoundedFailureMessage(t *testing.T) {
 	view := projectTaskResult("task-1", &absurd.TaskResultSnapshot{
 		State:   absurd.TaskFailed,
@@ -1226,84 +1132,6 @@ func TestTaskResultProjectionPublishesOnlyBoundedFailureMessage(t *testing.T) {
 	long := boundedTaskError(json.RawMessage(`{"message":"` + strings.Repeat("x", 400) + `"}`))
 	if got := len([]rune(long)); got != 320 || !strings.HasSuffix(long, "…") {
 		t.Fatalf("bounded error has %d runes", got)
-	}
-}
-
-func TestRenderWorkflowExecutionAttentionLeadsToTruthfulRepair(t *testing.T) {
-	job := core.Job{
-		ID: "job-123", AdmissionOpen: true,
-		Workflow: coding.Workflow, WorkflowRevision: coding.WorkflowRevision,
-	}
-	execution := taskResultView{TaskID: "task-1", State: absurd.TaskFailed, LastError: "clone repository: DNS failed"}
-	var output strings.Builder
-	renderExecutionAttention(&output, job, execution, "Clone repository")
-	want := "  attention: workflow stopped\n" +
-		"  operation: Clone repository\n" +
-		"  reason: clone repository: DNS failed\n" +
-		"  next: repair the cause, then run dorf retry job-123\n"
-	if output.String() != want {
-		t.Fatalf("attention output:\n%s\nwant:\n%s", output.String(), want)
-	}
-
-	output.Reset()
-	renderExecutionAttention(&output, core.Job{ID: "job-123", CleanupState: core.CleanupComplete}, execution, "Complete")
-	if output.Len() != 0 {
-		t.Fatalf("completed Job rendered non-actionable attention: %q", output.String())
-	}
-
-	output.Reset()
-	renderExecutionAttention(&output, core.Job{ID: "job-direct", AdmissionOpen: true}, execution, "Run prompt")
-	if got := output.String(); !strings.Contains(got, "attention: job stopped") || strings.Contains(got, "workflow stopped") {
-		t.Fatalf("direct Job attention=%q", got)
-	}
-
-	output.Reset()
-	renderExecutionAttention(&output, core.Job{ID: "job-123", CleanupState: core.CleanupScheduled}, execution, "Deleting Sandbox")
-	if got := output.String(); !strings.Contains(got, "attention: cleanup stopped") || !strings.Contains(got, "operation: Deleting Sandbox") || !strings.Contains(got, "dorf retry job-123") {
-		t.Fatalf("cleanup attention=%q", got)
-	}
-
-	output.Reset()
-	renderExecutionAttention(&output, job, taskResultView{State: absurd.TaskRunning}, "Clone repository")
-	if output.Len() != 0 {
-		t.Fatalf("running task rendered failure attention: %q", output.String())
-	}
-}
-
-func TestJobAttentionOffersTruthfulRecovery(t *testing.T) {
-	job := core.Job{ID: "job-123", AdmissionOpen: true, CleanupState: core.CleanupPending, WorkflowAttention: "E2B template is unavailable"}
-	execution := taskResultView{TaskID: "task-1", State: absurd.TaskCompleted}
-	var output strings.Builder
-	renderJobAttention(&output, job, execution)
-	if got := output.String(); got != "  attention: E2B template is unavailable\n  next: run dorf cleanup job-123 to release resources\n" || strings.Contains(got, "retry") {
-		t.Fatalf("recovery output=%q", got)
-	}
-
-	output.Reset()
-	renderJobAttention(&output, job, taskResultView{TaskID: "task-1", State: absurd.TaskSleeping})
-	if got := output.String(); got != "  attention: E2B template is unavailable\n  next: repair the cause while the worker retries, or run dorf cleanup job-123\n" {
-		t.Fatalf("retrying attention output=%q", got)
-	}
-}
-
-func TestInvestigationReportAccessIsExplicitlyWorkspaceOwnedAndCleanupBound(t *testing.T) {
-	job := core.Job{ID: "job-report", AdmissionOpen: true, CleanupState: core.CleanupPending}
-	var output strings.Builder
-	renderInvestigationReportAccess(&output, job)
-	want := "  report: " + investigation.ReportPath + " (agent-owned workspace file; existence not checked; not durably retained)\n" +
-		"  retrieve before cleanup: dorf sandbox file get " + core.MainSandboxName(job.ID) + " " + investigation.ReportPath + " --output " + investigation.ReportPath + "\n" +
-		"  revise: dorf message --job job-report --id REQUEST_ID --input-file FOLLOW_UP.md\n" +
-		"  release resources: dorf cleanup job-report\n"
-	if output.String() != want {
-		t.Fatalf("open report access:\n%s\nwant:\n%s", output.String(), want)
-	}
-
-	output.Reset()
-	job.AdmissionOpen = false
-	job.CleanupState = core.CleanupComplete
-	renderInvestigationReportAccess(&output, job)
-	if got := output.String(); got != "  report: REPORT.md (agent-owned workspace file; existence not checked; not durably retained)\n  report retrieval: unavailable after cleanup began\n" {
-		t.Fatalf("cleaned report access=%q", got)
 	}
 }
 

@@ -37,8 +37,6 @@ func (Definition) ActionLabel(kind core.ActionKind) string {
 		return "Provisioning Sandbox"
 	case gitworkspace.ActionRepositoryClone:
 		return "Cloning repository"
-	case ActionRepositoryRestore:
-		return "Restoring retained repository"
 	case core.ActionRouteCreate:
 		return "Connecting model access"
 	case core.ActionRouteRevoke:

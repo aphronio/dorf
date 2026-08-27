@@ -57,8 +57,6 @@ type InstallationDiscovery interface {
 	DiscoverInstallation(context.Context, string) (string, error)
 }
 
-// AdmissionService is the single coding admission authority used by every
-// local and remote adapter in a deployment.
 type AdmissionService struct {
 	store         AdmissionStore
 	scheduler     AdmissionScheduler
@@ -259,7 +257,7 @@ func invalidAdmissionText(value string, limit int, required bool) bool {
 
 func requireRemoteGitCapability(profile core.SandboxProfile) error {
 	if profile.Provider == core.SandboxProviderE2B && !profile.E2BAllowInternet {
-		return fmt.Errorf("Sandbox profile %q blocks internet access and cannot use a remote Git source; use a retained local source when supported, or update and reverify the profile with internet access", profile.Name)
+		return fmt.Errorf("Sandbox profile %q blocks internet access and cannot use a remote Git source; update and reverify the profile with internet access", profile.Name)
 	}
 	return nil
 }

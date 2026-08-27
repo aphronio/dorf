@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
-	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
@@ -32,7 +31,7 @@ func TestPostgresCodebaseInvestigationIdentityAndFollowUps(t *testing.T) {
 			Goal: "Find one unnecessary coding-workflow dependency.", SandboxProfile: "incus",
 			ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
 		},
-		Source: investigation.Source{Kind: investigation.SourceRemote, Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40)},
+		Source: investigation.Source{Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40)},
 	}
 	job, created, err := store.AdmitInvestigation(ctx, input)
 	if err != nil || !created || job.Workflow != input.Workflow || job.WorkflowRevision != input.WorkflowRevision {
@@ -43,14 +42,11 @@ func TestPostgresCodebaseInvestigationIdentityAndFollowUps(t *testing.T) {
 		t.Fatalf("idempotent Job=%#v created=%v err=%v", repeated, created, err)
 	}
 	source, err := store.CodebaseInvestigationSource(ctx, job.ID)
-	if err != nil || source.JobID != job.ID || source.Kind != investigation.SourceRemote || source.Repository != input.Source.Repository || source.Revision != input.Source.Revision {
+	if err != nil || source.JobID != job.ID || source.Repository != input.Source.Repository || source.Revision != input.Source.Revision {
 		t.Fatalf("source=%#v err=%v", source, err)
 	}
 	changedSource := input
-	changedSource.Source = investigation.Source{
-		Kind: investigation.SourceGitBundle, Revision: input.Source.Revision,
-		BundleDigest: strings.Repeat("e", 64), BundleByteSize: 123,
-	}
+	changedSource.Source.Repository = "https://github.com/aphronio/other.git"
 	if _, _, err := store.AdmitInvestigation(ctx, changedSource); !errors.Is(err, postgres.ErrAdmissionConflict) || !errors.Is(err, investigation.ErrAdmissionConflict) {
 		t.Fatalf("same admission key changed source identity: %v", err)
 	}
@@ -161,12 +157,6 @@ func (e *investigationExternals) SandboxCreate(context.Context, core.Job, core.S
 func (e *investigationExternals) ReconcileClone(context.Context, provider.Ownership, string, string, string) error {
 	return e.effect(gitworkspace.ActionRepositoryClone)
 }
-func (e *investigationExternals) Reconcile(_ context.Context, job core.Job, _ core.Sandbox, source investigation.Source, contents []byte) error {
-	if source.JobID != job.ID || string(contents) != "retained repository input" {
-		return fmt.Errorf("unexpected retained repository restore")
-	}
-	return e.effect(investigation.ActionRepositoryRestore)
-}
 func (e *investigationExternals) RouteCreate(context.Context, core.Job, core.Sandbox, core.Route) error {
 	return e.effect(core.ActionRouteCreate)
 }
@@ -200,16 +190,11 @@ func (e *investigationExternals) ReadSandboxFile(_ context.Context, job core.Job
 func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
-	records := blob.Store{Root: t.TempDir()}
-	retained, err := records.Put([]byte("retained repository input"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	externals := &investigationExternals{}
 	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
 		WithAgentExecution(investigationAgentExecution{store: store, externals: externals})
 	workspaceExecutor := gitworkspace.NewExecutor(execution, externals, nil)
-	service := investigation.NewService(workspaceExecutor, externals, records)
+	service := investigation.NewService(workspaceExecutor)
 	runtimeProfile := profileapp.Runtime{SandboxProfile: "incus"}
 	resolver := integrationRuntimeResolver{
 		execution: execution, files: externals, profile: runtimeProfile,
@@ -223,10 +208,7 @@ func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *test
 	}
 	application.RegisterCleanup()
 	investigation.Register(application, store, resolver)
-	source := investigation.Source{
-		Kind: investigation.SourceGitBundle, Revision: strings.Repeat("d", 40),
-		BundleDigest: retained.Digest, BundleByteSize: retained.ByteSize,
-	}
+	source := investigation.Source{Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("d", 40)}
 	job, created, err := investigation.NewAdmissionService(store, application, providerCheck{}).Admit(ctx, investigation.AdmissionRequest{
 		AdmissionKey: "investigation-terminal-" + suffix,
 		Brief:        "Find one concrete simplification.", SandboxProfile: "incus",
@@ -241,8 +223,8 @@ func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *test
 	if err != nil || storedSource != source {
 		t.Fatalf("source=%#v want=%#v err=%v", storedSource, source, err)
 	}
-	if _, err := store.DB.ExecContext(ctx, `update dorf.codebase_investigation_sources set bundle_digest=null where job_id=$1`, job.ID); err == nil {
-		t.Fatal("database accepted incomplete Git-bundle source identity")
+	if _, err := store.DB.ExecContext(ctx, `update dorf.codebase_investigation_sources set repository='' where job_id=$1`, job.ID); err == nil {
+		t.Fatal("database accepted an empty investigation repository")
 	}
 	reportJob, err := application.OpenJob(ctx, job.ID)
 	if err != nil {
@@ -270,7 +252,7 @@ func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *test
 		}
 	}
 	settleNextRun(client, "investigation-terminal", 1)
-	wantEffects := []core.ActionKind{core.ActionSandboxCreate, investigation.ActionRepositoryRestore, core.ActionRouteCreate}
+	wantEffects := []core.ActionKind{core.ActionSandboxCreate, gitworkspace.ActionRepositoryClone, core.ActionRouteCreate}
 	snapshot, err := investigation.LoadSnapshot(ctx, store, job.ID)
 	if err != nil {
 		t.Fatal(err)

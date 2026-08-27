@@ -19,7 +19,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/core"
+	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/postgres"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
@@ -37,6 +39,7 @@ const (
 	DefaultConnectionPath  = "/v1/admission/default-connection"
 	ConnectionCheckPath    = "/v1/admission/check-connection"
 	GitHubInstallationPath = "/v1/admission/github-installation"
+	PullRequestPath        = "/v1/github/pull-request/observe"
 )
 
 var (
@@ -53,6 +56,8 @@ var (
 // The provider-facing process receives no alternate resource or profile input.
 type Store interface {
 	Job(context.Context, string) (core.Job, error)
+	CodingJob(context.Context, string) (coding.Job, error)
+	Proposal(context.Context, string) (*coding.Proposal, error)
 	Sandbox(context.Context, string) (core.Sandbox, error)
 	AgentMessageExecution(context.Context, string) (core.AgentMessageExecution, error)
 	WithJobFence(context.Context, string, func() error) error
@@ -67,6 +72,10 @@ type InstallationDiscovery interface {
 	DiscoverInstallation(context.Context, string) (string, error)
 }
 
+type PullRequestObservation interface {
+	PullRequest(context.Context, githubapi.Authority, int64) (githubapi.PullRequest, error)
+}
+
 // Service owns provider-facing reads. It accepts only durable Dorf identities
 // and one already-validated workspace-relative path.
 type Service struct {
@@ -74,6 +83,7 @@ type Service struct {
 	Runtimes      core.SandboxRuntimeResolver
 	Provider      AdmissionProvider
 	Installations InstallationDiscovery
+	PullRequests  PullRequestObservation
 }
 
 func (s Service) ReadFile(ctx context.Context, sandboxID, relativePath string) ([]byte, error) {
@@ -250,6 +260,45 @@ func (s Service) DiscoverInstallation(ctx context.Context, repository string) (s
 	return installation, nil
 }
 
+func (s Service) ObservePullRequest(ctx context.Context, jobID string) (githubapi.PullRequest, error) {
+	if !validIdentity(jobID) {
+		return githubapi.PullRequest{}, ErrUnavailable
+	}
+	if s.Store == nil || s.PullRequests == nil {
+		return githubapi.PullRequest{}, fmt.Errorf("GitHub pull-request observation authority is not configured")
+	}
+	job, err := s.Store.CodingJob(ctx, jobID)
+	if errors.Is(err, postgres.ErrNotFound) {
+		return githubapi.PullRequest{}, ErrUnavailable
+	}
+	if err != nil {
+		return githubapi.PullRequest{}, err
+	}
+	proposal, err := s.Store.Proposal(ctx, jobID)
+	if errors.Is(err, postgres.ErrNotFound) {
+		return githubapi.PullRequest{}, ErrUnavailable
+	}
+	if err != nil {
+		return githubapi.PullRequest{}, err
+	}
+	if job.ID != jobID || !validRepository(job.GitHubRepository) || !validIdentity(job.GitHubInstallation) ||
+		!validIdentity(job.Branch) || !validIdentity(job.BaseBranch) || !validIdentity(job.Revision) ||
+		proposal == nil || proposal.JobID != job.ID || proposal.Number < 1 || !validIdentity(proposal.URL) ||
+		proposal.ProposedRevision != job.Revision {
+		return githubapi.PullRequest{}, ErrUnavailable
+	}
+	authority := githubapi.Authority{Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation}
+	pull, err := s.PullRequests.PullRequest(ctx, authority, proposal.Number)
+	if err != nil {
+		return githubapi.PullRequest{}, fmt.Errorf("observe exact GitHub pull request #%d: %w", proposal.Number, err)
+	}
+	if pull.Number != proposal.Number || pull.URL != proposal.URL || pull.Repository != job.GitHubRepository ||
+		pull.Head != job.Branch || pull.Base != job.BaseBranch || pull.HeadSHA != proposal.ProposedRevision {
+		return githubapi.PullRequest{}, ErrUnavailable
+	}
+	return pull, nil
+}
+
 func validIdentity(value string) bool {
 	return value != "" && value == strings.TrimSpace(value) && len(value) <= 255 && !strings.ContainsRune(value, 0)
 }
@@ -280,6 +329,10 @@ type installationRequest struct {
 	Repository string `json:"repository"`
 }
 
+type pullRequestObservationRequest struct {
+	JobID string `json:"job_id"`
+}
+
 type connectionResponse struct {
 	Connection string `json:"connection"`
 }
@@ -302,6 +355,30 @@ func NewHandler(token string, service Service) (http.Handler, error) {
 	if !validToken(token) {
 		return nil, fmt.Errorf("control reader token must be one 256-bit lowercase hex value")
 	}
+	routes := map[string]http.HandlerFunc{
+		HealthPath: jsonEndpoint(0, func(context.Context, struct{}) (healthResponse, error) {
+			return healthResponse{Ready: true}, nil
+		}),
+		FileReadPath: fileReadEndpoint(service),
+		MessageObservationPath: jsonEndpoint(MaxObservationBytes, func(ctx context.Context, input messageObservationRequest) (core.MessageResult, error) {
+			return service.ObserveMessage(ctx, input.JobID, input.MessageID)
+		}),
+		DefaultConnectionPath: jsonEndpoint(0, func(context.Context, struct{}) (connectionResponse, error) {
+			connection, err := service.DefaultConnection()
+			return connectionResponse{Connection: connection}, err
+		}),
+		ConnectionCheckPath: jsonEndpoint(0, func(ctx context.Context, input connectionRequest) (struct{}, error) {
+			return struct{}{}, service.Check(ctx, input.Connection)
+		}),
+		GitHubInstallationPath: jsonEndpoint(0, func(ctx context.Context, input installationRequest) (installationResponse, error) {
+			installation, err := service.DiscoverInstallation(ctx, input.Repository)
+			return installationResponse{Installation: installation}, err
+		}),
+		PullRequestPath: jsonEndpoint(MaxObservationBytes, func(ctx context.Context, input pullRequestObservationRequest) (githubapi.PullRequest, error) {
+			return service.ObservePullRequest(ctx, input.JobID)
+		}),
+	}
+
 	expected := sha256.Sum256([]byte(token))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -326,83 +403,55 @@ func NewHandler(token string, service Service) (http.Handler, error) {
 			writeProblem(w, http.StatusUnsupportedMediaType, "invalid_content_type")
 			return
 		}
-		switch r.URL.Path {
-		case HealthPath:
-			var input struct{}
-			if !decodeRequest(w, r, &input) {
-				return
-			}
-			writeJSON(w, http.StatusOK, healthResponse{Ready: true})
-		case FileReadPath:
-			var input fileReadRequest
-			if !decodeRequest(w, r, &input) {
-				return
-			}
-			contents, err := service.ReadFile(r.Context(), input.SandboxID, input.Path)
-			if err != nil {
-				writeServiceError(w, err)
-				return
-			}
-			w.Header().Set("Content-Type", "application/octet-stream")
-			w.Header().Set("Content-Length", strconv.Itoa(len(contents)))
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(contents)
-		case MessageObservationPath:
-			var input messageObservationRequest
-			if !decodeRequest(w, r, &input) {
-				return
-			}
-			result, err := service.ObserveMessage(r.Context(), input.JobID, input.MessageID)
-			if err != nil {
-				writeServiceError(w, err)
-				return
-			}
-			contents, err := marshalJSON(result)
-			if err != nil {
-				writeProblem(w, http.StatusInternalServerError, "internal_error")
-				return
-			}
-			if len(contents) > MaxObservationBytes {
-				writeProblem(w, http.StatusConflict, "response_too_large")
-				return
-			}
-			writeJSONBytes(w, http.StatusOK, contents)
-		case DefaultConnectionPath:
-			var input struct{}
-			if !decodeRequest(w, r, &input) {
-				return
-			}
-			connection, err := service.DefaultConnection()
-			if err != nil {
-				writeServiceError(w, err)
-				return
-			}
-			writeJSON(w, http.StatusOK, connectionResponse{Connection: connection})
-		case ConnectionCheckPath:
-			var input connectionRequest
-			if !decodeRequest(w, r, &input) {
-				return
-			}
-			if err := service.Check(r.Context(), input.Connection); err != nil {
-				writeServiceError(w, err)
-				return
-			}
-			writeJSON(w, http.StatusOK, struct{}{})
-		case GitHubInstallationPath:
-			var input installationRequest
-			if !decodeRequest(w, r, &input) {
-				return
-			}
-			installation, err := service.DiscoverInstallation(r.Context(), input.Repository)
-			if err != nil {
-				writeServiceError(w, err)
-				return
-			}
-			writeJSON(w, http.StatusOK, installationResponse{Installation: installation})
-		default:
+		handle, found := routes[r.URL.Path]
+		if !found {
 			writeProblem(w, http.StatusNotFound, "not_found")
+			return
 		}
+		handle(w, r)
 	}), nil
+}
+
+func jsonEndpoint[Input, Output any](maxResponseBytes int, call func(context.Context, Input) (Output, error)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var input Input
+		if !decodeRequest(w, r, &input) {
+			return
+		}
+		output, err := call(r.Context(), input)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		contents, err := marshalJSON(output)
+		if err != nil {
+			writeProblem(w, http.StatusInternalServerError, "internal_error")
+			return
+		}
+		if maxResponseBytes > 0 && len(contents) > maxResponseBytes {
+			writeProblem(w, http.StatusConflict, "response_too_large")
+			return
+		}
+		writeJSONBytes(w, http.StatusOK, contents)
+	}
+}
+
+func fileReadEndpoint(service Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var input fileReadRequest
+		if !decodeRequest(w, r, &input) {
+			return
+		}
+		contents, err := service.ReadFile(r.Context(), input.SandboxID, input.Path)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", strconv.Itoa(len(contents)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(contents)
+	}
 }
 
 func authenticated(r *http.Request, expected [sha256.Size]byte) bool {
@@ -543,7 +592,7 @@ func (c Client) Health(ctx context.Context) error {
 		return decodeProblem(response)
 	}
 	var result healthResponse
-	if err := decodeJSONResponse(response, &result); err != nil {
+	if err := decodeJSONResponse(response, &result, maxProblemBytes, "JSON"); err != nil {
 		return err
 	}
 	if !result.Ready {
@@ -583,25 +632,9 @@ func (c Client) ObserveMessage(ctx context.Context, jobID, messageID string) (co
 	if response.StatusCode != http.StatusOK {
 		return core.MessageResult{}, decodeProblem(response)
 	}
-	if !jsonContentType(response.Header.Get("Content-Type")) {
-		return core.MessageResult{}, fmt.Errorf("control reader returned an invalid Message content type")
-	}
-	contents, err := io.ReadAll(io.LimitReader(response.Body, MaxObservationBytes+1))
-	if err != nil {
-		return core.MessageResult{}, fmt.Errorf("read Sandbox observation response: %w", err)
-	}
-	if len(contents) > MaxObservationBytes {
-		return core.MessageResult{}, ErrResponseTooLarge
-	}
-	decoder := json.NewDecoder(bytes.NewReader(contents))
-	decoder.DisallowUnknownFields()
 	var result core.MessageResult
-	if err := decoder.Decode(&result); err != nil {
-		return core.MessageResult{}, fmt.Errorf("decode Sandbox observation response: %w", err)
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return core.MessageResult{}, fmt.Errorf("decode Sandbox observation response: trailing JSON")
+	if err := decodeJSONResponse(response, &result, MaxObservationBytes, "Message observation"); err != nil {
+		return core.MessageResult{}, err
 	}
 	if result.MessageID != messageID || !result.Terminal() || len(result.Output) > MaxObservationBytes {
 		return core.MessageResult{}, ErrUnavailable
@@ -619,7 +652,7 @@ func (c Client) DefaultConnection() (string, error) {
 		return "", decodeProblem(response)
 	}
 	var result connectionResponse
-	if err := decodeJSONResponse(response, &result); err != nil {
+	if err := decodeJSONResponse(response, &result, maxProblemBytes, "JSON"); err != nil {
 		return "", err
 	}
 	if !validIdentity(result.Connection) {
@@ -638,7 +671,7 @@ func (c Client) Check(ctx context.Context, connection string) error {
 		return decodeProblem(response)
 	}
 	var result struct{}
-	return decodeJSONResponse(response, &result)
+	return decodeJSONResponse(response, &result, maxProblemBytes, "JSON")
 }
 
 func (c Client) DiscoverInstallation(ctx context.Context, repository string) (string, error) {
@@ -651,7 +684,7 @@ func (c Client) DiscoverInstallation(ctx context.Context, repository string) (st
 		return "", decodeProblem(response)
 	}
 	var result installationResponse
-	if err := decodeJSONResponse(response, &result); err != nil {
+	if err := decodeJSONResponse(response, &result, maxProblemBytes, "JSON"); err != nil {
 		return "", err
 	}
 	if !validIdentity(result.Installation) {
@@ -660,25 +693,45 @@ func (c Client) DiscoverInstallation(ctx context.Context, repository string) (st
 	return result.Installation, nil
 }
 
-func decodeJSONResponse(response *http.Response, target any) error {
-	if !jsonContentType(response.Header.Get("Content-Type")) {
-		return fmt.Errorf("control reader returned an invalid JSON content type")
-	}
-	contents, err := io.ReadAll(io.LimitReader(response.Body, maxProblemBytes+1))
+func (c Client) ObservePullRequest(ctx context.Context, jobID string) (githubapi.PullRequest, error) {
+	response, err := c.request(ctx, PullRequestPath, pullRequestObservationRequest{JobID: jobID})
 	if err != nil {
-		return fmt.Errorf("read control reader response: %w", err)
+		return githubapi.PullRequest{}, err
 	}
-	if len(contents) > maxProblemBytes {
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return githubapi.PullRequest{}, decodeProblem(response)
+	}
+	var pull githubapi.PullRequest
+	if err := decodeJSONResponse(response, &pull, MaxObservationBytes, "pull-request observation"); err != nil {
+		return githubapi.PullRequest{}, err
+	}
+	if pull.Number < 1 || !validRepository(pull.Repository) || !validIdentity(pull.URL) ||
+		!validIdentity(pull.Head) || !validIdentity(pull.Base) || !validIdentity(pull.HeadSHA) {
+		return githubapi.PullRequest{}, ErrUnavailable
+	}
+	return pull, nil
+}
+
+func decodeJSONResponse(response *http.Response, target any, maxBytes int, name string) error {
+	if !jsonContentType(response.Header.Get("Content-Type")) {
+		return fmt.Errorf("control reader returned an invalid %s content type", name)
+	}
+	contents, err := io.ReadAll(io.LimitReader(response.Body, int64(maxBytes)+1))
+	if err != nil {
+		return fmt.Errorf("read %s response: %w", name, err)
+	}
+	if len(contents) > maxBytes {
 		return ErrResponseTooLarge
 	}
 	decoder := json.NewDecoder(bytes.NewReader(contents))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
-		return fmt.Errorf("decode control reader response: %w", err)
+		return fmt.Errorf("decode %s response: %w", name, err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return fmt.Errorf("decode control reader response: trailing JSON")
+		return fmt.Errorf("decode %s response: trailing JSON", name)
 	}
 	return nil
 }
@@ -708,7 +761,7 @@ func (c Client) request(ctx context.Context, path string, input any) (*http.Resp
 
 func decodeProblem(response *http.Response) error {
 	var value problem
-	if err := decodeJSONResponse(response, &value); err != nil || !problemMatchesStatus(value.Code, response.StatusCode) {
+	if err := decodeJSONResponse(response, &value, maxProblemBytes, "JSON"); err != nil || !problemMatchesStatus(value.Code, response.StatusCode) {
 		return fmt.Errorf("control reader returned HTTP %d", response.StatusCode)
 	}
 	switch value.Code {

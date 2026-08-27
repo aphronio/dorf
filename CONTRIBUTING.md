@@ -4,7 +4,7 @@ Use the repository-managed toolchain and run the repository contract:
 
 ```bash
 mise trust --yes
-mise install --locked go sqlc github:earendil-works/absurd
+mise install --locked
 docker compose -f compose.dev.yaml up --detach --wait postgres
 mise run db:init
 mise run check
@@ -21,6 +21,9 @@ toolchain, while `compose.dev.yaml` supplies PostgreSQL 17.10 at
 stale generated SQL and runs query preparation, Go tests, and vet without rebuilding an image.
 Self-hosted deployments use the published image through `deploy/compose.yaml` and do not require
 Mise.
+
+For fast feedback on Go changes, run `mise run lint` and `mise run complexity`. Use
+`mise run complexity:report` to rank the functions that remain above the repository limit.
 
 Read [AGENTS.md](AGENTS.md) before changing a documented product, architecture, storage, provider,
 setup, image, or release boundary.

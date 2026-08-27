@@ -23,6 +23,7 @@ var (
 	ErrMessageUnavailable  = errors.New("control API Message cannot be accepted")
 	ErrSteerUnavailable    = errors.New("control API steer cannot be accepted")
 	ErrRetryUnavailable    = errors.New("control API Job retry unavailable")
+	ErrAbandonUnavailable  = errors.New("control API Job abandon unavailable")
 	ErrEvidenceUnverified  = errors.New("control API Evidence could not be verified")
 	ErrIdempotencyConflict = errors.New("idempotency key is bound to different input")
 )
@@ -57,35 +58,33 @@ type RedeemRequest struct {
 }
 
 type AdmitJobRequest struct {
-	Goal      string `json:"goal"`
-	Profile   string `json:"profile"`
-	Model     string `json:"model"`
-	Reasoning string `json:"reasoning,omitempty"`
+	Goal         string `json:"goal"`
+	Profile      string `json:"profile"`
+	AIConnection string `json:"ai_connection,omitempty"`
+	Model        string `json:"model"`
+	Reasoning    string `json:"reasoning,omitempty"`
 }
 
-// AdmitCodingJobRequest is the complete public input for the built-in coding
-// workflow. Deployment configuration supplies GitHub and provider authority;
-// those credentials and identifiers never cross this boundary.
 type AdmitCodingJobRequest struct {
-	Goal       string `json:"goal"`
-	Repository string `json:"repository"`
-	Revision   string `json:"revision"`
-	BaseBranch string `json:"base_branch"`
-	Branch     string `json:"branch,omitempty"`
-	Profile    string `json:"profile,omitempty"`
-	Model      string `json:"model"`
-	Reasoning  string `json:"reasoning,omitempty"`
+	Goal         string `json:"goal"`
+	Repository   string `json:"repository"`
+	Revision     string `json:"revision"`
+	BaseBranch   string `json:"base_branch"`
+	Branch       string `json:"branch,omitempty"`
+	Profile      string `json:"profile,omitempty"`
+	AIConnection string `json:"ai_connection,omitempty"`
+	Model        string `json:"model"`
+	Reasoning    string `json:"reasoning,omitempty"`
 }
 
-// AdmitInvestigationJobRequest accepts only a remote repository source. Host-
-// local retained bundles remain an operator-only workflow input.
 type AdmitInvestigationJobRequest struct {
-	Brief      string `json:"brief"`
-	Repository string `json:"repository"`
-	Revision   string `json:"revision"`
-	Profile    string `json:"profile,omitempty"`
-	Model      string `json:"model"`
-	Reasoning  string `json:"reasoning,omitempty"`
+	Brief        string `json:"brief"`
+	Repository   string `json:"repository"`
+	Revision     string `json:"revision"`
+	Profile      string `json:"profile,omitempty"`
+	AIConnection string `json:"ai_connection,omitempty"`
+	Model        string `json:"model"`
+	Reasoning    string `json:"reasoning,omitempty"`
 }
 
 const (
@@ -177,8 +176,7 @@ func (j InvestigationJob) Common() Job   { return j.Job }
 func (InvestigationJob) jobKind() string { return JobKindInvestigation }
 
 type InvestigationSource struct {
-	Kind       string `json:"kind"`
-	Repository string `json:"repository,omitempty"`
+	Repository string `json:"repository"`
 	Revision   string `json:"revision"`
 }
 
@@ -285,6 +283,7 @@ type Jobs interface {
 	SendMessage(context.Context, string, string, SendMessageRequest) (Message, bool, error)
 	GetMessage(context.Context, string, string) (Message, error)
 	Retry(context.Context, string, string) (Retry, bool, error)
+	Abandon(context.Context, string) (JobView, error)
 	ReadSandboxFile(context.Context, string, string) ([]byte, error)
 	Evidence(context.Context, string) ([]Evidence, error)
 	RequestCleanup(context.Context, string) (JobView, error)

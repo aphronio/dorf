@@ -2,6 +2,8 @@
 go = "1.26.5"
 sqlc = "1.31.1"
 "github:earendil-works/absurd" = { version = "0.5.0", asset_pattern = "absurdctl" }
+"aqua:golangci/golangci-lint" = "2.13.1"
+"go:github.com/fzipp/gocyclo/cmd/gocyclo" = "0.6.0"
 
 [env]
 DORF_TEST_DATABASE_URL = { default = "postgresql://postgres:postgres@127.0.0.1:55432/dorf_test?sslmode=disable" }
@@ -54,6 +56,22 @@ run = "go test -count=1 ./internal/postgres ./cmd/dorf"
 description = "Refresh or run the disposable Ubuntu Compose deployment proof"
 run = "scripts/integration/compose-vm.sh"
 
+[tasks.lint]
+description = "Run the repository's blocking Go static analysis"
+run = "golangci-lint run"
+
+[tasks.complexity]
+description = "Reject new, increased, or unrecorded Go complexity"
+run = "scripts/check-go-complexity.sh check"
+
+[tasks."complexity:report"]
+description = "Rank authored production Go functions above the complexity limit"
+run = "scripts/check-go-complexity.sh report"
+
+[tasks."complexity:update"]
+description = "Record decreases to the Go complexity baseline"
+run = "scripts/check-go-complexity.sh update"
+
 [tasks.check]
 description = "Run the repository's deterministic SQL and Go checks"
 run = """
@@ -63,5 +81,7 @@ scripts/incus/check-image-inputs.sh
 go run ./cmd/dorf-brand-terminal --check
 bash scripts/integration/compose-vm-test.sh
 go test ./...
+golangci-lint run
+scripts/check-go-complexity.sh check
 go vet ./...
 """

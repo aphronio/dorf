@@ -14,15 +14,13 @@ without rebuilding it in a new agent framework. Dorf keeps custody of controlled
 including recovery, external effects, retained results, and requested cleanup.
 
 ```text
-Remote clients                    Native workflows
-        |                                |
-        v                                v
- authenticated HTTPS          in-process composition
- (fixed Job projections)                 |
-        |                                |
-        +-------------+------------------+
-                      v
-              Dorf deployment
+Deployment-host CLI       Remote clients       Native workflows
+        |                       |                      |
+ loopback HTTP        operator HTTPS ingress   in-process composition
+        |                       |                      |
+        +-----------------------+-----------+----------+
+                                            v
+                                    Dorf deployment
         durable execution and recovery
                       |
                       v
@@ -30,12 +28,13 @@ Remote clients                    Native workflows
 ```
 
 Dorf is a stateful, self-hosted control plane, not an agent framework or an embeddable runtime SDK.
-Native workflows compose Core in-process. The external-client boundary is intentionally narrow: an
-enrolled CLI client can admit a direct Job or either fixed built-in workflow and operate their common
-interaction loop—Messages, observation, eligible recovery, exact Sandbox files, verified Evidence
-metadata, cleanup, and bounded Job listing—through one configured Dorf deployment over authenticated
-HTTPS. Each deployment publishes its OpenAPI and typed Problem catalog. Static release manifests
-define separately supervised API and worker services; one resumable `dorf setup` flow prepares their
+Native workflows compose Core in-process. The client boundary is intentionally narrow: an enrolled
+CLI can admit a direct Job or either fixed built-in workflow and operate their common interaction
+loop—Messages, observation, eligible recovery, exact Sandbox files, verified Evidence metadata,
+cleanup, and bounded Job listing—through one configured Dorf deployment. The deployment-host CLI
+uses fixed authenticated loopback HTTP; remote clients use operator-owned HTTPS ingress. Each
+deployment publishes its OpenAPI and typed Problem catalog. Static release manifests define
+separately supervised API and worker services; one resumable `dorf setup` flow prepares their
 protected configuration and applies that exact Compose project. Operators use Compose directly only
 for advanced lifecycle operations. Generic workflow registration, client SDKs, MCP, and a
 control-plane UI remain later work.
@@ -52,7 +51,7 @@ The stable remote contract and deployment boundary are in the
 
 ```bash
 mise trust --yes
-mise install --locked go
+mise install --locked
 mise run build
 .dorf/bin/dorf version
 ```
@@ -64,7 +63,7 @@ disposable PostgreSQL dependency:
 
 ```bash
 docker compose -f compose.dev.yaml up --detach --wait postgres
-mise install --locked go sqlc github:earendil-works/absurd
+mise install --locked
 mise run db:init
 mise run check
 ```

@@ -1382,7 +1382,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   human authority: it may precede Proposal and therefore retains no invented GitHub state; when a Proposal
   already exists, Dorf still verifies its exact identity and refuses a merged pull request. Publication and
   observation join these facts instead of copying authority or an already-validated remote head. Merge and
-  close are observed automatically; `dorf abandon JOB` is the only manual Outcome command.
+  close are observed automatically; `dorf job abandon JOB` is the only manual Outcome command.
 - **Why:** Proposal and Outcome repeated facts fixed by their Job and predecessor, creating comparison
   code, larger schemas, and inconsistent states that had no product meaning. One owner per fact makes
   publication, inspection, and terminal recovery read in the same order as the workflow.
@@ -1712,8 +1712,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   agent review for a documentation-only change, published PR #134, observed its closed rejection,
   and cleaned its route and Sandbox. The second produced exact Revision
   `764f9312dd217b149e393c0ae1f31696894f4174`, passed both Checks, and selected one general reviewer.
-  A separately owned E2B Sandbox received the exact checkout by Git bundle, ran Codex with immutable
-  read-only capability, and returned no-material-issue feedback with Revision-bound review Evidence.
+  A separately owned E2B Sandbox checked out the exact Revision, ran Codex with immutable read-only
+  capability, and returned no-material-issue feedback with Revision-bound review Evidence.
   The original implementation thread accepted that feedback without changing the Revision, Dorf
   published PR #135, observed merge commit `f6961465f89b383d3ae0e84a207f64c4f2fba925` as an accepted
   Outcome, then revoked each route before ownership-deleting its main and reviewer Sandboxes. Both
@@ -1741,7 +1741,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 ## D068 — Explicit Job retry rearms the current failed Absurd task once
 
 - **Status:** Accepted operator ergonomics, extended by cleanup dogfood — 2026-08-19
-- **Decision:** `dorf retry JOB_ID` is a thin operator command for the Job's latest attached Absurd
+- **Decision:** `dorf job retry JOB_ID` is a thin operator command for the Job's latest attached Absurd
   task. Dorf records task handoffs as one append-only ordered attachment relation rather than named
   main/cleanup task columns; any future task handoff therefore becomes the retry target without new
   selection logic. Dorf calls Absurd's public in-place retry without overriding `max_attempts`, which
@@ -1945,36 +1945,14 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   storage becomes deployment authority, or multiple producers require a richer typed ownership
   relation than the current AgentRun-produced Artifact.
 
-## D073 — Local committed investigation sources are retained Git bundles
+## D073 — Local investigation source custody is superseded
 
-- **Status:** Accepted provider-neutral local-source slice — 2026-08-19
-- **Decision:** `codebase-investigation` accepts exactly one source: a reachable remote repository
-  with an exact full commit OID, or `--local-repo` with an optional revision that defaults to `HEAD`.
-  Dorf resolves the local revision to an exact commit, rejects submodules and Git LFS pointers,
-  creates a self-contained Git bundle capped at 128 MiB, durably stores its bytes by SHA-256 before
-  Job admission, and binds digest, byte size, and Revision as one immutable workflow-specific source.
-  Local index, tracked-worktree, and untracked changes are excluded and reported to the caller.
-- **Execution:** A retained source projects a distinct `repository-restore` Action. Dorf reads and
-  verifies the retained bytes, uses the common Sandbox `PutFile` operation to reconcile an exact
-  temporary bundle, verifies it with Git, and converges a detached checkout at the admitted Revision before the
-  investigator runs. An ownership marker distinguishes a retryable partial restore from a foreign
-  pre-existing checkout. Remote sources keep the existing `repository-clone` Action and use the same
-  detached exact-Revision contract. Investigation has no synthetic branch.
-- **File boundary:** `PutFile` reconciles one bounded byte slice at one clean absolute regular-file
-  destination through an adjacent verified temporary file and atomic rename. Incus and E2B retain
-  their private transports. The operation is safe to retry after an indeterminate response, but it
-  does not claim streaming, directory transfer, mounts, stat/list, or provider filesystem parity.
-- **Authority:** A retained source is accepted input custody, not a workflow result or Evidence.
-  Typed results remain workflow-owned; Evidence remains observed proof. A crash after
-  blob retention but before admission may leave an unreferenced deduplicated blob, while every
-  admitted Job is independent of the original host checkout.
-- **Why:** Investigation dogfood against an unpublished local commit otherwise required pushing it
-  to a remote authority. The existing review handoff also wrote bundles directly through command
-  stdin; the earned atomic file primitive removes that unsafe destination write without turning the
-  Sandbox contract into a speculative filesystem API.
-- **Reconsider when:** A real input exceeds the bounded in-memory transport, a provider-native
-  streaming upload materially reduces memory or protocol risk, submodules or LFS become required,
-  or another workflow earns a more general typed input-blob relation.
+- **Status:** Superseded before release by D103 — 2026-08-27
+- **Supersession:** Investigation accepts only a credential-free reachable HTTPS repository and an
+  exact full commit OID. D103 removes local-source admission, source-byte storage, source restoration,
+  and their tests. No user or admitted Job requires migration or recovery support.
+- **Why:** One remote source contract supplies an exact checkout without adding a second transport,
+  storage lifecycle, or API path.
 
 ## D074 — Investigation drafts wait for exact human disposition
 
@@ -2019,12 +1997,12 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D076 — Core Jobs and workflow inputs have separate durable types
 
-- **Status:** Refined by D088 and D089 — 2026-08-22
+- **Status:** Refined by D088, D089, and D103 — 2026-08-27
 - **Decision:** Keep `dorf.jobs` limited to shared custody: identity, bounded goal, pinned workflow
   and Sandbox profile, execution attachment, attention, and cleanup lifecycle. Store coding
   repository, starting/current Revision, branch, GitHub authority, and selected setup in
-  `coding_to_proposal_inputs`. Store investigation repository, exact Revision, and remote-or-retained
-  source identity in `codebase_investigation_sources`. Admission uses explicit typed inputs for each
+  `coding_to_proposal_inputs`. Store the investigation repository and exact Revision in
+  `codebase_investigation_sources`. Admission uses explicit typed inputs for each
   workflow; there is no generic input JSON, nullable workflow column set, or compatibility facade.
 - **Execution:** Coding continues to own a mutable branch and Revision line. Investigation owns a
   clean detached checkout at one exact Revision and never fabricates a branch. Shared Sandbox,
@@ -2035,7 +2013,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   Job row. The second workflow proved those were not Core facts and that retaining them would force
   false branches and coding authority onto unrelated work.
 - **Proof:** PostgreSQL constraints and integration coverage reject cross-workflow facts, preserve
-  complete-input idempotency, admit branchless remote and retained investigations, and keep coding
+  complete-input idempotency, admit branchless remote investigations, and keep coding
   revision/setup/publication behavior typed. The full SQL generation/vet, Go unit/integration, and
   vet contract passes against a recreated prototype baseline.
 - **Reconsider when:** Another workflow needs one of these facts with the same authority and recovery
@@ -2077,25 +2055,20 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   same lifecycle and recovery meaning. Add a typed composition for that workflow rather than
   widening the base runtime.
 
-## D079 — Investigation owns its source and restore policy
+## D079 — Investigation owns its repository source policy
 
-- **Status:** Accepted Core/domain separation slice; Draft storage removed by D092 — 2026-08-22
-- **Decision:** Move the investigation `Source` and retained-bundle restore into
-  `internal/investigation`. Its typed runtime composes that service over shared Git workspace
-  execution. D092 later removes the Draft and unchanged-checkout result checkpoint. The base runtime
-  grants only execution; coding and investigation each add their own Git-backed authority
-  explicitly.
-- **Why:** Keeping investigation types and restore rules in the shared Core package made the second workflow look
-  like shared Core semantics. Core owns the Action, Sandbox, AgentRun, and cleanup mechanisms;
-  deployment blob custody supports Evidence and the investigation-owned retained Git source, while
-  the investigation workflow owns its report-path prompt policy.
-- **Proof:** `internal/core` contains no investigation source, restore, or report-path policy.
-  PostgreSQL, CLI, terminal, coordinator, and typed runtime consume the investigation-owned source
-  contract directly; real bundle materialization and PostgreSQL workflow tests retain their prior
-  behavioral coverage.
-- **Reconsider when:** Another workflow needs retained repository input with the same accepted-input
-  and recovery semantics. Extract a neutral repository-input contract only after that second use,
-  rather than moving this workflow's type back into Core.
+- **Status:** Accepted Core/domain separation slice; source transport refined by D103 and Draft
+  storage removed by D092 — 2026-08-27
+- **Decision:** Keep the investigation `Source` in `internal/investigation`. Its typed runtime
+  composes credential-free HTTPS cloning over shared Git workspace execution. The base runtime
+  grants only execution. Coding and investigation each add their own Git-backed authority.
+- **Why:** Keeping investigation types and repository rules in the shared Core package made the
+  second workflow look like shared Core semantics. Core owns the Action, Sandbox, AgentRun, and
+  cleanup mechanisms. The investigation workflow owns its repository and report-path policy.
+- **Proof:** `internal/core` contains no investigation source or report-path policy. PostgreSQL, CLI,
+  coordinator, and typed runtime consume the investigation-owned source contract directly.
+- **Reconsider when:** Another workflow needs the same repository input and recovery semantics.
+  Extract a neutral repository-input contract only after that second use.
 
 ## D080 — Workflows authorize Messages; PostgreSQL atomically records them
 
@@ -2346,11 +2319,11 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   makes the bytes unavailable. D092 applies that boundary to Investigation: the workflow chooses
   `REPORT.md`, but neither Core nor the workflow retains its bytes.
 - **Storage:** Remove the generic Artifact domain, PostgreSQL table and queries, Core adapters, and
-  `dorf artifact` CLI. The content-addressed blob store remains only for Evidence and retained Git
-  input. No compatibility layer or migration preserves the pre-release Artifact shape.
+  `dorf artifact` CLI. The content-addressed blob store remains only for Evidence. No migration
+  preserves the pre-release Artifact shape.
 - **Reconciliation:** This supersedes D072, refines D069 and D075's investigation Draft
-  representation, and replaces D088's automatic retention design. D073's retained input custody and
-  the distinct Evidence proof boundary remain unchanged. D070's mandatory profile contract advances
+  representation, and replaces D088's automatic retention design. The distinct Evidence proof
+  boundary remains unchanged. D070's mandatory profile contract advances
   to `base-2` so every admitted profile has functionally proved exact binary file reads. The North
   Star remains the authority for native workflows as non-privileged Core consumers.
 - **Why:** Automatic retention invented output directories, naming and collision policy,
@@ -2465,8 +2438,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   within that envelope. The resulting installation and repository facts remain authority of the
   operation or durable consumer that needs them. The selected profile's coding runtime composes the
   deployment-default integration; neither the durable profile nor the Job request stores its
-  credentials or permission envelope. Replacing the default App requires explicit `--yes`; plain Git
-  access to public or retained input needs no GitHub App.
+  credentials or permission envelope. Replacing the default App requires explicit `--yes`;
+  credential-free access to a public Git repository needs no GitHub App.
 - **Authority:** This does not move repository authority into deployment configuration. D060 remains
   the coding Job authority for its immutable repository, installation, base, and head. Another
   workflow or direct client owns its own accepted per-use scope while reusing the same integration.
@@ -2480,24 +2453,24 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D094 — Published PostgreSQL migrations are immutable and append-only
 
-- **Status:** Accepted upgrade correction — 2026-08-25
+- **Status:** Accepted upgrade correction — 2026-08-25; greenfield reset exercised before users
+  — 2026-08-27
 - **Decision:** Freeze `001_baseline.sql` at the schema shipped in the v0.3 releases. Every later
   PostgreSQL change is a new ordered migration whose exact filename is recorded in
   `dorf.schema_migrations`. `dorf migrate` retains its small embedded runner, one transaction, and
   deployment-wide advisory lock; it rejects unknown history rather than inferring a version from
   today's table shape. Never edit an already-published migration to describe the latest schema.
-- **First upgrade:** `002_sandbox_custody.sql` converges both the released baseline and development
-  databases that were accidentally initialized from the edited baseline. It admits the explicit
-  requested-cleanup state, derives the main Sandbox name from implementation or investigation
-  AgentRuns and reviewer Sandbox names from their owning AgentRun, rebuilds the review projection,
-  and removes the Artifact and Investigation Draft tables already retired by D092. An unmappable
-  Sandbox fails the transaction instead of receiving invented custody.
-- **Proof:** PostgreSQL integration creates the exact published baseline inside a rollback-only
-  transaction, retains a main and reviewer Sandbox, applies and replays the current migration chain,
-  and proves their names, review projection, cleanup request, migration ledger, and retired-table
-  removal. The real self-hosted operator database supplied the failure terminal: its ledger said
-  `001_baseline.sql` while the live table lacked `sandboxes.name`, so the mutable baseline made
-  `dorf migrate` falsely report readiness.
+- **Greenfield reset:** D103 exercised this decision's destructive-reset condition before Dorf had
+  users or retained Jobs. The replacement `001_greenfield.sql` contains only the current remote
+  investigation source shape and records a new baseline identity. A database carrying the retired
+  identity fails closed with instructions to recreate the prototype database. There is no source
+  compatibility migration, dual read, or recovery path. The replacement is frozen at its
+  repository-checked digest.
+- **Proof:** PostgreSQL integration creates the exact reset baseline inside a rollback-only
+  transaction, checks its digest and migration inventory, and replays it idempotently. The earlier
+  self-hosted operator database supplied the original failure terminal: its ledger said
+  `001_baseline.sql` while its live shape differed, which is why an ordinary deployed upgrade may
+  not rewrite history.
 - **Refines:** D048's greenfield squash applied before the first released PostgreSQL schema. It does
   not authorize changing a migration after that schema ships. The prohibition on Python/SQLite
   compatibility facades and dual writes remains; this decision preserves Dorf-owned PostgreSQL
@@ -2509,7 +2482,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 ## D095 — The CLI is Dorf's first direct trusted client
 
 - **Status:** Accepted concrete client slice; role and message semantics refined by D096 —
-  2026-08-25; external transport refined by D097 — 2026-08-26
+  2026-08-25; external transport refined by D097 — 2026-08-26; host transport superseded by D103 —
+  2026-08-27
 - **Decision:** Add `dorf run` as the first concrete direct CLI client, initially composed
   in-process, that admits complete Job intent without workflow identity. It delivers the caller's
   exact prompt through the `direct` Agent role, leaves successful work open and idle for follow,
@@ -2609,7 +2583,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D099 — Fixed typed workflow admission reuses remote Job control
 
-- **Status:** Accepted and dogfooded — 2026-08-26
+- **Status:** Accepted and dogfooded — 2026-08-26; source admission refined by D103 — 2026-08-27
 - **Decision:** Add exactly two workflow admission resources to D097's authenticated Deployment:
   `POST /v1/workflows/coding/jobs` and
   `POST /v1/workflows/codebase-investigation/jobs`. Each accepts its complete typed input under the
@@ -2623,8 +2597,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Workflow authority:** Coding retains its exact repository, Revision, branch, Proposal, GitHub
   Outcome, and policy that conditionally requests cleanup after a terminal Outcome. Investigation
   retains its exact source and `REPORT.md` policy and remains open and idle until its client requests
-  cleanup. Remote investigation accepts only a credential-free HTTPS repository at an exact full
-  commit OID; retained local Git bundles remain deployment-host-only input and never cross this API.
+  cleanup. Investigation admission accepts only a credential-free reachable HTTPS repository at an
+  exact full commit OID.
 - **Why:** Real off-host clients need the existing built-in workflows without SSH, but a generic
   workflow surface would erase the typed policy and authority that make those workflows honest.
   Fixed typed routes reuse the proven Job interaction contract while keeping each compiled workflow
@@ -2635,9 +2609,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   [Remote Control API](../control-api.md); the real HTTPS proof is
   [archived](../history/control-api-slices.md).
 - **Reconsider when:** Another proved workflow cannot be expressed as a fixed typed admission and
-  closed Job member, independently distributed workflows earn a loading and compatibility contract,
-  or a real remote consumer requires retained local-source transport with an explicit bounded
-  credential and custody model.
+  closed Job member, or independently distributed workflows earn a loading and compatibility
+  contract.
 
 ## D100 — Automation contract and managed host services stay narrow
 
@@ -2819,3 +2792,49 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   [Remote Control API](../control-api.md#deployment-services).
 - **Reconsider when:** Another guided ingress provider earns equal end-to-end proof, one hostname
   must serve several Deployments, or a hosted topology needs independent lifecycle and identity.
+
+## D103 — Every ordinary CLI Job operation uses the authenticated control API
+
+- **Status:** Accepted implementation direction — 2026-08-27
+- **Decision:** The deployment-host CLI and remote CLI use the same authenticated control API for
+  Job admission, listing, inspection, watch, Messages, retry, Evidence, exact Sandbox file reads,
+  coding abandonment, and cleanup. Host administration remains local. The CLI does not reopen
+  PostgreSQL, Core, workflow services, Absurd, or the blob store for an ordinary Job operation.
+- **Host Client:** Setup enrolls an ordinary Client through the existing Enrollment contract and
+  stores its proof in protected host state. PostgreSQL `control_clients` remains the only
+  authentication authority. The proof has no role, scope, bypass, or second token table. A saved
+  remote `client.json` takes precedence. Otherwise Job commands use the fixed
+  `http://127.0.0.1:8745` origin. The loopback client disables proxies, DNS, alternate destinations,
+  and redirects. Compose publishes plain HTTP only on `127.0.0.1:8745`.
+- **Setup recovery:** Setup saves a candidate credential and Enrollment before redemption. A rerun
+  reuses an authenticated proof, replays an interrupted redemption, or rotates an invalid proof.
+  Setup reports ready only after authenticated `GET /v1/me` succeeds. Revocation takes effect
+  immediately, and a later setup run enrolls a replacement.
+- **Surface:** Direct, coding, and investigation admissions accept an optional named AI connection.
+  `PUT /v1/jobs/{job}/abandon` records the coding workflow's idempotent `abandoned` Outcome and then
+  requests cleanup. The worker's private reader adds one exact stored-Proposal observation so the
+  API receives no GitHub credential or generic GitHub proxy.
+- **Deletion:** Remove the top-level local `inspect`, `message`, `retry`, `evidence`, `abandon`, and
+  `cleanup` commands and their distinct output models. Keep the `dorf job` vocabulary and canonical
+  snapshot watch. Do not replace the deleted local history renderer with an event API. Delete local
+  source admission, storage, restoration, and tests. Do not add host roles, source upload, API blob
+  writes, or a private route.
+- **API failure:** A stopped or unhealthy control API is deployment-service work. Job commands fail
+  with setup, doctor, and Compose repair guidance. They never use direct storage as a break-glass
+  mutation path.
+- **Why:** Two adapters for the same Job operations had different flags, projections, recovery, and
+  tests. Preserving every host-only presentation feature would replace that duplication with host
+  authorization, upload, and history contracts. One narrow transport deletes the split authority
+  while retaining guided setup, Cloudflare, provider custody, Profiles, diagnostics, and Compose
+  repair.
+- **Supersedes and refines:** Supersedes D095's in-process CLI adapter and D073's local-source
+  admission. Refines D060's and D068's CLI names and D099's source-admission boundary. Refines D097
+  through D101 by using their existing authentication, typed workflow, automation, capability, and
+  Compose boundaries on the deployment host. There are no users or admitted Jobs that require
+  migration or recovery support for the deleted source path.
+- **Proof:** The control-path audit reports zero local Job dispatch cases and more than 1,000 net
+  authored lines removed. Tests cover host credential replay, remote precedence, loopback credential
+  containment, all three named-connection admissions, abandonment replay, Job listing,
+  PostgreSQL integration, and the published OpenAPI contract.
+- **Reconsider when:** A real client earns durable event history, a typed bounded source-upload
+  contract, or a separate host role whose authority cannot be expressed by an ordinary Client.

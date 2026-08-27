@@ -137,7 +137,7 @@ func TestBodyIsDeterministicExactRevisionProjection(t *testing.T) {
 func TestBodyProjectsOnlySelectedReviewEvidence(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	job := coding.Job{Job: core.Job{ID: "job-review", Goal: "Preserve opaque review feedback"}, Revision: revision, Branch: "dorf/review", BaseBranch: "main"}
-	role := "critical-boundary"
+	role := "general"
 	requestID := coding.ReviewRequestMessageID(job.ID, revision, role)
 	runID := core.AgentRunID(requestID)
 	feedbackMessageID := core.MessageID(job.ID, core.MessageFromAgent, runID)
@@ -171,7 +171,7 @@ func TestBodySeesOnlyExactRevisionReviewRuns(t *testing.T) {
 	jobID := "job-exact-review"
 	currentRevision := strings.Repeat("a", 40)
 	oldRevision := strings.Repeat("f", 40)
-	role := "critical-boundary"
+	role := "general"
 	currentRunID := core.AgentRunID(coding.ReviewRequestMessageID(jobID, currentRevision, role))
 	oldRunID := core.AgentRunID(coding.ReviewRequestMessageID(jobID, oldRevision, role))
 	runs := []coding.ReviewRunView{

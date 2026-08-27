@@ -27,7 +27,7 @@ func (s Store) AdmitInvestigation(ctx context.Context, input investigation.Admis
 		if err != nil {
 			return err
 		}
-		if stored.JobID != ids.jobID || investigationSourceFromValues("", stored.Kind, stored.Repository, stored.Revision, stored.BundleDigest, stored.BundleByteSize) != normalized.Source {
+		if stored.JobID != ids.jobID || investigationSourceFromValues("", stored.Repository, stored.Revision) != normalized.Source {
 			return fmt.Errorf("%w: %q", ErrAdmissionConflict, normalized.AdmissionKey)
 		}
 		if _, err := queries.InsertAdmittedAgentRun(ctx, dbsql.InsertAdmittedAgentRunParams{

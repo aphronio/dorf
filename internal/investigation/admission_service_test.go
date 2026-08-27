@@ -81,7 +81,7 @@ func (s *admissionServiceScheduler) ScheduleJobTask(_ context.Context, job core.
 	if taskName != TaskName || taskKey != TaskKey(job.ID) {
 		return core.Job{}, errors.New("wrong investigation task identity")
 	}
-	job.CurrentTaskID = "task-retained"
+	job.CurrentTaskID = "task-attached"
 	return job, nil
 }
 
@@ -100,7 +100,7 @@ func TestAdmissionServiceReconcilesFirstAdmissionRaceAndExactReplay(t *testing.T
 	service := NewAdmissionService(store, scheduler, provider)
 	request := AdmissionRequest{
 		AdmissionKey: "investigation-request", Brief: "preserve exact brief", Model: "gpt-5.6-sol",
-		Source: Source{Kind: SourceRemote, Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40)},
+		Source: Source{Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40)},
 	}
 
 	createdJob, created, err := service.Admit(context.Background(), request)
@@ -141,7 +141,7 @@ func TestAdmissionServiceReconcilesFirstAdmissionRaceAndExactReplay(t *testing.T
 func TestAdmissionServiceValidatesAndRequiresRemoteGitBeforeExternalAuthority(t *testing.T) {
 	valid := AdmissionRequest{
 		AdmissionKey: "request", Brief: "brief", Model: "model",
-		Source: Source{Kind: SourceRemote, Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40)},
+		Source: Source{Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40)},
 	}
 	tests := map[string]struct {
 		mutate     func(*AdmissionRequest)
@@ -168,17 +168,6 @@ func TestAdmissionServiceValidatesAndRequiresRemoteGitBeforeExternalAuthority(t 
 				t.Fatalf("error=%v, want invalid admission", err)
 			}
 		})
-	}
-}
-
-func TestAdmissionServiceAllowsRetainedBundleWithoutRemoteGit(t *testing.T) {
-	store := &admissionServiceStore{profile: verifiedAdmissionProfile("offline", false)}
-	request := AdmissionRequest{
-		AdmissionKey: "retained", Brief: "brief", Model: "model",
-		Source: Source{Kind: SourceGitBundle, Revision: strings.Repeat("a", 40), BundleDigest: strings.Repeat("b", 64), BundleByteSize: 10},
-	}
-	if _, created, err := NewAdmissionService(store, &admissionServiceScheduler{}, &admissionServiceProvider{}).Admit(context.Background(), request); err != nil || !created {
-		t.Fatalf("retained bundle created=%t err=%v", created, err)
 	}
 }
 

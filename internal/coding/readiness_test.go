@@ -40,18 +40,18 @@ func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testin
 	if !recovered.Ready {
 		t.Fatalf("later successful observed Follow did not recover old failure: %#v", recovered)
 	}
-	selected := ReviewPlanRecord{JobID: jobID, Revision: revision, Plan: policy.ReviewPlan{Decision: "selected", Roles: []policy.Role{policy.RoleCriticalBoundary}}}
+	selected := ReviewPlanRecord{JobID: jobID, Revision: revision, Plan: policy.ReviewPlan{Decision: "selected", Roles: []policy.Role{policy.RoleGeneral}}}
 	incomplete := AssessReviewReadiness(job, nil, store, &selected, nil, nil)
 	if incomplete.Ready || !strings.Contains(incomplete.Reason, "has not returned a feedback Message") {
 		t.Fatalf("incomplete selected readiness=%#v", incomplete)
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	requestFromID := ReviewRequestFromID(revision, string(policy.RoleCriticalBoundary))
-	requestID := ReviewRequestMessageID(jobID, revision, string(policy.RoleCriticalBoundary))
+	requestFromID := ReviewRequestFromID(revision, string(policy.RoleGeneral))
+	requestID := ReviewRequestMessageID(jobID, revision, string(policy.RoleGeneral))
 	runID := core.AgentRunID(requestID)
 	feedbackID := core.MessageID(jobID, core.MessageFromAgent, runID)
 	run := ReviewRunView{
-		ID: runID, JobID: jobID, MessageID: requestID, InputRevision: revision, Role: string(policy.RoleCriticalBoundary), Outcome: "completed", TurnID: "turn-review", Harness: "codex", ThreadID: "thread-review", Capability: ReviewReadOnlyCapability, StartedAt: now, FinishedAt: now.Add(time.Second),
+		ID: runID, JobID: jobID, MessageID: requestID, InputRevision: revision, Role: string(policy.RoleGeneral), Outcome: "completed", TurnID: "turn-review", Harness: "codex", ThreadID: "thread-review", Capability: ReviewReadOnlyCapability, StartedAt: now, FinishedAt: now.Add(time.Second),
 		Request: core.Message{ID: requestID, JobID: jobID, FromKind: core.MessageFromWorkflow, FromID: requestFromID, Sequence: 2, Input: "Review the exact Revision.", Intent: core.MessageFollow},
 	}
 	observed := reviewObservationEvidence(t, store, run, ReviewCheckoutObservation{Revision: revision, Tree: strings.Repeat("c", 40)})

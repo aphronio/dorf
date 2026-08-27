@@ -30,7 +30,9 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/direct"
 	githubapi "github.com/aphronio/dorf/internal/github"
+	"github.com/aphronio/dorf/internal/hostclientconfig"
 	"github.com/aphronio/dorf/internal/investigation"
+	outcomeapp "github.com/aphronio/dorf/internal/outcome"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/version"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -40,9 +42,6 @@ const defaultControlAddress = "127.0.0.1:8745"
 
 const maxControlModelBytes = 1024
 
-// remoteCommand handles commands that can run on a client-only machine. A
-// saved connection makes `run` remote; without one, the existing local command
-// remains authoritative.
 func remoteCommand(ctx context.Context, args []string, stdout, stderr io.Writer) (bool, error) {
 	if len(args) == 0 {
 		return false, nil
@@ -55,22 +54,19 @@ func remoteCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 	case "job":
 		return true, remoteJobCommand(ctx, args[1:], stdout, stderr)
 	case "sandbox", "run", "workflow":
-		cfg, _, found, err := loadClientConfig()
-		if err != nil || !found {
-			return false, err
-		}
-		client, err := controlclient.New(cfg.DeploymentURL, cfg.Credential, nil)
+		cfg, _, client, err := loadConnectedClient()
 		if err != nil {
 			return true, err
 		}
 		switch args[0] {
 		case "sandbox":
-			return true, remoteSandboxCommand(ctx, client, args[1:], stdout)
+			err = remoteSandboxCommand(ctx, client, args[1:], stdout)
 		case "run":
-			return true, remoteRun(ctx, client, cfg.DeploymentURL, args[1:], stdout, stderr)
+			err = remoteRun(ctx, client, cfg.DeploymentURL, args[1:], stdout, stderr)
 		default:
-			return true, remoteWorkflowCommand(ctx, client, cfg.DeploymentURL, args[1:], stdout, stderr)
+			err = remoteWorkflowCommand(ctx, client, cfg.DeploymentURL, args[1:], stdout, stderr)
 		}
+		return true, jobControlError(cfg.DeploymentURL, err)
 	default:
 		return false, nil
 	}
@@ -187,12 +183,16 @@ func authCommand(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	}
 	identity, err := client.Me(ctx)
 	if err != nil {
-		return err
+		return jobControlError(cfg.DeploymentURL, err)
+	}
+	credentialSource := "client_config"
+	if cfg.DeploymentURL == hostclientconfig.HostOrigin {
+		credentialSource = "deployment_host"
 	}
 	if *output == "json" {
 		return writeJSON(stdout, authStatusReceipt{
 			Deployment: cfg.DeploymentURL, Principal: identity.Principal, Client: identity.Client,
-			CredentialSource: "client_config",
+			CredentialSource: credentialSource,
 		})
 	}
 	return renderConnection(stdout, cfg.DeploymentURL, path, identity, true)
@@ -210,6 +210,7 @@ func remoteRun(ctx context.Context, client *controlclient.Client, deploymentURL 
 	set.SetOutput(stderr)
 	key := set.String("key", "", "stable request identity for explicit replay")
 	goalFile := set.String("goal-file", "", "path containing the complete goal")
+	connection := set.String("ai-connection", "", "named AI connection (default: deployment default)")
 	model := set.String("model", "", "Harness model")
 	effort := set.String("reasoning", "high", "Harness reasoning effort")
 	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
@@ -232,7 +233,7 @@ func remoteRun(ctx context.Context, client *controlclient.Client, deploymentURL 
 		return err
 	}
 	request := controlapi.AdmitJobRequest{
-		Goal: goal, Profile: strings.TrimSpace(*profileName), Model: strings.TrimSpace(*model), Reasoning: strings.TrimSpace(*effort),
+		Goal: goal, Profile: strings.TrimSpace(*profileName), AIConnection: strings.TrimSpace(*connection), Model: strings.TrimSpace(*model), Reasoning: strings.TrimSpace(*effort),
 	}
 	job, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Admission may have succeeded.", func() (controlapi.DirectJob, error) {
 		return client.AdmitJob(ctx, requestKey, request)
@@ -273,6 +274,7 @@ func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, dep
 	base := set.String("base", "", "immutable GitHub base branch")
 	branch := set.String("branch", "", "Job branch (default: dorf/<Job ID>)")
 	profile := set.String("profile", "", "named Sandbox profile (default: deployment default)")
+	connection := set.String("ai-connection", "", "named AI connection (default: deployment default)")
 	model := set.String("model", "", "Harness model")
 	reasoning := set.String("reasoning", "high", "Harness reasoning effort")
 	output := set.String("output", "human", "output format: human or json")
@@ -295,7 +297,7 @@ func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, dep
 	}
 	request := controlapi.AdmitCodingJobRequest{
 		Goal: goal, Repository: *repository, Revision: *revision, BaseBranch: *base, Branch: *branch,
-		Profile: *profile, Model: *model, Reasoning: *reasoning,
+		Profile: *profile, AIConnection: *connection, Model: *model, Reasoning: *reasoning,
 	}
 	job, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Admission may have succeeded.", func() (controlapi.CodingJob, error) {
 		return client.AdmitCodingJob(ctx, requestKey, request)
@@ -318,9 +320,9 @@ func remoteInvestigationWorkflow(ctx context.Context, client *controlclient.Clie
 	key := set.String("key", "", "stable request identity for explicit replay")
 	briefFile := set.String("brief-file", "", "path containing the complete investigation brief")
 	repository := set.String("repo", "", "credential-free HTTPS repository URL")
-	localRepository := set.String("local-repo", "", "deployment-host-only local Git repository")
 	revision := set.String("revision", "", "exact repository commit OID")
 	profile := set.String("profile", "", "named Sandbox profile (default: deployment default)")
+	connection := set.String("ai-connection", "", "named AI connection (default: deployment default)")
 	model := set.String("model", "", "Harness model")
 	reasoning := set.String("reasoning", "high", "Harness reasoning effort")
 	output := set.String("output", "human", "output format: human or json")
@@ -329,9 +331,6 @@ func remoteInvestigationWorkflow(ctx context.Context, client *controlclient.Clie
 	}
 	if set.NArg() != 0 {
 		return fmt.Errorf("workflow run codebase-investigation does not accept positional arguments")
-	}
-	if strings.TrimSpace(*localRepository) != "" {
-		return fmt.Errorf("--local-repo is available only on the deployment host; remote admission requires --repo and --revision")
 	}
 	if err := validateOutput(*output); err != nil {
 		return err
@@ -346,7 +345,7 @@ func remoteInvestigationWorkflow(ctx context.Context, client *controlclient.Clie
 	}
 	request := controlapi.AdmitInvestigationJobRequest{
 		Brief: brief, Repository: *repository, Revision: *revision,
-		Profile: *profile, Model: *model, Reasoning: *reasoning,
+		Profile: *profile, AIConnection: *connection, Model: *model, Reasoning: *reasoning,
 	}
 	job, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Admission may have succeeded.", func() (controlapi.InvestigationJob, error) {
 		return client.AdmitInvestigationJob(ctx, requestKey, request)
@@ -363,13 +362,14 @@ func remoteInvestigationWorkflow(ctx context.Context, client *controlclient.Clie
 	return nil
 }
 
-func remoteJobCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+func remoteJobCommand(ctx context.Context, args []string, stdout, stderr io.Writer) (err error) {
 	cfg, _, client, err := loadConnectedClient()
 	if err != nil {
 		return err
 	}
+	defer func() { err = jobControlError(cfg.DeploymentURL, err) }()
 	if len(args) == 0 {
-		return fmt.Errorf("job requires: list, inspect, watch, message, retry, evidence, or cleanup")
+		return fmt.Errorf("job requires: list, inspect, watch, message, retry, evidence, abandon, or cleanup")
 	}
 	switch args[0] {
 	case "list":
@@ -387,9 +387,36 @@ func remoteJobCommand(ctx context.Context, args []string, stdout, stderr io.Writ
 		return remoteJobRetry(ctx, cfg, client, args[1:], stdout, stderr)
 	case "evidence":
 		return remoteJobEvidence(ctx, client, args[1:], stdout, stderr)
+	case "abandon":
+		return remoteJobAbandon(ctx, cfg, client, args[1:], stdout, stderr)
 	default:
-		return fmt.Errorf("job requires: list, inspect, watch, message, retry, evidence, or cleanup")
+		return fmt.Errorf("job requires: list, inspect, watch, message, retry, evidence, abandon, or cleanup")
 	}
+}
+
+func remoteJobAbandon(ctx context.Context, cfg clientconfig.Config, client *controlclient.Client, args []string, stdout, stderr io.Writer) error {
+	set := flag.NewFlagSet("job abandon", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	output := set.String("output", "human", "output format: human or json")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if set.NArg() != 1 {
+		return fmt.Errorf("job abandon requires one Job ID")
+	}
+	if err := validateOutput(*output); err != nil {
+		return err
+	}
+	job, err := client.Abandon(ctx, set.Arg(0))
+	if err != nil {
+		return err
+	}
+	if *output == "json" {
+		return writeJSON(stdout, remoteJobReceipt{Deployment: cfg.DeploymentURL, Job: job})
+	}
+	fmt.Fprintf(stdout, "Job %s abandoned on %s\n", job.Common().ID, cfg.DeploymentURL)
+	renderRemoteJob(stdout, job)
+	return nil
 }
 
 func remoteJobSnapshot(ctx context.Context, cfg clientconfig.Config, client *controlclient.Client, args []string, stdout, stderr io.Writer) error {
@@ -664,8 +691,8 @@ func renderRemoteJob(output io.Writer, view controlapi.JobView) {
 				typed.Outcome.Kind, typed.Outcome.ObservedState, typed.Outcome.ObservedAt.Format(time.RFC3339))
 		}
 	case controlapi.InvestigationJob:
-		fmt.Fprintf(output, "  workflow revision: %s\n  source: %s %s Revision=%s\n  report: Sandbox %s · %s (workspace file; not durably retained)\n",
-			typed.WorkflowRevision, typed.Source.Kind, typed.Source.Repository, typed.Source.Revision,
+		fmt.Fprintf(output, "  workflow revision: %s\n  source: %s Revision=%s\n  report: Sandbox %s · %s (workspace file; not durably retained)\n",
+			typed.WorkflowRevision, typed.Source.Repository, typed.Source.Revision,
 			typed.Report.SandboxID, typed.Report.Path)
 	}
 }
@@ -729,11 +756,24 @@ func loadConnectedClient() (clientconfig.Config, string, *controlclient.Client, 
 	if err != nil {
 		return clientconfig.Config{}, path, nil, err
 	}
-	if !found {
-		return clientconfig.Config{}, path, nil, fmt.Errorf("Dorf is not connected; run dorf connect HTTPS_URL")
+	if found {
+		client, err := controlclient.New(cfg.DeploymentURL, cfg.Credential, nil)
+		return cfg, path, client, err
 	}
-	client, err := controlclient.New(cfg.DeploymentURL, cfg.Credential, nil)
-	return cfg, path, client, err
+	paths, err := config.CurrentOperatorPaths()
+	if err != nil {
+		return clientconfig.Config{}, path, nil, err
+	}
+	hostPath := hostclientconfig.Path(paths.StateDir)
+	host, hostFound, err := hostclientconfig.Load(hostPath)
+	if err != nil {
+		return clientconfig.Config{}, hostPath, nil, err
+	}
+	if !hostFound {
+		return clientconfig.Config{}, hostPath, nil, fmt.Errorf("Dorf Job control is not configured; run dorf setup on a deployment host or dorf connect HTTPS_URL on a remote client")
+	}
+	client, err := controlclient.NewLoopback(host.Credential)
+	return clientconfig.Config{DeploymentURL: hostclientconfig.HostOrigin, Credential: host.Credential}, hostPath, client, err
 }
 
 func defaultClientName() string {
@@ -767,6 +807,22 @@ func validateOutput(value string) error {
 func problemCode(err error, code string) bool {
 	var problem *controlclient.ProblemError
 	return errors.As(err, &problem) && problem.Problem.Code == code
+}
+
+func jobControlError(deploymentURL string, err error) error {
+	if err == nil || deploymentURL != hostclientconfig.HostOrigin {
+		return err
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || !controlclient.IsServiceError(err) {
+		return err
+	}
+	if problemCode(err, "unauthenticated") {
+		return fmt.Errorf("deployment-host Client is invalid, expired, or revoked; rerun dorf setup: %w", err)
+	}
+	if definitiveClientError(err) {
+		return err
+	}
+	return fmt.Errorf("deployment-host control API is unavailable; run dorf doctor, inspect the Compose control-api service, then rerun dorf setup: %w", err)
 }
 
 func definitiveClientError(err error) bool {
@@ -814,6 +870,7 @@ type controlAPIJobs struct {
 type controlReader interface {
 	ReadFile(context.Context, string, string) ([]byte, error)
 	ObserveMessage(context.Context, string, string) (core.MessageResult, error)
+	ObservePullRequest(context.Context, string) (githubapi.PullRequest, error)
 	DefaultConnection() (string, error)
 	Check(context.Context, string) error
 	DiscoverInstallation(context.Context, string) (string, error)
@@ -850,7 +907,7 @@ func classifyControlJob(workflow core.WorkflowName, revision string) (controlJob
 }
 
 func (a controlAPIJobs) AdmitDirect(ctx context.Context, key string, input controlapi.AdmitJobRequest) (controlapi.DirectJob, bool, error) {
-	admission, err := newControlJobAdmission(key, input.Goal, input.Profile, input.Model, input.Reasoning)
+	admission, err := newControlJobAdmission(key, input.Goal, input.Profile, input.AIConnection, input.Model, input.Reasoning)
 	if err != nil {
 		return controlapi.DirectJob{}, false, err
 	}
@@ -871,7 +928,7 @@ func (a controlAPIJobs) AdmitDirect(ctx context.Context, key string, input contr
 func (a controlAPIJobs) AdmitCoding(ctx context.Context, key string, input controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, bool, error) {
 	job, created, err := a.codingAdmissions.Admit(ctx, coding.AdmissionRequest{
 		AdmissionKey: key, Goal: input.Goal, SandboxProfile: input.Profile, Model: input.Model,
-		ReasoningEffort: input.Reasoning, Repository: input.Repository, Revision: input.Revision,
+		ProviderConnection: input.AIConnection, ReasoningEffort: input.Reasoning, Repository: input.Repository, Revision: input.Revision,
 		Branch: input.Branch, BaseBranch: input.BaseBranch,
 	})
 	if errors.Is(err, coding.ErrAdmissionConflict) {
@@ -890,8 +947,8 @@ func (a controlAPIJobs) AdmitCoding(ctx context.Context, key string, input contr
 func (a controlAPIJobs) AdmitInvestigation(ctx context.Context, key string, input controlapi.AdmitInvestigationJobRequest) (controlapi.InvestigationJob, bool, error) {
 	job, created, err := a.investigationAdmissions.Admit(ctx, investigation.AdmissionRequest{
 		AdmissionKey: key, Brief: input.Brief, SandboxProfile: input.Profile, Model: input.Model,
-		ReasoningEffort: input.Reasoning,
-		Source:          investigation.Source{Kind: investigation.SourceRemote, Repository: input.Repository, Revision: input.Revision},
+		ProviderConnection: input.AIConnection, ReasoningEffort: input.Reasoning,
+		Source: investigation.Source{Repository: input.Repository, Revision: input.Revision},
 	})
 	if errors.Is(err, investigation.ErrAdmissionConflict) {
 		return controlapi.InvestigationJob{}, false, controlapi.ErrIdempotencyConflict
@@ -910,12 +967,13 @@ func validControlAdmissionKey(key string) bool {
 	return key != "" && key == strings.TrimSpace(key) && len(key) <= 255 && !strings.ContainsRune(key, 0)
 }
 
-func newControlJobAdmission(key, goal, profile, model, reasoning string) (direct.AdmissionRequest, error) {
+func newControlJobAdmission(key, goal, profile, connection, model, reasoning string) (direct.AdmissionRequest, error) {
 	profile = strings.TrimSpace(profile)
+	connection = strings.TrimSpace(connection)
 	model = strings.TrimSpace(model)
 	reasoning = strings.TrimSpace(reasoning)
 	if !validControlAdmissionKey(key) || invalidControlPrompt(goal, 1<<20) ||
-		invalidOptionalControlText(profile, 255) || invalidControlText(model, maxControlModelBytes) {
+		invalidOptionalControlText(profile, 255) || invalidOptionalControlText(connection, 255) || invalidControlText(model, maxControlModelBytes) {
 		return direct.AdmissionRequest{}, controlapi.ErrInvalidInput
 	}
 	if reasoning == "" {
@@ -925,7 +983,7 @@ func newControlJobAdmission(key, goal, profile, model, reasoning string) (direct
 		return direct.AdmissionRequest{}, controlapi.ErrInvalidInput
 	}
 	return direct.AdmissionRequest{
-		AdmissionKey: key, Goal: goal, SandboxProfile: profile, Model: model, ReasoningEffort: reasoning,
+		AdmissionKey: key, Goal: goal, SandboxProfile: profile, ProviderConnection: connection, Model: model, ReasoningEffort: reasoning,
 	}, nil
 }
 
@@ -1123,6 +1181,46 @@ func (a controlAPIJobs) Evidence(ctx context.Context, jobID string) ([]controlap
 	return result, nil
 }
 
+type controlOutcomeGitHub struct {
+	reader controlReader
+	jobID  string
+}
+
+func (g controlOutcomeGitHub) PullRequest(ctx context.Context, _ githubapi.Authority, _ int64) (githubapi.PullRequest, error) {
+	if g.reader == nil {
+		return githubapi.PullRequest{}, fmt.Errorf("control reader is not configured")
+	}
+	return g.reader.ObservePullRequest(ctx, g.jobID)
+}
+
+func (a controlAPIJobs) Abandon(ctx context.Context, jobID string) (controlapi.JobView, error) {
+	job, err := a.supportedJob(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	if job.kind != controlCodingJob {
+		return nil, controlapi.ErrAbandonUnavailable
+	}
+	service := (outcomeapp.Service{
+		Store:  a.store,
+		GitHub: controlOutcomeGitHub{reader: a.reader, jobID: job.ID},
+	}).WithClaimCheck(func(context.Context) error { return nil })
+	if _, _, err := service.Record(ctx, job.ID, coding.OutcomeAbandoned); err != nil {
+		if errors.Is(err, outcomeapp.ErrUnavailable) {
+			return nil, controlapi.ErrAbandonUnavailable
+		}
+		return nil, err
+	}
+	handle, err := a.application().OpenJob(ctx, job.ID)
+	if err != nil {
+		return nil, err
+	}
+	if err := handle.RequestCleanup(ctx); err != nil {
+		return nil, err
+	}
+	return a.Get(ctx, job.ID)
+}
+
 func controlMessageError(err error) error {
 	switch {
 	case errors.Is(err, core.ErrMessageAdmissionClosed):
@@ -1173,15 +1271,6 @@ func (a controlAPIJobs) supportedJob(ctx context.Context, jobID string) (support
 	kind, ok := classifyControlJob(job.Workflow, job.WorkflowRevision)
 	if !ok {
 		return supportedControlJob{}, controlapi.ErrJobNotFound
-	}
-	if kind == controlInvestigationJob {
-		source, sourceErr := a.store.CodebaseInvestigationSource(ctx, job.ID)
-		if errors.Is(sourceErr, postgres.ErrNotFound) || sourceErr == nil && source.Kind != investigation.SourceRemote {
-			return supportedControlJob{}, controlapi.ErrJobNotFound
-		}
-		if sourceErr != nil {
-			return supportedControlJob{}, sourceErr
-		}
 	}
 	return supportedControlJob{Job: job, kind: kind}, nil
 }
@@ -1325,7 +1414,7 @@ func (a controlAPIJobs) projectInvestigation(ctx context.Context, job core.Job) 
 	return controlapi.InvestigationJob{
 		Job: common, WorkflowRevision: job.WorkflowRevision,
 		Source: controlapi.InvestigationSource{
-			Kind: string(snapshot.Source.Kind), Repository: snapshot.Source.Repository, Revision: snapshot.Source.Revision,
+			Repository: snapshot.Source.Repository, Revision: snapshot.Source.Revision,
 		},
 		Report: controlapi.InvestigationReport{
 			SandboxID: snapshot.MainSandbox.ID, Path: investigation.ReportPath,
@@ -1436,7 +1525,7 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 	}
 	server := controlapi.NewServer(controlapi.Discovery{
 		Product: "dorf", Version: version.Version,
-		Capabilities: []string{"direct_jobs", "coding_jobs", "codebase_investigation_jobs", "job_list", "job_watch", "messages", "job_retry", "sandbox_files", "evidence"},
+		Capabilities: []string{"direct_jobs", "coding_jobs", "codebase_investigation_jobs", "job_list", "job_watch", "messages", "job_retry", "job_abandon", "sandbox_files", "evidence"},
 	}, auth, jobs)
 	serverCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -1467,12 +1556,12 @@ func configuredControlReader(cfg config.Config, store postgres.Store, runtimes c
 	if origin == "" && token == "" {
 		// Explicitly manually supervised local `dorf serve` remains useful in
 		// development. Compose always supplies the isolated HTTP capability.
+		githubClient := githubapi.Client{APIURL: cfg.GitHubAPIURL, Credentials: cfg.GitHubCredentials}
 		return controlreader.Service{
 			Store: store, Runtimes: runtimes,
-			Provider: configuredProviderGateway(cfg),
-			Installations: githubapi.Client{
-				APIURL: cfg.GitHubAPIURL, Credentials: cfg.GitHubCredentials,
-			},
+			Provider:      configuredProviderGateway(cfg),
+			Installations: githubClient,
+			PullRequests:  githubClient,
 		}, nil
 	}
 	if origin == "" || token == "" {

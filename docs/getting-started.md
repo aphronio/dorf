@@ -156,9 +156,8 @@ operations. Their exact-artifact, credential, and route boundaries are described
 
 ## 2. Set up the optional GitHub integration
 
-Skip this section when a client or workflow needs only plain Git access, such as cloning a public
-repository or consuming retained Git input. A GitHub App is required for authenticated GitHub API
-or repository operations.
+Skip this section when a client or workflow needs only credential-free access to a public Git
+repository. A GitHub App is required for authenticated GitHub API or repository operations.
 
 Create the deployment-default App through GitHub's approval flow:
 
@@ -230,7 +229,7 @@ Save the complete prompt in `goal.txt`, then use the same CLI to admit and opera
 HTTPS:
 
 ```bash
-dorf run --goal-file goal.txt --model MODEL --reasoning high
+dorf run --goal-file goal.txt --ai-connection AI_CONNECTION --model MODEL --reasoning high
 dorf job list
 dorf job list --limit 25 --output json
 dorf job inspect JOB_ID
@@ -242,6 +241,7 @@ dorf job message inspect JOB_ID MESSAGE_ID
 dorf job retry JOB_ID
 dorf job evidence JOB_ID
 dorf sandbox file get SANDBOX_ID PATH --output DESTINATION
+dorf job abandon JOB_ID
 dorf job cleanup JOB_ID
 ```
 
@@ -254,6 +254,7 @@ dorf workflow run coding \
   --repo https://github.com/OWNER/REPOSITORY.git \
   --revision FULL_COMMIT_OID \
   --base main \
+  --ai-connection AI_CONNECTION \
   --model MODEL \
   --reasoning high
 
@@ -261,17 +262,18 @@ dorf workflow run codebase-investigation \
   --brief-file brief.txt \
   --repo https://github.com/OWNER/REPOSITORY.git \
   --revision FULL_COMMIT_OID \
+  --ai-connection AI_CONNECTION \
   --model MODEL \
   --reasoning high
 ```
 
 Remote coding uses the deployment's GitHub integration; its request carries no integration
-credential. Remote investigation accepts only a credential-free HTTPS repository URL and exact
-Revision. `--local-repo` remains a deployment-host-only input that creates a retained Git bundle and
-is never sent through the remote API. Both workflow Jobs use the same remote inspect, watch,
-Message, retry, file, Evidence, and cleanup commands shown above. Investigation remains open and
-idle after settled work until the client requests cleanup. Coding requests cleanup once it observes
-a terminal GitHub Outcome, so retrieve any needed Sandbox file before that external decision;
+credential. Investigation accepts only a credential-free HTTPS repository URL and exact Revision.
+Both workflow Jobs use the same inspect, watch, Message, retry, file, Evidence, and cleanup commands
+shown above.
+Investigation remains open and idle after settled work until the client requests cleanup. Coding
+requests cleanup once it observes a terminal GitHub Outcome, so retrieve any needed Sandbox file
+before that external decision;
 retained Evidence remains readable after cleanup.
 
 `job inspect` reports the Job ID, initial Message ID, and exact Sandbox IDs. For an investigation,
@@ -302,34 +304,34 @@ Clients or Jobs. Client administration is deliberately not a remote API.
 
 ## 4. Run a direct Job on the deployment host
 
-On a deployment host without a saved remote Client connection, use the local CLI when you want
-controlled agent execution without delegating result meaning or completion policy to a native
-workflow. Save the complete prompt in `goal.txt`, then admit it:
+Setup enrolls an ordinary deployment-host Client after the Compose API becomes ready. The Client
+uses the fixed loopback origin and the same API as a remote CLI. A saved remote `client.json` takes
+precedence. Save the complete prompt in `goal.txt`, then admit it:
 
 ```bash
 dorf run \
   --goal-file goal.txt \
+  --ai-connection AI_CONNECTION \
   --model MODEL \
   --reasoning high
 
-dorf inspect --follow JOB_ID
+dorf job watch JOB_ID
 ```
 
 The Compose-managed worker claims the Job; do not start a competing foreground worker in the ordinary
 deployment flow.
 
-For a human invocation, `--key` is optional: Dorf generates and prints an admission key before
-accepting the Job; reuse that key if the command is interrupted. Automation or deliberate replay
-should pass a stable `--key` explicitly so the same complete request can be replayed safely.
+For a human invocation, `--key` is optional. Dorf generates a key and retries one ambiguous API
+failure with the same request. Automation or deliberate replay should pass a stable `--key`.
 
 The verified deployment-default Sandbox profile and AI connection are used unless explicitly
 selected. After a successful Turn, the Job remains open and idle so the caller can continue the same
 Harness Thread, retrieve an exact workspace file, or request cleanup:
 
 ```bash
-dorf message --job JOB_ID --id follow-1 --input-file follow-up.txt
+dorf job message --key follow-1 --input-file follow-up.txt JOB_ID
 dorf sandbox file get SANDBOX_ID PATH --output DESTINATION
-dorf cleanup JOB_ID
+dorf job cleanup JOB_ID
 ```
 
 Follow-up Messages may be queued while earlier work is active; Dorf delivers them FIFO as distinct
@@ -342,8 +344,7 @@ GitHub integration is required.
 
 ## 5. Run a coding Job on the deployment host
 
-This command stays host-local only when the deployment host has no saved remote Client connection;
-a connected CLI sends the same typed request to its configured Deployment.
+This command uses the same authenticated control API on the deployment host and a remote client.
 
 The selected profile owns the Harness. Omit `--profile` to use the verified deployment default.
 Create and verify a separate Pi profile when that Job should use Pi; both may reference the same
@@ -359,10 +360,11 @@ dorf workflow run coding \
   --revision FULL_COMMIT_OID \
   --branch dorf/my-change-v1 \
   --base main \
+  --ai-connection AI_CONNECTION \
   --model MODEL \
   --reasoning high
 
-dorf inspect JOB_ID
+dorf job inspect JOB_ID
 ```
 
 Admission derives the exact GitHub owner/repository from `--repo`. The coding runtime composed for
@@ -374,28 +376,27 @@ depend on GitHub availability; the complete caller input must still match.
 To follow the same durable facts without repeatedly invoking inspection, use:
 
 ```bash
-dorf inspect --follow JOB_ID
+dorf job watch JOB_ID
 ```
 
-The follower shows current status and durable Job history until attention appears or cleanup
-completes. `Ctrl-C` stops only the local view, not the Job.
+The watcher reads canonical Job snapshots. `Ctrl-C` stops only the view, not the Job.
 
 The Compose-managed worker recovers after process loss; use [Support](support.md) when an operator
-action is needed. Use `dorf message` for later input and `--intent steer` to target active
+action is needed. Use `dorf job message` for later input and `--intent steer` to target active
 work. The coding workflow observes the exact pull request for acceptance or
 rejection and requests cleanup after its terminal policy is satisfied. To stop without a GitHub
 decision:
 
 ```bash
-dorf abandon JOB_ID
-dorf inspect JOB_ID
+dorf job abandon JOB_ID
+dorf job inspect JOB_ID
 ```
 
-If `dorf inspect JOB_ID` reports that the workflow stopped, repair the displayed cause and run
-`dorf retry JOB_ID`. This schedules exactly one more bounded attempt on the same Absurd task and
+If `dorf job inspect JOB_ID` reports that the workflow stopped, repair the displayed cause and run
+`dorf job retry JOB_ID`. This schedules exactly one more bounded attempt on the same Absurd task and
 retains its checkpoints. The receipt reports scheduling identities but does not claim that a worker
-has resumed it yet; use `dorf inspect JOB_ID` to observe current work and progress.
+has resumed it yet; use `dorf job inspect JOB_ID` to observe current work and progress.
 
-Cleanup remains separately observable. `dorf cleanup JOB_ID` is an explicit client request to release
-the Job's resources; Core reconciles that request or retries an incomplete cleanup, then inspection
-reports the resulting facts.
+Cleanup remains separately observable. `dorf job cleanup JOB_ID` is an explicit client request to
+release the Job's resources; Core reconciles that request or retries an incomplete cleanup, then
+inspection reports the resulting facts.

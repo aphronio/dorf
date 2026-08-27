@@ -114,16 +114,8 @@ create table dorf.job_tasks (
 create table dorf.codebase_investigation_sources (
     job_id text primary key,
     workflow_name text not null check (workflow_name='codebase-investigation'),
-    kind text not null check (kind in ('remote','git-bundle')),
-    repository text not null,
+    repository text not null check (length(trim(repository))>0),
     revision text not null check (revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
-    bundle_digest text,
-    bundle_byte_size bigint,
-    check (
-        (kind='remote' and length(trim(repository))>0 and bundle_digest is null and bundle_byte_size is null) or
-        (kind='git-bundle' and length(trim(repository))=0 and bundle_digest is not null and bundle_byte_size is not null and
-         bundle_digest ~ '^[0-9a-f]{64}$' and bundle_byte_size>0)
-    ),
     foreign key(job_id,workflow_name) references dorf.jobs(id,workflow_name)
 );
 
@@ -185,7 +177,7 @@ create table dorf.agent_runs (
     turn_id text,
     turn_outcome text check (turn_outcome is null or turn_outcome in ('completed','interrupted','failed')),
     attention text,
-    role text not null check (role in ('implement','investigate','direct','general','browser-ui','auth-authority','performance','critical-boundary')),
+    role text not null check (role in ('implement','investigate','direct','general','browser-ui','auth-authority')),
     input_revision text check (input_revision is null or input_revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
     capability text,
     sandbox_id text not null references dorf.sandboxes(id),
@@ -206,7 +198,7 @@ create table dorf.agent_runs (
         (role='implement' and capability is null and submission_nonce is null) or
         (role='investigate' and input_revision is not null and capability='repository-read-report' and submission_nonce is null) or
         (role='direct' and input_revision is null and capability is null and submission_nonce is null) or
-        (role in ('general','browser-ui','auth-authority','performance','critical-boundary') and
+        (role in ('general','browser-ui','auth-authority') and
          input_revision is not null and capability='immutable-read-only' and
          submission_nonce ~ '^[0-9a-f]{64}$')
     ),
@@ -366,6 +358,6 @@ comment on table dorf.sandbox_profiles is 'Named immutable-while-in-use provider
 comment on table dorf.sandbox_profile_verifications is 'Dorf-owned base-contract proof and confirmed cleanup for one exact Sandbox profile';
 comment on table dorf.github_proposals is 'One exact-Revision GitHub proposal projection per Job';
 comment on table dorf.job_outcomes is 'Immutable Job outcome; accepted and rejected outcomes retain an exact Proposal observation while pre-publication abandonment has none';
-comment on table dorf.codebase_investigation_sources is 'Immutable remote or retained Git-bundle input for one codebase-investigation Job';
+comment on table dorf.codebase_investigation_sources is 'Immutable remote repository and exact Revision input for one codebase-investigation Job';
 
-insert into dorf.schema_migrations(name) values ('001_baseline.sql');
+insert into dorf.schema_migrations(name) values ('001_greenfield.sql');

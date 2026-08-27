@@ -7,36 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/aphronio/dorf/internal/core"
 )
-
-func sandboxCommand(ctx context.Context, application core.Application, args []string, stdout, _ io.Writer) error {
-	if len(args) < 2 || args[0] != "file" || args[1] != "get" {
-		return fmt.Errorf("sandbox requires: file get SANDBOX_ID RELATIVE_PATH --output DESTINATION")
-	}
-	return sandboxFileGet(ctx, application, args[2:], stdout)
-}
-
-func sandboxFileGet(ctx context.Context, application core.Application, args []string, stdout io.Writer) error {
-	sandboxID, relativePath, output, err := parseSandboxFileGet(args)
-	if err != nil {
-		return err
-	}
-	owned, err := application.Store.Sandbox(ctx, sandboxID)
-	if err != nil {
-		return err
-	}
-	job, err := application.OpenJob(ctx, owned.JobID)
-	if err != nil {
-		return err
-	}
-	sandbox, err := job.Sandbox(ctx, owned.ID)
-	if err != nil {
-		return err
-	}
-	return downloadSandboxFile(ctx, sandboxID, relativePath, output, stdout, sandbox.ReadFile)
-}
 
 func parseSandboxFileGet(args []string) (sandboxID, relativePath, output string, err error) {
 	positionals := make([]string, 0, 2)

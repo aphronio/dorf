@@ -7,10 +7,10 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 )
 
-func TestNormalizeAdmissionRejectsForeignIdentityAndInvalidSource(t *testing.T) {
+func TestNormalizeAdmissionRejectsForeignIdentity(t *testing.T) {
 	valid := Admission{
 		JobAdmission: core.JobAdmission{AdmissionKey: "job", Goal: "goal"},
-		Source:       Source{Kind: SourceRemote, Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40)},
+		Source:       Source{Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40)},
 	}
 	trimmed := valid
 	trimmed.Workflow, trimmed.WorkflowRevision = " codebase-investigation ", " 2 "
@@ -27,17 +27,12 @@ func TestNormalizeAdmissionRejectsForeignIdentityAndInvalidSource(t *testing.T) 
 	if _, err := NormalizeAdmission(stale); err == nil {
 		t.Fatal("investigation admission accepted a foreign workflow revision")
 	}
-	invalid := valid
-	invalid.Source.BundleDigest = strings.Repeat("b", 64)
-	if _, err := NormalizeAdmission(invalid); err == nil {
-		t.Fatal("remote investigation admission accepted bundle custody fields")
-	}
 }
 
 func TestNormalizeAdmissionRequiresCredentialFreeHTTPSRemote(t *testing.T) {
 	valid := Admission{
 		JobAdmission: core.JobAdmission{AdmissionKey: "job", Goal: "goal"},
-		Source:       Source{Kind: SourceRemote, Repository: "  https://example.test/owner/repository.git  ", Revision: strings.Repeat("a", 40)},
+		Source:       Source{Repository: "  https://example.test/owner/repository.git  ", Revision: strings.Repeat("a", 40)},
 	}
 	normalized, err := NormalizeAdmission(valid)
 	if err != nil {

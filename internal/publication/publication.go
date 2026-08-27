@@ -396,7 +396,7 @@ func Body(job coding.Job, readiness coding.ReadinessAssessment, evidence []core.
 	if readiness.Ready {
 		status = "ready"
 	}
-	lines = append(lines, "", "## Readiness", "", "- Status: "+status, "- Reason: "+readiness.Reason, "- Remaining attention: "+attention, "- Inspect: `dorf inspect "+job.ID+"`")
+	lines = append(lines, "", "## Readiness", "", "- Status: "+status, "- Reason: "+readiness.Reason, "- Remaining attention: "+attention, "- Inspect: `dorf job inspect "+job.ID+"`")
 	return strings.Join(lines, "\n") + "\n"
 }
 

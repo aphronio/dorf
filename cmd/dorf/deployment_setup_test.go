@@ -205,17 +205,6 @@ func TestContainerForegroundDispatchIsHiddenAndStrict(t *testing.T) {
 	}
 }
 
-func TestPublicServiceCommandHasNoEarlyDispatch(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
-	t.Setenv("XDG_DATA_HOME", filepath.Join(root, "data"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
-	err := run(context.Background(), []string{"service", "status"}, io.Discard, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "PostgreSQL is not configured") {
-		t.Fatalf("public service command error = %v", err)
-	}
-}
-
 func TestCheckDockerRuntimeRequiresEngineAndComposePlugin(t *testing.T) {
 	var calls [][]string
 	err := checkDockerRuntimeWith(context.Background(), func() (string, error) {
