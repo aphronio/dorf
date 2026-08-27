@@ -209,7 +209,7 @@ func persistGuidedIncusAuthority(cfg *config.Config, privateBridge string) error
 	if !strings.HasPrefix(cfg.Incus.Endpoint, "unix://") {
 		return guidedRemoteIncusSetupError()
 	}
-	return deployment.SaveIncus(cfg.DeploymentPath, *cfg.Incus)
+	return deployment.RetainIncus(cfg.DeploymentPath, *cfg.Incus)
 }
 
 func guidedRemoteIncusSetupError() incusSetupReadinessError {

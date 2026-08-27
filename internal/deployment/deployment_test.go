@@ -451,7 +451,7 @@ func TestDeploymentUpdatesSerializeWholeReadModifyWrite(t *testing.T) {
 	go func() { firstDone <- SaveE2BAPIKey(path, "e2b-secret") }()
 	<-firstLoaded
 	secondDone := make(chan error, 1)
-	go func() { secondDone <- SaveIncus(path, Incus{Endpoint: "unix:///var/lib/incus/unix.socket"}) }()
+	go func() { secondDone <- RetainIncus(path, Incus{Endpoint: "unix:///var/lib/incus/unix.socket"}) }()
 	var secondErr error
 	secondFinished := false
 	select {
@@ -562,18 +562,70 @@ func TestIncusDeploymentRejectsAmbiguousOrIncompleteAuthorities(t *testing.T) {
 	}
 }
 
-func TestSaveIncusPreservesExistingDeploymentAuthority(t *testing.T) {
+func TestRetainIncusPreservesExistingDeploymentAuthority(t *testing.T) {
 	path := protectedDeploymentTestPath(t)
 	if err := Save(path, Config{Database: testDatabase(), E2B: &E2B{APIKey: "retained"}}); err != nil {
 		t.Fatal(err)
 	}
 	want := Incus{Endpoint: "unix:///var/lib/incus/unix.socket"}
-	if err := SaveIncus(path, want); err != nil {
+	if err := RetainIncus(path, want); err != nil {
 		t.Fatal(err)
 	}
 	got, found, err := Load(path)
 	if err != nil || !found || got.Database != testDatabase() || got.E2B == nil || got.E2B.APIKey != "retained" || got.Incus == nil || *got.Incus != want {
 		t.Fatalf("config=%#v found=%t err=%v", got, found, err)
+	}
+}
+
+func TestRetainIncusExactReplayIsANoOpAndConflictFailsClosed(t *testing.T) {
+	path := protectedDeploymentTestPath(t)
+	accepted := Incus{Endpoint: "unix:///var/lib/incus/unix.socket"}
+	if err := Save(path, Config{Database: testDatabase(), Incus: &accepted}); err != nil {
+		t.Fatal(err)
+	}
+	if err := RetainIncus(path, accepted); err != nil {
+		t.Fatalf("exact replay: %v", err)
+	}
+	conflict := Incus{Endpoint: "unix:///run/incus/unix.socket"}
+	if err := RetainIncus(path, conflict); err == nil || !strings.Contains(err.Error(), "different Incus authority") {
+		t.Fatalf("conflicting retain error=%v", err)
+	}
+	got, found, err := Load(path)
+	if err != nil || !found || got.Incus == nil || *got.Incus != accepted {
+		t.Fatalf("config=%#v found=%t error=%v", got, found, err)
+	}
+}
+
+func TestConcurrentRetainIncusAcceptsOneAuthorityAndRejectsTheOther(t *testing.T) {
+	path := protectedDeploymentTestPath(t)
+	if err := Save(path, Config{Database: testDatabase()}); err != nil {
+		t.Fatal(err)
+	}
+	a := Incus{Endpoint: "unix:///var/lib/incus/unix.socket"}
+	b := Incus{Endpoint: "unix:///run/incus/unix.socket"}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, authority := range []Incus{a, b} {
+		go func(authority Incus) {
+			<-start
+			results <- RetainIncus(path, authority)
+		}(authority)
+	}
+	close(start)
+	first, second := <-results, <-results
+	if (first == nil) == (second == nil) {
+		t.Fatalf("concurrent results=(%v, %v), want one success", first, second)
+	}
+	conflict := first
+	if conflict == nil {
+		conflict = second
+	}
+	if !strings.Contains(conflict.Error(), "different Incus authority") {
+		t.Fatalf("conflict error=%v", conflict)
+	}
+	got, found, err := Load(path)
+	if err != nil || !found || got.Incus == nil || (*got.Incus != a && *got.Incus != b) {
+		t.Fatalf("config=%#v found=%t error=%v", got, found, err)
 	}
 }
 

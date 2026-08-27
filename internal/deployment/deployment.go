@@ -592,13 +592,19 @@ func SaveE2BAPIKey(path, apiKey string) error {
 	})
 }
 
-// SaveIncus records or replaces the Deployment's one explicit Incus
-// authority while preserving the database and other provider credentials.
-func SaveIncus(path string, incus Incus) error {
+// RetainIncus records the Deployment's one explicit Incus authority. An exact
+// replay succeeds, but a different authority requires an explicit rotation.
+func RetainIncus(path string, incus Incus) error {
 	if err := incus.Validate(); err != nil {
 		return err
 	}
 	return updateDeployment(path, func(cfg *Config) (bool, error) {
+		if cfg.Incus != nil {
+			if *cfg.Incus == incus {
+				return false, nil
+			}
+			return false, fmt.Errorf("Dorf deployment already retains a different Incus authority")
+		}
 		cfg.Incus = &incus
 		return true, nil
 	})
