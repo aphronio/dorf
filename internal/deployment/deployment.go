@@ -694,6 +694,21 @@ func (i Incus) AuthorityHash() (string, error) {
 	return fmt.Sprintf("%x", digest), nil
 }
 
+func (i Incus) ClientCertificateFingerprint() (string, error) {
+	if err := i.Validate(); err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(i.Endpoint, "unix://") {
+		return "", nil
+	}
+	client, err := parseSingleCertificate("client", i.ClientCertificate)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(client.Raw)
+	return fmt.Sprintf("%x", digest), nil
+}
+
 func parseSingleCertificate(label, value string) (*x509.Certificate, error) {
 	contents := []byte(strings.TrimSpace(value))
 	block, rest := pem.Decode(contents)

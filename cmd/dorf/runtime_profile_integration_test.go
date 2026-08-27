@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -16,6 +17,43 @@ import (
 	"github.com/aphronio/dorf/internal/postgres"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
+
+func TestGuidedLocalIncusRejectsPublicGatewayBeforeAuthorityRetention(t *testing.T) {
+	dsn := os.Getenv("DORF_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DORF_TEST_DATABASE_URL is not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := postgres.Store{DB: db}
+	ctx := context.Background()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	path := setupTestDeploymentPath(t)
+	authority := &deployment.Incus{Endpoint: "unix:///var/lib/incus/unix.socket"}
+	cfg := config.Config{DeploymentPath: path, Incus: authority}
+	_, err = prepareGuidedSetup(
+		ctx,
+		store,
+		&cfg,
+		setupOptions{Yes: true, ProfileName: fmt.Sprintf("reject-local-route-%d", time.Now().UnixNano()), GatewayURL: "https://models.dorf.example/v1"},
+		[]core.SandboxProvider{core.SandboxProviderIncus},
+		newSetupPresenter(io.Discard),
+		io.Discard,
+		io.Discard,
+	)
+	if err == nil || !strings.Contains(err.Error(), "require E2B or a remote HTTPS Incus authority") {
+		t.Fatalf("local public Gateway rejection error=%v", err)
+	}
+	stored, found, loadErr := deployment.Load(path)
+	if loadErr != nil || !found || stored.Incus != nil {
+		t.Fatalf("rejected local setup retained authority=%#v found=%t error=%v", stored.Incus, found, loadErr)
+	}
+}
 
 func TestGuidedSetupRetargetsAndInvalidatesTheExistingE2BProfile(t *testing.T) {
 	dsn := os.Getenv("DORF_TEST_DATABASE_URL")

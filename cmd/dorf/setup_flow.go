@@ -66,6 +66,13 @@ type guidedSetupPrepared struct {
 	PrivateIPv4  string
 }
 
+type guidedRemoteGatewayPrepared struct {
+	ProfilePlans []guidedProfilePlan
+	Plan         guidedGatewayPlan
+	URL          string
+	ControlURL   string
+}
+
 // prepareGuidedSetup performs every offline or explicitly interactive setup
 // operation that must affect the final Compose project. It deliberately stops
 // before live Gateway, public-route, and Sandbox profile readiness.
@@ -75,7 +82,11 @@ func prepareGuidedSetup(ctx context.Context, store postgres.Store, cfg *config.C
 	if err != nil {
 		return guidedSetupPrepared{}, err
 	}
-	profilePlans, err := planGuidedProfiles(ctx, store, options, providers, harness)
+	profilePlans, err := planGuidedProfiles(ctx, store, options, providers, harness, cfg.Incus)
+	if err != nil {
+		return guidedSetupPrepared{}, err
+	}
+	stableHTTPS, err := setupStableHTTPSRequirement(options, profilePlans, cfg.Incus)
 	if err != nil {
 		return guidedSetupPrepared{}, err
 	}
@@ -94,7 +105,6 @@ func prepareGuidedSetup(ctx context.Context, store postgres.Store, cfg *config.C
 	if err := persistGuidedIncusAuthority(cfg, privateBridge); err != nil {
 		return guidedSetupPrepared{}, err
 	}
-
 	g.PrivateBridge = privateBridge
 	g.InternalDialOrigin = "http://" + bind + ":8317"
 	connection, err := setupAIConnection(ctx, g, bind, options, presenter)
@@ -110,34 +120,93 @@ func prepareGuidedSetup(ctx context.Context, store postgres.Store, cfg *config.C
 	if privateBridge == "" {
 		prepared.PrivateIPv4 = ""
 	}
-	gatewayURL := ""
+	remote, err := prepareGuidedRemoteGateway(ctx, store, cfg, options, providers, profilePlans, stableHTTPS, presenter, stdout, stderr)
+	if err != nil {
+		return guidedSetupPrepared{}, err
+	}
+	prepared.ProfilePlans = remote.ProfilePlans
+	prepared.GatewayPlan = remote.Plan
+	prepared.GatewayURL = remote.URL
+	prepared.ControlURL = remote.ControlURL
+	return prepared, nil
+}
+
+func prepareGuidedRemoteGateway(
+	ctx context.Context,
+	store postgres.Store,
+	cfg *config.Config,
+	options setupOptions,
+	providers []core.SandboxProvider,
+	profilePlans []guidedProfilePlan,
+	stableHTTPS bool,
+	presenter setupPresenter,
+	stdout, stderr io.Writer,
+) (guidedRemoteGatewayPrepared, error) {
+	prepared := guidedRemoteGatewayPrepared{ProfilePlans: profilePlans}
 	if containsSandboxProvider(providers, core.SandboxProviderE2B) {
 		if err := setupE2BCredential(ctx, cfg, options, presenter); err != nil {
-			return guidedSetupPrepared{}, err
+			return guidedRemoteGatewayPrepared{}, err
 		}
 		presenter.Ready("E2B access", "Project credential verified on this host")
-		ownedEndpoints, ownedErr := currentOwnedCloudflareEndpoints(cfg.GatewayStatePath)
-		if ownedErr != nil {
-			return guidedSetupPrepared{}, ownedErr
-		}
-		gatewayPlan, planErr := planRemoteGateway(ctx, options, profilePlans, presenter, net.DefaultResolver, ownedEndpoints)
-		if planErr != nil {
-			return guidedSetupPrepared{}, planErr
-		}
-		profilePlans, err = retargetGuidedE2BProfiles(ctx, store, profilePlans, gatewayPlan.URL)
-		if err != nil {
-			return guidedSetupPrepared{}, err
-		}
-		prepared.ProfilePlans = profilePlans
-		gatewayURL, err = prepareRemoteGateway(ctx, cfg.GatewayStatePath, gatewayPlan, presenter, stdout, stderr)
-		if err != nil {
-			return guidedSetupPrepared{}, err
-		}
-		prepared.GatewayPlan = gatewayPlan
-		prepared.GatewayURL = gatewayURL
-		prepared.ControlURL = gatewayPlan.ControlURL
 	}
+	if !stableHTTPS {
+		return prepared, nil
+	}
+	ownedEndpoints, err := currentOwnedCloudflareEndpoints(cfg.GatewayStatePath)
+	if err != nil {
+		return guidedRemoteGatewayPrepared{}, err
+	}
+	prepared.Plan, err = planRemoteGateway(ctx, options, profilePlans, presenter, net.DefaultResolver, ownedEndpoints)
+	if err != nil {
+		return guidedRemoteGatewayPrepared{}, err
+	}
+	if err := validateGuidedIncusGatewayProfiles(profilePlans, cfg.Incus, prepared.Plan.URL); err != nil {
+		return guidedRemoteGatewayPrepared{}, err
+	}
+	prepared.ProfilePlans, err = retargetGuidedE2BProfiles(ctx, store, profilePlans, prepared.Plan.URL)
+	if err != nil {
+		return guidedRemoteGatewayPrepared{}, err
+	}
+	prepared.URL, err = prepareRemoteGateway(ctx, cfg.GatewayStatePath, prepared.Plan, presenter, stdout, stderr)
+	if err != nil {
+		return guidedRemoteGatewayPrepared{}, err
+	}
+	prepared.ControlURL = prepared.Plan.ControlURL
 	return prepared, nil
+}
+
+func setupStableHTTPSRequirement(options setupOptions, plans []guidedProfilePlan, authority *deployment.Incus) (bool, error) {
+	stableHTTPS, err := setupNeedsStableHTTPS(plans, authority)
+	if err != nil {
+		return false, err
+	}
+	if setupRemoteGatewayRequested(options) && !stableHTTPS {
+		return false, fmt.Errorf("Gateway and Cloudflare setup flags require E2B or a remote HTTPS Incus authority")
+	}
+	return stableHTTPS, nil
+}
+
+func setupNeedsStableHTTPS(plans []guidedProfilePlan, authority *deployment.Incus) (bool, error) {
+	stableHTTPS := false
+	for _, plan := range plans {
+		switch plan.Provider {
+		case core.SandboxProviderE2B:
+			stableHTTPS = true
+		case core.SandboxProviderIncus:
+			if authority == nil {
+				return false, fmt.Errorf("Incus endpoint is not configured in the Dorf Deployment")
+			}
+			if strings.HasPrefix(authority.Endpoint, "https://") {
+				stableHTTPS = true
+			}
+		}
+	}
+	return stableHTTPS, nil
+}
+
+func setupRemoteGatewayRequested(options setupOptions) bool {
+	return options.GatewayURL != "" || options.CloudflareDomain != "" || options.CloudflareControlHostname != "" ||
+		options.CloudflareModelHostname != "" || options.ReplaceCloudflareDNS
 }
 
 func guidedIncusReadinessScope(plans []guidedProfilePlan) (string, string, bool) {
@@ -167,9 +236,6 @@ func setupGuidedIncusReadinessWith(
 	if !selected {
 		return nil
 	}
-	if authority != nil && strings.HasPrefix(authority.Endpoint, "https://") {
-		return guidedRemoteIncusSetupError()
-	}
 	if err := validateGuidedExistingIncusAuthorities(plans, authority); err != nil {
 		return err
 	}
@@ -197,8 +263,6 @@ func hasGuidedIncusProfileNeedingLocalDefinition(plans []guidedProfilePlan) bool
 	return false
 }
 
-// persistGuidedIncusAuthority commits a newly selected local endpoint before
-// setup creates a Profile whose definition is bound to that endpoint hash.
 func persistGuidedIncusAuthority(cfg *config.Config, privateBridge string) error {
 	if privateBridge == "" {
 		return nil
@@ -207,13 +271,19 @@ func persistGuidedIncusAuthority(cfg *config.Config, privateBridge string) error
 		return incusSetupReadinessError{cause: fmt.Errorf("Incus endpoint is not configured in the Dorf Deployment")}
 	}
 	if !strings.HasPrefix(cfg.Incus.Endpoint, "unix://") {
-		return guidedRemoteIncusSetupError()
+		return incusSetupReadinessError{cause: fmt.Errorf("a private Incus bridge requires one local Unix endpoint authority")}
 	}
-	return deployment.RetainIncus(cfg.DeploymentPath, *cfg.Incus)
-}
-
-func guidedRemoteIncusSetupError() incusSetupReadinessError {
-	return incusSetupReadinessError{cause: fmt.Errorf("guided remote Incus setup is not supported; configure an explicit guest-reachable Gateway route and profile after the remote terminal passes")}
+	if err := deployment.RetainIncus(cfg.DeploymentPath, *cfg.Incus); err != nil {
+		return err
+	}
+	stored, found, err := deployment.Load(cfg.DeploymentPath)
+	if err != nil {
+		return err
+	}
+	if !found || stored.Incus == nil || *stored.Incus != *cfg.Incus {
+		return fmt.Errorf("Incus authority was not committed to the Dorf Deployment")
+	}
+	return nil
 }
 
 // completeGuidedSetup resumes immediately after the final Compose
@@ -258,13 +328,13 @@ func setupHarness(ctx context.Context, options setupOptions, presenter setupPres
 	return harness, nil
 }
 
-func planGuidedProfiles(ctx context.Context, store postgres.Store, options setupOptions, providers []core.SandboxProvider, harness string) ([]guidedProfilePlan, error) {
+func planGuidedProfiles(ctx context.Context, store postgres.Store, options setupOptions, providers []core.SandboxProvider, harness string, authority *deployment.Incus) ([]guidedProfilePlan, error) {
 	plans := make([]guidedProfilePlan, 0, len(providers))
 	for _, provider := range providers {
 		name := options.ProfileName
 		if name == "" {
 			if provider == core.SandboxProviderIncus {
-				name = "local-" + harness
+				name = guidedIncusProfileName(harness, authority)
 			} else {
 				name = "cloud-" + harness
 			}
@@ -296,6 +366,13 @@ func planGuidedProfiles(ctx context.Context, store postgres.Store, options setup
 		plans = append(plans, plan)
 	}
 	return plans, nil
+}
+
+func guidedIncusProfileName(harness string, authority *deployment.Incus) string {
+	if authority != nil && strings.HasPrefix(authority.Endpoint, "https://") {
+		return "incus-" + harness
+	}
+	return "local-" + harness
 }
 
 type incusSetupReadinessError struct{ cause error }
@@ -356,7 +433,8 @@ func selectGuidedGatewayBind(profiles []core.SandboxProfile, selected []guidedPr
 	if err := validateGuidedExistingIncusAuthorities(selected, authority); err != nil {
 		return "", "", false, err
 	}
-	network, err := gatewayIncusNetwork(profiles, selected)
+	bridgePlans := guidedIncusBridgePlans(selected, authority)
+	network, err := gatewayIncusNetwork(profiles, bridgePlans)
 	if err != nil {
 		return "", "", false, err
 	}
@@ -367,18 +445,13 @@ func selectGuidedGatewayBind(profiles []core.SandboxProfile, selected []guidedPr
 			}
 		}
 	}
-	profileAddress, bridgeRequired, err := guidedIncusBridgeAuthority(profiles, selected, network)
+	profileAddress, bridgeRequired, err := guidedIncusBridgeAuthority(profiles, bridgePlans, network)
 	if err != nil {
 		return "", "", false, err
 	}
-	needsLocalDefinition := hasGuidedIncusProfileNeedingLocalDefinition(selected)
-	if needsLocalDefinition {
-		if authority == nil {
-			return "", "", false, incusSetupReadinessError{cause: fmt.Errorf("Incus endpoint is not configured in the Dorf Deployment")}
-		}
-		if strings.HasPrefix(authority.Endpoint, "https://") {
-			return "", "", false, guidedRemoteIncusSetupError()
-		}
+	needsLocalDefinition, err := guidedNeedsLocalIncusDefinition(selected, authority)
+	if err != nil {
+		return "", "", false, err
 	}
 	if profileAddress != "" {
 		address, err := selectGatewayPublishAddress("", preparedAddress, prepared, profileAddress, true)
@@ -396,6 +469,29 @@ func selectGuidedGatewayBind(profiles []core.SandboxProfile, selected []guidedPr
 		return address, "", false, err
 	}
 	return "", network, true, nil
+}
+
+func guidedIncusBridgePlans(selected []guidedProfilePlan, authority *deployment.Incus) []guidedProfilePlan {
+	if authority == nil || !strings.HasPrefix(authority.Endpoint, "https://") {
+		return selected
+	}
+	bridgePlans := make([]guidedProfilePlan, 0, len(selected))
+	for _, plan := range selected {
+		if plan.Provider != core.SandboxProviderIncus || plan.Existing != nil {
+			bridgePlans = append(bridgePlans, plan)
+		}
+	}
+	return bridgePlans
+}
+
+func guidedNeedsLocalIncusDefinition(selected []guidedProfilePlan, authority *deployment.Incus) (bool, error) {
+	if !hasGuidedIncusProfileNeedingLocalDefinition(selected) {
+		return false, nil
+	}
+	if authority == nil {
+		return false, incusSetupReadinessError{cause: fmt.Errorf("Incus endpoint is not configured in the Dorf Deployment")}
+	}
+	return strings.HasPrefix(authority.Endpoint, "unix://"), nil
 }
 
 func gatewayIncusScope(profiles []core.SandboxProfile, selected []guidedProfilePlan, network string) (string, string) {
@@ -726,12 +822,9 @@ func planRemoteGateway(ctx context.Context, options setupOptions, profiles []gui
 		return retainedCloudflareGatewayPlan(owned)
 	}
 
-	existingURL := ""
-	for _, profile := range profiles {
-		if profile.Provider == core.SandboxProviderE2B && profile.Existing != nil {
-			existingURL = profile.Existing.E2BGatewayURL
-			break
-		}
+	existingURL, err := retainedGuidedRemoteGatewayURL(profiles)
+	if err != nil {
+		return guidedGatewayPlan{}, err
 	}
 
 	if options.GatewayURL != "" {
@@ -760,7 +853,7 @@ func planRemoteGateway(ctx context.Context, options setupOptions, profiles []gui
 		return guidedGatewayPlan{Mode: setupGatewayExisting, URL: existingURL}, nil
 	}
 	if !presenter.interactive || options.Yes {
-		return guidedGatewayPlan{}, fmt.Errorf("automated E2B setup requires --gateway-url or --cloudflare-domain")
+		return guidedGatewayPlan{}, fmt.Errorf("automated remote Sandbox setup requires --gateway-url or --cloudflare-domain")
 	}
 
 	domain := ""
@@ -771,7 +864,7 @@ func planRemoteGateway(ctx context.Context, options setupOptions, profiles []gui
 	)); err != nil {
 		return guidedGatewayPlan{}, err
 	}
-	domain, err := normalizeCloudflareHostname(domain)
+	domain, err = normalizeCloudflareHostname(domain)
 	if err != nil {
 		return guidedGatewayPlan{}, err
 	}
@@ -787,6 +880,41 @@ func planRemoteGateway(ctx context.Context, options setupOptions, profiles []gui
 		return guidedGatewayPlan{}, err
 	}
 	return approveCloudflareGatewayPlan(ctx, options, presenter, resolver, plan, owned)
+}
+
+func retainedGuidedRemoteGatewayURL(profiles []guidedProfilePlan) (string, error) {
+	existingURLs := map[string]struct{}{}
+	for _, profile := range profiles {
+		existingURL := guidedProfileRemoteGatewayURL(profile)
+		if existingURL == "" {
+			continue
+		}
+		normalized, err := normalizeExactGatewayURL(existingURL)
+		if err != nil {
+			return "", fmt.Errorf("Sandbox profile %q model Gateway: %w", profile.Name, err)
+		}
+		existingURLs[normalized] = struct{}{}
+	}
+	if len(existingURLs) > 1 {
+		return "", fmt.Errorf("selected Sandbox profiles use different model Gateway URLs; update them explicitly before rerunning setup")
+	}
+	for value := range existingURLs {
+		return value, nil
+	}
+	return "", nil
+}
+
+func guidedProfileRemoteGatewayURL(profile guidedProfilePlan) string {
+	if profile.Existing == nil {
+		return ""
+	}
+	if profile.Provider == core.SandboxProviderE2B {
+		return profile.Existing.E2BGatewayURL
+	}
+	if profile.Provider == core.SandboxProviderIncus && strings.HasPrefix(profile.Existing.IncusGatewayURL, "https://") {
+		return profile.Existing.IncusGatewayURL
+	}
+	return ""
 }
 
 func newCloudflareGatewayPlan(domain, controlHostname, modelHostname string, replaceExistingDNS bool) (guidedGatewayPlan, error) {
@@ -1130,13 +1258,16 @@ func setupProfiles(ctx context.Context, store postgres.Store, cfg config.Config,
 			case core.SandboxProviderIncus:
 				err = presenter.Run(ctx, "Installing official Incus Sandbox", func(ctx context.Context) error {
 					var installErr error
-					gatewayURL := "http://" + privateIPv4 + ":8317/v1"
+					profileGatewayURL, routeErr := guidedIncusGatewayURL(cfg.Incus, gatewayURL, privateIPv4)
+					if routeErr != nil {
+						return routeErr
+					}
 					releaseTag, manifestPath, archive := releaseapp.OfficialImageRelease(), "", ""
 					if options.IncusManifest != "" {
 						releaseTag, manifestPath, archive = "", options.IncusManifest, options.IncusArchive
 					}
 					profile, _, _, installErr = reconcileOfficialIncusProfileDefinition(ctx, store, name, plan.Harness, releaseTag, manifestPath, archive,
-						cfg.Incus, incus.DefaultProject, incus.DefaultStoragePool, guidedIncusNetwork, guidedIncusDiskSize, gatewayURL)
+						cfg.Incus, incus.DefaultProject, incus.DefaultStoragePool, guidedIncusNetwork, guidedIncusDiskSize, profileGatewayURL)
 					return installErr
 				})
 			case core.SandboxProviderE2B:
@@ -1173,6 +1304,38 @@ func setupProfiles(ctx context.Context, store postgres.Store, cfg config.Config,
 		presenter.Ready("Sandbox profile", profile.Name+" · "+string(profile.Provider)+" · verified")
 	}
 	return profiles, nil
+}
+
+func guidedIncusGatewayURL(authority *deployment.Incus, stableHTTPS, privateIPv4 string) (string, error) {
+	if authority == nil {
+		return "", fmt.Errorf("Incus endpoint is not configured in the Dorf Deployment")
+	}
+	if strings.HasPrefix(authority.Endpoint, "https://") {
+		if err := validateExactGatewayURL(stableHTTPS); err != nil {
+			return "", fmt.Errorf("remote Incus model Gateway: %w", err)
+		}
+		return stableHTTPS, nil
+	}
+	ip := net.ParseIP(privateIPv4)
+	if ip == nil || ip.To4() == nil {
+		return "", fmt.Errorf("local Incus model Gateway bridge is unavailable")
+	}
+	return "http://" + privateIPv4 + ":8317/v1", nil
+}
+
+func validateGuidedIncusGatewayProfiles(plans []guidedProfilePlan, authority *deployment.Incus, gatewayURL string) error {
+	if authority == nil || !strings.HasPrefix(authority.Endpoint, "https://") {
+		return nil
+	}
+	for _, plan := range plans {
+		if plan.Provider != core.SandboxProviderIncus || plan.Existing == nil {
+			continue
+		}
+		if plan.Existing.IncusGatewayURL != gatewayURL {
+			return fmt.Errorf("Sandbox profile %q uses model Gateway %s; update it explicitly before selecting %s", plan.Name, plan.Existing.IncusGatewayURL, gatewayURL)
+		}
+	}
+	return nil
 }
 
 func retargetGuidedE2BProfiles(ctx context.Context, store postgres.Store, plans []guidedProfilePlan, gatewayURL string) ([]guidedProfilePlan, error) {

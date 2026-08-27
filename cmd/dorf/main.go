@@ -719,6 +719,7 @@ type setupOptions struct {
 	LocalImage                string
 	IncusManifest             string
 	IncusArchive              string
+	IncusTrustOfferFile       string
 	SandboxProviders          sandboxProviderFlags
 	Harness                   string
 	ConnectionMode            setupConnectionMode
@@ -766,6 +767,7 @@ func parseSetupOptions(args []string, stderr io.Writer) (setupOptions, error) {
 	localImage := set.String("local-image", "", "trust one already-loaded exact contributor/integration image reference")
 	incusManifest := set.String("incus-manifest", "", "verified local Incus image manifest")
 	incusArchive := set.String("incus-archive", "", "matching local Incus VM archive")
+	incusTrustOfferFile := set.String("incus-trust-offer-file", "", "protected Incus trust offer file; use - for standard input")
 	providers := sandboxProviderFlags{}
 	set.Var(&providers, "sandbox-provider", "configure incus or e2b; repeat to select both")
 	harness := set.String("harness", "", "Harness for guided profiles: codex or pi")
@@ -789,8 +791,9 @@ func parseSetupOptions(args []string, stderr io.Writer) (setupOptions, error) {
 		Yes: *yes, Connection: strings.TrimSpace(*connection),
 		ProfileName: strings.TrimSpace(*profileName), LocalImage: strings.TrimSpace(*localImage),
 		IncusManifest: strings.TrimSpace(*incusManifest), IncusArchive: strings.TrimSpace(*incusArchive),
-		SandboxProviders: providers,
-		Harness:          strings.TrimSpace(*harness), ConnectionMode: setupConnectionMode(strings.TrimSpace(*connectionMode)),
+		IncusTrustOfferFile: strings.TrimSpace(*incusTrustOfferFile),
+		SandboxProviders:    providers,
+		Harness:             strings.TrimSpace(*harness), ConnectionMode: setupConnectionMode(strings.TrimSpace(*connectionMode)),
 		OpenAIKeyFile: strings.TrimSpace(*openAIKeyFile), E2BKeyFile: strings.TrimSpace(*e2bKeyFile),
 		E2BTemplate: strings.TrimSpace(*e2bTemplate), GatewayURL: strings.TrimSpace(*gatewayURL),
 		CloudflareDomain:          strings.TrimSpace(*cloudflareDomain),
@@ -807,7 +810,7 @@ func parseSetupOptions(args []string, stderr io.Writer) (setupOptions, error) {
 
 func validateSetupOptions(options setupOptions) error {
 	cloudflareSelected := options.CloudflareDomain != "" || options.CloudflareControlHostname != "" || options.CloudflareModelHostname != "" || options.ReplaceCloudflareDNS
-	if len(options.SandboxProviders) == 0 && (options.Connection != "" || options.ProfileName != "" || options.Harness != "" || options.ConnectionMode != "" || options.OpenAIKeyFile != "" || options.E2BKeyFile != "" || options.E2BTemplate != "" || options.GatewayURL != "" || cloudflareSelected || options.AllowInternet || options.IncusManifest != "" || options.IncusArchive != "") {
+	if len(options.SandboxProviders) == 0 && (options.Connection != "" || options.ProfileName != "" || options.Harness != "" || options.ConnectionMode != "" || options.OpenAIKeyFile != "" || options.E2BKeyFile != "" || options.E2BTemplate != "" || options.GatewayURL != "" || cloudflareSelected || options.AllowInternet || options.IncusManifest != "" || options.IncusArchive != "" || options.IncusTrustOfferFile != "") {
 		return fmt.Errorf("agent setup flags require at least one --sandbox-provider")
 	}
 	if options.ProfileName != "" && len(options.SandboxProviders) != 1 {
@@ -834,12 +837,25 @@ func validateSetupOptions(options setupOptions) error {
 	if (options.IncusManifest == "") != (options.IncusArchive == "") {
 		return fmt.Errorf("setup requires both --incus-manifest and --incus-archive")
 	}
-	if options.IncusManifest != "" && !containsSandboxProvider(options.SandboxProviders, core.SandboxProviderIncus) {
-		return fmt.Errorf("Incus image transport flags require --sandbox-provider incus")
+	if err := validateSetupIncusOptions(options); err != nil {
+		return err
 	}
 	if len(options.SandboxProviders) > 0 && !containsSandboxProvider(options.SandboxProviders, core.SandboxProviderE2B) &&
-		(options.E2BKeyFile != "" || options.E2BTemplate != "" || options.GatewayURL != "" || cloudflareSelected || options.AllowInternet) {
+		(options.E2BKeyFile != "" || options.E2BTemplate != "" || options.AllowInternet) {
 		return fmt.Errorf("E2B setup flags require --sandbox-provider e2b")
+	}
+	return nil
+}
+
+func validateSetupIncusOptions(options setupOptions) error {
+	if containsSandboxProvider(options.SandboxProviders, core.SandboxProviderIncus) {
+		return nil
+	}
+	if options.IncusManifest != "" {
+		return fmt.Errorf("Incus image transport flags require --sandbox-provider incus")
+	}
+	if options.IncusTrustOfferFile != "" {
+		return fmt.Errorf("--incus-trust-offer-file requires --sandbox-provider incus")
 	}
 	return nil
 }
@@ -926,9 +942,8 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 		}
 	}
 	if containsSandboxProvider(providers, core.SandboxProviderIncus) {
-		if cfg.Incus == nil {
-			authority := deployment.Incus{Endpoint: "unix://" + incus.DefaultUnixSocket}
-			cfg.Incus = &authority
+		if err := prepareSetupIncusAuthority(ctx, &cfg, options, providers, paths.ComposeDir, presenter); err != nil {
+			return err
 		}
 	}
 	var prepared *guidedSetupPrepared
@@ -973,15 +988,45 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	return nil
 }
 
+func prepareSetupIncusAuthority(ctx context.Context, cfg *config.Config, options setupOptions, providers []core.SandboxProvider, composeDir string, presenter setupPresenter) error {
+	pendingPath := filepath.Join(composeDir, "incus-enrollment.json")
+	kvmAvailable := setupKVMDevicePresent()
+	trustOffer := ""
+	if setupNeedsInteractiveIncusTrustOffer(cfg, options, providers, kvmAvailable, presenter.interactive) {
+		if err := presenter.RunForm(ctx, presenter.SecretGroup(
+			"Connect your Incus host",
+			"Paste the one-time trust offer from the Incus workstation. Dorf retains the resulting client identity; the offer is one-use.",
+			&trustOffer,
+		)); err != nil {
+			return fmt.Errorf("read Incus trust offer: %w", err)
+		}
+	}
+	if err := establishSetupIncusAuthority(ctx, cfg, options, providers, pendingPath, kvmAvailable, trustOffer, os.Stdin, incus.EnsureEnrollment); err != nil {
+		return err
+	}
+	summary, err := setupIncusAuthoritySummary(*cfg.Incus)
+	if err != nil {
+		return err
+	}
+	presenter.Ready("Incus authority", summary)
+	return nil
+}
+
+func setupNeedsInteractiveIncusTrustOffer(cfg *config.Config, options setupOptions, providers []core.SandboxProvider, kvmAvailable, interactive bool) bool {
+	return containsSandboxProvider(providers, core.SandboxProviderIncus) && cfg.Incus == nil && options.IncusTrustOfferFile == "" &&
+		!kvmAvailable && interactive && !options.Yes
+}
+
 var errSetupCancelled = errors.New("setup cancelled")
 
 func selectSetupSandboxProviders(ctx context.Context, cfg config.Config, options setupOptions, presenter setupPresenter) ([]core.SandboxProvider, error) {
 	kvmAvailable := setupKVMDevicePresent()
-	selected, settled := deriveSetupSandboxProviders(cfg, options, presenter.interactive, kvmAvailable)
+	selected, settled := deriveSetupSandboxProviders(options, presenter.interactive)
 	if settled {
 		return selected, nil
 	}
-	if err := presenter.RunForm(ctx, presenter.ProviderGroup(&selected, kvmAvailable)); err != nil {
+	remoteIncus := cfg.Incus != nil && strings.HasPrefix(cfg.Incus.Endpoint, "https://")
+	if err := presenter.RunForm(ctx, presenter.ProviderGroup(&selected, kvmAvailable, remoteIncus)); err != nil {
 		return nil, fmt.Errorf("select Sandbox providers: %w", err)
 	}
 	return selected, nil
@@ -992,15 +1037,133 @@ func setupKVMDevicePresent() bool {
 	return err == nil && device.Mode()&os.ModeCharDevice != 0
 }
 
-func deriveSetupSandboxProviders(cfg config.Config, options setupOptions, interactive, kvmAvailable bool) ([]core.SandboxProvider, bool) {
+func deriveSetupSandboxProviders(options setupOptions, interactive bool) ([]core.SandboxProvider, bool) {
 	selected := append([]core.SandboxProvider{}, options.SandboxProviders...)
 	if len(selected) > 0 || options.Yes || !interactive {
 		return selected, true
 	}
-	if !kvmAvailable && strings.TrimSpace(cfg.E2BAPIKey) != "" {
-		return []core.SandboxProvider{core.SandboxProviderE2B}, true
-	}
 	return selected, false
+}
+
+func establishSetupIncusAuthority(
+	ctx context.Context,
+	cfg *config.Config,
+	options setupOptions,
+	providers []core.SandboxProvider,
+	pendingPath string,
+	localKVMAvailable bool,
+	promptedTrustOffer string,
+	stdin io.Reader,
+	enroll func(context.Context, incus.EnrollmentRequest) (deployment.Incus, error),
+) error {
+	if !containsSandboxProvider(providers, core.SandboxProviderIncus) {
+		return nil
+	}
+	if cfg.Incus != nil {
+		return reconcileAcceptedSetupIncusAuthority(ctx, cfg, pendingPath, enroll)
+	}
+
+	var authority deployment.Incus
+	if options.IncusTrustOfferFile == "" && localKVMAvailable {
+		authority = deployment.Incus{Endpoint: "unix://" + incus.DefaultUnixSocket}
+		cfg.Incus = &authority
+		return nil
+	}
+	trustOffer, err := selectedSetupIncusTrustOffer(options.IncusTrustOfferFile, promptedTrustOffer, stdin)
+	if err != nil {
+		return err
+	}
+	authority, err = enroll(ctx, incus.EnrollmentRequest{
+		DeploymentPath: cfg.DeploymentPath,
+		PendingPath:    pendingPath,
+		TrustToken:     trustOffer,
+	})
+	if err != nil {
+		return err
+	}
+	return requirePersistedSetupIncusAuthority(cfg, authority)
+}
+
+func selectedSetupIncusTrustOffer(path, prompted string, stdin io.Reader) (string, error) {
+	if path != "" {
+		return readSetupIncusTrustOffer(path, stdin)
+	}
+	if strings.TrimSpace(prompted) == "" {
+		return "", fmt.Errorf("automated remote Incus setup requires --incus-trust-offer-file")
+	}
+	return normalizeSetupIncusTrustOffer(prompted)
+}
+
+func reconcileAcceptedSetupIncusAuthority(
+	ctx context.Context,
+	cfg *config.Config,
+	pendingPath string,
+	enroll func(context.Context, incus.EnrollmentRequest) (deployment.Incus, error),
+) error {
+	accepted := *cfg.Incus
+	reconciled, err := enroll(ctx, incus.EnrollmentRequest{
+		DeploymentPath: cfg.DeploymentPath,
+		PendingPath:    pendingPath,
+	})
+	if err != nil {
+		return err
+	}
+	if reconciled != accepted {
+		return fmt.Errorf("Incus enrollment reconciliation returned a different retained authority")
+	}
+	return requirePersistedSetupIncusAuthority(cfg, accepted)
+}
+
+func readSetupIncusTrustOffer(path string, stdin io.Reader) (string, error) {
+	if path != "-" {
+		return incus.ReadTrustTokenFile(path)
+	}
+	trustOffer, err := readSecretFile(path, stdin)
+	if err != nil {
+		return "", fmt.Errorf("read Incus trust offer from standard input: %w", err)
+	}
+	return normalizeSetupIncusTrustOffer(trustOffer)
+}
+
+func normalizeSetupIncusTrustOffer(raw string) (string, error) {
+	if len(raw) > 16<<10 {
+		return "", fmt.Errorf("Incus trust offer exceeds 16 KiB")
+	}
+	trustOffer := strings.TrimSpace(raw)
+	if trustOffer == "" || strings.ContainsRune(trustOffer, '\x00') {
+		return "", fmt.Errorf("Incus trust offer is empty or invalid")
+	}
+	return trustOffer, nil
+}
+
+func requirePersistedSetupIncusAuthority(cfg *config.Config, authority deployment.Incus) error {
+	cfg.Incus = &authority
+	stored, found, err := deployment.Load(cfg.DeploymentPath)
+	if err != nil {
+		return err
+	}
+	if !found || stored.Incus == nil || *stored.Incus != authority {
+		return fmt.Errorf("Incus authority was not committed to the Dorf Deployment")
+	}
+	accepted := *stored.Incus
+	cfg.Incus = &accepted
+	return nil
+}
+
+func setupIncusAuthoritySummary(authority deployment.Incus) (string, error) {
+	authorityHash, err := authority.AuthorityHash()
+	if err != nil {
+		return "", err
+	}
+	summary := authority.Endpoint + " · authority " + authorityHash
+	fingerprint, err := authority.ClientCertificateFingerprint()
+	if err != nil {
+		return "", err
+	}
+	if fingerprint != "" {
+		summary += " · client " + fingerprint
+	}
+	return summary, nil
 }
 
 func containsSandboxProvider(values []core.SandboxProvider, wanted core.SandboxProvider) bool {

@@ -139,9 +139,13 @@ func (p setupPresenter) Run(ctx context.Context, title string, action func(conte
 		Run()
 }
 
-func (p setupPresenter) ProviderGroup(selected *[]core.SandboxProvider, kvmAvailable bool) *huh.Group {
+func (p setupPresenter) ProviderGroup(selected *[]core.SandboxProvider, kvmAvailable, remoteIncus bool) *huh.Group {
 	options := []huh.Option[core.SandboxProvider]{}
-	if kvmAvailable {
+	if remoteIncus || !kvmAvailable {
+		options = append(options,
+			huh.NewOption(p.option("Your Incus host", "Hardware-isolated Linux VMs on your Incus workstation"), core.SandboxProviderIncus),
+		)
+	} else if kvmAvailable {
 		options = append(options,
 			huh.NewOption(p.option("Local · Incus", "Hardware-isolated Linux VMs on this machine · requires KVM"), core.SandboxProviderIncus),
 		)
@@ -150,19 +154,12 @@ func (p setupPresenter) ProviderGroup(selected *[]core.SandboxProvider, kvmAvail
 		huh.NewOption(p.option("Cloud · E2B", "Managed Linux VMs"), core.SandboxProviderE2B),
 	)
 	fieldHeight := len(options) * 2
-	if !kvmAvailable {
-		fieldHeight += 3
-	}
 	field := huh.NewMultiSelect[core.SandboxProvider]().
 		Options(options...).
 		Value(selected).
 		Filterable(false).
 		Limit(len(options)).
 		Height(fieldHeight)
-	if !kvmAvailable {
-		field.Title("  [—] Local · Incus").
-			Description("      Unavailable on this machine · KVM not detected")
-	}
 	return huh.NewGroup(field).
 		Title("Choose one or more locations now").
 		Description("Each agent gets an isolated Sandbox. You can add more options later.")

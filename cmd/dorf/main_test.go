@@ -495,13 +495,14 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 		"--sandbox-provider", "incus", "--sandbox-provider", "e2b",
 		"--harness", "codex", "--e2b-template", "dorf:exact-build",
 		"--incus-manifest", "/proof/manifest.json", "--incus-archive", "/proof/image.tar.zst",
+		"--incus-trust-offer-file", "-",
 		"--gateway-url", "https://gateway.example/v1", "--allow-internet",
 	}, &stderr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !options.Yes || options.Connection != "personal-chatgpt" || options.ProfileName != "" ||
-		options.LocalImage != "dorf-proof:0.5.2" || options.IncusManifest != "/proof/manifest.json" || options.IncusArchive != "/proof/image.tar.zst" ||
+		options.LocalImage != "dorf-proof:0.5.2" || options.IncusManifest != "/proof/manifest.json" || options.IncusArchive != "/proof/image.tar.zst" || options.IncusTrustOfferFile != "-" ||
 		options.Harness != "codex" || options.E2BTemplate != "dorf:exact-build" ||
 		options.GatewayURL != "https://gateway.example/v1" || !options.AllowInternet ||
 		!containsSandboxProvider(options.SandboxProviders, core.SandboxProviderIncus) ||
@@ -548,6 +549,7 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 		{"--sandbox-provider", "incus", "--incus-manifest", "manifest.json"},
 		{"--sandbox-provider", "incus", "--incus-archive", "image.tar.zst"},
 		{"--sandbox-provider", "e2b", "--incus-manifest", "manifest.json", "--incus-archive", "image.tar.zst"},
+		{"--sandbox-provider", "e2b", "--incus-trust-offer-file", "offer.txt"},
 	} {
 		if _, err := parseSetupOptions(args, &stderr); err == nil {
 			t.Fatalf("invalid Incus image transport was accepted: %v", args)
@@ -577,12 +579,12 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 	if err != nil || len(automated) != 0 {
 		t.Fatalf("common-only automation providers=%v error=%v", automated, err)
 	}
-	inferred, settled := deriveSetupSandboxProviders(config.Config{E2BAPIKey: "configured"}, setupOptions{}, true, false)
-	if !settled || len(inferred) != 1 || inferred[0] != core.SandboxProviderE2B {
-		t.Fatalf("cloud-only inference providers=%v settled=%t", inferred, settled)
+	inferred, settled := deriveSetupSandboxProviders(setupOptions{}, true)
+	if settled || len(inferred) != 0 {
+		t.Fatalf("interactive provider selection was skipped: providers=%v settled=%t", inferred, settled)
 	}
-	if _, settled := deriveSetupSandboxProviders(config.Config{E2BAPIKey: "configured"}, setupOptions{}, true, true); settled {
-		t.Fatal("setup inferred one provider when local and cloud were both viable")
+	if selected, settled := deriveSetupSandboxProviders(setupOptions{SandboxProviders: sandboxProviderFlags{core.SandboxProviderIncus}}, true); !settled || len(selected) != 1 {
+		t.Fatalf("explicit provider selection=%v settled=%t", selected, settled)
 	}
 	for _, test := range []struct {
 		ready map[string]bool
@@ -605,15 +607,17 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 func TestGuidedSetupPresenterKeepsChoicesAndControlsUsable(t *testing.T) {
 	presenter := setupPresenter{}
 	providers := []core.SandboxProvider{}
-	provider := presenter.ProviderGroup(&providers, true)
+	provider := presenter.ProviderGroup(&providers, true, false)
 	harness := presenter.HarnessGroup(new(string))
 	connection := presenter.ConnectionGroup(new(setupConnectionMode))
+	trustOffer := presenter.SecretGroup("Connect your Incus host", "Paste the one-time trust offer", new(string))
 	controlHostname, modelHostname := "api.dorf.run", "models.dorf.run"
 	endpoints := presenter.PublicEndpointsGroup("dorf.run", &controlHostname, &modelHostname)
 	for _, group := range []struct{ name, header, content string }{
 		{"provider", provider.Header(), provider.Content()},
 		{"harness", harness.Header(), harness.Content()},
 		{"connection", connection.Header(), connection.Content()},
+		{"Incus trust offer", trustOffer.Header(), trustOffer.Content()},
 		{"endpoints", endpoints.Header(), endpoints.Content()},
 	} {
 		if strings.TrimSpace(group.header) == "" || strings.TrimSpace(group.content) == "" {
@@ -626,9 +630,13 @@ func TestGuidedSetupPresenterKeepsChoicesAndControlsUsable(t *testing.T) {
 	if content := harness.Content(); !strings.Contains(content, "Codex") || !strings.Contains(content, "Pi") {
 		t.Fatalf("Harness choices=%q", content)
 	}
-	unavailable := presenter.ProviderGroup(&providers, false).Content()
-	if !strings.Contains(unavailable, "[—] Local · Incus") || !strings.Contains(unavailable, "Unavailable") || strings.Contains(unavailable, "[ ] Local · Incus") {
-		t.Fatalf("KVM-disabled provider choices=%q", unavailable)
+	noKVM := presenter.ProviderGroup(&providers, false, false).Content()
+	if !strings.Contains(noKVM, "Your Incus host") || strings.Contains(noKVM, "Unavailable") {
+		t.Fatalf("KVM-free provider choices=%q", noKVM)
+	}
+	remote := presenter.ProviderGroup(&providers, false, true).Content()
+	if !strings.Contains(remote, "Your Incus host") || strings.Contains(remote, "Unavailable") {
+		t.Fatalf("remote Incus provider choices=%q", remote)
 	}
 
 	keymap := setupKeyMap()
@@ -905,24 +913,15 @@ func TestGuidedGatewayBindConsumesPersistedPrivateRouteWithoutLocalInference(t *
 	}
 }
 
-func TestGuidedGatewayBindRejectsNewIncusProfileOnRemoteAuthorityBeforeRouteReuse(t *testing.T) {
+func TestGuidedGatewayBindDoesNotInferABridgeForNewRemoteIncusProfile(t *testing.T) {
 	authority := testRemoteIncusAuthority(t)
-	hash, err := authority.AuthorityHash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	profile := core.SandboxProfile{
-		Name: "remote", Provider: core.SandboxProviderIncus,
-		IncusEndpointAuthorityHash: hash, IncusNetwork: guidedIncusNetwork,
-		IncusGatewayURL: "http://100.64.0.10:8317/v1",
-	}
-	_, _, _, err = selectGuidedGatewayBind(
-		[]core.SandboxProfile{profile},
+	address, privateBridge, resolve, err := selectGuidedGatewayBind(
+		nil,
 		[]guidedProfilePlan{{Provider: core.SandboxProviderIncus, Name: "new-local"}},
-		authority, "100.64.0.10", true,
+		authority, "127.0.0.2", true,
 	)
-	if err == nil || !strings.Contains(err.Error(), "guided remote Incus setup is not supported") {
-		t.Fatalf("remote Incus setup error=%v", err)
+	if err != nil || resolve || privateBridge != "" || address != "127.0.0.2" {
+		t.Fatalf("address=%q private bridge=%q resolve=%t error=%v", address, privateBridge, resolve, err)
 	}
 }
 
@@ -998,12 +997,16 @@ func TestGuidedIncusAuthorityDriftStopsBeforeReadinessHandoff(t *testing.T) {
 	}
 }
 
-func TestGuidedExistingVerifiedRemoteIncusIsRejectedBeforeAuthorityOrHostWork(t *testing.T) {
-	authority := &deployment.Incus{Endpoint: "https://unreachable.example:8443"}
+func TestGuidedExistingVerifiedRemoteIncusReachesExactEndpointReadiness(t *testing.T) {
+	authority := testRemoteIncusAuthority(t)
+	authorityHash, err := authority.AuthorityHash()
+	if err != nil {
+		t.Fatal(err)
+	}
 	verifiedAt := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
 	profile := core.SandboxProfile{
 		Name: "existing-remote", Provider: core.SandboxProviderIncus, Harness: "codex",
-		Artifact: "dorf:verified", IncusEndpointAuthorityHash: "different-authority",
+		Artifact: "dorf:verified", IncusEndpointAuthorityHash: authorityHash,
 		IncusProject: "restricted", IncusStoragePool: "dorf-pool", IncusNetwork: "remote0",
 		IncusDiskSize: "40GiB", IncusGatewayURL: "https://gateway.example/v1",
 	}
@@ -1017,20 +1020,14 @@ func TestGuidedExistingVerifiedRemoteIncusIsRejectedBeforeAuthorityOrHostWork(t 
 	}
 
 	probed := false
-	err := setupGuidedIncusReadinessWith(context.Background(), []guidedProfilePlan{{
+	err = setupGuidedIncusReadinessWith(context.Background(), []guidedProfilePlan{{
 		Provider: core.SandboxProviderIncus, Name: profile.Name, Existing: &profile,
 	}}, authority, func(context.Context, *deployment.Incus, string, string) error {
 		probed = true
 		return nil
 	})
-	if err == nil || !strings.Contains(err.Error(), "guided remote Incus setup is not supported") {
-		t.Fatalf("existing remote guided setup error=%v", err)
-	}
-	if strings.Contains(err.Error(), "different Incus endpoint authority") {
-		t.Fatalf("profile authority validation ran before remote Incus policy: %v", err)
-	}
-	if probed {
-		t.Fatal("existing remote profile reuse reached endpoint readiness")
+	if err != nil || !probed {
+		t.Fatalf("existing remote readiness probed=%t error=%v", probed, err)
 	}
 }
 

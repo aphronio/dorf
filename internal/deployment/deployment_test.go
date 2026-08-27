@@ -529,6 +529,35 @@ func TestIncusDeploymentRemoteAuthorityHashExcludesPrivateKey(t *testing.T) {
 	}
 }
 
+func TestIncusClientCertificateFingerprintIsStrictAndPublic(t *testing.T) {
+	serverCertificate, _ := deploymentTestCertificate(t, "incus.example")
+	clientCertificate, clientPrivateKey := deploymentTestCertificate(t, "dorf-worker")
+	remote := Incus{
+		Endpoint:          "https://incus.example:8443",
+		ServerCertificate: serverCertificate,
+		ClientCertificate: clientCertificate,
+		ClientPrivateKey:  clientPrivateKey,
+	}
+	fingerprint, err := remote.ClientCertificateFingerprint()
+	if err != nil || len(fingerprint) != 64 || strings.Contains(fingerprint, strings.TrimSpace(clientPrivateKey)) {
+		t.Fatalf("client fingerprint=%q error=%v", fingerprint, err)
+	}
+	formatted := remote
+	formatted.ClientCertificate = "\n" + clientCertificate + "\n"
+	if got, err := formatted.ClientCertificateFingerprint(); err != nil || got != fingerprint {
+		t.Fatalf("formatted fingerprint=%q error=%v", got, err)
+	}
+	invalid := remote
+	invalid.ClientCertificate += clientCertificate
+	if got, err := invalid.ClientCertificateFingerprint(); err == nil || got != "" {
+		t.Fatalf("multiple-certificate fingerprint=%q error=%v", got, err)
+	}
+	local := Incus{Endpoint: "unix:///var/lib/incus/unix.socket"}
+	if got, err := local.ClientCertificateFingerprint(); err != nil || got != "" {
+		t.Fatalf("local fingerprint=%q error=%v", got, err)
+	}
+}
+
 func TestIncusDeploymentRejectsAmbiguousOrIncompleteAuthorities(t *testing.T) {
 	serverCertificate, _ := deploymentTestCertificate(t, "incus.example")
 	clientCertificate, clientPrivateKey := deploymentTestCertificate(t, "dorf-worker")
