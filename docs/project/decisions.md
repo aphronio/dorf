@@ -2780,7 +2780,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D102 — One guided Dorf domain publishes two distinct public origins
 
-- **Status:** Accepted from remote-client dogfood — 2026-08-27; live public Job proof pending
+- **Status:** Accepted from remote-client dogfood — 2026-08-27; live public Job proof passed —
+  2026-08-27
 - **Decision:** Guided Cloudflare setup asks for one Dorf domain, leaves its apex untouched, and
   suggests editable direct-child hostnames `api.DOMAIN` for the Control API and `models.DOMAIN` for
   the Model Gateway. It reconciles one named outbound-only Tunnel with the exact selected pair and
@@ -2799,6 +2800,11 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   site and avoid relying on nested-host certificate coverage. The guided Tunnel is already a
   setup-owned foreground Compose service, so two fixed host routes complete the zero-friction setup
   without adding another supervisor, credential, or ingress abstraction.
+- **Public Job proof:** An independently enrolled workstation Client authenticated through the
+  public Control API origin and admitted a direct Job against the verified remote Incus Profile.
+  The Job completed a real `gpt-5.6-sol` Turn, returned an exact 33-byte workspace file through the
+  public API, and reached cleanup `complete`. The same Client then received `file_unavailable` for
+  that Sandbox, proving that the public cleanup fence had closed.
 - **Refines:** D036's named Tunnel, D097's Control API deployment, D100's operator-owned-ingress
   posture, and D101's Compose topology. The detailed operator flow lives only in
   [Getting started](../getting-started.md#1-install-the-application-initialize-a-deployment-host);
