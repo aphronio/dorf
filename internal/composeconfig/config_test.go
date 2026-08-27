@@ -93,6 +93,13 @@ func TestRenderSelectsStaticIncusOverlayForOneRealLocalSocket(t *testing.T) {
 	if got := dotenvValue(t, config.environment, "DORF_INCUS_SOCKET"); got != socketPath {
 		t.Fatalf("DORF_INCUS_SOCKET=%q", got)
 	}
+	wantDigest, err := spec.Deployment.Incus.AuthorityHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dotenvValue(t, config.environment, "DORF_INCUS_AUTHORITY_DIGEST"); got != wantDigest {
+		t.Fatalf("DORF_INCUS_AUTHORITY_DIGEST=%q want=%q", got, wantDigest)
+	}
 
 	missingOverlay := spec
 	missingOverlay.IncusFile = ""
@@ -116,6 +123,7 @@ func TestRenderGivesInactiveProfilesCanonicalInterpolationInputs(t *testing.T) {
 		"DORF_PROVIDER_GATEWAY_PUBLISH":         "127.0.0.1",
 		"DORF_CLOUDFLARE_HOST_STATE_PATH":       filepath.Join(spec.DataDir, "provider-gateway", "cloudflare"),
 		"DORF_CLOUDFLARE_DIGEST":                strings.Repeat("0", 64),
+		"DORF_INCUS_AUTHORITY_DIGEST":           strings.Repeat("0", 64),
 		"E2B_API_KEY":                           "",
 	}
 	for key, value := range want {
@@ -277,7 +285,7 @@ func TestStaticComposeManifestKeepsThePublicTopologyAndCapabilityBoundary(t *tes
 
 	workerEnvironment := yamlMap(t, serviceMap(t, services, "worker"), "environment")
 	apiEnvironment := yamlMap(t, serviceMap(t, services, "control-api"), "environment")
-	for _, key := range []string{"DORF_CONTROL_READER_TOKEN", "E2B_API_KEY", "DORF_PROVIDER_GATEWAY_INTERNAL_ORIGIN"} {
+	for _, key := range []string{"DORF_CONTROL_READER_TOKEN", "DORF_INCUS_AUTHORITY_DIGEST", "E2B_API_KEY", "DORF_PROVIDER_GATEWAY_INTERNAL_ORIGIN"} {
 		if _, found := workerEnvironment[key]; !found {
 			t.Errorf("worker missing %s", key)
 		}

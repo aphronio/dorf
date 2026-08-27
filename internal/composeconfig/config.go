@@ -105,14 +105,29 @@ func Render(spec Spec) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	incusDigest, err := incusAuthorityDigest(spec.Deployment.Incus)
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
 		Image:           spec.Image,
 		IncusOverlay:    socket != nil,
-		environment:     renderEnvironment(spec, databaseURL, socket),
+		environment:     renderEnvironment(spec, databaseURL, socket, incusDigest),
 		hostDirectories: [3]string{spec.ConfigDir, spec.DataDir, spec.StateDir},
 		uid:             spec.UID,
 		gid:             spec.GID,
 	}, nil
+}
+
+func incusAuthorityDigest(incus *deployment.Incus) (string, error) {
+	if incus == nil {
+		return strings.Repeat("0", 64), nil
+	}
+	digest, err := incus.AuthorityHash()
+	if err != nil {
+		return "", fmt.Errorf("derive accepted Incus authority digest: %w", err)
+	}
+	return digest, nil
 }
 
 type incusSocket struct {
@@ -139,7 +154,7 @@ func deriveIncusSocket(incus *deployment.Incus) (*incusSocket, error) {
 	return &incusSocket{path: parsed.Path, gid: int(owner.Gid)}, nil
 }
 
-func renderEnvironment(spec Spec, databaseURL string, socket *incusSocket) []byte {
+func renderEnvironment(spec Spec, databaseURL string, socket *incusSocket, incusDigest string) []byte {
 	pullPolicy := "never"
 	if spec.Image.Pull {
 		pullPolicy = "always"
@@ -162,6 +177,7 @@ func renderEnvironment(spec Spec, databaseURL string, socket *incusSocket) []byt
 		{"DORF_IMAGE_REF", spec.Image.Reference},
 		{"DORF_IMAGE_PULL_POLICY", pullPolicy},
 		{"DORF_LOCAL_INCUS", strconv.FormatBool(socket != nil)},
+		{"DORF_INCUS_AUTHORITY_DIGEST", incusDigest},
 		{"DORF_UID", strconv.Itoa(spec.UID)},
 		{"DORF_GID", strconv.Itoa(spec.GID)},
 		{"DORF_CONFIG_DIR", spec.ConfigDir},
