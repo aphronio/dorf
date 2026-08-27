@@ -16,6 +16,7 @@ type Name string
 
 const Docker Name = "docker"
 const Incus Name = "incus"
+const IncusRemote Name = "incus-remote"
 
 type Artifact struct{ Path, SHA256, Version string }
 
@@ -25,7 +26,10 @@ var dockerScript []byte
 //go:embed incus.sh
 var incusScript []byte
 
-var scripts = map[Name][]byte{Docker: dockerScript, Incus: incusScript}
+//go:embed incus-remote.sh
+var incusRemoteScript []byte
+
+var scripts = map[Name][]byte{Docker: dockerScript, Incus: incusScript, IncusRemote: incusRemoteScript}
 var releasePattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$`)
 
 func Materialize(dataRoot, version string, name Name) (Artifact, error) {

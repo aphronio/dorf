@@ -29,6 +29,7 @@ func TestMaterializePublishesExactVersionedHelpers(t *testing.T) {
 	}{
 		{Docker, dockerScript},
 		{Incus, incusScript},
+		{IncusRemote, incusRemoteScript},
 	} {
 		t.Run(string(test.name), func(t *testing.T) {
 			root := filepath.Join(protectedTempDir(t), "dorf-data")

@@ -34,6 +34,7 @@ printf 'license\n' >"$FIXTURE_ROOT/LICENSE"
 printf '@DORF_VERSION@\n' >"$FIXTURE_ROOT/scripts/install.sh"
 printf '#!/bin/sh\nprintf "docker helper\\n"\n' >"$FIXTURE_ROOT/scripts/bootstrap/docker.sh"
 printf '#!/bin/sh\nprintf "incus helper\\n"\n' >"$FIXTURE_ROOT/scripts/bootstrap/incus.sh"
+printf '#!/bin/sh\nprintf "remote incus helper\\n"\n' >"$FIXTURE_ROOT/scripts/bootstrap/incus-remote.sh"
 printf 'services:\n  api:\n    image: release-test\n' >"$FIXTURE_ROOT/deploy/compose.yaml"
 printf 'services:\n  worker:\n    environment:\n      INCUS_REMOTE: test\n' \
   >"$FIXTURE_ROOT/deploy/compose.incus.yaml"
@@ -217,6 +218,7 @@ chmod 0755 \
   "$FIXTURE_ROOT/scripts/release.sh" \
   "$FIXTURE_ROOT/scripts/bootstrap/docker.sh" \
   "$FIXTURE_ROOT/scripts/bootstrap/incus.sh" \
+  "$FIXTURE_ROOT/scripts/bootstrap/incus-remote.sh" \
   "$FIXTURE_ROOT/.dorf/bin/mise" \
   "$FIXTURE_ROOT/scripts/incus/check-image-inputs.sh" \
   "$FIXTURE_ROOT/scripts/incus/release-dorf-image.sh" \
@@ -298,12 +300,14 @@ assert_application_artifacts() {
   local archive="$FIXTURE_ROOT/dist/release/dorf_${VERSION}_linux_x86_64.tar.gz"
   local checksums="$FIXTURE_ROOT/dist/release/dorf_${VERSION}_checksums.txt"
 
-  [[ "$(tar -tzf "$archive" | LC_ALL=C sort)" == $'LICENSE\nbootstrap/docker.sh\nbootstrap/incus.sh\ndorf\ndorf-compose-incus.yaml\ndorf-compose.yaml' ]] ||
+  [[ "$(tar -tzf "$archive" | LC_ALL=C sort)" == $'LICENSE\nbootstrap/docker.sh\nbootstrap/incus-remote.sh\nbootstrap/incus.sh\ndorf\ndorf-compose-incus.yaml\ndorf-compose.yaml' ]] ||
     fail "application archive does not contain the exact installable files and administrator helpers"
   [[ "$(tar -xOf "$archive" bootstrap/docker.sh)" == $'#!/bin/sh\nprintf "docker helper\\n"' ]] ||
     fail "application archive changed the canonical Docker helper"
   [[ "$(tar -xOf "$archive" bootstrap/incus.sh)" == $'#!/bin/sh\nprintf "incus helper\\n"' ]] ||
     fail "application archive changed the canonical Incus helper"
+  [[ "$(tar -xOf "$archive" bootstrap/incus-remote.sh)" == $'#!/bin/sh\nprintf "remote incus helper\\n"' ]] ||
+    fail "application archive changed the canonical remote Incus helper"
   cmp <(tar -xOf "$archive" dorf-compose.yaml) "$FIXTURE_ROOT/deploy/compose.yaml" ||
     fail "application archive changed the canonical Compose manifest"
   cmp <(tar -xOf "$archive" dorf-compose-incus.yaml) "$FIXTURE_ROOT/deploy/compose.incus.yaml" ||

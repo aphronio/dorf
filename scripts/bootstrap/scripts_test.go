@@ -9,8 +9,9 @@ import (
 
 func TestBootstrapHelpersAreValidPOSIXShell(t *testing.T) {
 	for name, script := range map[string][]byte{
-		"docker.sh": dockerScript,
-		"incus.sh":  incusScript,
+		"docker.sh":       dockerScript,
+		"incus.sh":        incusScript,
+		"incus-remote.sh": incusRemoteScript,
 	} {
 		t.Run(name, func(t *testing.T) {
 			cmd := exec.Command("sh", "-n")
@@ -19,6 +20,36 @@ func TestBootstrapHelpersAreValidPOSIXShell(t *testing.T) {
 				t.Fatalf("sh -n: %v\n%s", err, output)
 			}
 		})
+	}
+}
+
+func TestRemoteIncusHelperKeepsExposureAndTrustNarrow(t *testing.T) {
+	script := string(incusRemoteScript)
+	for _, required := range []string{
+		"--acknowledge-remote-incus-exposure is required",
+		"--acknowledge-client-revocation is required",
+		"Incus 7.3 or newer is required",
+		`"instance_port_forward"`,
+		"core.https_address conflicts with the exact Tailscale listener",
+		"core.remote_token_expiry 15m",
+		`config trust add "$CLIENT_NAME" --restricted --projects dorf`,
+		`config trust show "$FINGERPRINT"`,
+		`config trust remove "$FINGERPRINT"`,
+		"restricted only to project dorf",
+		"not an Incus client certificate",
+		"--connect-timeout 3 --max-time 5 --insecure",
+		"is already absent",
+		"CLIENT_NAME=dorf-controller",
+		"must have exactly one Tailscale IPv4 address",
+	} {
+		if !strings.Contains(script, required) {
+			t.Errorf("remote Incus helper is missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"tailscale up", "tailscale serve", "tailscale funnel", "ssh ", "sudo ", "0.0.0.0:8443", "config trust add-certificate"} {
+		if strings.Contains(script, forbidden) {
+			t.Errorf("remote Incus helper contains out-of-scope operation %q", forbidden)
+		}
 	}
 }
 
@@ -93,14 +124,18 @@ func TestIncusHelperDoesNotClaimForbiddenAuthority(t *testing.T) {
 }
 
 func TestBootstrapHelpersExcludeUnsafeAndOutOfScopeOperations(t *testing.T) {
-	for name, script := range map[string]string{"docker.sh": string(dockerScript), "incus.sh": string(incusScript)} {
+	for name, script := range map[string]string{
+		"docker.sh":       string(dockerScript),
+		"incus.sh":        string(incusScript),
+		"incus-remote.sh": string(incusRemoteScript),
+	} {
 		t.Run(name, func(t *testing.T) {
 			for _, forbidden := range []string{"sudo ", "apt-get remove", "apt remove", "docker pull", "docker load", "dorf setup", "dorf service", "provider-gateway"} {
 				if strings.Contains(script, forbidden) {
 					t.Errorf("helper contains forbidden operation %q", forbidden)
 				}
 			}
-			for _, pattern := range []*regexp.Regexp{regexp.MustCompile(`curl[^\n]*\|`), regexp.MustCompile(`rm\s+-[^\n]*r`)} {
+			for _, pattern := range []*regexp.Regexp{regexp.MustCompile(`curl[^\n]*[^|]\|[^|]`), regexp.MustCompile(`rm\s+-[^\n]*r`)} {
 				if pattern.MatchString(script) {
 					t.Errorf("helper contains forbidden shell pattern %q", pattern)
 				}

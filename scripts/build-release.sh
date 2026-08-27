@@ -18,6 +18,7 @@ readonly DOCKERFILE="$PROJECT_ROOT/internal/release/container/Dockerfile"
 readonly DOCKERIGNORE="$PROJECT_ROOT/internal/release/container/.dockerignore"
 readonly DOCKER_HELPER="$PROJECT_ROOT/scripts/bootstrap/docker.sh"
 readonly INCUS_HELPER="$PROJECT_ROOT/scripts/bootstrap/incus.sh"
+readonly INCUS_REMOTE_HELPER="$PROJECT_ROOT/scripts/bootstrap/incus-remote.sh"
 readonly COMPOSE_MANIFEST="$PROJECT_ROOT/deploy/compose.yaml"
 readonly INCUS_COMPOSE_MANIFEST="$PROJECT_ROOT/deploy/compose.incus.yaml"
 readonly CONTAINER_REPOSITORY="ghcr.io/aphronio/dorf"
@@ -54,6 +55,7 @@ for required in \
   "$DOCKERIGNORE" \
   "$DOCKER_HELPER" \
   "$INCUS_HELPER" \
+  "$INCUS_REMOTE_HELPER" \
   "$COMPOSE_MANIFEST" \
   "$INCUS_COMPOSE_MANIFEST"; do
   if [[ ! -f "$required" ]]; then
@@ -113,13 +115,14 @@ install -m 0644 "$PROJECT_ROOT/LICENSE" "$STAGE/context/LICENSE"
 install -m 0644 "$DOCKERIGNORE" "$STAGE/context/.dockerignore"
 install -m 0755 "$DOCKER_HELPER" "$STAGE/context/bootstrap/docker.sh"
 install -m 0755 "$INCUS_HELPER" "$STAGE/context/bootstrap/incus.sh"
+install -m 0755 "$INCUS_REMOTE_HELPER" "$STAGE/context/bootstrap/incus-remote.sh"
 install -m 0644 "$COMPOSE_MANIFEST" "$STAGE/context/dorf-compose.yaml"
 install -m 0644 "$INCUS_COMPOSE_MANIFEST" "$STAGE/context/dorf-compose-incus.yaml"
 readonly binary_sha256="$(sha256sum "$STAGE/context/dorf" | awk '{print $1}')"
 
 tar -C "$STAGE/context" -czf "$STAGE/artifacts/$ARCHIVE" \
   dorf dorf-compose.yaml dorf-compose-incus.yaml \
-  LICENSE bootstrap/docker.sh bootstrap/incus.sh
+  LICENSE bootstrap/docker.sh bootstrap/incus.sh bootstrap/incus-remote.sh
 install -m 0644 "$STAGE/artifacts/$ARCHIVE" "$OUTPUT_DIR/$ARCHIVE"
 (
   cd "$OUTPUT_DIR"
