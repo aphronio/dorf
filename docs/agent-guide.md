@@ -48,20 +48,20 @@ Do not invent another Dorf lifecycle wrapper, edit the protected generated `.env
 foreground Dorf processes. Use Compose directly only for the advanced observation and process
 operations documented in Getting started.
 
-Cloudflare has no shell helper. Keep its existing guided browser, DNS, and named-Tunnel flow, pausing
-for the human authorization it requests. If setup finds a resolving hostname, let the human choose
-between their existing ingress and the repair path described by the [Provider Gateway
-authority](project/provider-gateway.md); never infer DNS-replacement authority. Prove the project
-through the deployment-host procedure and [Support](support.md), then run the documented Profile,
-Provider Gateway, and `dorf doctor` checks with the exact selected names.
+Cloudflare has no shell helper. Follow the domain and editable public-hostname flow in
+[Getting started](getting-started.md#1-install-the-application-initialize-a-deployment-host), pausing
+for the human browser authorization or DNS-replacement choice it requests. Never infer replacement
+authority. Setup reuses its persisted exact pair on rerun. Prove the project through that procedure
+and [Support](support.md), then run the documented Profile, Provider Gateway, and `dorf doctor`
+checks with the exact selected names.
 
 Optional integrations remain host concerns. Pause while the human completes browser authorization,
 and return a short-lived code only to its waiting command. Let runtime composition supply integration
 authority instead of putting credentials or integration settings in a Job request.
 
-Keep the operator-owned HTTPS ingress distinct from both the Compose-managed control API and
-the Provider Gateway origin. Do not infer service readiness from a process or terminal merely
-remaining open; use Compose state and setup's factual readiness result.
+Keep the Control API and Provider Gateway origins distinct even when guided setup routes both through
+one Tunnel. Custom ingress remains operator-owned. Do not infer service readiness from a process or
+terminal merely remaining open; use Compose state and setup's factual readiness result.
 
 ## Remote-client protocol
 

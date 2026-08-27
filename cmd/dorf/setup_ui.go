@@ -188,20 +188,26 @@ func (p setupPresenter) ConnectionGroup(selected *setupConnectionMode) *huh.Grou
 		Description("The upstream credential stays on this host and never enters a Sandbox.")
 }
 
-func (p setupPresenter) CloudflareGatewayGroup(selected *setupGatewayMode, zone string, occupied bool) *huh.Group {
-	cloudflareTitle := "Guided Cloudflare Tunnel"
-	cloudflareDescription := "Create and run a stable outbound-only route"
-	if occupied {
-		cloudflareTitle = "Repair with a guided Cloudflare Tunnel"
-		cloudflareDescription = "Replace this hostname's existing DNS route"
+func (p setupPresenter) PublicEndpointsGroup(domain string, controlHostname, modelHostname *string) *huh.Group {
+	validate := func(value string, other *string) error {
+		hostname, err := normalizeCloudflareHostname(value)
+		if err != nil {
+			return err
+		}
+		if !directChildHostname(hostname, domain) {
+			return fmt.Errorf("enter one direct subdomain of %s", domain)
+		}
+		otherHostname, err := normalizeCloudflareHostname(*other)
+		if err == nil && hostname == otherHostname {
+			return fmt.Errorf("Control API and Model Gateway hostnames must differ")
+		}
+		return nil
 	}
 	return huh.NewGroup(
-		setupSelect(p, selected,
-			setupChoice[setupGatewayMode]{Title: cloudflareTitle, Description: cloudflareDescription, Value: setupGatewayCloudflare},
-			setupChoice[setupGatewayMode]{Title: "Existing HTTPS ingress", Description: "Use routing infrastructure you already operate", Value: setupGatewayExisting},
-		),
-	).Title("Cloudflare DNS detected for " + zone).
-		Description("Choose how cloud Sandboxes should reach Dorf at this hostname.")
+		huh.NewInput().Title("Control API").Value(controlHostname).Validate(func(value string) error { return validate(value, modelHostname) }),
+		huh.NewInput().Title("Model Gateway").Value(modelHostname).Validate(func(value string) error { return validate(value, controlHostname) }),
+	).Title("Public endpoints").
+		Description("Editable HTTPS hostnames under " + domain + "; Dorf leaves the apex untouched.")
 }
 
 func setupSelect[T comparable](p setupPresenter, selected *T, choices ...setupChoice[T]) *huh.Select[T] {

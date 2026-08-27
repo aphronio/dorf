@@ -52,7 +52,7 @@ func containerForegroundCommand(ctx context.Context, args []string, stdout, stde
 	defer stop()
 	switch args[0] {
 	case "_container-control-api-health":
-		ready, detail := controlAPIReady(ctx, version.Version, localControlHTTPClient())
+		ready, detail := controlAPIReady(ctx, version.Version, controlDiscoveryURL, localControlHTTPClient())
 		if !ready {
 			return true, fmt.Errorf("control API discovery is not ready: %s", detail)
 		}
@@ -202,6 +202,9 @@ func currentDeploymentConfigurationSource(ctx context.Context, prepareOptional b
 	if !found {
 		return deploymentConfigurationSource{}, fmt.Errorf("Dorf deployment is not configured; run dorf setup")
 	}
+	if err := requireSupportedCloudflareState(filepath.Join(paths.DataDir, "provider-gateway")); err != nil {
+		return deploymentConfigurationSource{}, err
+	}
 	binary, err := currentDorfBinary()
 	if err != nil {
 		return deploymentConfigurationSource{}, err
@@ -288,7 +291,7 @@ func materializeDeploymentConfiguration(
 	if err := apply(ctx, source.Paths.ComposeDir); err != nil {
 		return image, fmt.Errorf("apply Dorf Compose project: %w", err)
 	}
-	ready, detail := controlAPIReady(ctx, image.Version, client)
+	ready, detail := controlAPIReady(ctx, image.Version, controlDiscoveryURL, client)
 	if !ready {
 		return image, fmt.Errorf("Dorf deployment did not become ready after Compose apply: %s", detail)
 	}
@@ -426,13 +429,16 @@ func localControlHTTPClient() *http.Client {
 	}
 }
 
-func controlAPIReady(ctx context.Context, releaseVersion string, client *http.Client) (bool, string) {
+func controlAPIReady(ctx context.Context, releaseVersion, discoveryURL string, client *http.Client) (bool, string) {
 	if client == nil {
 		return false, "control API discovery is unavailable"
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, deploymentProbeTimeout)
 	defer cancel()
-	request, _ := http.NewRequestWithContext(probeCtx, http.MethodGet, controlDiscoveryURL, nil)
+	request, err := http.NewRequestWithContext(probeCtx, http.MethodGet, discoveryURL, nil)
+	if err != nil {
+		return false, "control API discovery is unavailable"
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return false, "control API discovery is unavailable"

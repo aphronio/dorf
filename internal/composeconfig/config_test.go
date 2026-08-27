@@ -254,8 +254,14 @@ func TestStaticComposeManifestKeepsThePublicTopologyAndCapabilityBoundary(t *tes
 		t.Fatalf("PostgreSQL networks=%v, want database plus runtime egress", got)
 	}
 	controlAPI := serviceMap(t, services, "control-api")
-	if got := controlAPI["networks"]; !jsonEqual(got, []any{"database", "reader", "worker-egress"}) {
-		t.Fatalf("control API networks=%v, want database, reader, and runtime egress", got)
+	if got := controlAPI["networks"]; !jsonEqual(got, []any{"database", "reader", "worker-egress", "ingress"}) {
+		t.Fatalf("control API networks=%v, want database, reader, runtime egress, and public ingress", got)
+	}
+	if got := serviceMap(t, services, "provider-gateway")["networks"]; !jsonEqual(got, []any{"application", "ingress"}) {
+		t.Fatalf("provider Gateway networks=%v, want application and public ingress only", got)
+	}
+	if got := serviceMap(t, services, "cloudflared")["networks"]; !jsonEqual(got, []any{"ingress"}) {
+		t.Fatalf("cloudflared networks=%v, want public ingress only", got)
 	}
 	if got := controlAPI["ports"]; !jsonEqual(got, []any{"8745:8745"}) {
 		t.Fatalf("control API ports=%v, want direct host mapping", got)

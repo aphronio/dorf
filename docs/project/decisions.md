@@ -668,7 +668,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Status:** Accepted direction — 2026-07-29; Go control plane at D047 cutover — 2026-08-08;
   remote E2B route wire proved — 2026-08-14; named Cloudflare route implemented, live hostname proof
   pending — 2026-08-21; deployment supervision and Incus route custody refined by D101 — 2026-08-26;
-  broker-state ownership and explicit stale-DNS repair refined — 2026-08-27
+  broker-state ownership and explicit stale-DNS repair refined — 2026-08-27; guided public origins
+  refined by D102 — 2026-08-27
 - **Decision:** Keep the Provider Gateway as a sibling application subsystem outside the durable
   Job core. Its programmatic boundary manages durable upstream Provider
   AI connections and revocable consumer-specific Inference Routes over a supervised broker backend.
@@ -690,18 +691,13 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   convenience. A remote Sandbox's scoped route key authenticates Gateway requests, and exact-host
   default-deny egress remains adapter-owned.
   Any exact stable HTTPS `/v1` ingress remains valid deployment input. Guided setup owns one narrower
-  convenience: a named outbound-only Cloudflare Tunnel for an operator-authorized hostname and exact
-  retained Tunnel credential. A resolving Cloudflare hostname defaults to operator-owned ingress;
-  setup may replace its DNS route only after an explicit interactive repair choice or the exact
-  automation flag paired with that hostname. The Gateway and `cloudflared` run as foreground
-  services under the one Compose supervisor defined by D101; there is no host Cloudflare service.
-  Only `/v1` reaches the private broker. One random nonsecret probe path terminates inside the exact
-  Tunnel configuration;
-  readiness requires its HTTP 204 plus the private Gateway's anonymous HTTP 401. Operator-owned HTTPS
-  ingress retains only the latter universal contract because Dorf cannot attest routing it does not
-  own. The broad Cloudflare account certificate used to create the Tunnel and DNS route is removed
-  after readiness. Disposable Quick Tunnels remain proof-only. Workload identity beyond the scoped
-  route and multi-user authority remain unimplemented until a concrete deployment requires them.
+  convenience: D102's named outbound-only Cloudflare Tunnel publishes the separate Provider Gateway
+  and Control API origins defined by the [Provider Gateway authority](provider-gateway.md). Only the
+  model origin reaches the private broker. The broad Cloudflare account certificate used to create
+  the Tunnel and its two DNS routes is removed after readiness. Operator-owned Gateway ingress
+  retains the universal protected-API check because Dorf cannot attest routing it does not own.
+  Disposable Quick Tunnels remain proof-only. Workload identity beyond the scoped route and
+  multi-user authority remain unimplemented until a concrete deployment requires them.
 - **Broker-state ownership:** Dorf attests the pinned broker executable and its own launch inputs.
   The running broker owns and may normalize its protected active configuration; Dorf does not hash
   those mutable bytes as a second launch authority or prevent setup from resuming after a valid
@@ -2560,7 +2556,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 ## D097 — One authenticated HTTPS Deployment projects direct Job control
 
 - **Status:** Accepted and dogfooded — 2026-08-26; projection expanded by D098 and D099; automation
-  contract refined by D100 and deployment lifecycle refined by D101
+  contract refined by D100, deployment lifecycle refined by D101, and guided ingress refined by
+  D102
 - **Decision:** Expose one deliberately narrow external client boundary for a configured Dorf
   Deployment over HTTPS. The initial surface admits direct Jobs, returns their situation-first
   projection, and accepts an explicit cleanup request; D098 and D099 expand that same boundary. It
@@ -2571,11 +2568,12 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   opaque credential. Dorf retains only credential digests, and each Client identity can be revoked
   independently. This is a single-operator trust boundary, not multi-user identity, roles, or
   organization membership.
-- **Deployment:** Compose maps the API service's HTTP listener directly to host port `8745` behind
-  operator-owned HTTPS ingress. It authenticates clients, admits and projects Jobs, and requests
-  cleanup, but it registers no execution handlers. A separate durable worker owns task execution and
-  recovery. D100 later proved their independent process-loss boundary; D101 now supervises both in
-  one static Compose project applied by the continuous setup flow while keeping ingress operator-owned.
+- **Deployment:** Compose maps the API service's HTTP listener directly to host port `8745` for
+  custom operator-owned HTTPS ingress and joins it to D102's optional guided Cloudflare ingress. It
+  authenticates clients, admits and projects Jobs, and requests cleanup, but it registers no
+  execution handlers. A separate durable worker owns task execution and recovery. D100 later proved
+  their independent process-loss boundary; D101 now supervises both in one static Compose project
+  applied by the continuous setup flow.
 - **Why:** SSH grants host authority that ordinary Job control neither needs nor should imply, while
   exposing every Core mechanism would be premature. The smaller authenticated projection makes a
   self-hosted deployment useful off-host without granting database, executor, provider, or host
@@ -2584,8 +2582,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   local direct CLI. The current transport contract is the
   [Remote Control API](../control-api.md); its staged design and proof record is
   [archived](../history/control-api-slices.md).
-- **Reconsider when:** A second real client earns a language SDK, the single-operator Principal
-  cannot represent actual users, or deployment evidence justifies Dorf-owned ingress.
+- **Reconsider when:** A second real client earns a language SDK or the single-operator Principal
+  cannot represent actual users.
 
 ## D098 — Remote direct Job control exposes the existing interaction loop
 
@@ -2651,9 +2649,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   host-only Client list, show, and idempotent revoke commands. Do not add a generator dependency,
   SDK family, remote Client administration, or another status or event model.
 - **Service lifecycle:** Superseded by D101's static setup-applied Compose lifecycle. D100's
-  operator-owned HTTPS ingress remains accepted; its Dorf-specific status, restart, logs,
-  reconciliation, update handoff, systemd units, notification, fragment custody, and journal facts
-  are historical rather than current interfaces.
+  operator-owned custom HTTPS ingress remains accepted; D102 adds one guided Cloudflare exception.
+  Dorf-specific status, restart, logs, reconciliation, update handoff, systemd units, notification,
+  fragment custody, and journal facts are historical rather than current interfaces.
 - **Historical proof:** The full live PostgreSQL suite passed. A non-TTY direct HTTPS client derived
   the Job-list operation from the published OpenAPI document, traversed a page, and received the
   catalogued `invalid_cursor` response for an altered cursor. A temporary Client appeared in host
@@ -2663,20 +2661,21 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   restart, remained available across an API restart, and cleaned up successfully. Both units then
   remained enabled, current, and ready.
 - **Why:** Automation needs one discoverable schema, bounded enumeration, stable machine failures,
-  and a supported process-loss boundary. Keeping Client administration host-local and ingress
-  operator-owned completes those needs without inventing OAuth, roles, deployment contexts, an SDK
-  ecosystem, or an ingress product.
+  and a supported process-loss boundary. Keeping Client administration host-local and custom
+  ingress operator-owned completes those needs without inventing OAuth, roles, deployment contexts,
+  an SDK ecosystem, or a general ingress product.
 - **Refines:** D097's authentication and deployment split, D098's common remote interaction, and
   D099's closed Job union. The shipped boundary is documented in the
   [Remote Control API](../control-api.md).
-- **Reconsider when:** A second concrete client earns generated distribution artifacts, a real
-  organization needs identity federation or roles, or repeated ingress deployment evidence
-  justifies Dorf owning that separate product. Deployment-lifecycle reconsideration belongs to D101.
+- **Reconsider when:** A second concrete client earns generated distribution artifacts or a real
+  organization needs identity federation or roles. Deployment-lifecycle reconsideration belongs to
+  D101; guided ingress belongs to D102.
 
 ## D101 — Compose owns deployment lifecycle; bootstrap privilege stays explicit
 
 - **Status:** Accepted implementation direction — 2026-08-26; setup application refined by live
-  `v0.5.4` dogfood — 2026-08-26; complete live terminal proof pending
+  `v0.5.4` dogfood — 2026-08-26; guided ingress topology refined by D102 — 2026-08-27; complete live
+  terminal proof pending
 - **Decision:** Replace D071's standalone PostgreSQL container and D100's systemd units with one
   versioned static Dorf Docker Compose project. The
   [Remote Control API](../control-api.md#deployment-services) owns its exact service and network
@@ -2705,8 +2704,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   The Provider Gateway and guided Cloudflare Tunnel are optional profiled foreground services. The
   default project uses bridge networking, publishes PostgreSQL only on host loopback and the control
   API on host port `8745`, and never uses host networking or mounts the host Docker socket into a
-  Dorf workload or Sandbox. The fresh one-shot migration reaches its checksum-pinned Absurd schema
-  through the existing runtime-egress bridge before it exits.
+  Dorf workload or Sandbox. When selected, the Tunnel reaches only the control API and Provider
+  Gateway over their shared ingress bridge. The fresh one-shot migration reaches its
+  checksum-pinned Absurd schema through the existing runtime-egress bridge before it exits.
 - **Database boundary:** The Compose-managed deployment defined here always uses the PostgreSQL
   service and named volume in the project. Its fixed PostgreSQL image belongs in the static manifest,
   not mutable deployment state. `DORF_DATABASE_URL` remains a development, test, and explicitly
@@ -2770,9 +2770,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   virtualization policy, general container lifecycle, or ingress product.
 - **Supersedes:** D041's automatic host mutation, D071's deliberate Compose omission and standalone
   database reconciler, and D100's entire Dorf-owned service-lifecycle interface. D100's OpenAPI,
-  authentication, Job-list, Problem, API/worker separation, and operator-owned public control
-  ingress decisions remain accepted. Unreleased systemd, standalone-database, image-archive,
-  Compose-manager, and legacy-Profile compatibility shapes are deleted rather than migrated.
+  authentication, Job-list, Problem, API/worker separation, and operator-owned custom control
+  ingress decisions remain accepted; D102 owns the guided Cloudflare exception. Unreleased systemd,
+  standalone-database, image-archive, Compose-manager, and legacy-Profile compatibility shapes are
+  deleted rather than migrated.
 - **Refines:** D012's local-Incus assumption, D036's Gateway and Cloudflare supervision, D067's
   provider-route wording, D070's Incus profile custody, and D097's API/worker deployment shape. It
   does not change their Job, Sandbox, Gateway, or authenticated-client authorities.
@@ -2789,3 +2790,32 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   process loss, a supported non-Docker deployment earns equal proof, rootless container operation
   materially changes the Docker authority boundary, or repeated routed-Incus deployments justify
   an adapter-owned data-plane proxy.
+
+## D102 — One guided Dorf domain publishes two distinct public origins
+
+- **Status:** Accepted from remote-client dogfood — 2026-08-27; live public Job proof pending
+- **Decision:** Guided Cloudflare setup asks for one Dorf domain, leaves its apex untouched, and
+  suggests editable direct-child hostnames `api.DOMAIN` for the Control API and `models.DOMAIN` for
+  the Model Gateway. It reconciles one named outbound-only Tunnel with the exact selected pair and
+  persists that pair for unchanged replay. The CLI prints and connects to the Control API origin;
+  Sandbox Profiles retain the separate model URL. The origins share Tunnel custody, not protocol or
+  application authority.
+- **Boundary:** This is one setup-owned Cloudflare convenience, not an ingress registry or general
+  proxy. Fresh unused hostnames require no additional confirmation; replacing unrelated resolving
+  DNS requires explicit operator consent. Any custom Control API origin remains operator-owned and
+  reaches host port `8745`. Any custom Provider Gateway route remains explicit deployment input;
+  advanced `--gateway-url` changes only that route, never infers Control API ingress, and is not
+  mixed with retained guided Tunnel state. The retired single-host Tunnel state is rejected before
+  host mutation rather than carried as a migration path.
+- **Why:** Remote dogfood proved that preparing only the Sandbox model route left the intended Dorf
+  deployment unusable by a remote Client. Separate direct children preserve the apex for a future
+  site and avoid relying on nested-host certificate coverage. The guided Tunnel is already a
+  setup-owned foreground Compose service, so two fixed host routes complete the zero-friction setup
+  without adding another supervisor, credential, or ingress abstraction.
+- **Refines:** D036's named Tunnel, D097's Control API deployment, D100's operator-owned-ingress
+  posture, and D101's Compose topology. The detailed operator flow lives only in
+  [Getting started](../getting-started.md#1-install-the-application-initialize-a-deployment-host);
+  runtime contracts live in the [Provider Gateway](provider-gateway.md) and
+  [Remote Control API](../control-api.md#deployment-services).
+- **Reconsider when:** Another guided ingress provider earns equal end-to-end proof, one hostname
+  must serve several Deployments, or a hosted topology needs independent lifecycle and identity.

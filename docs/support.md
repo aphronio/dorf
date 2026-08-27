@@ -9,23 +9,27 @@ cloud-only E2B deployments do not. Setup does not prepare missing host prerequis
 for the exact administrator-helper or manual handoff.
 
 E2B requires an exact qualified template and a stable deployment-owned HTTPS Provider Gateway route.
-Guided setup supports a named Cloudflare Tunnel; any operator-owned route satisfying the same exact
-HTTPS `/v1` contract is valid. Disposable Quick Tunnels are proof-only. macOS, Windows, ARM, and
-remote Incus daemons are not supported. Remote Incus remains behind the same endpoint adapter until
-its HTTPS client identity, port forwarding, and guest-to-Gateway path pass one live terminal. Docker
-authority follows the deployment-host setup procedure, and the socket is never mounted into a Dorf
-workload or Sandbox. Custom Sandbox artifacts may be admitted through an explicitly created
-and functionally verified profile, but carry no Dorf release provenance. An E2B profile that blocks
-general internet access can consume a retained local Git source, but cannot run coding or
-investigation work that must clone a remote Git source; Dorf rejects that combination before
-admitting a Job.
+Guided setup routes the model hostname through the same named Cloudflare Tunnel as the separate
+Control API hostname; any operator-owned route satisfying the exact HTTPS `/v1` Gateway contract is
+also valid. The [deployment-host procedure](getting-started.md#1-install-the-application-initialize-a-deployment-host)
+owns the domain, exact hostname pair, replay, and replacement flow. Disposable Quick Tunnels are
+proof-only. macOS, Windows, ARM, and remote Incus daemons are not supported. Guided setup rejects
+remote Incus, including an existing remote Profile, until its HTTPS client identity, port
+forwarding, and guest-to-Gateway path pass one live terminal. Docker authority
+follows the deployment-host setup procedure, and the socket is never mounted into a Dorf workload
+or Sandbox. Custom Sandbox artifacts may be admitted through an explicitly created and functionally
+verified profile, but carry no Dorf release provenance. An E2B profile that blocks general internet
+access can consume a retained local Git source, but cannot run coding or investigation work that
+must clone a remote Git source; Dorf rejects that combination before admitting a Job.
 
 The remote control API is a separate authority on a separate hostname from the Provider Gateway.
-Its public boundary is one exact HTTPS Deployment origin backed by Compose host port `8745`; the
-Compose-managed worker separately owns durable task execution and recovery. After
-Enrollment, a remote CLI Client needs network and TLS access to that origin and only its own Dorf
-Client credential; it never needs PostgreSQL, provider, Harness, Gateway, or Sandbox credentials.
-Fixed remote coding and investigation admission reuse the same boundary. The
+Its public boundary is one exact HTTPS Deployment origin. Guided Cloudflare reaches container port
+`8745` over the Compose ingress network and publishes the exact pair selected during setup; custom
+operator-owned ingress reaches the API's published host port. The Compose-managed worker separately
+owns durable task execution and recovery. After Enrollment, a remote CLI Client needs network and
+TLS access to the Control API origin and only its own Dorf Client credential; it never needs
+PostgreSQL, provider, Harness, Gateway, or Sandbox credentials. Fixed remote coding and investigation
+admission reuse the same boundary. The
 [remote-client setup procedure](getting-started.md#3-connect-one-remote-cli-client) owns the current
 workflow inputs; the [Remote Control API](control-api.md) owns the service and transport contract.
 
@@ -60,7 +64,8 @@ the [deployment-host procedure](getting-started.md#1-install-the-application-ini
 The Compose-owned PostgreSQL service must be healthy, the one-shot migration must have succeeded,
 and the worker and control API must be healthy. Worker readiness includes its narrow authenticated
 reader. A configured Gateway or Cloudflare Tunnel must also be running under its selected Compose
-profile. Rerun `dorf setup` to apply the exact installed project as needed and probe the control API
+profile. For guided Cloudflare, setup separately proves the public Control API origin and model
+origin. Rerun `dorf setup` to apply the exact installed project as needed and probe the control API
 and other prepared authorities. Setup does not install host prerequisites, repair arbitrary Docker
 resources, or replace the direct advanced Compose operations in the deployment-host procedure.
 

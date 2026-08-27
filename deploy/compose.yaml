@@ -145,6 +145,7 @@ services:
       - database
       - reader
       - worker-egress
+      - ingress
 
   provider-gateway:
     profiles: ["gateway", "cloudflare"]

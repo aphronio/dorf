@@ -119,6 +119,26 @@ func TestMaterializeDeploymentConfigurationFailsWhenAppliedProjectIsNotReady(t *
 	}
 }
 
+func TestControlAPIReadyChecksTheExactPublicDiscoveryURLWithoutAuthentication(t *testing.T) {
+	client := &http.Client{Transport: deploymentRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodGet || request.URL.String() != "https://dorf.example.test/v1" {
+			t.Fatalf("discovery request = %s %s", request.Method, request.URL)
+		}
+		if authorization := request.Header.Get("Authorization"); authorization != "" {
+			t.Fatalf("public discovery sent Authorization %q", authorization)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"product":"dorf","version":"1.2.3"}`)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	ready, detail := controlAPIReady(context.Background(), "1.2.3", "https://dorf.example.test/v1", client)
+	if !ready || detail != "ready" {
+		t.Fatalf("ready=%v detail=%q", ready, detail)
+	}
+}
+
 func TestDockerComposeUpUsesGeneratedProjectAndWaitsForHealth(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "project")

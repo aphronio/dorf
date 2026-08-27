@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -24,6 +25,7 @@ import (
 	profileapp "github.com/aphronio/dorf/internal/profile"
 	releaseapp "github.com/aphronio/dorf/internal/release"
 	providerapi "github.com/aphronio/dorf/internal/sandbox"
+	"github.com/aphronio/dorf/internal/version"
 )
 
 const (
@@ -42,8 +44,16 @@ type guidedProfilePlan struct {
 type guidedGatewayPlan struct {
 	Mode               setupGatewayMode
 	URL                string
-	Hostname           string
+	Domain             string
+	ControlURL         string
+	ControlHostname    string
+	ModelHostname      string
 	ReplaceExistingDNS bool
+}
+
+type ownedCloudflareEndpoints struct {
+	ControlHostname string
+	ModelHostname   string
 }
 
 type guidedSetupPrepared struct {
@@ -52,6 +62,7 @@ type guidedSetupPrepared struct {
 	ProfilePlans []guidedProfilePlan
 	GatewayPlan  guidedGatewayPlan
 	GatewayURL   string
+	ControlURL   string
 	PrivateIPv4  string
 }
 
@@ -105,20 +116,26 @@ func prepareGuidedSetup(ctx context.Context, store postgres.Store, cfg *config.C
 			return guidedSetupPrepared{}, err
 		}
 		presenter.Ready("E2B access", "Project credential verified on this host")
-		ownedHostname, ownedErr := currentOwnedCloudflareHostname(cfg.GatewayStatePath)
+		ownedEndpoints, ownedErr := currentOwnedCloudflareEndpoints(cfg.GatewayStatePath)
 		if ownedErr != nil {
 			return guidedSetupPrepared{}, ownedErr
 		}
-		gatewayPlan, planErr := planRemoteGateway(ctx, options, profilePlans, presenter, net.DefaultResolver, ownedHostname)
+		gatewayPlan, planErr := planRemoteGateway(ctx, options, profilePlans, presenter, net.DefaultResolver, ownedEndpoints)
 		if planErr != nil {
 			return guidedSetupPrepared{}, planErr
 		}
-		gatewayURL, err = prepareRemoteGateway(ctx, cfg.GatewayStatePath, gatewayPlan, options.Yes, presenter, stdout, stderr)
+		profilePlans, err = retargetGuidedE2BProfiles(ctx, store, profilePlans, gatewayPlan.URL)
+		if err != nil {
+			return guidedSetupPrepared{}, err
+		}
+		prepared.ProfilePlans = profilePlans
+		gatewayURL, err = prepareRemoteGateway(ctx, cfg.GatewayStatePath, gatewayPlan, presenter, stdout, stderr)
 		if err != nil {
 			return guidedSetupPrepared{}, err
 		}
 		prepared.GatewayPlan = gatewayPlan
 		prepared.GatewayURL = gatewayURL
+		prepared.ControlURL = gatewayPlan.ControlURL
 	}
 	return prepared, nil
 }
@@ -206,7 +223,10 @@ func completeGuidedSetup(ctx context.Context, store postgres.Store, cfg config.C
 		if err := finalizeRemoteGateway(ctx, prepared.Gateway, prepared.GatewayPlan, cfg.GatewayStatePath, presenter); err != nil {
 			return err
 		}
-		presenter.Ready("Cloud Gateway", prepared.GatewayURL)
+		if prepared.ControlURL != "" {
+			presenter.Ready("Dorf API", prepared.ControlURL)
+		}
+		presenter.Ready("Model Gateway", prepared.GatewayURL)
 	}
 	presenter.Section("Sandbox profiles")
 	profiles, err := setupProfiles(ctx, store, cfg, options, prepared.ProfilePlans, prepared.GatewayURL, prepared.PrivateIPv4, presenter)
@@ -700,185 +720,248 @@ func retainSetupE2BCredential(cfg *config.Config, key string, suppliedDuringSetu
 	return nil
 }
 
-func planRemoteGateway(ctx context.Context, options setupOptions, profiles []guidedProfilePlan, presenter setupPresenter, resolver dnsResolver, ownedCloudflareHostname string) (guidedGatewayPlan, error) {
+func planRemoteGateway(ctx context.Context, options setupOptions, profiles []guidedProfilePlan, presenter setupPresenter, resolver dnsResolver, owned ownedCloudflareEndpoints) (guidedGatewayPlan, error) {
+	cloudflareRequested := options.CloudflareDomain != ""
+	if !cloudflareRequested && options.GatewayURL == "" && owned.ControlHostname != "" && owned.ModelHostname != "" {
+		return retainedCloudflareGatewayPlan(owned)
+	}
+
+	existingURL := ""
 	for _, profile := range profiles {
-		if profile.Provider != core.SandboxProviderE2B || profile.Existing == nil {
-			continue
+		if profile.Provider == core.SandboxProviderE2B && profile.Existing != nil {
+			existingURL = profile.Existing.E2BGatewayURL
+			break
 		}
-		existingURL := profile.Existing.E2BGatewayURL
-		if options.GatewayURL != "" {
-			provided, err := normalizeExactGatewayURL(options.GatewayURL)
-			if err != nil {
-				return guidedGatewayPlan{}, err
-			}
-			if provided != existingURL {
-				return guidedGatewayPlan{}, fmt.Errorf("Sandbox profile %q already uses %s; update the profile explicitly before changing its Gateway URL", profile.Name, existingURL)
-			}
+	}
+
+	if options.GatewayURL != "" {
+		if owned.ControlHostname != "" {
+			return guidedGatewayPlan{}, fmt.Errorf("remove the Dorf-owned Cloudflare Tunnel before selecting a custom --gateway-url")
 		}
-		if options.CloudflareHost != "" {
-			wanted, err := cloudflareapp.GatewayURL(options.CloudflareHost)
-			if err != nil {
-				return guidedGatewayPlan{}, err
-			}
-			if wanted != existingURL {
-				return guidedGatewayPlan{}, fmt.Errorf("Sandbox profile %q already uses %s; update the profile explicitly before changing its Gateway URL", profile.Name, existingURL)
-			}
-			if _, err := requireCloudflareDNS(ctx, resolver, options.CloudflareHost); err != nil {
-				return guidedGatewayPlan{}, err
-			}
-			parsed, _ := url.Parse(wanted)
-			hostname := parsed.Hostname()
-			if err := requireUnusedOrOwnedCloudflareHostname(ctx, resolver, hostname, ownedCloudflareHostname, options.ReplaceCloudflareDNS); err != nil {
-				return guidedGatewayPlan{}, err
-			}
-			return guidedGatewayPlan{
-				Mode: setupGatewayCloudflare, URL: wanted, Hostname: hostname,
-				ReplaceExistingDNS: options.ReplaceCloudflareDNS,
-			}, nil
+		normalized, err := normalizeExactGatewayURL(options.GatewayURL)
+		if err != nil {
+			return guidedGatewayPlan{}, err
 		}
+		return guidedGatewayPlan{Mode: setupGatewayExisting, URL: normalized}, nil
+	}
+	if cloudflareRequested {
+		plan, err := newCloudflareGatewayPlan(
+			options.CloudflareDomain,
+			options.CloudflareControlHostname,
+			options.CloudflareModelHostname,
+			options.ReplaceCloudflareDNS,
+		)
+		if err != nil {
+			return guidedGatewayPlan{}, err
+		}
+		return approveCloudflareGatewayPlan(ctx, options, presenter, resolver, plan, owned)
+	}
+	if existingURL != "" {
 		return guidedGatewayPlan{Mode: setupGatewayExisting, URL: existingURL}, nil
 	}
+	if !presenter.interactive || options.Yes {
+		return guidedGatewayPlan{}, fmt.Errorf("automated E2B setup requires --gateway-url or --cloudflare-domain")
+	}
 
-	plan := guidedGatewayPlan{}
-	interactiveHostname := false
-	cloudflareDNSConfirmed := false
-	switch {
-	case options.CloudflareHost != "":
-		plan.Mode, plan.Hostname = setupGatewayCloudflare, options.CloudflareHost
-		plan.ReplaceExistingDNS = options.ReplaceCloudflareDNS
-	case options.GatewayURL != "":
-		plan.Mode, plan.URL = setupGatewayExisting, options.GatewayURL
-	case presenter.interactive && !options.Yes:
-		interactiveHostname = true
-		if err := presenter.RunForm(ctx, presenter.TextGroup(
-			"Choose the Gateway hostname",
-			"Cloud Sandboxes will reach Dorf through this stable public hostname.",
-			"dorf.example.com", &plan.Hostname,
-			func(value string) error { _, err := cloudflareapp.GatewayURL(value); return err }),
-		); err != nil {
-			return guidedGatewayPlan{}, err
-		}
-		plan.Hostname = strings.TrimSpace(plan.Hostname)
-		delegation, lookupErr := discoverDNSDelegation(ctx, resolver, plan.Hostname)
-		switch {
-		case lookupErr != nil:
-			plan.Mode = setupGatewayExisting
-			presenter.Note("Gateway ingress", "DNS provider could not be confirmed; use existing HTTPS ingress")
-		case delegation.Cloudflare:
-			occupied, addressErr := hostnameHasAddresses(ctx, resolver, plan.Hostname)
-			switch {
-			case addressErr != nil:
-				plan.Mode = setupGatewayExisting
-				presenter.Note("Gateway ingress", "Existing DNS records could not be ruled out; use existing HTTPS ingress")
-			case occupied:
-				plan.Mode = setupGatewayExisting
-				cloudflareDNSConfirmed = true
-				if err := presenter.RunForm(ctx, presenter.CloudflareGatewayGroup(&plan.Mode, delegation.Zone, true)); err != nil {
-					return guidedGatewayPlan{}, err
-				}
-				plan.ReplaceExistingDNS = plan.Mode == setupGatewayCloudflare
-			default:
-				cloudflareDNSConfirmed = true
-				plan.Mode = setupGatewayCloudflare
-				if err := presenter.RunForm(ctx, presenter.CloudflareGatewayGroup(&plan.Mode, delegation.Zone, false)); err != nil {
-					return guidedGatewayPlan{}, err
-				}
-			}
-		default:
-			plan.Mode = setupGatewayExisting
-			presenter.Note("Gateway ingress", "Cloudflare DNS was not detected; use existing HTTPS ingress")
-		}
-	default:
-		return guidedGatewayPlan{}, fmt.Errorf("automated E2B setup requires --gateway-url or --cloudflare-hostname")
+	domain := ""
+	if err := presenter.RunForm(ctx, presenter.TextGroup(
+		"Choose your Dorf domain",
+		"The domain must already use Cloudflare DNS. Dorf leaves its apex untouched.",
+		"dorf.run", &domain, validateCloudflareHostname,
+	)); err != nil {
+		return guidedGatewayPlan{}, err
 	}
-	switch plan.Mode {
-	case setupGatewayExisting:
-		if plan.URL == "" && plan.Hostname != "" {
-			var err error
-			plan.URL, err = cloudflareapp.GatewayURL(plan.Hostname)
-			if err != nil {
-				return guidedGatewayPlan{}, err
-			}
-		}
-		if plan.URL == "" {
-			if err := presenter.RunForm(ctx, presenter.TextGroup(
-				"Enter the existing Provider Gateway URL",
-				"It must be an exact stable HTTPS URL ending in /v1.",
-				"https://gateway.example.com/v1", &plan.URL,
-				validateExactGatewayURL),
-			); err != nil {
-				return guidedGatewayPlan{}, err
-			}
-		}
-		var err error
-		plan.URL, err = normalizeExactGatewayURL(plan.URL)
-		if err != nil {
-			return guidedGatewayPlan{}, err
-		}
-		if interactiveHostname {
-			confirmed := false
-			description := fmt.Sprintf("Route %s to the private Dorf Gateway. Continue once that HTTPS ingress is ready.", plan.URL)
-			if err := presenter.RunForm(ctx, presenter.ConfirmGroup("Use existing HTTPS ingress", description, &confirmed)); err != nil {
-				return guidedGatewayPlan{}, err
-			}
-			if !confirmed {
-				return guidedGatewayPlan{}, errSetupCancelled
-			}
-		}
-		return plan, nil
-	case setupGatewayCloudflare:
-		if plan.Hostname == "" {
-			if err := presenter.RunForm(ctx, presenter.TextGroup(
-				"Choose the Cloudflare hostname",
-				"The domain must already use Cloudflare DNS.",
-				"dorf.example.com", &plan.Hostname,
-				func(value string) error { _, err := cloudflareapp.GatewayURL(value); return err }),
-			); err != nil {
-				return guidedGatewayPlan{}, err
-			}
-		}
-		plan.Hostname = strings.TrimSpace(plan.Hostname)
-		var err error
-		plan.URL, err = cloudflareapp.GatewayURL(plan.Hostname)
-		if err != nil {
-			return guidedGatewayPlan{}, err
-		}
-		parsedGateway, _ := url.Parse(plan.URL)
-		plan.Hostname = parsedGateway.Hostname()
-		if !cloudflareDNSConfirmed {
-			if _, err := requireCloudflareDNS(ctx, resolver, plan.Hostname); err != nil {
-				return guidedGatewayPlan{}, err
-			}
-			if err := requireUnusedOrOwnedCloudflareHostname(ctx, resolver, plan.Hostname, ownedCloudflareHostname, plan.ReplaceExistingDNS); err != nil {
-				return guidedGatewayPlan{}, err
-			}
-		}
-		return plan, nil
-	default:
-		return guidedGatewayPlan{}, fmt.Errorf("Gateway setup must use Cloudflare Tunnel or an existing HTTPS URL")
+	domain, err := normalizeCloudflareHostname(domain)
+	if err != nil {
+		return guidedGatewayPlan{}, err
 	}
+	if err := requireCloudflareZone(ctx, resolver, domain); err != nil {
+		return guidedGatewayPlan{}, err
+	}
+	controlHostname, modelHostname := "api."+domain, "models."+domain
+	if err := presenter.RunForm(ctx, presenter.PublicEndpointsGroup(domain, &controlHostname, &modelHostname)); err != nil {
+		return guidedGatewayPlan{}, err
+	}
+	plan, err := newCloudflareGatewayPlan(domain, controlHostname, modelHostname, false)
+	if err != nil {
+		return guidedGatewayPlan{}, err
+	}
+	return approveCloudflareGatewayPlan(ctx, options, presenter, resolver, plan, owned)
 }
 
-func requireUnusedOrOwnedCloudflareHostname(ctx context.Context, resolver dnsResolver, hostname, ownedHostname string, allowReplacement bool) error {
-	if hostname == ownedHostname || allowReplacement {
-		return nil
-	}
-	occupied, err := hostnameHasAddresses(ctx, resolver, hostname)
+func newCloudflareGatewayPlan(domain, controlHostname, modelHostname string, replaceExistingDNS bool) (guidedGatewayPlan, error) {
+	domain, err := normalizeCloudflareHostname(domain)
 	if err != nil {
-		return fmt.Errorf("inspect address records for %s: %w", hostname, err)
+		return guidedGatewayPlan{}, fmt.Errorf("Dorf domain: %w", err)
 	}
-	if occupied {
-		return fmt.Errorf("%s already resolves; use --gateway-url for existing ingress or choose an unused --cloudflare-hostname", hostname)
+	if strings.TrimSpace(controlHostname) == "" {
+		controlHostname = "api." + domain
+	}
+	if strings.TrimSpace(modelHostname) == "" {
+		modelHostname = "models." + domain
+	}
+	controlHostname, err = normalizeCloudflareHostname(controlHostname)
+	if err != nil {
+		return guidedGatewayPlan{}, fmt.Errorf("Control API hostname: %w", err)
+	}
+	modelHostname, err = normalizeCloudflareHostname(modelHostname)
+	if err != nil {
+		return guidedGatewayPlan{}, fmt.Errorf("model Gateway hostname: %w", err)
+	}
+	if controlHostname == modelHostname {
+		return guidedGatewayPlan{}, fmt.Errorf("Control API and model Gateway hostnames must differ")
+	}
+	if !directChildHostname(controlHostname, domain) || !directChildHostname(modelHostname, domain) {
+		return guidedGatewayPlan{}, fmt.Errorf("Control API and model Gateway hostnames must each be one direct subdomain of %s", domain)
+	}
+	controlURL, _ := cloudflareapp.ControlURL(controlHostname)
+	gatewayURL, _ := cloudflareapp.GatewayURL(modelHostname)
+	return guidedGatewayPlan{
+		Mode: setupGatewayCloudflare, URL: gatewayURL, Domain: domain, ControlURL: controlURL,
+		ControlHostname: controlHostname, ModelHostname: modelHostname, ReplaceExistingDNS: replaceExistingDNS,
+	}, nil
+}
+
+func retainedCloudflareGatewayPlan(owned ownedCloudflareEndpoints) (guidedGatewayPlan, error) {
+	controlURL, err := cloudflareapp.ControlURL(owned.ControlHostname)
+	if err != nil {
+		return guidedGatewayPlan{}, err
+	}
+	gatewayURL, err := cloudflareapp.GatewayURL(owned.ModelHostname)
+	if err != nil {
+		return guidedGatewayPlan{}, err
+	}
+	return guidedGatewayPlan{
+		Mode: setupGatewayCloudflare, URL: gatewayURL, Domain: commonEndpointParent(owned), ControlURL: controlURL,
+		ControlHostname: owned.ControlHostname, ModelHostname: owned.ModelHostname,
+	}, nil
+}
+
+func approveCloudflareGatewayPlan(ctx context.Context, options setupOptions, presenter setupPresenter, resolver dnsResolver, plan guidedGatewayPlan, owned ownedCloudflareEndpoints) (guidedGatewayPlan, error) {
+	occupied, err := inspectCloudflareGatewayPlan(ctx, resolver, plan, owned)
+	if err != nil {
+		return guidedGatewayPlan{}, err
+	}
+	if len(occupied) == 0 || plan.ReplaceExistingDNS {
+		return plan, nil
+	}
+	if !presenter.interactive || options.Yes {
+		return guidedGatewayPlan{}, fmt.Errorf("%s already resolves; choose unused public endpoints or pass --replace-cloudflare-dns", strings.Join(occupied, " and "))
+	}
+	confirmed := false
+	description := fmt.Sprintf("Replace unrelated DNS routes for %s?", strings.Join(occupied, " and "))
+	if err := presenter.RunForm(ctx, presenter.ConfirmGroup("Replace existing Cloudflare DNS", description, &confirmed)); err != nil {
+		return guidedGatewayPlan{}, err
+	}
+	if !confirmed {
+		return guidedGatewayPlan{}, errSetupCancelled
+	}
+	plan.ReplaceExistingDNS = true
+	return plan, nil
+}
+
+func inspectCloudflareGatewayPlan(ctx context.Context, resolver dnsResolver, plan guidedGatewayPlan, owned ownedCloudflareEndpoints) ([]string, error) {
+	if err := requireCloudflareZone(ctx, resolver, plan.Domain); err != nil {
+		return nil, err
+	}
+	for _, hostname := range []string{plan.ControlHostname, plan.ModelHostname} {
+		delegation, err := requireCloudflareDNS(ctx, resolver, hostname)
+		if err != nil {
+			return nil, err
+		}
+		if delegation.Zone != plan.Domain {
+			return nil, fmt.Errorf("%s is delegated separately from the selected Dorf domain %s", hostname, plan.Domain)
+		}
+	}
+	if owned.ControlHostname != "" && owned.ControlHostname != plan.ControlHostname {
+		return nil, fmt.Errorf("the Dorf-owned Cloudflare Tunnel already uses Control API hostname %s; remove that Tunnel before selecting %s", owned.ControlHostname, plan.ControlHostname)
+	}
+	if owned.ModelHostname != "" && owned.ModelHostname != plan.ModelHostname {
+		return nil, fmt.Errorf("the Dorf-owned Cloudflare Tunnel already uses model Gateway hostname %s; remove that Tunnel before selecting %s", owned.ModelHostname, plan.ModelHostname)
+	}
+	occupied := make([]string, 0, 2)
+	for _, endpoint := range []struct {
+		hostname string
+		owned    string
+	}{
+		{hostname: plan.ControlHostname, owned: owned.ControlHostname},
+		{hostname: plan.ModelHostname, owned: owned.ModelHostname},
+	} {
+		if endpoint.hostname == endpoint.owned {
+			continue
+		}
+		hasAddresses, err := hostnameHasAddresses(ctx, resolver, endpoint.hostname)
+		if err != nil {
+			return nil, fmt.Errorf("inspect address records for %s: %w", endpoint.hostname, err)
+		}
+		if hasAddresses {
+			occupied = append(occupied, endpoint.hostname)
+		}
+	}
+	return occupied, nil
+}
+
+func requireCloudflareZone(ctx context.Context, resolver dnsResolver, domain string) error {
+	delegation, err := requireCloudflareDNS(ctx, resolver, domain)
+	if err != nil {
+		return err
+	}
+	if delegation.Zone != domain {
+		return fmt.Errorf("Dorf domain %s must be the Cloudflare DNS zone apex; detected %s", domain, delegation.Zone)
 	}
 	return nil
 }
 
-func currentOwnedCloudflareHostname(gatewayStatePath string) (string, error) {
-	state, found, err := (cloudflareapp.Tunnel{StatePath: filepath.Join(gatewayStatePath, "cloudflare")}).Current()
-	if err != nil || !found {
+func validateCloudflareHostname(raw string) error {
+	_, err := normalizeCloudflareHostname(raw)
+	return err
+}
+
+func normalizeCloudflareHostname(raw string) (string, error) {
+	controlURL, err := cloudflareapp.ControlURL(raw)
+	if err != nil {
 		return "", err
 	}
-	return state.Hostname, nil
+	parsed, _ := url.Parse(controlURL)
+	return parsed.Hostname(), nil
+}
+
+func directChildHostname(hostname, domain string) bool {
+	label, found := strings.CutSuffix(hostname, "."+domain)
+	return found && label != "" && !strings.Contains(label, ".")
+}
+
+func commonEndpointParent(owned ownedCloudflareEndpoints) string {
+	_, controlParent, controlFound := strings.Cut(owned.ControlHostname, ".")
+	_, modelParent, modelFound := strings.Cut(owned.ModelHostname, ".")
+	if controlFound && modelFound && controlParent == modelParent {
+		return controlParent
+	}
+	return ""
+}
+
+func currentOwnedCloudflareEndpoints(gatewayStatePath string) (ownedCloudflareEndpoints, error) {
+	state, found, err := (cloudflareapp.Tunnel{StatePath: filepath.Join(gatewayStatePath, "cloudflare")}).Current()
+	if err != nil || !found {
+		return ownedCloudflareEndpoints{}, err
+	}
+	return ownedCloudflareEndpoints{ControlHostname: state.Hostname, ModelHostname: state.ModelHostname}, nil
+}
+
+func requireSupportedCloudflareState(gatewayStatePath string) error {
+	if strings.TrimSpace(gatewayStatePath) == "" {
+		return nil
+	}
+	owned, err := currentOwnedCloudflareEndpoints(gatewayStatePath)
+	if err != nil || owned.ControlHostname == "" {
+		return err
+	}
+	domain := commonEndpointParent(owned)
+	if owned.ModelHostname == "" || domain == "" ||
+		!directChildHostname(owned.ControlHostname, domain) || !directChildHostname(owned.ModelHostname, domain) {
+		return fmt.Errorf("existing Cloudflare state uses the retired single-origin hostname layout; remove its Tunnel, DNS routes, and local state before rerunning dorf setup")
+	}
+	return nil
 }
 
 func requireCloudflareDNS(ctx context.Context, resolver dnsResolver, hostname string) (dnsDelegation, error) {
@@ -908,54 +991,21 @@ func normalizeExactGatewayURL(raw string) (string, error) {
 	return parsed.String(), nil
 }
 
-func prepareRemoteGateway(ctx context.Context, gatewayStatePath string, plan guidedGatewayPlan, yes bool, presenter setupPresenter, stdout, stderr io.Writer) (string, error) {
+func prepareRemoteGateway(ctx context.Context, gatewayStatePath string, plan guidedGatewayPlan, presenter setupPresenter, stdout, stderr io.Writer) (string, error) {
 	tunnel := cloudflareapp.Tunnel{
 		StatePath:          filepath.Join(gatewayStatePath, "cloudflare"),
-		Origin:             cloudflareapp.ComposeGatewayOrigin,
 		ReplaceExistingDNS: plan.ReplaceExistingDNS,
 	}
 	switch plan.Mode {
 	case setupGatewayExisting:
-		state, found, err := tunnel.Current()
-		if err != nil {
-			return "", err
-		}
-		if found {
-			ownedURL, urlErr := cloudflareapp.GatewayURL(state.Hostname)
-			if urlErr != nil {
-				return "", urlErr
-			}
-			if ownedURL == plan.URL {
-				presenter.Note("Cloud Gateway", "Preparing the existing Cloudflare Tunnel for Compose")
-				state, err = tunnel.Prepare(ctx, state.Hostname, stdout, stderr)
-				if err != nil {
-					return "", err
-				}
-				presenter.Ready("Cloudflare Tunnel", state.Hostname+" · prepared")
-				return plan.URL, nil
-			}
-		}
 		return plan.URL, nil
 	case setupGatewayCloudflare:
-		confirmed := yes
-		if !confirmed {
-			description := fmt.Sprintf("Create one named Tunnel, route %s to the Compose Provider Gateway, and remove the temporary account credential.", plan.Hostname)
-			if plan.ReplaceExistingDNS {
-				description = fmt.Sprintf("Create one named Tunnel and replace %s's existing DNS route with the Compose Provider Gateway.", plan.Hostname)
-			}
-			if err := presenter.RunForm(ctx, presenter.ConfirmGroup("Review Cloudflare changes", description, &confirmed)); err != nil {
-				return "", err
-			}
-			if !confirmed {
-				return "", errSetupCancelled
-			}
-		}
-		presenter.Note("Cloud Gateway", "Preparing the Cloudflare Tunnel and DNS route")
-		state, err := tunnel.Prepare(ctx, plan.Hostname, stdout, stderr)
+		presenter.Note("Public ingress", "Preparing the Cloudflare Tunnel and DNS routes")
+		state, err := tunnel.Prepare(ctx, plan.ControlHostname, plan.ModelHostname, stdout, stderr)
 		if err != nil {
 			return "", err
 		}
-		presenter.Ready("Cloudflare Tunnel", state.Hostname+" · prepared")
+		presenter.Ready("Cloudflare Tunnel", state.Hostname+" + "+state.ModelHostname+" · prepared")
 		return plan.URL, nil
 	default:
 		return "", fmt.Errorf("Gateway setup plan is incomplete")
@@ -965,7 +1015,6 @@ func prepareRemoteGateway(ctx context.Context, gatewayStatePath string, plan gui
 func finalizeRemoteGateway(ctx context.Context, g gateway.Gateway, plan guidedGatewayPlan, gatewayStatePath string, presenter setupPresenter) error {
 	tunnel := cloudflareapp.Tunnel{
 		StatePath: filepath.Join(gatewayStatePath, "cloudflare"),
-		Origin:    cloudflareapp.ComposeGatewayOrigin,
 	}
 	state, found, err := tunnel.Current()
 	if err != nil {
@@ -973,11 +1022,15 @@ func finalizeRemoteGateway(ctx context.Context, g gateway.Gateway, plan guidedGa
 	}
 	managed := false
 	if found {
-		ownedURL, urlErr := cloudflareapp.GatewayURL(state.Hostname)
+		ownedURL, urlErr := cloudflareapp.GatewayURL(state.ModelHostname)
 		if urlErr != nil {
 			return urlErr
 		}
-		managed = ownedURL == plan.URL
+		ownedControlURL, urlErr := cloudflareapp.ControlURL(state.Hostname)
+		if urlErr != nil {
+			return urlErr
+		}
+		managed = ownedURL == plan.URL && ownedControlURL == plan.ControlURL
 	}
 	if !managed {
 		if err := g.CheckRemote(ctx, plan.URL); err != nil {
@@ -985,18 +1038,22 @@ func finalizeRemoteGateway(ctx context.Context, g gateway.Gateway, plan guidedGa
 		}
 		return nil
 	}
-	presenter.Ready("Cloudflare Tunnel", state.Hostname+" · Compose active")
-	return presenter.Run(ctx, "Checking the public Gateway route", func(ctx context.Context) error {
+	presenter.Ready("Cloudflare Tunnel", state.Hostname+" + "+state.ModelHostname+" · Compose active")
+	controlProbeURL, err := state.ProbeURL(state.Hostname)
+	if err != nil {
+		return err
+	}
+	return presenter.Run(ctx, "Checking the public Dorf routes", func(ctx context.Context) error {
 		managedGateway, err := managedRemoteGateway(g, state)
 		if err != nil {
 			return err
 		}
-		return waitForRemoteGateway(ctx, managedGateway, plan.URL)
+		return waitForRemoteGateway(ctx, managedGateway, plan.URL, plan.ControlURL, controlProbeURL)
 	})
 }
 
 func managedRemoteGateway(g gateway.Gateway, state cloudflareapp.State) (gateway.Gateway, error) {
-	probeURL, err := state.ProbeURL()
+	probeURL, err := state.ProbeURL(state.ModelHostname)
 	if err != nil {
 		return gateway.Gateway{}, err
 	}
@@ -1004,17 +1061,26 @@ func managedRemoteGateway(g gateway.Gateway, state cloudflareapp.State) (gateway
 	return g, nil
 }
 
-func waitForRemoteGateway(ctx context.Context, g gateway.Gateway, gatewayURL string) error {
+func waitForRemoteGateway(ctx context.Context, g gateway.Gateway, gatewayURL, controlURL, controlProbeURL string) error {
 	// The availability preflight may have cached an expected negative DNS
 	// answer immediately before the Tunnel route was created. Readiness uses a
 	// fresh public resolver so that setup does not wait for the host's negative
 	// cache TTL before proving the new route.
-	g.Client = freshDNSHTTPClient()
+	client := freshDNSHTTPClient()
+	g.Client = client
 	deadline := time.Now().Add(90 * time.Second)
 	var last error
 	for {
 		if err := g.CheckRemote(ctx, gatewayURL); err == nil {
-			return nil
+			if err := checkPublicDeploymentProbe(ctx, controlProbeURL, client); err == nil {
+				ready, detail := controlAPIReady(ctx, version.Version, controlURL+"/v1", client)
+				if ready {
+					return nil
+				}
+				last = errors.New(detail)
+			} else {
+				last = err
+			}
 		} else {
 			last = err
 		}
@@ -1027,6 +1093,28 @@ func waitForRemoteGateway(ctx context.Context, g gateway.Gateway, gatewayURL str
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+func checkPublicDeploymentProbe(ctx context.Context, probeURL string, client *http.Client) error {
+	if client == nil {
+		return fmt.Errorf("public Dorf deployment identity is unavailable")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+	if err != nil {
+		return err
+	}
+	probeClient := *client
+	probeClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	response, err := probeClient.Do(request)
+	if err != nil {
+		return fmt.Errorf("public Dorf deployment identity is unavailable: %w", err)
+	}
+	defer response.Body.Close()
+	_, _ = io.Copy(io.Discard, response.Body)
+	if response.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("public Dorf deployment identity returned HTTP %d, want 204", response.StatusCode)
+	}
+	return nil
 }
 
 func setupProfiles(ctx context.Context, store postgres.Store, cfg config.Config, options setupOptions, plans []guidedProfilePlan, gatewayURL, privateIPv4 string, presenter setupPresenter) ([]core.SandboxProfile, error) {
@@ -1085,6 +1173,32 @@ func setupProfiles(ctx context.Context, store postgres.Store, cfg config.Config,
 		presenter.Ready("Sandbox profile", profile.Name+" · "+string(profile.Provider)+" · verified")
 	}
 	return profiles, nil
+}
+
+func retargetGuidedE2BProfiles(ctx context.Context, store postgres.Store, plans []guidedProfilePlan, gatewayURL string) ([]guidedProfilePlan, error) {
+	for index := range plans {
+		plan := &plans[index]
+		if plan.Provider != core.SandboxProviderE2B || plan.Existing == nil {
+			continue
+		}
+		profile, err := retargetGuidedE2BProfile(ctx, store, *plan.Existing, gatewayURL)
+		if err != nil {
+			return nil, err
+		}
+		plan.Existing = &profile
+	}
+	return plans, nil
+}
+
+func retargetGuidedE2BProfile(ctx context.Context, store postgres.Store, profile core.SandboxProfile, gatewayURL string) (core.SandboxProfile, error) {
+	if gatewayURL == "" || profile.E2BGatewayURL == gatewayURL {
+		return profile, nil
+	}
+	updated, _, err := store.UpdateSandboxProfile(ctx, profile.Name, postgres.SandboxProfilePatch{E2BGatewayURL: &gatewayURL})
+	if err != nil {
+		return core.SandboxProfile{}, fmt.Errorf("update Sandbox profile %q for the prepared model Gateway: %w", profile.Name, err)
+	}
+	return updated, nil
 }
 
 func setupE2BTemplate(options setupOptions) (string, error) {

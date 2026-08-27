@@ -102,26 +102,18 @@ terminal remains gated by
 [D101's live proof](project/decisions.md#d101--compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit):
 
 ```text
-operator-owned HTTPS ingress
-            |
-            v
-host port 8745
-            |
-            v
-Docker Compose project
-  PostgreSQL -> migrate -> worker + authenticated narrow reads
-                        -> control-api -----------^
-                        -> provider-gateway  (when configured)
-                             ^
-                             |
-                        cloudflared          (when guided Tunnel is configured)
+Remote Client -> guided cloudflared -> control-api:8745
+Sandbox       -> same Tunnel        -> provider-gateway:8317
+
+PostgreSQL -> migrate -> worker + authenticated narrow reads <- control-api
 ```
 
 PostgreSQL, the one-shot migration, the control API, and the durable worker are always in the base
 project, even when no Sandbox provider is selected. Migration must complete successfully before
 the worker or API starts. The worker hosts the independently authenticated, fixed read endpoint
 needed by the API; it is not another service or lifecycle. The Provider Gateway and guided named
-Cloudflare Tunnel are optional foreground services under the same Compose supervisor.
+Cloudflare Tunnel are optional foreground services under the same Compose supervisor. Guided setup
+attaches only the control API and Provider Gateway to the Tunnel's ingress network.
 
 The API receives its database URL, read-only API state, and an independently derived reader token
 through the protected Compose environment. It receives no Incus socket or identity, E2B key,
@@ -132,11 +124,12 @@ selector, credential response, or mutation operation.
 
 Bridge networks keep database access, API-to-worker reads, worker-to-Gateway calls, runtime egress,
 and Gateway ingress explicit. PostgreSQL publishes only on host loopback, while the control API maps
-host port `8745`; the Gateway publishes only an explicitly selected Profile route. The one-shot
-migration uses runtime egress only to retrieve its checksum-pinned Absurd schema before exiting. The
-project uses no host networking and mounts no host Docker socket. The optional local-Incus overlay
-gives only the worker the exact configured Incus Unix socket; a remote Incus endpoint uses its
-explicit HTTPS and mTLS adapter instead.
+host port `8745` for custom ingress and joins the optional guided ingress network; the Gateway
+publishes only an explicitly selected Profile route. The one-shot migration uses runtime egress only
+to retrieve its checksum-pinned Absurd schema before exiting. The project uses no host networking
+and mounts no host Docker socket. The optional local-Incus overlay gives only the worker the exact
+configured Incus Unix socket; a remote Incus endpoint uses its explicit HTTPS and mTLS adapter
+instead, but guided remote deployment remains unsupported.
 
 The release installs static `dorf-compose.yaml` and `dorf-compose-incus.yaml` manifests beside the
 binary. One continuous `dorf setup` flow writes the protected `.env`, applies only those exact
@@ -152,11 +145,14 @@ The managed project always uses its PostgreSQL service and the protected persist
 configuration as authority. `DORF_DATABASE_URL` remains only a development, test, or explicitly
 manually supervised process override; it does not select another managed topology.
 
-HTTPS ingress remains operator-owned and outside the Compose project. Dorf never infers, installs,
-or mutates the public control origin. The control API must also use a different origin from the
-Provider Gateway's OpenAI-compatible `/v1` service; the two authorities are not interchangeable.
-See [Getting started](getting-started.md#3-connect-one-remote-cli-client) for the operator and client
-procedure and [Support](support.md) for fault attribution.
+Guided Cloudflare setup owns one narrow public-ingress case: one named Tunnel publishes the distinct
+Control API and Provider Gateway origins selected during setup. `dorf connect` receives the Control
+API origin. Any custom Control API ingress remains operator-owned and reaches host port `8745`;
+advanced `--gateway-url` changes only the Provider Gateway route. See
+[Getting started](getting-started.md#1-install-the-application-initialize-a-deployment-host) for the
+domain and hostname procedure,
+[Getting started](getting-started.md#3-connect-one-remote-cli-client) for client connection, and
+[Support](support.md) for fault attribution.
 
 ## Deliberately deferred
 

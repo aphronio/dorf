@@ -17,6 +17,56 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
+func TestGuidedSetupRetargetsAndInvalidatesTheExistingE2BProfile(t *testing.T) {
+	dsn := os.Getenv("DORF_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DORF_TEST_DATABASE_URL is not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := postgres.Store{DB: db}
+	ctx := context.Background()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	name := fmt.Sprintf("setup-retarget-%d", time.Now().UnixNano())
+	profile, _, err := store.CreateSandboxProfile(ctx, core.SandboxProfile{
+		Name: name, Provider: core.SandboxProviderE2B, Harness: "codex",
+		Artifact: "dorf:exact-build", E2BGatewayURL: "https://dorf.example.test/v1",
+		E2BSandboxTimeout: 55 * time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, verification, err := store.BeginSandboxProfileVerification(ctx, name)
+	if err == nil {
+		err = store.RecordSandboxProfileProbe(ctx, verification, "codex-test")
+	}
+	if err == nil {
+		err = store.RecordSandboxProfileVerificationCleanup(ctx, verification)
+	}
+	if err == nil {
+		profile, err = store.SetDefaultSandboxProfile(ctx, name)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !profile.BaseVerified() || !profile.Default {
+		t.Fatalf("prepared profile=%#v", profile)
+	}
+
+	profile, err = retargetGuidedE2BProfile(ctx, store, profile, "https://models.dorf.example.test/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.E2BGatewayURL != "https://models.dorf.example.test/v1" || profile.BaseVerified() || profile.Default {
+		t.Fatalf("retargeted profile=%#v", profile)
+	}
+}
+
 func TestAdmittedJobRuntimeIgnoresLaterVerificationReceiptState(t *testing.T) {
 	dsn := os.Getenv("DORF_TEST_DATABASE_URL")
 	if dsn == "" {

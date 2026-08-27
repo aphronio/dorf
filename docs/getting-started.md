@@ -71,8 +71,8 @@ setup automatically applies that exact installed project and waits for it to bec
 continuing the same guided flow. Its one-shot `migrate` service must complete successfully before
 the worker and control API start. Calling `dorf setup` is the deployment intent; there is no extra
 Compose permission prompt, manual start handoff, separate `dorf start`, or setup-start-setup loop.
-That invoking identity may be root or non-root. Public HTTPS control ingress remains an independent
-operator responsibility.
+That invoking identity may be root or non-root. Guided Cloudflare setup also completes Dorf's two
+public origins; deployments using another ingress keep that responsibility with their operator.
 
 The official release configuration selects the exact
 `ghcr.io/aphronio/dorf:MAJOR.MINOR.PATCH` image with `pull_policy: always`. Dorf does not render
@@ -91,12 +91,13 @@ docker compose logs --tail=200 worker control-api
 
 Do not edit the generated `.env`; rerun setup to change and apply its source facts.
 
-Setup offers local Incus, cloud E2B, both, or neither. A selected Incus endpoint must already be
-usable. For the default local `unix:///var/lib/incus/unix.socket` authority only, setup can
+Setup offers prepared local Incus, cloud E2B, both, or neither. A selected local Incus endpoint must
+already be usable. For the default `unix:///var/lib/incus/unix.socket` authority only, setup can
 materialize the version-matched `incus.sh` administrator helper, print its exact command and the
 upstream manual path, and exit. A custom Unix socket receives an exact repair-or-select handoff
-instead of a host recipe. Guided HTTPS Incus setup remains gated while remote proof is pending,
-although the adapter retains its explicit HTTPS and mTLS boundary. Dorf does not install Incus or
+instead of a host recipe. Guided setup rejects a remote HTTPS Incus endpoint, including reuse of a
+Profile that names one, until the complete remote terminal passes. The adapter retains its explicit
+HTTPS and mTLS boundary, but that is not a supported guided path. Dorf does not install Incus or
 QEMU, enable a service, change group membership, initialize the daemon, or mutate a host network.
 The manual authority is the upstream [Incus installation
 guide](https://linuxcontainers.org/incus/docs/main/installing/). The invoking operator owns any
@@ -124,11 +125,30 @@ The Provider Gateway joins the static Compose project when an AI connection is c
 publishes that profile into the protected `.env`, reapplies the project, and continues to verify and
 finalize the retained candidate in the same run. It can verify an existing Sandbox-reachable route
 or guide the named Cloudflare Tunnel owned by the [Provider Gateway
-authority](project/provider-gateway.md). This remains an unprivileged browser and DNS flow, not
-another shell helper. When a Cloudflare-delegated hostname already resolves, setup defaults to the
-existing ingress but offers to repair it with the guided Tunnel. Selecting repair clearly confirms
-the DNS replacement before applying it; automation pairs `--cloudflare-hostname HOST` with
-`--replace-cloudflare-dns` for the same explicit intent.
+authority](project/provider-gateway.md).
+
+The guided path first asks for a Dorf domain, for example `dorf.run`. It leaves that apex untouched
+and proposes two editable direct child hostnames:
+
+```text
+api.dorf.run     Control API
+models.dorf.run  Model Gateway
+```
+
+The inputs are hostnames, not URLs; setup fixes HTTPS for both and `/v1` for the Model Gateway. One
+named outbound-only Tunnel routes the exact selected pair. A rerun reuses that persisted pair
+rather than deriving new names. Fresh unused names proceed without another confirmation. If either
+name resolves through unrelated DNS, setup requires an explicit replacement choice before changing
+it.
+
+Automation supplies `--cloudflare-domain DOMAIN`; optional
+`--cloudflare-control-hostname HOST` and `--cloudflare-model-hostname HOST` replace the two suggested
+names. Pair `--replace-cloudflare-dns` with that selection only when replacement is intended. Setup
+verifies both public routes and prints the Control API origin for `dorf connect`. This remains an
+unprivileged browser and DNS flow, not another shell helper. Advanced `--gateway-url` retains an
+existing exact Provider Gateway route and leaves custom Control API ingress to the operator.
+It is not mixed with retained Dorf-owned Tunnel state; remove that managed ingress before switching
+to custom origins.
 
 The separate `profile` and `provider` commands remain available for custom artifacts and advanced
 operations. Their exact-artifact, credential, and route boundaries are described by the
@@ -170,14 +190,15 @@ Replacing the configured credential bundle retains its explicit `--yes` approval
 ## 3. Connect one remote CLI Client
 
 The deployment host owns setup, Profiles, provider and Harness credentials, PostgreSQL, and the
-managed Compose project. A remote client machine needs only the Dorf CLI, an operator-provided HTTPS
-Deployment URL, and one short-lived Enrollment; it does not run `dorf setup`.
+managed Compose project. A remote client machine needs only the Dorf CLI, the HTTPS Deployment
+origin printed by guided setup or supplied by the operator, and one short-lived Enrollment; it does
+not run `dorf setup`.
 
-The control API URL must be an operator-owned HTTPS origin backed by the Compose API on host port
-`8745`. The operator must give it a different origin from the Provider Gateway: that separate
-`/v1` service provides model access to Sandboxes, not Dorf client operations. Compose supervises the
-control API and worker, but Dorf does not provision or infer public ingress. Before Enrollment,
-complete the continuous setup flow in
+The Control API service listens on container port `8745`. Guided Cloudflare reaches it over the
+Compose ingress network and prints that origin; custom operator-owned HTTPS ingress reaches the
+published host port `8745`. The Provider Gateway uses the separate model origin prepared by setup,
+or the exact custom route selected with `--gateway-url`; it provides model access to Sandboxes, not
+Dorf client operations. Before Enrollment, complete the continuous setup flow in
 [the deployment-host procedure](#1-install-the-application-initialize-a-deployment-host). The
 [Remote Control API](control-api.md#deployment-services) owns the exact capability and service
 boundary.
@@ -192,7 +213,7 @@ Transfer the printed code to the intended client through a private channel. On t
 to the Deployment and paste the code when prompted:
 
 ```bash
-dorf connect https://control.example.com
+dorf connect https://api.dorf.run
 dorf auth status
 ```
 

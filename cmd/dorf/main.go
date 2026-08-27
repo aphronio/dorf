@@ -365,6 +365,9 @@ func providerCommand(ctx context.Context, store postgres.Store, cfg config.Confi
 	if authMode == "openai" && strings.TrimSpace(*apiKeyFile) == "" {
 		return fmt.Errorf("provider connect openai requires --api-key-file PATH or -")
 	}
+	if err := requireSupportedCloudflareState(cfg.GatewayStatePath); err != nil {
+		return err
+	}
 	g, resolvedBind, err := providerGatewayForBind(ctx, store, cfg, *bind, *profileName)
 	if err != nil {
 		return err
@@ -653,13 +656,13 @@ func remoteGatewayForProviderStatus(cfg config.Config, profile core.SandboxProfi
 	if !found {
 		return g, nil
 	}
-	ownedURL, err := cloudflareapp.GatewayURL(state.Hostname)
+	ownedURL, err := cloudflareapp.GatewayURL(state.ModelHostname)
 	if err != nil {
 		return g, err
 	}
 	if ownedURL == gatewayURL {
 		client := freshDNSHTTPClient()
-		probeURL, err := state.ProbeURL()
+		probeURL, err := state.ProbeURL(state.ModelHostname)
 		if err != nil {
 			return g, err
 		}
@@ -783,22 +786,24 @@ func releaseManifest(args []string, stdout, stderr io.Writer) error {
 }
 
 type setupOptions struct {
-	Yes                  bool
-	Connection           string
-	ProfileName          string
-	LocalImage           string
-	IncusManifest        string
-	IncusArchive         string
-	SandboxProviders     sandboxProviderFlags
-	Harness              string
-	ConnectionMode       setupConnectionMode
-	OpenAIKeyFile        string
-	E2BKeyFile           string
-	E2BTemplate          string
-	GatewayURL           string
-	CloudflareHost       string
-	ReplaceCloudflareDNS bool
-	AllowInternet        bool
+	Yes                       bool
+	Connection                string
+	ProfileName               string
+	LocalImage                string
+	IncusManifest             string
+	IncusArchive              string
+	SandboxProviders          sandboxProviderFlags
+	Harness                   string
+	ConnectionMode            setupConnectionMode
+	OpenAIKeyFile             string
+	E2BKeyFile                string
+	E2BTemplate               string
+	GatewayURL                string
+	CloudflareDomain          string
+	CloudflareControlHostname string
+	CloudflareModelHostname   string
+	ReplaceCloudflareDNS      bool
+	AllowInternet             bool
 }
 
 type sandboxProviderFlags []core.SandboxProvider
@@ -842,8 +847,10 @@ func parseSetupOptions(args []string, stderr io.Writer) (setupOptions, error) {
 	e2bKeyFile := set.String("e2b-api-key-file", "", "E2B API key file for guided setup")
 	e2bTemplate := set.String("e2b-template", "", "exact E2B template build reference")
 	gatewayURL := set.String("gateway-url", "", "existing stable HTTPS /v1 Provider Gateway URL")
-	cloudflareHost := set.String("cloudflare-hostname", "", "hostname for guided Cloudflare Tunnel setup")
-	replaceCloudflareDNS := set.Bool("replace-cloudflare-dns", false, "replace the selected hostname's existing Cloudflare DNS route")
+	cloudflareDomain := set.String("cloudflare-domain", "", "Dorf domain using Cloudflare DNS")
+	cloudflareControlHostname := set.String("cloudflare-control-hostname", "", "exact Control API hostname under the Dorf domain")
+	cloudflareModelHostname := set.String("cloudflare-model-hostname", "", "exact model Gateway hostname under the Dorf domain")
+	replaceCloudflareDNS := set.Bool("replace-cloudflare-dns", false, "replace unrelated DNS routes for the selected public endpoints")
 	allowInternet := set.Bool("allow-internet", false, "allow general internet egress from the guided E2B profile")
 	if err := set.Parse(args); err != nil {
 		return setupOptions{}, err
@@ -859,8 +866,11 @@ func parseSetupOptions(args []string, stderr io.Writer) (setupOptions, error) {
 		Harness:          strings.TrimSpace(*harness), ConnectionMode: setupConnectionMode(strings.TrimSpace(*connectionMode)),
 		OpenAIKeyFile: strings.TrimSpace(*openAIKeyFile), E2BKeyFile: strings.TrimSpace(*e2bKeyFile),
 		E2BTemplate: strings.TrimSpace(*e2bTemplate), GatewayURL: strings.TrimSpace(*gatewayURL),
-		CloudflareHost: strings.TrimSpace(*cloudflareHost), ReplaceCloudflareDNS: *replaceCloudflareDNS,
-		AllowInternet: *allowInternet,
+		CloudflareDomain:          strings.TrimSpace(*cloudflareDomain),
+		CloudflareControlHostname: strings.TrimSpace(*cloudflareControlHostname),
+		CloudflareModelHostname:   strings.TrimSpace(*cloudflareModelHostname),
+		ReplaceCloudflareDNS:      *replaceCloudflareDNS,
+		AllowInternet:             *allowInternet,
 	}
 	if err := validateSetupOptions(options); err != nil {
 		return setupOptions{}, err
@@ -869,17 +879,18 @@ func parseSetupOptions(args []string, stderr io.Writer) (setupOptions, error) {
 }
 
 func validateSetupOptions(options setupOptions) error {
-	if len(options.SandboxProviders) == 0 && (options.Connection != "" || options.ProfileName != "" || options.Harness != "" || options.ConnectionMode != "" || options.OpenAIKeyFile != "" || options.E2BKeyFile != "" || options.E2BTemplate != "" || options.GatewayURL != "" || options.CloudflareHost != "" || options.AllowInternet || options.IncusManifest != "" || options.IncusArchive != "") {
+	cloudflareSelected := options.CloudflareDomain != "" || options.CloudflareControlHostname != "" || options.CloudflareModelHostname != "" || options.ReplaceCloudflareDNS
+	if len(options.SandboxProviders) == 0 && (options.Connection != "" || options.ProfileName != "" || options.Harness != "" || options.ConnectionMode != "" || options.OpenAIKeyFile != "" || options.E2BKeyFile != "" || options.E2BTemplate != "" || options.GatewayURL != "" || cloudflareSelected || options.AllowInternet || options.IncusManifest != "" || options.IncusArchive != "") {
 		return fmt.Errorf("agent setup flags require at least one --sandbox-provider")
 	}
 	if options.ProfileName != "" && len(options.SandboxProviders) != 1 {
 		return fmt.Errorf("--profile requires exactly one --sandbox-provider")
 	}
-	if options.GatewayURL != "" && options.CloudflareHost != "" {
-		return fmt.Errorf("setup accepts either --gateway-url or --cloudflare-hostname, not both")
+	if options.GatewayURL != "" && cloudflareSelected {
+		return fmt.Errorf("setup accepts either --gateway-url or Cloudflare domain options, not both")
 	}
-	if options.ReplaceCloudflareDNS && options.CloudflareHost == "" {
-		return fmt.Errorf("--replace-cloudflare-dns requires --cloudflare-hostname")
+	if options.CloudflareDomain == "" && (options.CloudflareControlHostname != "" || options.CloudflareModelHostname != "" || options.ReplaceCloudflareDNS) {
+		return fmt.Errorf("Cloudflare endpoint overrides and --replace-cloudflare-dns require --cloudflare-domain")
 	}
 	if options.Connection != "" && options.ConnectionMode != "" {
 		return fmt.Errorf("setup accepts either an existing --ai-connection or --connection-auth, not both")
@@ -900,7 +911,7 @@ func validateSetupOptions(options setupOptions) error {
 		return fmt.Errorf("Incus image transport flags require --sandbox-provider incus")
 	}
 	if len(options.SandboxProviders) > 0 && !containsSandboxProvider(options.SandboxProviders, core.SandboxProviderE2B) &&
-		(options.E2BKeyFile != "" || options.E2BTemplate != "" || options.GatewayURL != "" || options.CloudflareHost != "" || options.AllowInternet) {
+		(options.E2BKeyFile != "" || options.E2BTemplate != "" || options.GatewayURL != "" || cloudflareSelected || options.AllowInternet) {
 		return fmt.Errorf("E2B setup flags require --sandbox-provider e2b")
 	}
 	return nil
@@ -916,6 +927,9 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	}
 	presenter := newSetupPresenter(stdout)
 	presenter.Welcome()
+	if err := requireSupportedCloudflareState(cfg.GatewayStatePath); err != nil {
+		return err
+	}
 	if err := checkDockerRuntime(ctx); err != nil {
 		return setupBootstrapHandoff(bootstrapDocker, err, stdout)
 	}
@@ -1011,6 +1025,9 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 		presenter.Ready("Dorf", "Control plane ready · configure a Sandbox profile before admitting Jobs")
 	} else {
 		presenter.Ready("Dorf", "Control plane and durable Job worker ready")
+	}
+	if prepared != nil && prepared.ControlURL != "" {
+		presenter.Ready("Connect", "dorf connect "+prepared.ControlURL)
 	}
 	return nil
 }

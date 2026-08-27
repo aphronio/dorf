@@ -471,15 +471,16 @@ func TestProviderStatusUsesFreshDNSForTheExactDorfOwnedTunnel(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cloudflarePath, "state.json"), []byte(`{
   "schema_version": 1,
   "tunnel_name": "dorf-proof",
-  "hostname": "dorf.example.com",
+  "hostname": "api.dorf.example",
+  "model_hostname": "models.dorf.example",
   "origin": "http://127.0.0.1:8317",
   "probe_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 }`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	profile := core.SandboxProfile{Provider: core.SandboxProviderE2B, E2BGatewayURL: "https://dorf.example.com/v1"}
+	profile := core.SandboxProfile{Provider: core.SandboxProviderE2B, E2BGatewayURL: "https://models.dorf.example/v1"}
 	g, err := remoteGatewayForProviderStatus(config.Config{GatewayStatePath: statePath}, profile)
-	if err != nil || g.Client == nil || g.DeploymentProbeURL != "https://dorf.example.com/.dorf/probe/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+	if err != nil || g.Client == nil || g.DeploymentProbeURL != "https://models.dorf.example/.dorf/probe/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
 		t.Fatalf("gateway=%#v err=%v", g, err)
 	}
 	profile.E2BGatewayURL = "https://operator.example/v1"
@@ -510,15 +511,34 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 		t.Fatalf("options=%#v", options)
 	}
 	replacement, err := parseSetupOptions([]string{
-		"--sandbox-provider", "e2b", "--cloudflare-hostname", "dorf.example.com", "--replace-cloudflare-dns",
+		"--sandbox-provider", "e2b", "--cloudflare-domain", "dorf.run",
+		"--cloudflare-control-hostname", "control.dorf.run",
+		"--cloudflare-model-hostname", "inference.dorf.run",
+		"--replace-cloudflare-dns",
 	}, &stderr)
-	if err != nil || !replacement.ReplaceCloudflareDNS {
+	if err != nil || replacement.CloudflareDomain != "dorf.run" || replacement.CloudflareControlHostname != "control.dorf.run" ||
+		replacement.CloudflareModelHostname != "inference.dorf.run" || !replacement.ReplaceCloudflareDNS {
 		t.Fatalf("replacement options=%#v error=%v", replacement, err)
 	}
 	if _, err := parseSetupOptions([]string{
 		"--sandbox-provider", "e2b", "--replace-cloudflare-dns",
-	}, &stderr); err == nil || !strings.Contains(err.Error(), "--cloudflare-hostname") {
-		t.Fatalf("hostname-less replacement error=%v", err)
+	}, &stderr); err == nil || !strings.Contains(err.Error(), "--cloudflare-domain") {
+		t.Fatalf("domain-less replacement error=%v", err)
+	}
+	if _, err := parseSetupOptions([]string{
+		"--sandbox-provider", "e2b", "--cloudflare-control-hostname", "api.dorf.run",
+	}, &stderr); err == nil || !strings.Contains(err.Error(), "--cloudflare-domain") {
+		t.Fatalf("domain-less endpoint error=%v", err)
+	}
+	if _, err := parseSetupOptions([]string{
+		"--sandbox-provider", "e2b", "--gateway-url", "https://gateway.example/v1", "--cloudflare-domain", "dorf.run",
+	}, &stderr); err == nil || !strings.Contains(err.Error(), "either") {
+		t.Fatalf("mixed ingress error=%v", err)
+	}
+	if _, err := parseSetupOptions([]string{
+		"--sandbox-provider", "e2b", "--cloudflare-hostname", "dorf.run",
+	}, &stderr); err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
+		t.Fatalf("removed hostname flag error=%v", err)
 	}
 	if _, err := parseSetupOptions([]string{"--profile", "local-codex", "--sandbox-provider", "incus", "--sandbox-provider", "e2b"}, &stderr); err == nil || !strings.Contains(err.Error(), "exactly one") {
 		t.Fatalf("multi-provider named profile error=%v", err)
@@ -590,12 +610,13 @@ func TestGuidedSetupPresenterKeepsChoicesAndControlsUsable(t *testing.T) {
 	provider := presenter.ProviderGroup(&providers, true)
 	harness := presenter.HarnessGroup(new(string))
 	connection := presenter.ConnectionGroup(new(setupConnectionMode))
-	gateway := presenter.CloudflareGatewayGroup(new(setupGatewayMode), "example.com", false)
+	controlHostname, modelHostname := "api.dorf.run", "models.dorf.run"
+	endpoints := presenter.PublicEndpointsGroup("dorf.run", &controlHostname, &modelHostname)
 	for _, group := range []struct{ name, header, content string }{
 		{"provider", provider.Header(), provider.Content()},
 		{"harness", harness.Header(), harness.Content()},
 		{"connection", connection.Header(), connection.Content()},
-		{"gateway", gateway.Header(), gateway.Content()},
+		{"endpoints", endpoints.Header(), endpoints.Content()},
 	} {
 		if strings.TrimSpace(group.header) == "" || strings.TrimSpace(group.content) == "" {
 			t.Fatalf("%s group header=%q content=%q", group.name, group.header, group.content)
@@ -627,10 +648,9 @@ func TestGuidedSetupPresenterKeepsChoicesAndControlsUsable(t *testing.T) {
 		styles.Focused.FocusedButton.Render("Continue") == styles.Focused.BlurredButton.Render("Continue") {
 		t.Fatal("focused controls lack a distinct indicator")
 	}
-	repairGroup := presenter.CloudflareGatewayGroup(new(setupGatewayMode), "example.com", true)
-	for _, label := range []string{"Repair with a guided Cloudflare Tunnel", "Replace this hostname's existing DNS route", "Existing HTTPS ingress"} {
-		if !strings.Contains(repairGroup.Content(), label) {
-			t.Fatalf("Cloudflare repair selector omitted %q:\n%s", label, repairGroup.Content())
+	for _, label := range []string{"Control API", "Model Gateway", "api.dorf.run", "models.dorf.run"} {
+		if !strings.Contains(endpoints.Content(), label) {
+			t.Fatalf("public endpoint inputs omitted %q:\n%s", label, endpoints.Content())
 		}
 	}
 }
@@ -646,6 +666,30 @@ func TestManagedSetupRejectsExternalPostgreSQLBeforeHostWork(t *testing.T) {
 	}
 }
 
+func TestManagedSetupRejectsRetiredSingleOriginTunnelBeforeHostWork(t *testing.T) {
+	statePath := t.TempDir()
+	cloudflarePath := filepath.Join(statePath, "cloudflare")
+	if err := os.MkdirAll(cloudflarePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cloudflarePath, "state.json"), []byte(`{
+  "schema_version": 1,
+  "tunnel_name": "dorf-retired",
+  "hostname": "dorf.example.com",
+  "origin": "http://127.0.0.1:8317"
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout strings.Builder
+	err := setupCommand(context.Background(), config.Config{GatewayStatePath: statePath}, nil, &stdout, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "retired single-origin") {
+		t.Fatalf("retired Tunnel error=%v", err)
+	}
+	if strings.Contains(stdout.String(), "Host runtime") || strings.Contains(stdout.String(), "Starting Dorf services") {
+		t.Fatalf("retired Tunnel reached host work: %q", stdout.String())
+	}
+}
+
 func TestGuidedGatewayPlanningReusesTheDurableProfileContract(t *testing.T) {
 	existing := core.SandboxProfile{
 		Name: "cloud-codex", Provider: core.SandboxProviderE2B, Harness: "codex",
@@ -653,17 +697,22 @@ func TestGuidedGatewayPlanningReusesTheDurableProfileContract(t *testing.T) {
 	}
 	plan, err := planRemoteGateway(context.Background(), setupOptions{}, []guidedProfilePlan{{
 		Provider: core.SandboxProviderE2B, Name: existing.Name, Harness: existing.Harness, Existing: &existing,
-	}}, setupPresenter{}, fakeDNSResolver{}, "")
+	}}, setupPresenter{}, fakeDNSResolver{}, ownedCloudflareEndpoints{})
 	if err != nil || plan.Mode != setupGatewayExisting || plan.URL != existing.E2BGatewayURL {
 		t.Fatalf("plan=%#v err=%v", plan, err)
 	}
-	_, err = planRemoteGateway(context.Background(), setupOptions{CloudflareHost: "other.example.com"}, []guidedProfilePlan{{
+	owned := ownedCloudflareEndpoints{ControlHostname: "api.dorf.run", ModelHostname: "models.dorf.run"}
+	if _, err := planRemoteGateway(context.Background(), setupOptions{GatewayURL: "https://gateway.example/v1"}, nil, setupPresenter{}, fakeDNSResolver{}, owned); err == nil || !strings.Contains(err.Error(), "remove") {
+		t.Fatalf("custom Gateway with retained Tunnel error=%v", err)
+	}
+	cloudflare := fakeDNSResolver{records: map[string][]*net.NS{
+		"dorf.run": {{Host: "cash.ns.cloudflare.com."}, {Host: "lana.ns.cloudflare.com."}},
+	}}
+	plan, err = planRemoteGateway(context.Background(), setupOptions{CloudflareDomain: "dorf.run"}, []guidedProfilePlan{{
 		Provider: core.SandboxProviderE2B, Name: existing.Name, Harness: existing.Harness, Existing: &existing,
-	}}, setupPresenter{}, fakeDNSResolver{records: map[string][]*net.NS{
-		"example.com": {{Host: "cash.ns.cloudflare.com."}, {Host: "lana.ns.cloudflare.com."}},
-	}}, "")
-	if err == nil || !strings.Contains(err.Error(), "update the profile explicitly") {
-		t.Fatalf("conflicting Gateway error=%v", err)
+	}}, setupPresenter{}, cloudflare, ownedCloudflareEndpoints{})
+	if err != nil || plan.URL != "https://models.dorf.run/v1" {
+		t.Fatalf("retarget plan=%#v error=%v", plan, err)
 	}
 	for _, invalid := range []string{
 		"http://gateway.example/v1", "https://user@gateway.example/v1", "https://gateway.example/v1/", "https://gateway.example/v1?token=secret",
@@ -676,73 +725,104 @@ func TestGuidedGatewayPlanningReusesTheDurableProfileContract(t *testing.T) {
 
 func TestGuidedGatewayPlanningRequiresCloudflareDNSAndAnUnusedHostname(t *testing.T) {
 	cloudflare := fakeDNSResolver{records: map[string][]*net.NS{
-		"example.com": {{Host: "cash.ns.cloudflare.com."}, {Host: "lana.ns.cloudflare.com."}},
+		"dorf.run": {{Host: "cash.ns.cloudflare.com."}, {Host: "lana.ns.cloudflare.com."}},
 	}}
-	plan, err := planRemoteGateway(context.Background(), setupOptions{CloudflareHost: "dorf.example.com"}, nil, setupPresenter{}, cloudflare, "")
-	if err != nil || plan.Mode != setupGatewayCloudflare || plan.URL != "https://dorf.example.com/v1" {
+	plan, err := planRemoteGateway(context.Background(), setupOptions{CloudflareDomain: "dorf.run"}, nil, setupPresenter{}, cloudflare, ownedCloudflareEndpoints{})
+	if err != nil || plan.Mode != setupGatewayCloudflare || plan.Domain != "dorf.run" ||
+		plan.ControlHostname != "api.dorf.run" || plan.ModelHostname != "models.dorf.run" ||
+		plan.ControlURL != "https://api.dorf.run" || plan.URL != "https://models.dorf.run/v1" {
 		t.Fatalf("plan=%#v err=%v", plan, err)
 	}
 
 	nonCloudflare := fakeDNSResolver{records: map[string][]*net.NS{
-		"example.com": {{Host: "ns1.other-provider.example."}},
+		"dorf.run": {{Host: "ns1.other-provider.example."}},
 	}}
-	if _, err := planRemoteGateway(context.Background(), setupOptions{CloudflareHost: "dorf.example.com"}, nil, setupPresenter{}, nonCloudflare, ""); err == nil || !strings.Contains(err.Error(), "not Cloudflare") {
+	if _, err := planRemoteGateway(context.Background(), setupOptions{CloudflareDomain: "dorf.run"}, nil, setupPresenter{}, nonCloudflare, ownedCloudflareEndpoints{}); err == nil || !strings.Contains(err.Error(), "not Cloudflare") {
 		t.Fatalf("non-Cloudflare error=%v", err)
 	}
 
 	occupied := cloudflare
-	occupied.addresses = map[string][]net.IPAddr{"dorf.example.com": {{IP: net.ParseIP("192.0.2.1")}}}
-	if _, err := planRemoteGateway(context.Background(), setupOptions{CloudflareHost: "dorf.example.com"}, nil, setupPresenter{}, occupied, ""); err == nil || !strings.Contains(err.Error(), "already resolves") {
-		t.Fatalf("occupied hostname error=%v", err)
+	occupied.addresses = map[string][]net.IPAddr{"api.dorf.run": {{IP: net.ParseIP("192.0.2.1")}}}
+	if _, err := planRemoteGateway(context.Background(), setupOptions{CloudflareDomain: "dorf.run"}, nil, setupPresenter{}, occupied, ownedCloudflareEndpoints{}); err == nil || !strings.Contains(err.Error(), "already resolves") {
+		t.Fatalf("occupied Control API hostname error=%v", err)
 	}
-	if plan, err := planRemoteGateway(context.Background(), setupOptions{CloudflareHost: "dorf.example.com"}, nil, setupPresenter{}, occupied, "dorf.example.com"); err != nil || plan.Mode != setupGatewayCloudflare {
+	occupied.addresses = map[string][]net.IPAddr{"models.dorf.run": {{IP: net.ParseIP("192.0.2.2")}}}
+	if _, err := planRemoteGateway(context.Background(), setupOptions{CloudflareDomain: "dorf.run"}, nil, setupPresenter{}, occupied, ownedCloudflareEndpoints{}); err == nil || !strings.Contains(err.Error(), "already resolves") {
+		t.Fatalf("occupied model Gateway hostname error=%v", err)
+	}
+	occupied.addresses = map[string][]net.IPAddr{"api.dorf.run": {{IP: net.ParseIP("192.0.2.1")}}}
+	owned := ownedCloudflareEndpoints{ControlHostname: "api.dorf.run", ModelHostname: "models.dorf.run"}
+	if plan, err := planRemoteGateway(context.Background(), setupOptions{CloudflareDomain: "dorf.run"}, nil, setupPresenter{}, occupied, owned); err != nil || plan.Mode != setupGatewayCloudflare {
 		t.Fatalf("owned hostname replay plan=%#v error=%v", plan, err)
 	}
 }
 
 func TestGuidedGatewayPlanningCanExplicitlyReplaceCloudflareDNS(t *testing.T) {
-	const hostname = "dorf.example.com"
 	occupied := fakeDNSResolver{
 		records: map[string][]*net.NS{
-			"example.com": {{Host: "cash.ns.cloudflare.com."}, {Host: "lana.ns.cloudflare.com."}},
+			"dorf.run": {{Host: "cash.ns.cloudflare.com."}, {Host: "lana.ns.cloudflare.com."}},
 		},
-		addresses: map[string][]net.IPAddr{hostname: {{IP: net.ParseIP("192.0.2.1")}}},
+		addresses: map[string][]net.IPAddr{
+			"control.dorf.run":   {{IP: net.ParseIP("192.0.2.1")}},
+			"inference.dorf.run": {{IP: net.ParseIP("192.0.2.2")}},
+		},
 	}
 	plan, err := planRemoteGateway(context.Background(), setupOptions{
-		CloudflareHost: hostname, ReplaceCloudflareDNS: true,
-	}, nil, setupPresenter{}, occupied, "")
-	if err != nil || plan.Mode != setupGatewayCloudflare || plan.URL != "https://dorf.example.com/v1" || !plan.ReplaceExistingDNS {
+		CloudflareDomain: "dorf.run", CloudflareControlHostname: "control.dorf.run",
+		CloudflareModelHostname: "inference.dorf.run", ReplaceCloudflareDNS: true,
+	}, nil, setupPresenter{}, occupied, ownedCloudflareEndpoints{})
+	if err != nil || plan.Mode != setupGatewayCloudflare || plan.ControlURL != "https://control.dorf.run" ||
+		plan.URL != "https://inference.dorf.run/v1" || !plan.ReplaceExistingDNS {
 		t.Fatalf("replacement plan=%#v error=%v", plan, err)
 	}
 }
 
-func TestExistingProfileCannotTurnOccupiedDNSIntoADorfTunnel(t *testing.T) {
-	const hostname = "dorf.example.com"
+func TestGuidedGatewayPlanningRetargetsTheOwnedSingleOriginProfile(t *testing.T) {
 	existing := core.SandboxProfile{
 		Name: "cloud-codex", Provider: core.SandboxProviderE2B, Harness: "codex",
-		Artifact: "dorf:exact-build", E2BGatewayURL: "https://" + hostname + "/v1",
+		Artifact: "dorf:exact-build", E2BGatewayURL: "https://api.dorf.run/v1",
 	}
-	plans := []guidedProfilePlan{{
+	owned := ownedCloudflareEndpoints{ControlHostname: "api.dorf.run", ModelHostname: "models.dorf.run"}
+	plan, err := planRemoteGateway(context.Background(), setupOptions{}, []guidedProfilePlan{{
 		Provider: core.SandboxProviderE2B, Name: existing.Name, Harness: existing.Harness, Existing: &existing,
-	}}
-	occupied := fakeDNSResolver{
-		records: map[string][]*net.NS{
-			"example.com": {{Host: "cash.ns.cloudflare.com."}, {Host: "lana.ns.cloudflare.com."}},
-		},
-		addresses: map[string][]net.IPAddr{hostname: {{IP: net.ParseIP("192.0.2.1")}}},
+	}}, setupPresenter{}, fakeDNSResolver{}, owned)
+	if err != nil || plan.Mode != setupGatewayCloudflare || plan.ControlHostname != owned.ControlHostname ||
+		plan.ModelHostname != owned.ModelHostname || plan.ControlURL != "https://api.dorf.run" || plan.URL != "https://models.dorf.run/v1" {
+		t.Fatalf("plan=%#v error=%v", plan, err)
 	}
-	options := setupOptions{CloudflareHost: hostname}
-	if _, err := planRemoteGateway(context.Background(), options, plans, setupPresenter{}, occupied, ""); err == nil || !strings.Contains(err.Error(), "already resolves") {
-		t.Fatalf("occupied existing-profile hostname error=%v", err)
+}
+
+func TestGuidedGatewayPlanningPreservesExactRetainedEndpointsWithoutAProfile(t *testing.T) {
+	owned := ownedCloudflareEndpoints{ControlHostname: "control.dorf.run", ModelHostname: "inference.dorf.run"}
+	plan, err := planRemoteGateway(context.Background(), setupOptions{}, nil, setupPresenter{}, fakeDNSResolver{}, owned)
+	if err != nil || plan.Domain != "dorf.run" || plan.ControlHostname != owned.ControlHostname ||
+		plan.ModelHostname != owned.ModelHostname || plan.ControlURL != "https://control.dorf.run" || plan.URL != "https://inference.dorf.run/v1" {
+		t.Fatalf("retained plan=%#v error=%v", plan, err)
 	}
-	plan, err := planRemoteGateway(context.Background(), options, plans, setupPresenter{}, occupied, hostname)
-	if err != nil || plan.Mode != setupGatewayCloudflare || plan.Hostname != hostname {
-		t.Fatalf("owned existing-profile replay plan=%#v error=%v", plan, err)
+}
+
+func TestCloudflareGatewayPlanRequiresDistinctDirectChildren(t *testing.T) {
+	controlOverride, err := newCloudflareGatewayPlan("DORF.RUN", "control.dorf.run", "", false)
+	if err != nil || controlOverride.ControlHostname != "control.dorf.run" || controlOverride.ModelHostname != "models.dorf.run" {
+		t.Fatalf("control override plan=%#v error=%v", controlOverride, err)
 	}
-	options.ReplaceCloudflareDNS = true
-	plan, err = planRemoteGateway(context.Background(), options, plans, setupPresenter{}, occupied, "")
-	if err != nil || plan.Mode != setupGatewayCloudflare || !plan.ReplaceExistingDNS {
-		t.Fatalf("explicit existing-profile replacement plan=%#v error=%v", plan, err)
+	modelOverride, err := newCloudflareGatewayPlan("dorf.run", "", "inference.dorf.run", false)
+	if err != nil || modelOverride.ControlHostname != "api.dorf.run" || modelOverride.ModelHostname != "inference.dorf.run" {
+		t.Fatalf("model override plan=%#v error=%v", modelOverride, err)
+	}
+	for _, test := range []struct {
+		name, control, model string
+	}{
+		{name: "equal", control: "api.dorf.run", model: "api.dorf.run"},
+		{name: "control apex", control: "dorf.run", model: "models.dorf.run"},
+		{name: "model outside", control: "api.dorf.run", model: "models.example.com"},
+		{name: "nested control", control: "edge.api.dorf.run", model: "models.dorf.run"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := newCloudflareGatewayPlan("dorf.run", test.control, test.model, false); err == nil {
+				t.Fatalf("accepted control=%q model=%q", test.control, test.model)
+			}
+		})
 	}
 }
 

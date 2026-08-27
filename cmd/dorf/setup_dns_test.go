@@ -116,6 +116,28 @@ func TestHostnameHasAddressesTreatsMissingRecordsAsAvailable(t *testing.T) {
 	}
 }
 
+func TestPublicDeploymentProbeRequiresTheExactUnauthenticated204(t *testing.T) {
+	const probeURL = "https://api.dorf.run/.dorf/probe/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodGet || request.URL.String() != probeURL {
+			t.Fatalf("probe request=%s %s", request.Method, request.URL)
+		}
+		if authorization := request.Header.Get("Authorization"); authorization != "" {
+			t.Fatalf("probe sent Authorization %q", authorization)
+		}
+		return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
+	})}
+	if err := checkPublicDeploymentProbe(context.Background(), probeURL, client); err != nil {
+		t.Fatal(err)
+	}
+	client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusFound, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
+	})
+	if err := checkPublicDeploymentProbe(context.Background(), probeURL, client); err == nil || !strings.Contains(err.Error(), "HTTP 302") {
+		t.Fatalf("redirecting probe error=%v", err)
+	}
+}
+
 func TestResolvedHTTPClientBypassesAStaleSystemResolver(t *testing.T) {
 	dialed := make(chan string, 1)
 	served := make(chan error, 1)

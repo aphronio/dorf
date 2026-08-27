@@ -49,23 +49,32 @@ remote HTTPS endpoint; that controller path does not create the separate guest-t
 remote endpoint never uses guided bridge inference and remains unsupported until the complete
 endpoint, port-forward, and explicit guest-route terminal passes.
 
-An existing operator-owned HTTPS URL is the universal remote contract. Guided setup asks for the
-intended hostname and discovers its nearest public DNS delegation. When every authoritative
-nameserver is Cloudflare, it can reconcile one named, outbound-only Cloudflare Tunnel. An unused
-hostname enters that guided path normally. A resolving hostname defaults to the existing-HTTPS
-ingress path, but interactive setup also offers an explicit repair choice that replaces its current
-DNS route after confirmation. Automation must provide both the exact hostname and the explicit DNS
-replacement flag. Dorf never requests Cloudflare's overwrite behavior without one of those explicit
-operator choices. Browser authorization creates a broad Cloudflare account certificate only
-for Tunnel and DNS reconciliation; setup removes it after those account-level mutations settle.
+An existing operator-owned HTTPS `/v1` URL is the universal remote Gateway contract. Advanced
+`--gateway-url` supplies that route without changing Control API ingress. The
+[deployment-host procedure](../getting-started.md#1-install-the-application-initialize-a-deployment-host)
+owns guided Cloudflare prompts, automation inputs, and DNS-replacement consent. Its selected Dorf
+domain remains untouched at the apex. When its two exact direct-child hostnames are Cloudflare
+delegated, setup reconciles one named, outbound-only Tunnel with these routes:
+
+```text
+https://CONTROL_HOST/v1  -> control-api:8745
+https://MODEL_HOST/v1    -> provider-gateway:8317
+```
+
+The Control origin is printed for `dorf connect`; the exact Model URL is persisted in the Sandbox
+Profile. The Tunnel state retains both hostnames and replays them unchanged. They share Tunnel
+custody, not protocol or application authority. Dorf never requests Cloudflare's overwrite behavior
+without the operator choice defined by the setup procedure. Browser authorization creates a broad
+Cloudflare account certificate only for Tunnel and DNS reconciliation; setup removes it after those
+account-level mutations settle.
+
 The Gateway and configured `cloudflared` process are foreground siblings in Dorf's static Compose
-project; there is no host Cloudflare service. The Tunnel receives no upstream Provider credential
-and exposes only `/v1` plus one random nonsecret deployment probe. Setup and status require that
-probe to return
-HTTP 204 and separately require anonymous `/v1/models` access to return the Gateway's HTTP 401. This
-proves the configured hostname reaches this Dorf-owned Tunnel rather than merely some protected
-service. Operator-owned HTTPS ingress retains only the universal protected-API check because Dorf
-does not own its routing configuration.
+project; there is no host Cloudflare service. The Tunnel receives no upstream Provider or Client
+credential and exposes only each hostname's `/v1` surface plus one random nonsecret deployment
+probe. Setup requires public Control API discovery, the probe's HTTP 204, and anonymous
+`/v1/models` access returning the Gateway's HTTP 401. This proves both configured hostnames reach
+the Dorf-owned Tunnel. Operator-owned Gateway ingress retains only the universal protected-API
+check because Dorf does not own its routing configuration.
 
 The E2B adapter defaults to restricting Sandbox egress to the configured Gateway hostname, and the
 Gateway's revocable consumer key remains the request capability. A repository profile may
@@ -95,9 +104,9 @@ machine-readable facts.
 - Route keys are broker-local capabilities, never upstream credentials.
 - Compose keeps the broker private; any guest-reachable route is an explicit verified Profile field,
   never a wildcard or inferred public listener.
-- The guided Cloudflare route forwards only the exact `/v1` API path; its one nonsecret
-  deployment-probe path terminates with HTTP 204 and every other public path terminates with HTTP
-  404.
+- The guided Cloudflare routes forward only the `/v1` surface on each hostname; their one nonsecret
+  deployment-probe path terminates with HTTP 204 and every path outside those surfaces terminates
+  with HTTP 404.
 - A remote route is admitted only as an exact HTTPS `/v1` URL; query credentials and userinfo are
   rejected. E2B egress is default-deny unless its selected profile explicitly admits internet access.
 - Route creation and revocation use stable Action identities and authenticated management calls.

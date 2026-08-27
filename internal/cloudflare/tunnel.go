@@ -25,6 +25,7 @@ import (
 
 const (
 	BinaryVersion        = "2026.8.2"
+	ComposeControlOrigin = "http://control-api:8745"
 	ComposeGatewayOrigin = "http://provider-gateway:8317"
 	binarySHA256         = "fcfb02b575a52ca1af2e3267af4e1517bcdeb30ac48c834c69abaed3c0576ad2"
 	binaryURL            = "https://github.com/cloudflare/cloudflared/releases/download/" + BinaryVersion + "/cloudflared-linux-amd64"
@@ -88,7 +89,6 @@ func mergeEnv(base, overrides []string) []string {
 type Tunnel struct {
 	StatePath          string
 	Binary             string
-	Origin             string
 	ReplaceExistingDNS bool
 	Runner             CommandRunner
 	HTTPClient         *http.Client
@@ -99,16 +99,19 @@ type Tunnel struct {
 }
 
 type State struct {
-	SchemaVersion  int    `json:"schema_version"`
-	TunnelName     string `json:"tunnel_name"`
-	TunnelID       string `json:"tunnel_id,omitempty"`
-	Hostname       string `json:"hostname"`
-	Origin         string `json:"origin"`
-	CredentialPath string `json:"credential_path,omitempty"`
-	ConfigPath     string `json:"config_path,omitempty"`
-	BinaryPath     string `json:"binary_path,omitempty"`
-	ProbeID        string `json:"probe_id,omitempty"`
-	DNSConfigured  bool   `json:"dns_configured"`
+	SchemaVersion         int    `json:"schema_version"`
+	TunnelName            string `json:"tunnel_name"`
+	TunnelID              string `json:"tunnel_id,omitempty"`
+	Hostname              string `json:"hostname"`
+	ModelHostname         string `json:"model_hostname,omitempty"`
+	Origin                string `json:"origin"`
+	CredentialPath        string `json:"credential_path,omitempty"`
+	ConfigPath            string `json:"config_path,omitempty"`
+	BinaryPath            string `json:"binary_path,omitempty"`
+	ProbeID               string `json:"probe_id,omitempty"`
+	DNSConfigured         bool   `json:"dns_configured"`
+	ModelDNSConfigured    bool   `json:"model_dns_configured"`
+	DNSReplacementPending bool   `json:"dns_replacement_pending,omitempty"`
 }
 
 type ComposeState struct {
@@ -116,15 +119,22 @@ type ComposeState struct {
 	Digest    string
 }
 
-func (s State) ProbeURL() (string, error) {
-	baseURL, err := GatewayURL(s.Hostname)
+func (s State) ProbeURL(hostname string) (string, error) {
+	hostname, err := canonicalHostname(hostname)
+	if err != nil {
+		return "", err
+	}
+	if hostname != s.Hostname && hostname != s.ModelHostname {
+		return "", fmt.Errorf("Cloudflare hostname %s is not owned by this Tunnel", hostname)
+	}
+	baseURL, err := ControlURL(hostname)
 	if err != nil {
 		return "", err
 	}
 	if !probeIDPattern.MatchString(s.ProbeID) {
 		return "", fmt.Errorf("Cloudflare Tunnel deployment probe identity is invalid; rerun dorf setup")
 	}
-	return strings.TrimSuffix(baseURL, "/v1") + "/.dorf/probe/" + s.ProbeID, nil
+	return baseURL + "/.dorf/probe/" + s.ProbeID, nil
 }
 
 type listedTunnel struct {
@@ -150,7 +160,7 @@ func (t Tunnel) ComposeState() (ComposeState, bool, error) {
 	if err != nil || !found {
 		return ComposeState{}, false, err
 	}
-	if !state.DNSConfigured || state.TunnelID == "" || state.CredentialPath == "" || state.ConfigPath == "" || state.BinaryPath == "" {
+	if !state.DNSConfigured || !state.ModelDNSConfigured || state.ModelHostname == "" || state.TunnelID == "" || state.CredentialPath == "" || state.ConfigPath == "" || state.BinaryPath == "" {
 		return ComposeState{}, false, nil
 	}
 	if err := t.attestPreparedRuntime(state); err != nil {
@@ -201,7 +211,7 @@ func (t Tunnel) RunForeground(ctx context.Context, stdout, stderr io.Writer) err
 	if err != nil {
 		return err
 	}
-	if !found || !state.DNSConfigured || strings.TrimSpace(state.TunnelID) == "" || strings.TrimSpace(state.CredentialPath) == "" || strings.TrimSpace(state.ConfigPath) == "" || strings.TrimSpace(state.BinaryPath) == "" {
+	if !found || !state.DNSConfigured || !state.ModelDNSConfigured || strings.TrimSpace(state.ModelHostname) == "" || strings.TrimSpace(state.TunnelID) == "" || strings.TrimSpace(state.CredentialPath) == "" || strings.TrimSpace(state.ConfigPath) == "" || strings.TrimSpace(state.BinaryPath) == "" {
 		return fmt.Errorf("Cloudflare Tunnel is not prepared; rerun dorf setup")
 	}
 	if err := t.attestPreparedRuntime(state); err != nil {
@@ -231,7 +241,7 @@ func (t Tunnel) PrepareRuntimeBinary(ctx context.Context) (bool, error) {
 	if err != nil || !found {
 		return false, err
 	}
-	if !state.DNSConfigured || state.TunnelID == "" || state.CredentialPath == "" || state.ConfigPath == "" {
+	if !state.DNSConfigured || !state.ModelDNSConfigured || state.ModelHostname == "" || state.TunnelID == "" || state.CredentialPath == "" || state.ConfigPath == "" {
 		return false, nil
 	}
 	lock, err := os.OpenFile(filepath.Join(statePath, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
@@ -247,7 +257,7 @@ func (t Tunnel) PrepareRuntimeBinary(ctx context.Context) (bool, error) {
 	if err != nil || !found {
 		return false, err
 	}
-	if !state.DNSConfigured || state.TunnelID == "" || state.CredentialPath == "" || state.ConfigPath == "" {
+	if !state.DNSConfigured || !state.ModelDNSConfigured || state.ModelHostname == "" || state.TunnelID == "" || state.CredentialPath == "" || state.ConfigPath == "" {
 		return false, nil
 	}
 	if err := t.repairRetainedConfig(state); err != nil {
@@ -353,10 +363,18 @@ func (t Tunnel) expectedBinarySHA256() string {
 	return binarySHA256
 }
 
-func GatewayURL(hostname string) (string, error) {
+func canonicalHostname(hostname string) (string, error) {
 	hostname = strings.ToLower(strings.TrimSpace(hostname))
 	if !hostnamePattern.MatchString(hostname) || net.ParseIP(hostname) != nil {
-		return "", fmt.Errorf("Cloudflare hostname must be one complete lowercase DNS hostname")
+		return "", fmt.Errorf("Cloudflare hostname must be one complete DNS hostname")
+	}
+	return hostname, nil
+}
+
+func GatewayURL(hostname string) (string, error) {
+	hostname, err := canonicalHostname(hostname)
+	if err != nil {
+		return "", err
 	}
 	parsed, err := url.Parse("https://" + hostname + "/v1")
 	if err != nil || parsed.Hostname() != hostname {
@@ -365,47 +383,48 @@ func GatewayURL(hostname string) (string, error) {
 	return parsed.String(), nil
 }
 
-func validateOrigin(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == ComposeGatewayOrigin {
-		return raw, nil
+func ControlURL(hostname string) (string, error) {
+	hostname, err := canonicalHostname(hostname)
+	if err != nil {
+		return "", err
 	}
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme != "http" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Port() != "8317" {
-		return "", fmt.Errorf("Cloudflare Tunnel origin must be one private HTTP address on port 8317")
-	}
-	host := net.ParseIP(parsed.Hostname())
-	if host == nil || (!host.IsLoopback() && !host.IsPrivate()) {
-		return "", fmt.Errorf("Cloudflare Tunnel origin must be loopback or a private host address")
-	}
-	return parsed.String(), nil
+	return "https://" + hostname, nil
 }
 
 // Prepare creates one locally managed, outbound-only Cloudflare Tunnel and
 // retains only the credential and config needed to run that exact Tunnel. It
 // does not install or start a host service.
-func (t Tunnel) Prepare(ctx context.Context, hostname string, stdout, stderr io.Writer) (State, error) {
-	return t.reconcile(ctx, hostname, stdout, stderr)
+func (t Tunnel) Prepare(ctx context.Context, controlHostname, modelHostname string, stdout, stderr io.Writer) (State, error) {
+	return t.reconcile(ctx, controlHostname, modelHostname, stdout, stderr)
 }
 
 // A broad account certificate exists only while the external Tunnel and DNS
 // route are being reconciled. The retained credential can run only the exact
 // Tunnel recorded in state.
-func (t Tunnel) reconcile(ctx context.Context, hostname string, stdout, stderr io.Writer) (State, error) {
-	gatewayURL, err := GatewayURL(hostname)
+func (t Tunnel) reconcile(ctx context.Context, controlHostname, modelHostname string, stdout, stderr io.Writer) (State, error) {
+	controlHostname, err := canonicalHostname(controlHostname)
 	if err != nil {
-		return State{}, err
+		return State{}, fmt.Errorf("validate Cloudflare control hostname: %w", err)
 	}
-	hostname = strings.TrimSuffix(strings.TrimPrefix(gatewayURL, "https://"), "/v1")
-	origin, err := validateOrigin(t.Origin)
+	modelHostname, err = canonicalHostname(modelHostname)
 	if err != nil {
-		return State{}, err
+		return State{}, fmt.Errorf("validate Cloudflare model hostname: %w", err)
+	}
+	if controlHostname == modelHostname {
+		return State{}, fmt.Errorf("Cloudflare control and model hostnames must be different")
 	}
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		return State{}, fmt.Errorf("guided Cloudflare Tunnel setup supports only x86_64 Linux")
 	}
 	if strings.TrimSpace(t.StatePath) == "" {
 		return State{}, fmt.Errorf("Cloudflare Tunnel state path is empty")
+	}
+	preexisting, found, err := t.load()
+	if err != nil {
+		return State{}, err
+	}
+	if found && preexisting.ModelHostname == "" {
+		return State{}, fmt.Errorf("Cloudflare Tunnel uses the retired single-origin hostname layout")
 	}
 	if t.Runner == nil {
 		t.Runner = ExecRunner{}
@@ -429,14 +448,16 @@ func (t Tunnel) reconcile(ctx context.Context, hostname string, stdout, stderr i
 	if err != nil {
 		return State{}, err
 	}
-	if found && state.Hostname != hostname {
+	if found && state.Hostname != controlHostname {
 		return State{}, fmt.Errorf("Dorf already owns Cloudflare hostname %s; refusing to replace it", state.Hostname)
 	}
+	if found && state.ModelHostname != "" && state.ModelHostname != modelHostname {
+		return State{}, fmt.Errorf("Dorf already owns Cloudflare model hostname %s; refusing to replace it", state.ModelHostname)
+	}
 	if found {
-		// The Gateway moves from loopback to the private Incus bridge when a
-		// local profile is added to a cloud-only deployment. The Tunnel identity
-		// and public hostname remain stable; only its local origin changes.
-		state.Origin = origin
+		if state.ModelHostname == "" {
+			return State{}, fmt.Errorf("Cloudflare Tunnel uses the retired single-origin hostname layout")
+		}
 	}
 	if !found {
 		nonce, err := randomHex(4)
@@ -447,7 +468,7 @@ func (t Tunnel) reconcile(ctx context.Context, hostname string, stdout, stderr i
 		if err != nil {
 			return State{}, err
 		}
-		state = State{SchemaVersion: 1, TunnelName: "dorf-" + nonce, Hostname: hostname, Origin: origin, ProbeID: probeID}
+		state = State{SchemaVersion: 1, TunnelName: "dorf-" + nonce, Hostname: controlHostname, ModelHostname: modelHostname, Origin: ComposeGatewayOrigin, ProbeID: probeID}
 		if err := t.save(state); err != nil {
 			return State{}, err
 		}
@@ -457,6 +478,14 @@ func (t Tunnel) reconcile(ctx context.Context, hostname string, stdout, stderr i
 		if err != nil {
 			return state, err
 		}
+		if err := t.save(state); err != nil {
+			return state, err
+		}
+	}
+	if t.ReplaceExistingDNS && !state.DNSReplacementPending {
+		state.DNSReplacementPending = true
+		state.DNSConfigured = false
+		state.ModelDNSConfigured = false
 		if err := t.save(state); err != nil {
 			return state, err
 		}
@@ -473,13 +502,16 @@ func (t Tunnel) reconcile(ctx context.Context, hostname string, stdout, stderr i
 			}
 		}
 	}
-	if state.DNSConfigured && t.ReplaceExistingDNS {
-		// An explicit repair is stronger than the coarse public-DNS presence
-		// observation above: reapply this exact Tunnel route with Cloudflare's
-		// replacement primitive.
-		state.DNSConfigured = false
-		if err := t.save(state); err != nil {
+	if state.ModelDNSConfigured {
+		present, err := t.dnsRoutePresent(ctx, state.ModelHostname)
+		if err != nil {
 			return state, err
+		}
+		if !present {
+			state.ModelDNSConfigured = false
+			if err := t.save(state); err != nil {
+				return state, err
+			}
 		}
 	}
 	binary, err := t.ensureBinary(ctx)
@@ -494,7 +526,7 @@ func (t Tunnel) reconcile(ctx context.Context, hostname string, stdout, stderr i
 	cloudflaredHome := filepath.Join(managementHome, ".cloudflared")
 	certificate := filepath.Join(cloudflaredHome, "cert.pem")
 	env := []string{"HOME=" + managementHome}
-	if state.TunnelID == "" || !state.DNSConfigured {
+	if state.TunnelID == "" || !state.DNSConfigured || !state.ModelDNSConfigured {
 		if _, err := os.Stat(certificate); errors.Is(err, os.ErrNotExist) {
 			if err := os.MkdirAll(cloudflaredHome, 0o700); err != nil {
 				return state, err
@@ -577,10 +609,10 @@ func (t Tunnel) reconcile(ctx context.Context, hostname string, stdout, stderr i
 	if !state.DNSConfigured {
 		// Cloudflare atomically creates an absent record, accepts the existing
 		// CNAME only when it already targets this exact Tunnel, and rejects every
-		// foreign record unless this setup run carries the operator's explicit
+		// foreign record unless reconciliation carries the operator's retained
 		// replacement choice.
 		routeArgs := []string{"tunnel", "--origincert", certificate, "route", "dns"}
-		if t.ReplaceExistingDNS {
+		if state.DNSReplacementPending {
 			routeArgs = append(routeArgs, "--overwrite-dns")
 		}
 		routeArgs = append(routeArgs, state.TunnelID, state.Hostname)
@@ -588,6 +620,26 @@ func (t Tunnel) reconcile(ctx context.Context, hostname string, stdout, stderr i
 			return state, fmt.Errorf("route Cloudflare hostname: %w", err)
 		}
 		state.DNSConfigured = true
+		if err := t.save(state); err != nil {
+			return state, err
+		}
+	}
+	if !state.ModelDNSConfigured {
+		routeArgs := []string{"tunnel", "--origincert", certificate, "route", "dns"}
+		if state.DNSReplacementPending {
+			routeArgs = append(routeArgs, "--overwrite-dns")
+		}
+		routeArgs = append(routeArgs, state.TunnelID, state.ModelHostname)
+		if err := t.Runner.Run(ctx, env, stdout, stderr, binary, routeArgs...); err != nil {
+			return state, fmt.Errorf("route Cloudflare model hostname: %w", err)
+		}
+		state.ModelDNSConfigured = true
+		if err := t.save(state); err != nil {
+			return state, err
+		}
+	}
+	if state.DNSReplacementPending {
+		state.DNSReplacementPending = false
 		if err := t.save(state); err != nil {
 			return state, err
 		}
@@ -633,7 +685,7 @@ func (t Tunnel) listByName(ctx context.Context, binary string, env []string, cer
 }
 
 func (t Tunnel) config(state State) string {
-	return fmt.Sprintf("tunnel: %q\ncredentials-file: %q\nno-autoupdate: true\ningress:\n  - hostname: %q\n    path: ^/\\.dorf/probe/%s$\n    service: http_status:204\n  - hostname: %q\n    path: ^/v1(/.*)?$\n    service: %q\n  - service: http_status:404\n", state.TunnelID, state.CredentialPath, state.Hostname, state.ProbeID, state.Hostname, state.Origin)
+	return fmt.Sprintf("tunnel: %q\ncredentials-file: %q\nno-autoupdate: true\ningress:\n  - hostname: %q\n    path: ^/\\.dorf/probe/%s$\n    service: http_status:204\n  - hostname: %q\n    path: ^/\\.dorf/probe/%s$\n    service: http_status:204\n  - hostname: %q\n    path: ^/v1(/.*)?$\n    service: %q\n  - hostname: %q\n    path: ^/v1(/.*)?$\n    service: %q\n  - service: http_status:404\n", state.TunnelID, state.CredentialPath, state.Hostname, state.ProbeID, state.ModelHostname, state.ProbeID, state.Hostname, ComposeControlOrigin, state.ModelHostname, ComposeGatewayOrigin)
 }
 
 func randomHex(bytes int) (string, error) {
@@ -720,6 +772,19 @@ func (t Tunnel) load() (State, bool, error) {
 	}
 	if state.SchemaVersion != 1 || state.TunnelName == "" || state.Hostname == "" || state.Origin == "" {
 		return State{}, false, fmt.Errorf("Cloudflare Tunnel state is invalid")
+	}
+	if state.ModelHostname == "" && state.ModelDNSConfigured {
+		return State{}, false, fmt.Errorf("Cloudflare Tunnel state has an invalid model hostname")
+	}
+	controlHostname, err := canonicalHostname(state.Hostname)
+	if err != nil || controlHostname != state.Hostname {
+		return State{}, false, fmt.Errorf("Cloudflare Tunnel state has an invalid control hostname")
+	}
+	if state.ModelHostname != "" {
+		modelHostname, err := canonicalHostname(state.ModelHostname)
+		if err != nil || modelHostname != state.ModelHostname || modelHostname == state.Hostname {
+			return State{}, false, fmt.Errorf("Cloudflare Tunnel state has an invalid model hostname")
+		}
 	}
 	return state, true, nil
 }

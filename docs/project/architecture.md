@@ -10,7 +10,7 @@ Product direction and vocabulary live in the [North Star](north-star.md).
 
 ```mermaid
 flowchart LR
-    Remote["Remote client"] --> Ingress["Operator-owned HTTPS ingress"]
+    Remote["Remote client"] --> Ingress["HTTPS ingress · guided or custom"]
     Ingress --> API["Control API · fixed Job projections"]
     API -->|direct| Core["In-process Core application boundary"]
     Client["Host-local client adapter"] --> Core
@@ -33,8 +33,8 @@ and codebase-investigation workflows, followed by their common Job interaction s
 a network exposure of Core itself, a workflow registry, a client SDK, or an embeddable-runtime
 contract. One versioned static Docker Compose project supervises the accepted deployment; the
 [Remote Control API](../control-api.md#deployment-services) owns its exact service inventory,
-capability custody, and network segmentation. Operator-owned public control ingress remains outside
-its lifecycle.
+capability custody, and network segmentation. Custom public Control API ingress remains
+operator-owned; D102's guided Cloudflare path is the only setup-owned exception.
 
 Compose is the only supervisor in the managed shape. The project uses its own PostgreSQL service,
 segmented bridge networks, setup's protected generated `.env`, and a narrow authenticated reader
@@ -217,14 +217,17 @@ The deployment has one operator Principal. An operator-issued, short-lived, one-
 a Client register a client-generated opaque credential; only its digest is retained server-side,
 and each Client can be revoked independently. The CLI retains one Deployment origin and Client
 credential rather than implementing multi-deployment context selection. Compose maps the API's
-HTTP listener to host port `8745`; operator-owned HTTPS ingress fronts that port. The API admits and
-projects Jobs but does not register execution handlers; a separate durable worker claims and
+HTTP listener to host port `8745` for custom HTTPS ingress. The guided Cloudflare Tunnel instead
+reaches it over the Compose ingress network; the
+[Provider Gateway authority](provider-gateway.md) owns the exact two-origin mapping. The API admits
+and projects Jobs but does not register execution handlers; a separate durable worker claims and
 reconciles the attached Absurd tasks and hosts the fixed authenticated reads the API cannot perform
-without provider authority. The static Compose project supervises both long-running responsibilities after its
-one-shot migration completes. Setup prepares protected `.env`, applies that exact project, waits for
-its services, and verifies readiness. The operator or deployment agent uses ordinary Compose
-directly only for advanced observation and process operations.
-Ingress, multi-user identity, roles, organizations, billing, and quotas remain separate work.
+without provider authority. The static Compose project supervises both long-running responsibilities
+after its one-shot migration completes. Setup prepares protected `.env`, applies that exact project,
+waits for its services, and verifies readiness. The operator or deployment agent uses ordinary
+Compose directly only for advanced observation and process operations.
+General ingress management, multi-user identity, roles, organizations, billing, and quotas remain
+separate work.
 
 A direct Job has no workflow identity. Its first Message carries the caller's exact prompt through
 the `direct` Agent role, and successful work remains open and idle until a caller requests cleanup.
@@ -316,7 +319,8 @@ streams through Incus port forwarding. Guided setup may observe one unambiguous 
 bridge once to create an exact private Gateway URL in a Profile; admission and runtime use only that
 persisted definition. That local setup convenience never applies to a remote endpoint, and the
 controller path itself does not infer or supply the separate guest-to-Gateway route. Support
-requires the complete selected topology to pass live proof.
+requires the complete selected topology to pass live proof; guided setup rejects remote Incus until
+that proof exists.
 
 ### Current dogfood deployment terminals
 
