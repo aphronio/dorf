@@ -83,6 +83,35 @@ func TestSetupInteractiveRemoteIncusOfferAndProfileNaming(t *testing.T) {
 	}
 }
 
+func TestGuidedIncusProfileTargetSelectsTheFixedEndpointBoundary(t *testing.T) {
+	local := &deployment.Incus{Endpoint: "unix:///var/lib/incus/unix.socket"}
+	remote := testRemoteIncusAuthority(t)
+	for _, test := range []struct {
+		name                      string
+		authority                 *deployment.Incus
+		project, storage, network string
+	}{
+		{
+			name: "local Unix", authority: local,
+			project: incus.DefaultProject, storage: incus.DefaultStoragePool, network: guidedIncusNetwork,
+		},
+		{
+			name: "remote HTTPS", authority: remote,
+			project: incus.RemoteProjectName, storage: incus.DefaultStoragePool, network: incus.RemoteNetworkName,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			project, storage, network, err := guidedIncusProfileTarget(test.authority)
+			if err != nil || project != test.project || storage != test.storage || network != test.network {
+				t.Fatalf("target=%s/%s/%s want=%s/%s/%s error=%v", project, storage, network, test.project, test.storage, test.network, err)
+			}
+		})
+	}
+	if _, _, _, err := guidedIncusProfileTarget(nil); err == nil {
+		t.Fatal("guided Incus target accepted no deployment authority")
+	}
+}
+
 func TestSetupKeepsFreshLocalIncusInMemoryUntilReadiness(t *testing.T) {
 	path := setupTestDeploymentPath(t)
 	cfg := config.Config{DeploymentPath: path}

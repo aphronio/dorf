@@ -24,6 +24,10 @@ EOF
 }
 
 die() { printf 'incus.sh: refusing: %s\n' "$1" >&2; exit 1; }
+reviewed_executable() {
+	[ -f "$1" ] && [ ! -L "$1" ] && [ -x "$1" ] &&
+		[ "$(/usr/bin/stat -c '%u:%g:%a' "$1" 2>/dev/null || true)" = 0:0:755 ]
+}
 
 TARGET_USER=
 ACK_AUTHORITY=0
@@ -57,11 +61,11 @@ TARGET_HOME=$(getent passwd "$TARGET_USER" | awk -F: '{print $6}')
 [ -d /run/systemd/system ] || die "systemd is not running"
 [ -c /dev/kvm ] || die "/dev/kvm is required"
 
-local_incus() { env -i HOME=/root PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin incus --force-local "$@"; }
+local_incus() { env -i HOME=/root PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/incus --force-local "$@"; }
 SOURCE=/etc/apt/sources.list.d/zabbly-incus-stable.sources
 KEY=/etc/apt/keyrings/zabbly.asc
 guided_install() {
-	[ "$(command -v incus 2>/dev/null || true)" = /usr/bin/incus ] &&
+	reviewed_executable /usr/bin/incus &&
 		[ "$(dpkg-query -W -f='${db:Status-Status}' incus 2>/dev/null || true)" = installed ] &&
 		[ -f "$SOURCE" ] && grep -F 'https://pkgs.zabbly.com/incus/stable' "$SOURCE" >/dev/null &&
 		[ -f "$KEY" ] &&
@@ -72,7 +76,7 @@ incus_for_operator() {
 		local_incus "$@"
 	else
 		runuser -u "$TARGET_USER" -- env -i HOME="$TARGET_HOME" USER="$TARGET_USER" \
-			PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin incus --force-local "$@"
+			PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/incus --force-local "$@"
 	fi
 }
 has_extension() { local_incus query /1.0 2>/dev/null | grep -F '"instance_port_forward"' >/dev/null; }
@@ -130,7 +134,7 @@ if guided_install && command -v qemu-system-x86_64 >/dev/null 2>&1 && systemctl 
 	fi
 fi
 
-if command -v incus >/dev/null 2>&1 || [ -e /var/lib/incus ]; then
+if command -v incus >/dev/null 2>&1 || [ -e /usr/bin/incus ] || [ -L /usr/bin/incus ] || [ -e /var/lib/incus ]; then
 	guided_install || die "existing Incus is partial, foreign, or not the guided Zabbly install"
 else
 	for PATHNAME in /var/snap/lxd /snap/bin/lxc /var/lib/lxd /etc/apt/keyrings/zabbly.asc /etc/apt/sources.list.d/zabbly-incus-stable.sources; do

@@ -13,9 +13,11 @@ Guided setup routes the model hostname through the same named Cloudflare Tunnel 
 Control API hostname; any operator-owned route satisfying the exact HTTPS `/v1` Gateway contract is
 also valid. The [deployment-host procedure](getting-started.md#1-install-the-application-initialize-a-deployment-host)
 owns the domain, exact hostname pair, replay, and replacement flow. Disposable Quick Tunnels are
-proof-only. macOS, Windows, ARM, and remote Incus daemons are not supported. Guided setup rejects
-remote Incus, including an existing remote Profile, until its HTTPS client identity, port
-forwarding, and guest-to-Gateway path pass one live terminal. Docker authority
+proof-only. macOS, Windows, and ARM are not supported. Remote Incus is supported only through the
+fixed Tailscale, restricted-project, isolated-bridge, and stable HTTPS Gateway procedure in
+[Getting started](getting-started.md#prepare-a-remote-incus-workstation). Arbitrary public Incus
+listeners, Tailscale Funnel or Serve, subnet routers, and inferred guest routes remain unsupported.
+Docker authority
 follows the deployment-host setup procedure, and the socket is never mounted into a Dorf workload
 or Sandbox. Custom Sandbox artifacts may be admitted through an explicitly created and functionally
 verified profile, but carry no Dorf release provenance. An E2B profile that blocks general internet

@@ -129,7 +129,7 @@ func (c *sdkClient) CreateInstance(ctx context.Context, request CreateInstanceRe
 		InstancePut: api.InstancePut{
 			Config: api.ConfigMap(cloneStrings(request.Config)),
 			Devices: api.DevicesMap{
-				"eth0": {"type": "nic", "name": "eth0", "network": request.Network},
+				"eth0": instanceNetworkDevice(request.Network),
 				"root": {"type": "disk", "path": "/", "pool": request.StoragePool, "size": request.DiskSize},
 			},
 		},
@@ -142,6 +142,16 @@ func (c *sdkClient) CreateInstance(ctx context.Context, request CreateInstanceRe
 		return fmt.Errorf("create Incus instance %s: %w", request.Name, err)
 	}
 	return nil
+}
+
+func instanceNetworkDevice(network string) map[string]string {
+	device := map[string]string{"type": "nic", "name": "eth0", "network": network}
+	if network == RemoteNetworkName {
+		device["security.ipv4_filtering"] = "true"
+		device["security.ipv6_filtering"] = "true"
+		device["security.port_isolation"] = "true"
+	}
+	return device
 }
 
 func (c *sdkClient) PatchInstanceConfig(ctx context.Context, name string, required, updates map[string]string) error {

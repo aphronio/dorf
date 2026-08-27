@@ -11,10 +11,10 @@ curl -fsSL https://github.com/aphronio/dorf/releases/latest/download/install.sh 
 ```
 
 The installer downloads and verifies the complete matching x86_64 Linux archive, then installs
-`dorf`, `dorf-compose.yaml`, and `dorf-compose-incus.yaml` together in `~/.local/bin`, replacing each
-file atomically in that directory. It prints a
+`dorf`, `dorf-compose.yaml`, `dorf-compose-incus.yaml`, and `dorf-incus-remote.sh` together in
+`~/.local/bin`. It replaces each file atomically in that directory. It prints a
 `PATH` handoff when needed and does not run setup or Docker Compose. `dorf update` replaces the same
-three files without changing a running deployment. Install an exact release with its pinned
+four files without changing a running deployment. Install an exact release with its pinned
 installer asset:
 
 ```bash
@@ -22,8 +22,8 @@ RELEASE_TAG=vX.Y.Z
 curl -fsSL "https://github.com/aphronio/dorf/releases/download/$RELEASE_TAG/install.sh" | sh
 ```
 
-To verify GitHub's signed release attestation and install manually, install the binary and both
-static manifests beside one another:
+To verify GitHub's signed release attestation and install manually, install the complete release
+set beside one another:
 
 ```bash
 RELEASE_TAG=vX.Y.Z
@@ -39,6 +39,8 @@ install -m 0755 "$release_dir/dorf" "$HOME/.local/bin/dorf"
 install -m 0644 "$release_dir/dorf-compose.yaml" "$HOME/.local/bin/dorf-compose.yaml"
 install -m 0644 "$release_dir/dorf-compose-incus.yaml" \
   "$HOME/.local/bin/dorf-compose-incus.yaml"
+install -m 0755 "$release_dir/bootstrap/incus-remote.sh" \
+  "$HOME/.local/bin/dorf-incus-remote.sh"
 dorf version
 ```
 
@@ -91,26 +93,117 @@ docker compose logs --tail=200 worker control-api
 
 Do not edit the generated `.env`; rerun setup to change and apply its source facts.
 
-Setup offers prepared local Incus, cloud E2B, both, or neither. A selected local Incus endpoint must
-already be usable. For the default `unix:///var/lib/incus/unix.socket` authority only, setup can
-materialize the version-matched `incus.sh` administrator helper, print its exact command and the
-upstream manual path, and exit. A custom Unix socket receives an exact repair-or-select handoff
-instead of a host recipe. Guided setup rejects a remote HTTPS Incus endpoint, including reuse of a
-Profile that names one, until the complete remote terminal passes. The adapter retains its explicit
-HTTPS and mTLS boundary, but that is not a supported guided path. Dorf does not install Incus or
-QEMU, enable a service, change group membership, initialize the daemon, or mutate a host network.
-The manual authority is the upstream [Incus installation
-guide](https://linuxcontainers.org/incus/docs/main/installing/). The invoking operator owns any
-administrator action and login handoff; Dorf never runs the helper, elevates, or changes identity.
+Setup offers prepared local Incus, remote Incus over Tailscale, cloud E2B, any combination, or none.
+A selected local Incus endpoint must already be usable. For the default
+`unix:///var/lib/incus/unix.socket` authority only, setup can materialize the version-matched
+`incus.sh` administrator helper, print its exact command and the upstream manual path, and exit. A
+custom Unix socket receives an exact repair-or-select handoff instead of a host recipe. Dorf does
+not install Incus or QEMU, enable a service, change group membership, initialize the daemon, or
+mutate a host network. The manual authority is the upstream [Incus installation
+guide](https://linuxcontainers.org/incus/docs/main/installing/). The invoking operator owns every
+administrator action and login handoff; Dorf never runs a helper, elevates, or changes identity.
 Rerun setup afterward as that same operator identity.
 
 A Dorf Deployment configures at most one Incus endpoint, while each Incus Profile owns its
 restricted project, pool, network, exact image, disk contract, and guest-reachable Provider Gateway
 URL. Guided local setup may create that route from one unambiguous prepared bridge observation; the
 [Provider Gateway authority](project/provider-gateway.md) owns the exact persistence and
-no-runtime-inference rule. Remote Incus never uses that convenience and remains unsupported until
-the live gate in [Support](support.md) passes. There is no migration or adoption path for an earlier
-Profile shape; create and verify a current Profile.
+no-runtime-inference rule. A remote Incus Profile requires the stable HTTPS Gateway prepared later
+in this procedure. There is no migration or adoption path for an earlier Profile shape; create and
+verify a current Profile.
+
+### Prepare a remote Incus workstation
+
+Use this path when the Dorf deployment host cannot run KVM and an owner-controlled x86_64 Linux
+workstation can. Install the same Dorf release on both hosts. The workstation needs Incus 7.3 or
+newer, KVM, UFW, and Tailscale. The deployment host needs Tailscale but does not need Incus or KVM.
+
+Give the deployment host only the Tailscale identity `tag:dorf-controller`. Keep the workstation as
+a user-owned device. Add one host alias and one grant to the existing tailnet policy; do not replace
+unrelated policy:
+
+```json
+{
+  "tagOwners": {
+    "tag:dorf-controller": ["OWNER@example.com"]
+  },
+  "hosts": {
+    "dorf-incus-workstation": "WORKSTATION_TAILSCALE_IPV4"
+  },
+  "grants": [
+    {
+      "src": ["tag:dorf-controller"],
+      "dst": ["dorf-incus-workstation"],
+      "ip": ["tcp:8443"]
+    }
+  ]
+}
+```
+
+Defining a tag does not assign it. In the Tailscale admin console, apply `tag:dorf-controller` to
+the deployment host and confirm that the Machines page shows that tag before continuing. A tagged
+authentication key is the automation alternative described by Tailscale's tag rules.
+
+Tailscale grants are additive. Review every other matching grant or ACL so the tagged controller
+cannot reach another workstation port. Use the current [Tailscale grants
+syntax](https://tailscale.com/docs/reference/syntax/grants) and [tag
+rules](https://tailscale.com/docs/features/tags) as the policy authority. Do not enable Tailscale
+SSH, subnet routing, an exit node, Serve, or Funnel for this connection. On the controller, reject
+incoming tailnet connections and ignore tailnet DNS and subnet routes:
+
+```bash
+sudo tailscale set --shields-up --accept-dns=false --accept-routes=false
+```
+
+On the workstation, inspect the installed helper. Then prepare the fixed `dorf-remote` project,
+`dorfbr0` bridge, `dorf-egress` ACL, kernel module declaration, and UFW policy:
+
+```bash
+sudo -- "$HOME/.local/bin/dorf-incus-remote.sh" prepare \
+  --acknowledge-kernel-module-impact \
+  --acknowledge-firewall-impact
+```
+
+The helper preserves unrelated Incus projects, networks, and instances. It gives Job VMs public
+IPv4 egress through NAT, disables IPv6, isolates VM peers, and blocks the workstation, LAN,
+link-local, and tailnet ranges. It binds no listener during `prepare`.
+
+After the tailnet grant is active, create one protected 15-minute offer. The `offer` action binds
+native Incus HTTPS to the workstation's exact Tailscale IPv4 on TCP 8443 and prints only the offer:
+
+```bash
+umask 077
+sudo -- "$HOME/.local/bin/dorf-incus-remote.sh" offer \
+  --acknowledge-remote-incus-exposure > incus-offer
+```
+
+Transfer `incus-offer` to the deployment host through a private channel. Run setup before it
+expires:
+
+```bash
+dorf setup \
+  --sandbox-provider incus \
+  --incus-trust-offer-file "$HOME/incus-offer"
+```
+
+Setup pins the server certificate, creates a fresh client key, redeems the offer, proves that the
+client is restricted to `dorf-remote`, and removes its pending record after retention. It then uses
+the fixed `default` pool and `dorfbr0` network, installs the official image, creates a Profile with
+the stable HTTPS Provider Gateway URL, and verifies a disposable VM. Delete both offer-file copies
+after setup succeeds. Use `--incus-trust-offer-file -` to stream an offer without retaining a
+controller copy.
+
+Setup prints the retained client fingerprint. On the workstation, verify its exact restriction:
+
+```bash
+sudo -- "$HOME/.local/bin/dorf-incus-remote.sh" inspect \
+  --fingerprint CLIENT_CERTIFICATE_SHA256
+```
+
+The Incus HTTPS listener stays on the Tailscale address after enrollment. The restricted client can
+create and operate Dorf VMs but cannot edit the administrator-owned bridge or ACL. To cut off that
+controller, use the helper's explicit `revoke` action with the printed fingerprint and its required
+acknowledgement.
 
 Selecting a provider continues through Harness choice, ChatGPT-subscription or OpenAI-API
 authentication, provider inputs, profile creation, functional verification, and default selection.

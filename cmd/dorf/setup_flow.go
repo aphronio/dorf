@@ -209,17 +209,18 @@ func setupRemoteGatewayRequested(options setupOptions) bool {
 		options.CloudflareModelHostname != "" || options.ReplaceCloudflareDNS
 }
 
-func guidedIncusReadinessScope(plans []guidedProfilePlan) (string, string, bool) {
+func guidedIncusReadinessScope(plans []guidedProfilePlan, authority *deployment.Incus) (string, string, bool, error) {
 	for _, plan := range plans {
 		if plan.Provider != core.SandboxProviderIncus {
 			continue
 		}
 		if plan.Existing != nil {
-			return plan.Existing.IncusProject, plan.Existing.IncusStoragePool, true
+			return plan.Existing.IncusProject, plan.Existing.IncusStoragePool, true, nil
 		}
-		return incus.DefaultProject, incus.DefaultStoragePool, true
+		project, storagePool, _, err := guidedIncusProfileTarget(authority)
+		return project, storagePool, true, err
 	}
-	return "", "", false
+	return "", "", false, nil
 }
 
 func setupGuidedIncusReadiness(ctx context.Context, plans []guidedProfilePlan, authority *deployment.Incus) error {
@@ -232,7 +233,10 @@ func setupGuidedIncusReadinessWith(
 	authority *deployment.Incus,
 	probe func(context.Context, *deployment.Incus, string, string) error,
 ) error {
-	project, storagePool, selected := guidedIncusReadinessScope(plans)
+	project, storagePool, selected, err := guidedIncusReadinessScope(plans, authority)
+	if err != nil {
+		return err
+	}
 	if !selected {
 		return nil
 	}
@@ -412,7 +416,10 @@ func setupGatewayBind(ctx context.Context, store postgres.Store, selected []guid
 	if err != nil || !resolve {
 		return address, privateBridge, err
 	}
-	project, storagePool := gatewayIncusScope(profiles, selected, privateBridge)
+	project, storagePool, err := gatewayIncusScope(profiles, selected, authority, privateBridge)
+	if err != nil {
+		return "", "", err
+	}
 	connection, _, err := incusProfileConnection(authority, project, storagePool)
 	if err != nil {
 		return "", "", incusSetupReadinessError{cause: err}
@@ -494,24 +501,36 @@ func guidedNeedsLocalIncusDefinition(selected []guidedProfilePlan, authority *de
 	return strings.HasPrefix(authority.Endpoint, "unix://"), nil
 }
 
-func gatewayIncusScope(profiles []core.SandboxProfile, selected []guidedProfilePlan, network string) (string, string) {
+func gatewayIncusScope(profiles []core.SandboxProfile, selected []guidedProfilePlan, authority *deployment.Incus, network string) (string, string, error) {
 	for _, plan := range selected {
 		if plan.Provider != core.SandboxProviderIncus {
 			continue
 		}
 		if plan.Existing == nil {
-			return incus.DefaultProject, incus.DefaultStoragePool
+			project, storagePool, _, err := guidedIncusProfileTarget(authority)
+			return project, storagePool, err
 		}
 		if _, direct := guidedIncusProfilePublishAddress(*plan.Existing); direct && plan.Existing.IncusNetwork == network {
-			return plan.Existing.IncusProject, plan.Existing.IncusStoragePool
+			return plan.Existing.IncusProject, plan.Existing.IncusStoragePool, nil
 		}
 	}
 	for _, profile := range profiles {
 		if _, direct := guidedIncusProfilePublishAddress(profile); direct && profile.IncusNetwork == network {
-			return profile.IncusProject, profile.IncusStoragePool
+			return profile.IncusProject, profile.IncusStoragePool, nil
 		}
 	}
-	return incus.DefaultProject, incus.DefaultStoragePool
+	project, storagePool, _, err := guidedIncusProfileTarget(authority)
+	return project, storagePool, err
+}
+
+func guidedIncusProfileTarget(authority *deployment.Incus) (string, string, string, error) {
+	if authority == nil {
+		return "", "", "", incusSetupReadinessError{cause: fmt.Errorf("Incus endpoint is not configured in the Dorf Deployment")}
+	}
+	if strings.HasPrefix(authority.Endpoint, "https://") {
+		return incus.RemoteProjectName, incus.DefaultStoragePool, incus.RemoteNetworkName, nil
+	}
+	return incus.DefaultProject, incus.DefaultStoragePool, guidedIncusNetwork, nil
 }
 
 func resolveIncusNetworkIPv4(ctx context.Context, authority *deployment.Incus, project, storagePool, network string) (string, error) {
@@ -1258,6 +1277,10 @@ func setupProfiles(ctx context.Context, store postgres.Store, cfg config.Config,
 			case core.SandboxProviderIncus:
 				err = presenter.Run(ctx, "Installing official Incus Sandbox", func(ctx context.Context) error {
 					var installErr error
+					project, storagePool, network, targetErr := guidedIncusProfileTarget(cfg.Incus)
+					if targetErr != nil {
+						return targetErr
+					}
 					profileGatewayURL, routeErr := guidedIncusGatewayURL(cfg.Incus, gatewayURL, privateIPv4)
 					if routeErr != nil {
 						return routeErr
@@ -1267,7 +1290,7 @@ func setupProfiles(ctx context.Context, store postgres.Store, cfg config.Config,
 						releaseTag, manifestPath, archive = "", options.IncusManifest, options.IncusArchive
 					}
 					profile, _, _, installErr = reconcileOfficialIncusProfileDefinition(ctx, store, name, plan.Harness, releaseTag, manifestPath, archive,
-						cfg.Incus, incus.DefaultProject, incus.DefaultStoragePool, guidedIncusNetwork, guidedIncusDiskSize, profileGatewayURL)
+						cfg.Incus, project, storagePool, network, guidedIncusDiskSize, profileGatewayURL)
 					return installErr
 				})
 			case core.SandboxProviderE2B:

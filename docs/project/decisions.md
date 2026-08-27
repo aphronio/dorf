@@ -669,7 +669,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   remote E2B route wire proved — 2026-08-14; named Cloudflare route implemented, live hostname proof
   pending — 2026-08-21; deployment supervision and Incus route custody refined by D101 — 2026-08-26;
   broker-state ownership and explicit stale-DNS repair refined — 2026-08-27; guided public origins
-  refined by D102 — 2026-08-27
+  refined by D102 — 2026-08-27; remote Incus guest route proved — 2026-08-27
 - **Decision:** Keep the Provider Gateway as a sibling application subsystem outside the durable
   Job core. Its programmatic boundary manages durable upstream Provider
   AI connections and revocable consumer-specific Inference Routes over a supervised broker backend.
@@ -1816,7 +1816,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 ## D070 — Named Sandbox profiles pin exact artifacts and require Dorf verification
 
 - **Status:** Accepted incremental profile-management slice; base file contract refined by D089 and
-  online re-verification refined by D091; Incus endpoint custody refined by D101 — 2026-08-26
+  online re-verification refined by D091; Incus endpoint custody refined by D101 — 2026-08-26;
+  remote Incus profile terminal proved — 2026-08-27
 - **Decision:** PostgreSQL owns named Sandbox profiles. A profile binds one provider, exact provider
   artifact, Harness, provider networking and lifecycle settings, and Dorf verification receipt.
   Provider credentials and host paths remain deployment configuration and never enter the profile.
@@ -1824,7 +1825,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   endpoint's stable public identity and owns its restricted project, storage pool, network, exact
   image and disk contract, and exact guest-reachable Provider Gateway URL; it never borrows ambient
   Incus CLI context. The same endpoint contract admits a local Unix socket or remote HTTPS daemon,
-  though remote Incus remains unsupported until D101's complete live proof passes.
+  and D101 owns the fixed supported remote topology.
   One verified profile may be selected explicitly per Job; omission resolves the one deployment
   default. The Job durably pins the profile name. Workers resolve that name through the composition
   root into the existing provider-neutral Sandbox and Harness contracts, so workflows contain no
@@ -2648,7 +2649,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 - **Status:** Accepted implementation direction — 2026-08-26; setup application refined by live
   `v0.5.4` dogfood — 2026-08-26; guided ingress topology refined by D102 — 2026-08-27; complete live
-  terminal proof pending
+  Compose VM terminal pending; remote Incus terminal passed — 2026-08-27
 - **Decision:** Replace D071's standalone PostgreSQL container and D100's systemd units with one
   versioned static Dorf Docker Compose project. The
   [Remote Control API](../control-api.md#deployment-services) owns its exact service and network
@@ -2696,7 +2697,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   [Getting started](../getting-started.md#1-install-the-application-initialize-a-deployment-host)
   and its equivalent manual authorities. The release ships the same small, inspectable helpers from
   `scripts/bootstrap/`; they remain explicit, idempotent recipes for their stated proven host, not a
-  universal package manager or a second runtime reconciler. Setup invokes Compose under its same
+  universal package manager or a second runtime reconciler. Setup materializes the same-host Docker
+  and Incus helpers; the installer places the remote Incus helper beside the binary for a separate
+  workstation. Setup invokes Compose under its same
   operator identity, root or non-root; Dorf never elevates, changes identity, runs helpers, installs
   Docker or Incus, or manages host privilege. Cloudflare remains in the existing
   guided browser/DNS/Tunnel flow; a shell wrapper would only duplicate that authority.
@@ -2712,8 +2715,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   rule; every other topology requires an explicit guest-reachable private/VPN address or public
   HTTPS ingress, and profile verification must prove it before admission. Dorf mounts neither a
   general operator CLI configuration nor an invented data-plane proxy. Guided remote HTTPS setup
-  remains gated until its complete topology passes the accepted live proof. No unreleased legacy
-  Profile adoption or migration path remains.
+  accepts only the fixed `dorf-remote` project, `dorfbr0` network, native Incus HTTPS on a Tailscale
+  address, and a stable HTTPS Gateway URL. Its one-use offer yields a pinned server certificate and
+  fresh client identity restricted to that project. No unreleased legacy Profile adoption or
+  migration path remains.
 - **Guided experience:** Missing infrastructure is not a documentation dead end. Interactive setup
   keeps its deliberate choices, exact plans, secret/browser pauses, profile creation, functional
   verification, default selection, and resumable progress. Once prerequisites exist, setup applies
@@ -2734,6 +2739,12 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   project reuses its ordinary runtime bridge for migration and host publication, maps the control
   API directly as `8745:8745`, and keeps PostgreSQL's host mapping on loopback. Setup also selects
   quiet Compose progress so transport events do not replace its own concise presentation.
+- **Remote Incus proof:** A shared Linux controller without KVM reached native Incus HTTPS on an
+  owner-controlled workstation through one Tailscale TCP 8443 grant. Enrollment retained an mTLS
+  client restricted to `dorf-remote`. A verified Profile completed a real `gpt-5.6-sol` turn from
+  an isolated VM through the public Provider Gateway, survived a worker restart, and returned an
+  exact file. Cleanup removed the scoped Gateway route and VM. The workstation retained no active
+  offers, and the controller retained no pending enrollment.
 - **Why:** The API and worker need durable supervision, not a custom privileged service manager or
   a custom Compose manager. PostgreSQL is already containerized, while the systemd,
   standalone-container, image-acquisition, and Compose-manager implementations duplicate lifecycle,
@@ -2757,12 +2768,15 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   identity, complete its guided configuration and verification in one resumable flow, complete a
   real Job, survive direct Compose worker and API restart, retrieve required state, and clean up.
   E2B/remote-Gateway behavior needs the cloud-controller terminal; local Incus behavior needs the
-  workstation terminal; remote Incus remains unsupported until HTTPS client identity,
-  instance-port forwarding, and the guest-to-Gateway path pass together.
+  workstation terminal. The remote Incus subgate passed with HTTPS client identity, instance-port
+  forwarding, the guest-to-Gateway path, worker recovery, file retrieval, route revocation, and VM
+  cleanup in one terminal.
 - **Reconsider when:** Compose cannot preserve deterministic migration and recovery under real
   process loss, a supported non-Docker deployment earns equal proof, rootless container operation
-  materially changes the Docker authority boundary, or repeated routed-Incus deployments justify
-  an adapter-owned data-plane proxy.
+  materially changes the Docker authority boundary, or a second private Sandbox provider or
+  repeated remote-host attachment makes an outbound connector concrete. The non-normative
+  [private provider attachment playbook](../research/private-provider-attachment.md) records the
+  starting hypotheses for that investigation.
 
 ## D102 — One guided Dorf domain publishes two distinct public origins
 

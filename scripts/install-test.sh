@@ -48,6 +48,11 @@ expected_incus_compose_manifest() {
   printf 'services:\n  worker:\n    environment:\n      INCUS_RELEASE: "%s"\n' "$version"
 }
 
+expected_remote_incus_helper() {
+  local version="$1"
+  printf '#!/bin/sh\nprintf "remote-incus-%s\\n"\n' "$version"
+}
+
 assert_installed_manifests() {
   local install_dir="$1"
   local version="$2"
@@ -61,6 +66,10 @@ assert_installed_manifests() {
     fail "installed Compose manifest mode is not 0644"
   [[ "$(stat -c %a "$install_dir/dorf-compose-incus.yaml")" == 644 ]] ||
     fail "installed Incus Compose override mode is not 0644"
+  cmp <(expected_remote_incus_helper "$version") "$install_dir/dorf-incus-remote.sh" ||
+    fail "installed remote Incus helper differs from the release archive"
+  [[ "$(stat -c %a "$install_dir/dorf-incus-remote.sh")" == 755 ]] ||
+    fail "installed remote Incus helper mode is not 0755"
 }
 
 create_release() {
@@ -79,9 +88,12 @@ create_release() {
   chmod 0755 "$stage/dorf"
   expected_compose_manifest "$version" >"$stage/dorf-compose.yaml"
   if [[ "$layout" == complete ]]; then
+    mkdir -p "$stage/bootstrap"
     expected_incus_compose_manifest "$version" >"$stage/dorf-compose-incus.yaml"
+    expected_remote_incus_helper "$version" >"$stage/bootstrap/incus-remote.sh"
+    chmod 0755 "$stage/bootstrap/incus-remote.sh"
     tar -C "$stage" -czf "$release_dir/$archive" \
-      dorf dorf-compose.yaml dorf-compose-incus.yaml
+      dorf dorf-compose.yaml dorf-compose-incus.yaml bootstrap/incus-remote.sh
   else
     tar -C "$stage" -czf "$release_dir/$archive" dorf dorf-compose.yaml
   fi
@@ -226,6 +238,7 @@ test_checksum_failure_is_atomic() {
   chmod 0755 "$install_dir/dorf"
   printf 'existing compose\n' >"$install_dir/dorf-compose.yaml"
   printf 'existing incus compose\n' >"$install_dir/dorf-compose-incus.yaml"
+  printf 'existing remote incus helper\n' >"$install_dir/dorf-incus-remote.sh"
 
   if install_with_release_server --version v9.9.9 --install-dir "$install_dir"; then
     fail "installer accepted an archive with a bad checksum"
@@ -236,8 +249,11 @@ test_checksum_failure_is_atomic() {
     fail "checksum failure replaced the Compose manifest"
   [[ "$(<"$install_dir/dorf-compose-incus.yaml")" == "existing incus compose" ]] ||
     fail "checksum failure replaced the Incus Compose override"
+  [[ "$(<"$install_dir/dorf-incus-remote.sh")" == "existing remote incus helper" ]] ||
+    fail "checksum failure replaced the remote Incus helper"
   unexpected="$(find "$install_dir" -mindepth 1 -maxdepth 1 \
-    ! -name dorf ! -name dorf-compose.yaml ! -name dorf-compose-incus.yaml -print -quit)"
+    ! -name dorf ! -name dorf-compose.yaml ! -name dorf-compose-incus.yaml \
+    ! -name dorf-incus-remote.sh -print -quit)"
   [[ -z "$unexpected" ]] || fail "installer left a partial file: $unexpected"
 }
 
@@ -252,6 +268,7 @@ test_incomplete_archive_is_atomic() {
   chmod 0755 "$install_dir/dorf"
   printf 'existing compose\n' >"$install_dir/dorf-compose.yaml"
   printf 'existing incus compose\n' >"$install_dir/dorf-compose-incus.yaml"
+  printf 'existing remote incus helper\n' >"$install_dir/dorf-incus-remote.sh"
 
   if install_with_release_server --version v8.8.8 --install-dir "$install_dir"; then
     fail "installer accepted an archive missing the Incus Compose override"
@@ -261,6 +278,8 @@ test_incomplete_archive_is_atomic() {
     fail "incomplete archive replaced the Compose manifest"
   [[ "$(<"$install_dir/dorf-compose-incus.yaml")" == "existing incus compose" ]] ||
     fail "incomplete archive replaced the Incus Compose override"
+  [[ "$(<"$install_dir/dorf-incus-remote.sh")" == "existing remote incus helper" ]] ||
+    fail "incomplete archive replaced the remote Incus helper"
 }
 
 test_unsupported_platforms() {
@@ -335,10 +354,14 @@ test_generated_installer_embeds_release_version() {
     fail "generated installer changed the shipped Compose manifest"
   cmp "$PROJECT_ROOT/deploy/compose.incus.yaml" "$install_dir/dorf-compose-incus.yaml" ||
     fail "generated installer changed the shipped Incus Compose override"
+  cmp "$PROJECT_ROOT/scripts/bootstrap/incus-remote.sh" "$install_dir/dorf-incus-remote.sh" ||
+    fail "generated installer changed the shipped remote Incus helper"
   [[ "$(stat -c %a "$install_dir/dorf-compose.yaml")" == 644 ]] ||
     fail "generated installer used the wrong Compose manifest mode"
   [[ "$(stat -c %a "$install_dir/dorf-compose-incus.yaml")" == 644 ]] ||
     fail "generated installer used the wrong Incus Compose override mode"
+  [[ "$(stat -c %a "$install_dir/dorf-incus-remote.sh")" == 755 ]] ||
+    fail "generated installer used the wrong remote Incus helper mode"
 }
 
 [[ -f "$SOURCE_INSTALLER" ]] || fail "missing installer at $SOURCE_INSTALLER"

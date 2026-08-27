@@ -28,13 +28,15 @@ load cache, OCI parser, or second release transport. The application archive con
 
 - `dorf`;
 - the static `dorf-compose.yaml` and `dorf-compose-incus.yaml` manifests;
-- the inspectable `bootstrap/docker.sh` and `bootstrap/incus.sh` administrator helpers; and
+- the inspectable `bootstrap/docker.sh`, `bootstrap/incus.sh`, and `bootstrap/incus-remote.sh`
+  administrator helpers; and
 - the license.
 
 The checksum file identifies the application archive exactly once. The installer verifies the
-complete set before replacing each file atomically beside the others. The manifests select the published
-semantic-version image with an always-pull policy; operator lifecycle remains the direct Compose
-procedure in [Getting started](getting-started.md#1-install-the-application-initialize-a-deployment-host).
+complete set before replacing each installed file atomically. It places the binary, both manifests,
+and the remote Incus helper beside one another. The manifests select the published semantic-version
+image with an always-pull policy; operator lifecycle remains the direct Compose procedure in [Getting
+started](getting-started.md#1-install-the-application-initialize-a-deployment-host).
 
 Publication first prepares the image and application archive without changing GitHub's `latest`
 release, verifies the signed immutable release and every uploaded asset, and only then promotes it

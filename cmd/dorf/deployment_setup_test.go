@@ -251,6 +251,18 @@ func TestShellJoinQuotesAdministratorHandoffArguments(t *testing.T) {
 	}
 }
 
+func TestRemoteIncusReadinessHandoffPointsToTheSupportedRepairProcedure(t *testing.T) {
+	authority := &deployment.Incus{Endpoint: "https://100.64.0.1:8443"}
+	err := setupIncusReadinessHandoff(authority, errors.New("connection refused"), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "Getting started") ||
+		!strings.Contains(err.Error(), "repair the fixed remote Incus topology") {
+		t.Fatalf("remote Incus repair handoff = %v", err)
+	}
+	if strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("supported remote Incus was reported unsupported: %v", err)
+	}
+}
+
 func testDeploymentConfigurationSource(t *testing.T) deploymentConfigurationSource {
 	t.Helper()
 	root := t.TempDir()

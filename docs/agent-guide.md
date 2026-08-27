@@ -44,6 +44,38 @@ and privilege handoff in
 for explicit human authorization, then rerun setup. Honor its Docker-authority warning even when no
 escalation prompt appears.
 
+### Coordinate remote Incus setup
+
+Use this path only when the deployment host cannot run KVM and a separate owner-controlled x86_64
+Linux workstation can. The [remote Incus workstation
+procedure](getting-started.md#prepare-a-remote-incus-workstation) owns the exact requirements,
+commands, Tailscale policy, and verification. [Support and diagnostics](support.md) owns supported
+platforms and network limits.
+
+Coordinate the two hosts in this order:
+
+1. Identify the deployment host and the Incus workstation. Confirm both hosts meet the linked
+   requirements before changing either host.
+2. Install the same Dorf release on both hosts. Do not copy a helper from another release.
+3. Ask the human to approve and apply the narrow tailnet identity and grant. Review other matching
+   Tailscale rules because grants are additive.
+4. On the workstation, let the human inspect and authorize the installed preparation helper. Run
+   only that exact helper after authorization. Leave missing host prerequisites and any other
+   firewall or tailnet change to the human.
+5. Create the short-lived Incus offer on the workstation. Transfer it through the human-approved
+   private channel, never through chat or an agent transcript.
+6. On the deployment host, run the linked `dorf setup` flow before the offer expires. Return to the
+   workstation to verify the retained client restriction.
+7. Prove the selected Profile with the setup result and the documented `dorf doctor` check. Report
+   the two host roles, the installed version, the verified Profile, and the retained client
+   fingerprint. Do not report the offer or credentials.
+
+Keep the supported topology intact. Do not substitute another transport or broaden its authority.
+If the hardware, operating system, network policy, or provider differs from the supported path,
+stop and report the boundary from Support. Do not adapt the procedure by inference. The
+non-normative [private provider attachment playbook](research/private-provider-attachment.md) is the
+starting point for a future provider design, not permission to change a deployment.
+
 Do not invent another Dorf lifecycle wrapper, edit the protected generated `.env`, or start separate
 foreground Dorf processes. Use Compose directly only for the advanced observation and process
 operations documented in Getting started.

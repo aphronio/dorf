@@ -46,8 +46,11 @@ runtime consume that persisted value and never resolve or infer a bridge route a
 
 The Incus adapter reaches guest app servers through its Deployment's one configured local Unix or
 remote HTTPS endpoint; that controller path does not create the separate guest-to-Gateway path. A
-remote endpoint never uses guided bridge inference and remains unsupported until the complete
-endpoint, port-forward, and explicit guest-route terminal passes.
+remote endpoint never uses guided bridge inference. The supported remote Incus path uses the exact
+stable HTTPS Gateway URL selected by setup; its endpoint, port-forward, guest model turn, worker
+recovery, file retrieval, route revocation, and VM cleanup passed together. The
+[remote Incus workstation procedure](../getting-started.md#prepare-a-remote-incus-workstation) owns
+the network and enrollment steps.
 
 An existing operator-owned HTTPS `/v1` URL is the universal remote Gateway contract. Advanced
 `--gateway-url` supplies that route without changing Control API ingress. The

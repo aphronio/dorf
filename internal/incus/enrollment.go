@@ -410,13 +410,14 @@ func (sdkEnrollmentRemote) AuthenticateAndProve(ctx context.Context, authority d
 	if server.Auth != "trusted" {
 		return false, nil
 	}
-	if !client.HasExtension(requiredPortForwardExtension) || !client.HasExtension("certificate_project") {
-		return false, fmt.Errorf("Incus endpoint lacks required project or port-forward capabilities")
+	if !client.HasExtension(requiredPortForwardExtension) || !client.HasExtension("certificate_project") ||
+		!client.HasExtension("network_acl") || !client.HasExtension("network_bridge_acl") {
+		return false, fmt.Errorf("Incus endpoint lacks required project, network ACL, or port-forward capabilities")
 	}
-	projectClient := client.UseProject(DefaultProject)
-	project, _, err := projectClient.GetProject(DefaultProject)
+	projectClient := client.UseProject(RemoteProjectName)
+	project, _, err := projectClient.GetProject(RemoteProjectName)
 	if err != nil {
-		return false, fmt.Errorf("read required Incus project %s: %w", DefaultProject, err)
+		return false, fmt.Errorf("read required Incus project %s: %w", RemoteProjectName, err)
 	}
 	if err := attestPreparedEnrollmentProject(project); err != nil {
 		return false, err
@@ -424,47 +425,34 @@ func (sdkEnrollmentRemote) AuthenticateAndProve(ctx context.Context, authority d
 	if _, _, err := projectClient.GetStoragePool(DefaultStoragePool); err != nil {
 		return false, fmt.Errorf("read required Incus storage pool %s: %w", DefaultStoragePool, err)
 	}
-	network, _, err := projectClient.GetNetwork("incusbr0")
+	network, _, err := projectClient.GetNetwork(RemoteNetworkName)
 	if err != nil {
-		return false, fmt.Errorf("read required Incus network incusbr0: %w", err)
+		return false, fmt.Errorf("read required Incus network %s: %w", RemoteNetworkName, err)
 	}
-	if !network.Managed || network.Name != "incusbr0" {
-		return false, fmt.Errorf("required Incus network incusbr0 is not managed")
+	if err := attestPreparedRemoteNetwork(network); err != nil {
+		return false, err
 	}
-	_, outsideErr := client.UseProject(api.ProjectDefaultName).GetInstanceNames(api.InstanceTypeAny)
-	if err := attestOutsideProjectDenial(outsideErr); err != nil {
+	if err := proveExactProjectConfinement(client); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func attestOutsideProjectDenial(err error) error {
-	if err == nil {
-		return fmt.Errorf("Incus client identity can access instances outside project %s", DefaultProject)
-	}
-	if !api.StatusErrorCheck(err, http.StatusForbidden) {
-		return fmt.Errorf("prove Incus denial outside project %s: %w", DefaultProject, err)
-	}
-	return nil
+type enrollmentProjectNamesReader interface {
+	GetProjectNames() ([]string, error)
 }
 
-func attestPreparedEnrollmentProject(project *api.Project) error {
-	if project == nil || project.Name != DefaultProject {
-		return fmt.Errorf("required Incus project %s is missing", DefaultProject)
+func proveExactProjectConfinement(reader enrollmentProjectNamesReader) error {
+	projects, err := reader.GetProjectNames()
+	return attestExactEnrollmentProjects(projects, err)
+}
+
+func attestExactEnrollmentProjects(projects []string, err error) error {
+	if err != nil {
+		return fmt.Errorf("read projects visible to the Incus client identity: %w", err)
 	}
-	required := map[string]string{
-		"restricted":                      "true",
-		"features.images":                 "true",
-		"features.networks":               "false",
-		"features.profiles":               "true",
-		"features.storage.volumes":        "true",
-		"restricted.networks.access":      "incusbr0",
-		"restricted.storage-pools.access": DefaultStoragePool,
-	}
-	for key, value := range required {
-		if project.Config[key] != value {
-			return fmt.Errorf("Incus project %s requires %s=%s", DefaultProject, key, value)
-		}
+	if len(projects) != 1 || projects[0] != RemoteProjectName {
+		return fmt.Errorf("Incus client identity must be restricted only to project %s", RemoteProjectName)
 	}
 	return nil
 }

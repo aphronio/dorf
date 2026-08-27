@@ -138,7 +138,8 @@ selected Profile route. The one-shot
 migration uses runtime egress only to retrieve its checksum-pinned Absurd schema before exiting. The
 project uses no host networking and mounts no host Docker socket. The optional local-Incus overlay
 gives only the worker the exact configured Incus Unix socket; a remote Incus endpoint uses its
-explicit HTTPS and mTLS adapter instead, but guided remote deployment remains unsupported.
+explicit HTTPS and mTLS adapter instead. The supported remote topology and its isolation procedure
+are defined in [Getting started](getting-started.md#prepare-a-remote-incus-workstation).
 
 The release installs static `dorf-compose.yaml` and `dorf-compose-incus.yaml` manifests beside the
 binary. One continuous `dorf setup` flow writes the protected `.env`, applies only those exact

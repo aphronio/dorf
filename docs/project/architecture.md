@@ -47,7 +47,9 @@ advanced operations, and no Dorf workload or Sandbox mounts the host Docker sock
 `DORF_DATABASE_URL` is only a development, test, or explicitly manually supervised process
 override. Host prerequisites and bootstrap privilege follow the single
 [deployment-host setup procedure](../getting-started.md#1-install-the-application-initialize-a-deployment-host);
-version-matched helpers are explicit administrator handoffs, not another reconciler.
+version-matched helpers are explicit administrator handoffs, not another reconciler. Setup
+materializes same-host prerequisite helpers; the installer places the remote Incus helper beside
+the binary for use on a separate workstation.
 
 Absurd owns when durable work is eligible, claimed, checkpointed, retried, sleeping, waiting, or
 cancelled. It does not own Dorf's product vocabulary or become the only place where a Job's truth can
@@ -322,8 +324,9 @@ streams through Incus port forwarding. Guided setup may observe one unambiguous 
 bridge once to create an exact private Gateway URL in a Profile; admission and runtime use only that
 persisted definition. That local setup convenience never applies to a remote endpoint, and the
 controller path itself does not infer or supply the separate guest-to-Gateway route. Support
-requires the complete selected topology to pass live proof; guided setup rejects remote Incus until
-that proof exists.
+requires the complete selected topology to pass live proof. The supported remote path uses native
+Incus HTTPS on one Tailscale address, a project-restricted client certificate, an
+administrator-owned isolated bridge, and a stable HTTPS Provider Gateway URL.
 
 ### Current dogfood deployment terminals
 
@@ -335,9 +338,16 @@ The cloud controller terminal runs the Dorf Compose project on an ordinary share
 Incus or KVM. Managed E2B Sandboxes reach only the scoped Gateway through a stable
 deployment-owned outbound HTTPS tunnel; administration and storage remain private.
 
+The remote Incus terminal combines those hosts. The Compose controller runs without KVM and reaches
+native Incus HTTPS on the owner-controlled workstation through one Tailscale TCP 8443 grant. Job VMs
+use the workstation's isolated bridge for public IPv4 egress and use the controller's stable HTTPS
+Provider Gateway for model access. The controller has no route to guest addresses; the Incus
+port-forward API carries Harness traffic.
+
 Live proof selects the terminal that exercises the changed authority. Local Incus, image, KVM, or
 private-network changes require the workstation terminal. E2B, remote Gateway, and cloud
-self-hosting changes require the cloud-controller terminal. Provider-neutral lifecycle, setup,
+self-hosting changes require the cloud-controller terminal. Remote Incus enrollment, isolation, or
+port-forward changes require the combined terminal. Provider-neutral lifecycle, setup,
 profile, or portability changes that claim to serve both require both fresh terminals. Other Core
 and workflow slices require one real end-to-end terminal on the relevant target, not both by
 default. Host requirements derive from the selected Sandbox profiles; Incus and KVM are not

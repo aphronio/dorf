@@ -516,7 +516,7 @@ func setupIncusReadinessHandoff(authority *deployment.Incus, cause error, output
 		return setupBootstrapHandoff(bootstrapIncus, cause, output)
 	}
 	if authority != nil && strings.HasPrefix(authority.Endpoint, "https://") {
-		return fmt.Errorf("remote Incus endpoint %s is not supported until its live proof gate passes; select another Sandbox provider: %w", authority.Endpoint, cause)
+		return fmt.Errorf("remote Incus endpoint %s is not ready: %w; repair the fixed remote Incus topology through Getting started, then rerun dorf setup", authority.Endpoint, cause)
 	}
 	endpoint := "unconfigured"
 	if authority != nil {

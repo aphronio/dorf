@@ -258,19 +258,22 @@ func TestEnsureEnrollmentDoesNotRedeemAfterTransportOrCapabilityFailure(t *testi
 	}
 }
 
-func TestOutsideProjectProofAcceptsOnlyForbidden(t *testing.T) {
+func TestExactProjectConfinementAcceptsOnlyTheRemoteProject(t *testing.T) {
 	for _, test := range []struct {
-		name string
-		err  error
-		want bool
+		name     string
+		projects []string
+		err      error
+		want     bool
 	}{
-		{name: "forbidden", err: api.StatusErrorf(403, "forbidden"), want: true},
+		{name: "exact", projects: []string{RemoteProjectName}, want: true},
+		{name: "no project"},
+		{name: "default only", projects: []string{api.ProjectDefaultName}},
+		{name: "additional project", projects: []string{RemoteProjectName, "other"}},
 		{name: "server failure", err: api.StatusErrorf(500, "failed")},
 		{name: "transport failure", err: errors.New("connection reset")},
-		{name: "unexpected access"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			err := attestOutsideProjectDenial(test.err)
+			err := attestExactEnrollmentProjects(test.projects, test.err)
 			if (err == nil) != test.want {
 				t.Fatalf("accepted=%t want=%t error=%v", err == nil, test.want, err)
 			}
@@ -278,17 +281,44 @@ func TestOutsideProjectProofAcceptsOnlyForbidden(t *testing.T) {
 	}
 }
 
-func TestPreparedEnrollmentProjectRequiresExactRestrictionConfig(t *testing.T) {
+type fakeEnrollmentProjectNamesReader struct {
+	called   bool
+	projects []string
+	err      error
+}
+
+func (reader *fakeEnrollmentProjectNamesReader) GetProjectNames() ([]string, error) {
+	reader.called = true
+	return reader.projects, reader.err
+}
+
+func TestProjectConfinementProofReadsTheFilteredProjectSet(t *testing.T) {
+	reader := &fakeEnrollmentProjectNamesReader{projects: []string{RemoteProjectName}}
+	if err := proveExactProjectConfinement(reader); err != nil {
+		t.Fatal(err)
+	}
+	if !reader.called {
+		t.Fatal("project names were not read")
+	}
+}
+
+func TestPreparedRemoteProjectRequiresExactRestrictionConfig(t *testing.T) {
 	configured := &api.Project{
-		Name: DefaultProject,
+		Name: RemoteProjectName,
 		ProjectPut: api.ProjectPut{Config: map[string]string{
 			"restricted": "true", "features.images": "true", "features.networks": "false",
-			"features.profiles": "true", "features.storage.volumes": "true",
-			"restricted.networks.access": "incusbr0", "restricted.storage-pools.access": DefaultStoragePool,
+			"features.profiles": "true", "features.storage.buckets": "false", "features.storage.volumes": "true",
+			"limits.instances": "4", "limits.virtual-machines": "4",
+			"restricted.networks.access": RemoteNetworkName, "restricted.storage-pools.access": DefaultStoragePool,
 		}},
 	}
 	if err := attestPreparedEnrollmentProject(configured); err != nil {
 		t.Fatal(err)
+	}
+	wrongProject := *configured
+	wrongProject.Name = DefaultProject
+	if err := attestPreparedEnrollmentProject(&wrongProject); err == nil || !strings.Contains(err.Error(), RemoteProjectName) {
+		t.Fatalf("wrong project error=%v", err)
 	}
 	for key := range configured.Config {
 		broken := *configured

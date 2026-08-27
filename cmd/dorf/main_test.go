@@ -842,9 +842,10 @@ func TestGuidedGatewayBindPreservesExistingLocalProfiles(t *testing.T) {
 	if err != nil || network != "incusbr0" {
 		t.Fatalf("network=%q err=%v", network, err)
 	}
-	project, pool := gatewayIncusScope(profiles, selected, network)
-	if project != "restricted" || pool != "dorf-pool" {
-		t.Fatalf("Incus Gateway scope=%s/%s", project, pool)
+	localAuthority := &deployment.Incus{Endpoint: "unix:///var/lib/incus/unix.socket"}
+	project, pool, err := gatewayIncusScope(profiles, selected, localAuthority, network)
+	if err != nil || project != "restricted" || pool != "dorf-pool" {
+		t.Fatalf("Incus Gateway scope=%s/%s error=%v", project, pool, err)
 	}
 	address, required, err := guidedIncusBridgeAuthority(profiles, selected, network)
 	if err != nil || !required || address != "10.44.0.1" {
@@ -947,13 +948,13 @@ func testRemoteIncusAuthority(t *testing.T) *deployment.Incus {
 }
 
 func TestIncusReadinessIsScopedOnlyToASelectedIncusProfile(t *testing.T) {
-	if _, _, selected := guidedIncusReadinessScope([]guidedProfilePlan{{Provider: core.SandboxProviderE2B}}); selected {
+	if _, _, selected, err := guidedIncusReadinessScope([]guidedProfilePlan{{Provider: core.SandboxProviderE2B}}, nil); err != nil || selected {
 		t.Fatal("E2B-only setup inherited a configured Incus prerequisite")
 	}
 	existing := &core.SandboxProfile{IncusProject: "restricted", IncusStoragePool: "dorf-pool"}
-	project, pool, selected := guidedIncusReadinessScope([]guidedProfilePlan{{Provider: core.SandboxProviderIncus, Existing: existing}})
-	if !selected || project != "restricted" || pool != "dorf-pool" {
-		t.Fatalf("selected Incus readiness scope=%s/%s selected=%t", project, pool, selected)
+	project, pool, selected, err := guidedIncusReadinessScope([]guidedProfilePlan{{Provider: core.SandboxProviderIncus, Existing: existing}}, nil)
+	if err != nil || !selected || project != "restricted" || pool != "dorf-pool" {
+		t.Fatalf("selected Incus readiness scope=%s/%s selected=%t error=%v", project, pool, selected, err)
 	}
 }
 

@@ -10,6 +10,8 @@ Read only the authority relevant to the task:
 - [Architecture](docs/project/architecture.md): storage, sequencing, recovery, and composition.
 - [Decision Log](docs/project/decisions.md): accepted consequential choices and reconsideration triggers.
 - [Provider Gateway](docs/project/provider-gateway.md): provider authentication, routing, and broker ownership.
+- [Private Provider Attachment](docs/research/private-provider-attachment.md): non-normative
+  starting point for evaluating remote self-managed Sandbox hosts and an outbound connector.
 - [Getting Started](docs/getting-started.md): deployment-host and remote-client installation and setup.
 - [Support](docs/support.md): supported platforms, diagnostics, and fault attribution.
 - [Agent Guide](docs/agent-guide.md): delegated installation and CLI-operation runbook.

@@ -68,6 +68,8 @@ jobs:
           cmp deploy/compose.incus.yaml "$smoke_dir/dorf-compose-incus.yaml"
           test -x "$smoke_dir/bootstrap/docker.sh"
           test -x "$smoke_dir/bootstrap/incus.sh"
+          test -x "$smoke_dir/bootstrap/incus-remote.sh"
           cmp scripts/bootstrap/docker.sh "$smoke_dir/bootstrap/docker.sh"
           cmp scripts/bootstrap/incus.sh "$smoke_dir/bootstrap/incus.sh"
+          cmp scripts/bootstrap/incus-remote.sh "$smoke_dir/bootstrap/incus-remote.sh"
           mise exec -- go version -m "$smoke_dir/dorf"
