@@ -266,9 +266,6 @@ func (s Service) ObservePullRequest(ctx context.Context, jobID string) (githubap
 		return githubapi.PullRequest{}, err
 	}
 	proposal, err := s.Store.Proposal(ctx, jobID)
-	if errors.Is(err, postgres.ErrNotFound) {
-		return githubapi.PullRequest{}, ErrUnavailable
-	}
 	if err != nil {
 		return githubapi.PullRequest{}, err
 	}
