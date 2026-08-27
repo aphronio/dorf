@@ -22,9 +22,6 @@ stale generated SQL and runs query preparation, Go tests, and vet without rebuil
 Self-hosted deployments use the published image through `deploy/compose.yaml` and do not require
 Mise.
 
-For fast feedback on Go changes, run `mise run lint` and `mise run complexity`. Use
-`mise run complexity:report` to rank the functions that remain above the repository limit.
-
 Read [AGENTS.md](AGENTS.md) before changing a documented product, architecture, storage, provider,
 setup, image, or release boundary.
 

@@ -200,6 +200,7 @@ while IFS=$'\t' read -r package_relative symbol score; do
 done <"$candidate_file"
 
 failed=0
+baseline_stale=0
 while IFS=$'\t' read -r package_relative symbol score; do
   identity="$package_relative"$'\t'"$symbol"
   if [[ -z "${baseline_scores[$identity]+present}" ]]; then
@@ -211,6 +212,7 @@ while IFS=$'\t' read -r package_relative symbol score; do
   elif [[ "$mode" == "check" ]] && ((score < baseline_scores[$identity])); then
     echo "complexity: baseline is stale after decrease: $package_relative $symbol (${baseline_scores[$identity]} -> $score)" >&2
     failed=1
+    baseline_stale=1
   fi
   unset 'baseline_scores[$identity]'
 done <"$current_file"
@@ -219,7 +221,12 @@ if [[ "$mode" == "check" ]]; then
   for identity in "${!baseline_scores[@]}"; do
     echo "complexity: baseline is stale after removal or decrease below $maximum: ${identity//$'\t'/ } (${baseline_scores[$identity]})" >&2
     failed=1
+    baseline_stale=1
   done
+fi
+
+if ((baseline_stale != 0)); then
+  echo "complexity: inspect the change, then run 'mise run complexity:update' to record the lower ceiling" >&2
 fi
 
 ((failed == 0)) || {
