@@ -39,7 +39,7 @@ internal/controlapi	(*handler).jobListRoute	18
 internal/controlapi	(*handler).serviceError	18
 internal/controlapi	(*handler).watchRoute	32
 internal/controlclient	(*Client).watchJobOnce	32
-internal/controlreader	(Service).ObserveMessage	33
+internal/controlreader	(Service).ObserveMessage	29
 internal/controlreader	(Service).ObservePullRequest	26
 internal/controlreader	(Service).ReadFile	25
 internal/controlreader	NewClient	21

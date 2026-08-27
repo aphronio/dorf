@@ -161,16 +161,6 @@ func (s Service) ObserveMessage(ctx context.Context, jobID, messageID string) (c
 	}
 	var result core.MessageResult
 	err := s.Store.WithJobFence(ctx, jobID, func() error {
-		job, err := s.Store.Job(ctx, jobID)
-		if errors.Is(err, postgres.ErrNotFound) {
-			return ErrUnavailable
-		}
-		if err != nil {
-			return err
-		}
-		if job.ID != jobID || job.CleanupState != core.CleanupPending {
-			return ErrUnavailable
-		}
 		authoritative, err := s.Store.AgentMessageExecution(ctx, messageID)
 		if errors.Is(err, postgres.ErrNotFound) {
 			return ErrUnavailable
@@ -178,7 +168,8 @@ func (s Service) ObserveMessage(ctx context.Context, jobID, messageID string) (c
 		if err != nil {
 			return err
 		}
-		if authoritative.Job.ID != job.ID || authoritative.Job.SandboxProfile != job.SandboxProfile ||
+		job := authoritative.Job
+		if job.ID != jobID || job.CleanupState != core.CleanupPending ||
 			authoritative.Message.ID != messageID || authoritative.Message.JobID != job.ID ||
 			authoritative.AgentRun.JobID != job.ID || authoritative.AgentRun.MessageID != messageID ||
 			!validIdentity(authoritative.AgentRun.ID) || authoritative.AgentRun.State != core.AgentRunCompleted ||
