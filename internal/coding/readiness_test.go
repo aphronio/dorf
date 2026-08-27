@@ -78,6 +78,35 @@ func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testin
 	}
 }
 
+func TestReviewReadinessRejectsMalformedPlanBeforeReviewRuns(t *testing.T) {
+	job := Job{Job: core.Job{ID: "job-readiness"}, Revision: "revision-readiness"}
+	tests := []struct {
+		name   string
+		plan   policy.ReviewPlan
+		reason string
+	}{
+		{name: "missing decision", reason: "persisted review plan has no final decision"},
+		{name: "no-review with Role", plan: policy.ReviewPlan{Decision: "no-review", Roles: []policy.Role{policy.RoleGeneral}}, reason: "persisted review decision and selected Roles disagree"},
+		{name: "selected without Role", plan: policy.ReviewPlan{Decision: "selected"}, reason: "persisted review decision and selected Roles disagree"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			plan := ReviewPlanRecord{JobID: job.ID, Revision: job.Revision, Plan: test.plan}
+			got := AssessReviewReadiness(job, nil, blob.Store{}, &plan, nil, nil)
+			if got != (ReadinessAssessment{Revision: job.Revision, Reason: test.reason}) {
+				t.Fatalf("readiness = %#v", got)
+			}
+		})
+	}
+
+	plan := ReviewPlanRecord{JobID: job.ID, Revision: job.Revision, Plan: policy.ReviewPlan{Decision: "selected", Roles: []policy.Role{policy.RoleGeneral, policy.RoleAuthAuthority}}}
+	got := AssessReviewReadiness(job, nil, blob.Store{}, &plan, nil, nil)
+	wantReason := "selected review Role general has not returned a feedback Message with observed AgentRun Evidence"
+	if got.Reason != wantReason {
+		t.Fatalf("first selected Role reason = %q, want %q", got.Reason, wantReason)
+	}
+}
+
 func gitObservationEvidence(t *testing.T, store blob.Store, job Job, message MessageRecord, started time.Time) core.Evidence {
 	t.Helper()
 	observation := gitworkspace.Observation{

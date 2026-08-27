@@ -174,6 +174,23 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 	})
 }
 
+func TestCurrentWorkTerminalFactsPrecedeMissingInfrastructure(t *testing.T) {
+	facts := readyFacts()
+	facts.Actions = nil
+	facts.Outcome = &Outcome{JobID: facts.Job.ID, Kind: OutcomeAccepted}
+	want := Work{Kind: WorkComplete, Revision: facts.Job.Revision, FactID: facts.Job.ID, Detail: string(OutcomeAccepted)}
+	if got := decideCurrentWork(facts); got != want {
+		t.Fatalf("CurrentWork = %#v, want %#v", got, want)
+	}
+
+	facts.Outcome = nil
+	facts.Job.AdmissionOpen = false
+	want = Work{Kind: WorkComplete, Revision: facts.Job.Revision, FactID: facts.Job.ID, Detail: "admission closed"}
+	if got := decideCurrentWork(facts); got != want {
+		t.Fatalf("CurrentWork = %#v, want %#v", got, want)
+	}
+}
+
 func TestCurrentWorkSurfacesSandboxActionAttention(t *testing.T) {
 	facts := readyFacts()
 	facts.Actions = nil

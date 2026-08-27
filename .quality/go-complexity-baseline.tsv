@@ -26,11 +26,9 @@ internal/codex	(*protocol).reconcileStrictReviewTurn	17
 internal/codex	(Agent).withServerEndpointController	22
 internal/coding	(ProposalRuntime).Observe	27
 internal/coding	(ReviewAgentOperation).validate	30
-internal/coding	AssessReviewReadiness	57
 internal/coding	Register	18
 internal/coding	RunJob	18
 internal/coding	VerifyReviewRunEvidence	23
-internal/coding	decideCurrentWorkWithReviewRuns	43
 internal/coding	normalizeAdmissionRequest	18
 internal/coding	runSandboxAction	18
 internal/coding	unchangedAttention	17

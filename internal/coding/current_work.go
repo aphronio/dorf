@@ -173,135 +173,128 @@ func (s Snapshot) currentReviewRuns() []ReviewRunView {
 	return runs
 }
 
-// decideCurrentWork is intentionally an ordinary, coding-specific decision.
-// Its order is the dependency chain; do not replace it with a generic graph,
-// registry, persisted projection, or database-side workflow interpreter.
 func decideCurrentWork(f Snapshot) Work {
 	return decideCurrentWorkWithReviewRuns(f, f.currentReviewRuns())
 }
 
 func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []ReviewRunView) Work {
-	work := func(kind WorkKind, factID, detail string) Work {
-		return Work{Kind: kind, Revision: f.Job.Revision, FactID: factID, Detail: detail}
-	}
-	actionWork := func(kind core.ActionKind, scope, detail string) Work {
-		work := Work{
-			Kind: WorkAction, Revision: f.Job.Revision,
-			FactID:     core.ScopedActionID(f.Job.ID, kind, scope),
-			ActionKind: kind, Scope: scope, Detail: detail,
-		}
-		if f.Job.WorkflowAttentionSource == work.FactID && f.Job.WorkflowAttention != "" {
-			work.Kind = WorkAttention
-			work.Detail = f.Job.WorkflowAttention
-		}
-		return work
-	}
 	if f.Outcome != nil {
-		return work(WorkComplete, f.Outcome.JobID, string(f.Outcome.Kind))
+		return f.work(WorkComplete, f.Outcome.JobID, string(f.Outcome.Kind))
 	}
 	if !f.Job.AdmissionOpen {
-		return work(WorkComplete, f.Job.ID, "admission closed")
+		return f.work(WorkComplete, f.Job.ID, "admission closed")
 	}
-
-	// Infrastructure is a fixed prerequisite chain. Sandbox-create truthfully
-	// projects Core custody; the workflow never executes its provider mutation.
-	if !core.HasSucceededAction(f.Actions, core.ActionSandboxCreate, f.MainSandbox.ID) {
-		return actionWork(core.ActionSandboxCreate, f.MainSandbox.ID, "")
+	if work, ok := mainSandboxWork(f); ok {
+		return work
 	}
-	if !core.HasSucceededAction(f.Actions, gitworkspace.ActionRepositoryClone, f.MainSandbox.ID) {
-		return actionWork(gitworkspace.ActionRepositoryClone, f.MainSandbox.ID, "")
-	}
-	if !core.HasSucceededAction(f.Actions, core.ActionRouteCreate, f.MainSandbox.ID) {
-		return actionWork(core.ActionRouteCreate, f.MainSandbox.ID, "")
-	}
-	// Once exact-Revision publication Actions exist, reconcile them before a
-	// later accepted Message can advance the Revision. The Proposal then makes
-	// that old publication unambiguous and becomes stale after the new Revision.
 	if f.Proposal == nil && publicationPending(f.Actions, f.Job.Revision) {
-		return work(WorkPublishProposal, f.Job.Revision, publicationDetail(f, "reconcile started publication"))
+		return f.work(WorkPublishProposal, f.Job.Revision, publicationDetail(f, "reconcile started publication"))
 	}
 
-	// Once ReviewPolicy selected exact reviewers, wait for Core reconciliation
-	// and then consume their feedback as a typed workflow fact.
 	plan := f.currentReviewPlan()
 	if plan != nil {
-		byRole := make(map[string]ReviewRunView, len(reviewRuns))
-		for _, run := range reviewRuns {
-			byRole[run.Role] = run
-		}
-		for _, role := range plan.Plan.Roles {
-			run, ok := byRole[string(role)]
-			if !ok {
-				return work(WorkAttention, f.Job.Revision, fmt.Sprintf("selected reviewer %s has no durable execution", role))
-			}
-			if reviewFeedbackReturned(f.Messages, f.Job.ID, run.ID) {
-				continue
-			}
-			if f.Job.WorkflowAttentionSource == run.MessageID && f.Job.WorkflowAttention != "" {
-				return work(WorkAttention, run.MessageID, f.Job.WorkflowAttention)
-			}
-			if run.Attention != "" || run.Outcome != "" && run.Outcome != "completed" {
-				return work(WorkAttention, run.MessageID, attentionDetail(f.Job, run.MessageID, messageAttention(run.MessageID, run.Outcome, run.Attention)))
-			}
-			if run.Sandbox.ID == "" || run.Sandbox.ID != run.SandboxID || run.Sandbox.JobID != f.Job.ID {
-				return work(WorkAttention, run.ID, fmt.Sprintf("selected reviewer %s has no exact Job-owned Sandbox", role))
-			}
-			if !core.HasSucceededAction(f.Actions, core.ActionSandboxCreate, run.Sandbox.ID) {
-				return actionWork(core.ActionSandboxCreate, run.Sandbox.ID, string(role))
-			}
-			if !core.HasSucceededAction(f.Actions, ActionReviewCheckout, run.Sandbox.ID) {
-				return actionWork(ActionReviewCheckout, run.Sandbox.ID, string(role))
-			}
-			if !core.HasSucceededAction(f.Actions, core.ActionRouteCreate, run.Sandbox.ID) {
-				return actionWork(core.ActionRouteCreate, run.Sandbox.ID, string(role))
-			}
-			if run.Outcome == "completed" {
-				return work(WorkRecordReview, run.MessageID, string(role))
-			}
-			return work(WorkWaitAgent, run.MessageID, "awaiting "+string(role)+" reviewer result")
+		if work, ok := selectedReviewWork(f, plan, reviewRuns); ok {
+			return work
 		}
 	}
-
-	latestInput, latestTurnStart := latestImplementationRuns(f)
-	if latestInput != nil && latestInput.Outcome == "" && latestInput.Attention == "" {
-		return work(WorkWaitAgent, latestInput.Message.ID, "awaiting implementation result")
-	}
-	if latestInput != nil && latestInput.Outcome != "completed" {
-		return work(WorkAttention, latestInput.Message.ID, attentionDetail(f.Job, latestInput.Message.ID, messageAttention(latestInput.Message.ID, latestInput.Outcome, latestInput.Attention)))
-	}
-	if latestTurnStart != nil && latestTurnStart.Outcome == "" && latestTurnStart.Attention == "" {
-		return work(WorkWaitAgent, latestTurnStart.Message.ID, "awaiting implementation result")
-	}
-	if latestTurnStart != nil && latestTurnStart.Outcome != "completed" {
-		return work(WorkAttention, latestTurnStart.Message.ID, attentionDetail(f.Job, latestTurnStart.Message.ID, messageAttention(latestTurnStart.Message.ID, latestTurnStart.Outcome, latestTurnStart.Attention)))
+	if work, ok := implementationWork(f); ok {
+		return work
 	}
 
-	// A completed implementation Turn is not a Git fact. Its immutable
-	// git-revision Evidence is the recovery boundary, even when HEAD is unchanged.
-	if candidate := revisionCandidate(f, latestTurnStart); candidate != nil {
-		if candidate.InputRevision != f.Job.Revision {
-			return work(WorkAttention, candidate.Message.ID, fmt.Sprintf("Message input Revision %s does not match current Revision %s", candidate.InputRevision, f.Job.Revision))
-		}
-		return work(WorkObserveRevision, candidate.Message.ID, attentionDetail(f.Job, candidate.Message.ID, ""))
-	}
-	if id, detail := unchangedAttention(f); id != "" {
-		return work(WorkAttention, id, detail)
-	}
-
-	// Deterministic verification is intentionally absent here. D084 records
-	// when workflow-owned verification is earned and where to recover the
-	// useful pre-deletion mechanics without restoring the old repository contract.
-
-	// The ReviewPlan is the final deterministic decision. There is no pending
-	// plan or a separate handoff fact.
 	if plan == nil {
-		return work(WorkChooseReview, f.Job.Revision, attentionDetail(f.Job, ReviewPolicyAttentionSource(f.Job.Revision), ""))
+		return f.work(WorkChooseReview, f.Job.Revision, attentionDetail(f.Job, ReviewPolicyAttentionSource(f.Job.Revision), ""))
 	}
 
 	if f.Proposal != nil && f.Proposal.ProposedRevision == f.Job.Revision {
-		return work(WorkObserveProposal, f.Proposal.URL, fmt.Sprintf("pull request #%d", f.Proposal.Number))
+		return f.work(WorkObserveProposal, f.Proposal.URL, fmt.Sprintf("pull request #%d", f.Proposal.Number))
 	}
-	return work(WorkPublishProposal, f.Job.Revision, "")
+	return f.work(WorkPublishProposal, f.Job.Revision, "")
+}
+
+func (f Snapshot) work(kind WorkKind, factID, detail string) Work {
+	return Work{Kind: kind, Revision: f.Job.Revision, FactID: factID, Detail: detail}
+}
+
+func (f Snapshot) actionWork(kind core.ActionKind, scope, detail string) Work {
+	work := Work{Kind: WorkAction, Revision: f.Job.Revision, FactID: core.ScopedActionID(f.Job.ID, kind, scope), ActionKind: kind, Scope: scope, Detail: detail}
+	if f.Job.WorkflowAttentionSource == work.FactID && f.Job.WorkflowAttention != "" {
+		work.Kind = WorkAttention
+		work.Detail = f.Job.WorkflowAttention
+	}
+	return work
+}
+
+func mainSandboxWork(f Snapshot) (Work, bool) {
+	for _, kind := range []core.ActionKind{core.ActionSandboxCreate, gitworkspace.ActionRepositoryClone, core.ActionRouteCreate} {
+		if !core.HasSucceededAction(f.Actions, kind, f.MainSandbox.ID) {
+			return f.actionWork(kind, f.MainSandbox.ID, ""), true
+		}
+	}
+	return Work{}, false
+}
+
+func selectedReviewWork(f Snapshot, plan *ReviewPlanRecord, reviewRuns []ReviewRunView) (Work, bool) {
+	byRole := make(map[string]ReviewRunView, len(reviewRuns))
+	for _, run := range reviewRuns {
+		byRole[run.Role] = run
+	}
+	for _, role := range plan.Plan.Roles {
+		run, ok := byRole[string(role)]
+		if !ok {
+			return f.work(WorkAttention, f.Job.Revision, fmt.Sprintf("selected reviewer %s has no durable execution", role)), true
+		}
+		if reviewFeedbackReturned(f.Messages, f.Job.ID, run.ID) {
+			continue
+		}
+		if f.Job.WorkflowAttentionSource == run.MessageID && f.Job.WorkflowAttention != "" {
+			return f.work(WorkAttention, run.MessageID, f.Job.WorkflowAttention), true
+		}
+		if run.Attention != "" || run.Outcome != "" && run.Outcome != "completed" {
+			return f.work(WorkAttention, run.MessageID, attentionDetail(f.Job, run.MessageID, messageAttention(run.MessageID, run.Outcome, run.Attention))), true
+		}
+		if !exactReviewSandbox(f.Job.ID, run) {
+			return f.work(WorkAttention, run.ID, fmt.Sprintf("selected reviewer %s has no exact Job-owned Sandbox", role)), true
+		}
+		for _, kind := range []core.ActionKind{core.ActionSandboxCreate, ActionReviewCheckout, core.ActionRouteCreate} {
+			if !core.HasSucceededAction(f.Actions, kind, run.Sandbox.ID) {
+				return f.actionWork(kind, run.Sandbox.ID, string(role)), true
+			}
+		}
+		if run.Outcome == "completed" {
+			return f.work(WorkRecordReview, run.MessageID, string(role)), true
+		}
+		return f.work(WorkWaitAgent, run.MessageID, "awaiting "+string(role)+" reviewer result"), true
+	}
+	return Work{}, false
+}
+
+func exactReviewSandbox(jobID string, run ReviewRunView) bool {
+	return run.Sandbox.ID != "" && run.Sandbox.ID == run.SandboxID && run.Sandbox.JobID == jobID
+}
+
+func implementationWork(f Snapshot) (Work, bool) {
+	latestInput, latestTurnStart := latestImplementationRuns(f)
+	for _, message := range []*MessageRecord{latestInput, latestTurnStart} {
+		if message == nil {
+			continue
+		}
+		if message.Outcome == "" && message.Attention == "" {
+			return f.work(WorkWaitAgent, message.Message.ID, "awaiting implementation result"), true
+		}
+		if message.Outcome != "completed" {
+			return f.work(WorkAttention, message.Message.ID, attentionDetail(f.Job, message.Message.ID, messageAttention(message.Message.ID, message.Outcome, message.Attention))), true
+		}
+	}
+	if candidate := revisionCandidate(f, latestTurnStart); candidate != nil {
+		if candidate.InputRevision != f.Job.Revision {
+			return f.work(WorkAttention, candidate.Message.ID, fmt.Sprintf("Message input Revision %s does not match current Revision %s", candidate.InputRevision, f.Job.Revision)), true
+		}
+		return f.work(WorkObserveRevision, candidate.Message.ID, attentionDetail(f.Job, candidate.Message.ID, "")), true
+	}
+	if id, detail := unchangedAttention(f); id != "" {
+		return f.work(WorkAttention, id, detail), true
+	}
+	return Work{}, false
 }
 
 func reviewFeedbackReturned(messages []MessageRecord, jobID, runID string) bool {

@@ -20,85 +20,111 @@ type ReadinessAssessment struct {
 }
 
 func AssessReviewReadiness(job Job, records []core.Evidence, blobs blob.Store, plan *ReviewPlanRecord, reviews []ReviewRunView, messages []MessageRecord) ReadinessAssessment {
-	assessment := ReadinessAssessment{Revision: job.Revision}
-	if plan == nil || plan.JobID != job.ID || plan.Revision != job.Revision {
-		assessment.Reason = "exact current Revision has no explicit persisted ReviewPolicy decision"
-		return assessment
-	}
-	if plan.Plan.Decision != "no-review" && plan.Plan.Decision != "selected" {
-		assessment.Reason = "persisted review plan has no final decision"
-		return assessment
-	}
-	if (plan.Plan.Decision == "no-review" && len(plan.Plan.Roles) != 0) || (plan.Plan.Decision == "selected" && len(plan.Plan.Roles) == 0) {
-		assessment.Reason = "persisted review decision and selected Roles disagree"
-		return assessment
-	}
-	exactReviews := make([]ReviewRunView, 0, len(reviews))
-	for _, run := range reviews {
-		if run.JobID == job.ID && run.InputRevision == job.Revision {
-			exactReviews = append(exactReviews, run)
-		}
-	}
-	byRole := make(map[string]ReviewRunView, len(exactReviews))
-	for _, run := range exactReviews {
-		byRole[run.Role] = run
+	if reason := reviewPlanFailure(job, plan); reason != "" {
+		return ReadinessAssessment{Revision: job.Revision, Reason: reason}
 	}
 	messageByID := make(map[string]MessageRecord, len(messages))
 	for _, message := range messages {
 		messageByID[message.Message.ID] = message
 	}
-	verifyRun := func(run ReviewRunView) bool {
-		if err := VerifyReviewRunEvidence(run, records, blobs); err != nil {
-			assessment.Reason = fmt.Sprintf("review AgentRun %s Evidence is invalid: %s", run.ID, err)
-			return false
-		}
-		return true
+	returnedReviews, reason := selectedReviewReturns(job, plan, reviews, messageByID, records, blobs)
+	if reason != "" {
+		return ReadinessAssessment{Revision: job.Revision, Reason: reason}
 	}
-	type feedbackOwner struct{ messageID, reviewerID string }
-	feedback := make([]feedbackOwner, 0, len(plan.Plan.Roles))
+	if reason := handledReviewFailure(job, returnedReviews); reason != "" {
+		return ReadinessAssessment{Revision: job.Revision, Reason: reason}
+	}
+	if reason := latestImplementationFailure(job, messages, records, blobs); reason != "" {
+		return ReadinessAssessment{Revision: job.Revision, Reason: reason}
+	}
+	if plan.Plan.Decision == "no-review" {
+		return ReadinessAssessment{Ready: true, Revision: job.Revision, Reason: "the exact Revision has observed Git Evidence and ReviewPolicy explicitly selected no agent review"}
+	}
+	return ReadinessAssessment{Ready: true, Revision: job.Revision, Reason: "the exact Revision has observed Git Evidence and every selected review AgentRun returned feedback that was handled"}
+}
+
+func reviewPlanFailure(job Job, plan *ReviewPlanRecord) string {
+	switch {
+	case plan == nil || plan.JobID != job.ID || plan.Revision != job.Revision:
+		return "exact current Revision has no explicit persisted ReviewPolicy decision"
+	case plan.Plan.Decision != "no-review" && plan.Plan.Decision != "selected":
+		return "persisted review plan has no final decision"
+	case plan.Plan.Decision == "no-review" && len(plan.Plan.Roles) != 0 || plan.Plan.Decision == "selected" && len(plan.Plan.Roles) == 0:
+		return "persisted review decision and selected Roles disagree"
+	}
+	return ""
+}
+
+func selectedReviewReturns(job Job, plan *ReviewPlanRecord, reviews []ReviewRunView, messages map[string]MessageRecord, records []core.Evidence, blobs blob.Store) ([]MessageRecord, string) {
+	byRole := make(map[string]ReviewRunView, len(reviews))
+	for _, run := range reviews {
+		if run.JobID == job.ID && run.InputRevision == job.Revision {
+			byRole[run.Role] = run
+		}
+	}
+	returned := make([]MessageRecord, 0, len(plan.Plan.Roles))
 	for _, role := range plan.Plan.Roles {
-		run, ok := byRole[string(role)]
-		expectedRequestID := ReviewRequestMessageID(job.ID, job.Revision, string(role))
-		expectedRunID := core.AgentRunID(expectedRequestID)
-		expectedRequestFromID := ReviewRequestFromID(job.Revision, string(role))
-		expectedMessageID := core.MessageID(job.ID, core.MessageFromAgent, expectedRunID)
-		feedbackRecord, feedbackOK := messageByID[expectedMessageID]
-		feedbackMessage := feedbackRecord.Message
-		if !ok || run.ID != expectedRunID || run.MessageID != expectedRequestID || run.Request.ID != expectedRequestID || run.Request.JobID != job.ID || run.Request.FromKind != core.MessageFromWorkflow || run.Request.FromID != expectedRequestFromID || run.Request.Intent != core.MessageFollow || strings.TrimSpace(run.Request.Input) == "" || run.Outcome != "completed" || !feedbackOK || feedbackMessage.JobID != job.ID || feedbackMessage.FromKind != core.MessageFromAgent || feedbackMessage.FromID != expectedRunID || feedbackMessage.Intent != core.MessageFollow {
-			assessment.Reason = fmt.Sprintf("selected review Role %s has not returned a feedback Message with observed AgentRun Evidence", role)
-			return assessment
+		roleName := string(role)
+		requestID := ReviewRequestMessageID(job.ID, job.Revision, roleName)
+		runID := core.AgentRunID(requestID)
+		run := byRole[roleName]
+		feedback := messages[core.MessageID(job.ID, core.MessageFromAgent, runID)]
+		message := feedback.Message
+		if !selectedReviewRunMatches(job, roleName, requestID, runID, run) || message.ID != core.MessageID(job.ID, core.MessageFromAgent, runID) || message.JobID != job.ID || message.FromKind != core.MessageFromAgent || message.FromID != runID || message.Intent != core.MessageFollow {
+			return nil, fmt.Sprintf("selected review Role %s has not returned a feedback Message with observed AgentRun Evidence", role)
 		}
-		if !verifyRun(run) {
-			return assessment
+		if err := VerifyReviewRunEvidence(run, records, blobs); err != nil {
+			return nil, fmt.Sprintf("review AgentRun %s Evidence is invalid: %s", run.ID, err)
 		}
-		feedback = append(feedback, feedbackOwner{messageID: expectedMessageID, reviewerID: run.ID})
+		returned = append(returned, feedback)
 	}
+	return returned, ""
+}
 
-	for _, item := range feedback {
-		implementation, ok := messageByID[item.messageID]
-		message := implementation.Message
-		if !ok || message.FromKind != core.MessageFromAgent || message.FromID != item.reviewerID || message.JobID != job.ID || implementation.InputRevision != job.Revision || implementation.Outcome != "completed" {
-			assessment.Reason = fmt.Sprintf("review feedback Message %s has not been handled by a completed implementation AgentRun", item.messageID)
-			return assessment
+func handledReviewFailure(job Job, returned []MessageRecord) string {
+	for _, implementation := range returned {
+		if implementation.InputRevision != job.Revision || implementation.Outcome != "completed" {
+			return fmt.Sprintf("review feedback Message %s has not been handled by a completed implementation AgentRun", implementation.Message.ID)
 		}
 	}
+	return ""
+}
 
-	var latestInput MessageRecord
-	var latestInputSequence int64
-	var latestTurnStart MessageRecord
-	var latestSequence int64
+func selectedReviewRunMatches(job Job, role, requestID, runID string, run ReviewRunView) bool {
+	return run.ID == runID && run.MessageID == requestID && run.Request.ID == requestID && run.Request.JobID == job.ID && run.Request.FromKind == core.MessageFromWorkflow && run.Request.FromID == ReviewRequestFromID(job.Revision, role) && run.Request.Intent == core.MessageFollow && strings.TrimSpace(run.Request.Input) != "" && run.Outcome == "completed"
+}
+
+func latestImplementationFailure(job Job, messages []MessageRecord, records []core.Evidence, blobs blob.Store) string {
+	latestInput, latestTurnStart, reason := latestReadinessMessages(job, messages)
+	switch {
+	case reason != "":
+		return reason
+	case latestInput.Message.ID != "" && latestInput.Outcome != "completed":
+		return fmt.Sprintf("latest implementation input Message %s has not completed successfully", latestInput.Message.ID)
+	case latestTurnStart.Message.ID == "":
+		return ""
+	case latestTurnStart.Outcome != "completed" || latestTurnStart.InputRevision == "":
+		return fmt.Sprintf("latest implementation turn-start Message %s has not completed successfully", latestTurnStart.Message.ID)
+	}
+	if err := verifyGitRevisionObservation(job, latestTurnStart, records, blobs); err != nil {
+		return fmt.Sprintf("implementation producer %s has no valid Git observation: %v", latestTurnStart.ProducerID, err)
+	}
+	return ""
+}
+
+func latestReadinessMessages(job Job, messages []MessageRecord) (MessageRecord, MessageRecord, string) {
+	var latestInput, latestTurnStart MessageRecord
+	var latestInputSequence, latestSequence int64
 	for _, record := range messages {
 		message := record.Message
 		if message.JobID != job.ID {
 			continue
 		}
 		if record.Outcome == "" {
-			assessment.Reason = fmt.Sprintf("implementation Message %s is not terminal", message.ID)
-			return assessment
+			return latestInput, latestTurnStart, fmt.Sprintf("implementation Message %s is not terminal", message.ID)
 		}
 		if message.ID == "" || record.ProducerID == "" {
-			assessment.Reason = fmt.Sprintf("implementation Message %s has no retained producer provenance", message.ID)
-			return assessment
+			return latestInput, latestTurnStart, fmt.Sprintf("implementation Message %s has no retained producer provenance", message.ID)
 		}
 		if latestInput.Message.ID == "" || message.Sequence > latestInputSequence {
 			latestInput, latestInputSequence = record, message.Sequence
@@ -107,32 +133,9 @@ func AssessReviewReadiness(job Job, records []core.Evidence, blobs blob.Store, p
 			latestTurnStart, latestSequence = record, message.Sequence
 		}
 	}
-	if latestInput.Message.ID != "" && latestInput.Outcome != "completed" {
-		assessment.Reason = fmt.Sprintf("latest implementation input Message %s has not completed successfully", latestInput.Message.ID)
-		return assessment
-	}
-	if latestTurnStart.Message.ID != "" {
-		if latestTurnStart.Outcome != "completed" || latestTurnStart.InputRevision == "" {
-			assessment.Reason = fmt.Sprintf("latest implementation turn-start Message %s has not completed successfully", latestTurnStart.Message.ID)
-			return assessment
-		}
-		if err := verifyGitRevisionObservation(job, latestTurnStart, records, blobs); err != nil {
-			assessment.Reason = fmt.Sprintf("implementation producer %s has no valid Git observation: %v", latestTurnStart.ProducerID, err)
-			return assessment
-		}
-	}
-	assessment.Ready = true
-	if plan.Plan.Decision == "no-review" {
-		assessment.Reason = "the exact Revision has observed Git Evidence and ReviewPolicy explicitly selected no agent review"
-	} else {
-		assessment.Reason = "the exact Revision has observed Git Evidence and every selected review AgentRun returned feedback that was handled"
-	}
-	return assessment
+	return latestInput, latestTurnStart, ""
 }
 
-// PublicationMessages retains the exact admitted input boundary that began
-// publication. Later Messages remain accepted, but cannot strand recovery of
-// an already-started external effect.
 func PublicationMessages(messages []MessageRecord, startedAt time.Time) []MessageRecord {
 	if startedAt.IsZero() {
 		return messages
