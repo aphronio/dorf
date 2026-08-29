@@ -1,10 +1,13 @@
 # Support and diagnostics
 
 The managed deployment shape is x86_64 Linux with an operator-prepared Docker Engine and Compose
-plugin. Its frozen clean-host terminal remains pending; do not treat the new Compose path as
-release-proven until the [D101 proof gate](project/decisions.md#d101--compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit)
-passes. Local profiles additionally require an operator-prepared usable Incus endpoint and KVM;
-cloud-only E2B deployments do not. Setup does not prepare missing host prerequisites; follow the
+plugin. The current early release line is proven on the live controller, remote Incus workstation,
+and public Control API path recorded by
+[D101](project/decisions.md#d101--compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit).
+Its frozen clean-host reproduction remains deferred until the first external operator or a material
+installation, bootstrap, Compose, or packaging change. Local profiles additionally require an
+operator-prepared usable Incus endpoint and KVM; cloud-only E2B deployments do not. Setup does not
+prepare missing host prerequisites; follow the
 [deployment-host setup procedure](getting-started.md#1-install-the-application-initialize-a-deployment-host)
 for the exact administrator-helper or manual handoff.
 

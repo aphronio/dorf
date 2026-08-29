@@ -2648,8 +2648,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 ## D101 — Compose owns deployment lifecycle; bootstrap privilege stays explicit
 
 - **Status:** Accepted implementation direction — 2026-08-26; setup application refined by live
-  `v0.5.4` dogfood — 2026-08-26; guided ingress topology refined by D102 — 2026-08-27; complete live
-  Compose VM terminal pending; remote Incus terminal passed — 2026-08-27
+  `v0.5.4` dogfood — 2026-08-26; guided ingress topology refined by D102 — 2026-08-27; remote Incus
+  and public Control API terminals passed — 2026-08-27; frozen clean-host reproduction deferred
+  until its trigger — 2026-08-29
 - **Decision:** Replace D071's standalone PostgreSQL container and D100's systemd units with one
   versioned static Dorf Docker Compose project. The
   [Remote Control API](../control-api.md#deployment-services) owns its exact service and network
@@ -2761,16 +2762,15 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Refines:** D012's local-Incus assumption, D036's Gateway and Cloudflare supervision, D067's
   provider-route wording, D070's Incus profile custody, and D097's API/worker deployment shape. It
   does not change their Job, Sandbox, Gateway, or authenticated-client authorities.
-- **Proof gate:** Before this becomes the supported deployment, the repository-owned
-  [frozen Compose VM harness](../../scripts/integration/compose-vm.sh) must let
-  an administrator prepare Docker, Compose, and an Incus endpoint, then let a deployment operator
-  run setup without Dorf invoking `sudo`, have setup apply the static project under that same
-  identity, complete its guided configuration and verification in one resumable flow, complete a
-  real Job, survive direct Compose worker and API restart, retrieve required state, and clean up.
-  E2B/remote-Gateway behavior needs the cloud-controller terminal; local Incus behavior needs the
-  workstation terminal. The remote Incus subgate passed with HTTPS client identity, instance-port
-  forwarding, the guest-to-Gateway path, worker recovery, file retrieval, route revocation, and VM
-  cleanup in one terminal.
+- **Early-release proof:** CI must pass on the exact release commit, the release authority must
+  verify its immutable artifacts, and each changed external authority needs its relevant live
+  terminal. The current deployment passed remote Incus, the public Control API, a real model Turn,
+  process restart, file retrieval, route revocation, and VM cleanup. That evidence is enough for the
+  current early release line. Run the repository-owned
+  [frozen Compose VM harness](../../scripts/integration/compose-vm.sh) before the first external
+  operator relies on clean-host reproduction, or after a material change to installation,
+  bootstrap helpers, Compose topology, or release packaging. The harness must then prove the same
+  setup, restart, retrieval, and cleanup contract on a fresh host.
 - **Reconsider when:** Compose cannot preserve deterministic migration and recovery under real
   process loss, a supported non-Docker deployment earns equal proof, rootless container operation
   materially changes the Docker authority boundary, or a second private Sandbox provider or
