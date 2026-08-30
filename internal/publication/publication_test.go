@@ -107,6 +107,30 @@ func TestGitCredentialHelperSuppliesOnlyTheRequestedEphemeralCredential(t *testi
 	}
 }
 
+func TestGitRepositoryPushReportsSanitizedPorcelainAndStderr(t *testing.T) {
+	const token = "installation-secret-token"
+	calls := 0
+	repository := GitRepository{
+		Workspace: "/workspace/job",
+		Ownership: publicationOwner("job-exact"),
+		Sandbox: publicationSandbox(sandboxRunner(func(context.Context, string, []byte, ...string) (incus.Result, error) {
+			return incus.Result{Stdout: "fake-bundle"}, nil
+		}), "job-exact"),
+		Run: func(context.Context, []string, []string) ([]byte, []byte, error) {
+			calls++
+			if calls == 1 {
+				return nil, nil, nil
+			}
+			return []byte("! refs/heads/dorf/job [remote rejected] blocked " + token), []byte("error: failed to push " + token), errors.New("push failed")
+		},
+	}
+	job := coding.Job{Job: core.Job{ID: "job-exact"}, Revision: strings.Repeat("a", 40), Branch: "dorf/job", GitHubRepository: "aphronio/dorf"}
+	err := repository.Push(context.Background(), job, token)
+	if err == nil || !strings.Contains(err.Error(), "remote rejected") || !strings.Contains(err.Error(), "failed to push") || strings.Contains(err.Error(), token) || strings.Count(err.Error(), "[REDACTED_GITHUB_TOKEN]") != 2 {
+		t.Fatalf("push error=%q", err)
+	}
+}
+
 func TestGitRepositoryRelationAllowsOnlyBehindAndClassifiesAheadDivergent(t *testing.T) {
 	for name, exits := range map[string][]int{"behind": {0, 0}, "ahead": {0, 1, 0}, "divergent": {0, 1, 1}} {
 		t.Run(name, func(t *testing.T) {

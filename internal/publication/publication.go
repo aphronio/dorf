@@ -518,8 +518,12 @@ rm -f -- "$bundle"`, "dorf-publication-export", r.Workspace, job.Revision, job.B
 	remoteURL := "https://github.com/" + job.GitHubRepository + ".git"
 	env := append(isolatedGit, "DORF_EPHEMERAL_GITHUB_TOKEN="+token)
 	args := []string{"git", "-c", "credential.helper=", "-c", "credential.helper=" + gitCredentialHelper, "-C", repository, "push", "--porcelain", remoteURL, job.Revision + ":refs/heads/" + job.Branch}
-	if _, stderr, err := run(ctx, env, args); err != nil {
-		return fmt.Errorf("push exact Revision to recorded head without force: %s", sanitize(stderr, token))
+	if stdout, stderr, err := run(ctx, env, args); err != nil {
+		detail := make([]byte, 0, len(stdout)+len(stderr)+1)
+		detail = append(detail, stdout...)
+		detail = append(detail, '\n')
+		detail = append(detail, stderr...)
+		return fmt.Errorf("push exact Revision to recorded head without force: %s", sanitize(detail, token))
 	}
 	return nil
 }
