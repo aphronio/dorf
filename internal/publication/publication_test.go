@@ -3,6 +3,8 @@ package publication
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -75,14 +77,33 @@ func TestGitRepositoryPushUsesRecordedOIDAndRefWithoutCredentialInArgvOrSandbox(
 		t.Fatalf("host commands=%v", hostArgs)
 	}
 	push := strings.Join(hostArgs[1], " ")
-	if !strings.Contains(push, "credential.helper=") || !strings.Contains(push, revision+":refs/heads/dorf/issue-43") || strings.Contains(push, "HEAD:") || strings.Contains(push, "--force") || strings.Contains(push, token) {
+	if !strings.Contains(push, "credential.helper=!") || !strings.Contains(push, revision+":refs/heads/dorf/issue-43") || strings.Contains(push, "HEAD:") || strings.Contains(push, "--force") || strings.Contains(push, token) {
 		t.Fatalf("unsafe push argv: %s", push)
 	}
 	if strings.Contains(strings.Join(hostArgs[0], " "), token) {
 		t.Fatal("credential appeared in materialization argv")
 	}
-	if !strings.Contains(strings.Join(hostEnv[1], " "), "DORF_EPHEMERAL_GITHUB_TOKEN="+token) {
-		t.Fatal("host-only ephemeral credential was not supplied to askpass")
+	pushEnv := strings.Join(hostEnv[1], " ")
+	if !strings.Contains(pushEnv, "DORF_EPHEMERAL_GITHUB_TOKEN="+token) {
+		t.Fatal("host-only ephemeral credential was not supplied to Git")
+	}
+	if strings.Contains(pushEnv, "GIT_ASKPASS=") {
+		t.Fatal("push depends on an executable temporary askpass helper")
+	}
+}
+
+func TestGitCredentialHelperSuppliesOnlyTheRequestedEphemeralCredential(t *testing.T) {
+	const token = "installation-secret-token"
+	command := exec.Command("git", "-c", "credential.helper=", "-c", "credential.helper="+gitCredentialHelper, "credential", "fill")
+	command.Env = append(os.Environ(), "DORF_EPHEMERAL_GITHUB_TOKEN="+token)
+	command.Stdin = strings.NewReader("protocol=https\nhost=github.com\n\n")
+	output, err := command.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential := string(output)
+	if !strings.Contains(credential, "username=x-access-token\n") || !strings.Contains(credential, "password="+token+"\n") {
+		t.Fatalf("credential helper output=%q", credential)
 	}
 }
 

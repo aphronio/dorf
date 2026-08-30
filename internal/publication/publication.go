@@ -427,6 +427,8 @@ type GitRepository struct {
 	Run       func(context.Context, []string, []string) ([]byte, []byte, error)
 }
 
+const gitCredentialHelper = `!f() { case "$1" in get) printf 'username=%s\npassword=%s\n\n' x-access-token "$DORF_EPHEMERAL_GITHUB_TOKEN";; esac; }; f`
+
 func (r GitRepository) Relation(ctx context.Context, job coding.Job, remote string) (string, error) {
 	if !postgres.ValidRevision(remote) {
 		return "", &AttentionError{Reason: "remote head is not an exact commit OID"}
@@ -505,10 +507,6 @@ rm -f -- "$bundle"`, "dorf-publication-export", r.Workspace, job.Revision, job.B
 		return err
 	}
 	repository := filepath.Join(temporary, "repository.git")
-	askpass := filepath.Join(temporary, "askpass")
-	if err := os.WriteFile(askpass, []byte("#!/bin/sh\ncase \"$1\" in *Username*) printf '%s\\n' x-access-token;; *) printf '%s\\n' \"$DORF_EPHEMERAL_GITHUB_TOKEN\";; esac\n"), 0o700); err != nil {
-		return err
-	}
 	run := r.Run
 	if run == nil {
 		run = runGit
@@ -518,8 +516,8 @@ rm -f -- "$bundle"`, "dorf-publication-export", r.Workspace, job.Revision, job.B
 		return fmt.Errorf("materialize exact publication objects: %s", sanitize(stderr, token))
 	}
 	remoteURL := "https://github.com/" + job.GitHubRepository + ".git"
-	env := append(isolatedGit, "GIT_ASKPASS="+askpass, "DORF_EPHEMERAL_GITHUB_TOKEN="+token)
-	args := []string{"git", "-c", "credential.helper=", "-C", repository, "push", "--porcelain", remoteURL, job.Revision + ":refs/heads/" + job.Branch}
+	env := append(isolatedGit, "DORF_EPHEMERAL_GITHUB_TOKEN="+token)
+	args := []string{"git", "-c", "credential.helper=", "-c", "credential.helper=" + gitCredentialHelper, "-C", repository, "push", "--porcelain", remoteURL, job.Revision + ":refs/heads/" + job.Branch}
 	if _, stderr, err := run(ctx, env, args); err != nil {
 		return fmt.Errorf("push exact Revision to recorded head without force: %s", sanitize(stderr, token))
 	}
