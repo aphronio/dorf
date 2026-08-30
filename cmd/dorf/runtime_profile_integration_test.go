@@ -95,6 +95,11 @@ func TestGuidedSetupRetargetsAndInvalidatesTheExistingE2BProfile(t *testing.T) {
 	if !profile.BaseVerified() || !profile.Default {
 		t.Fatalf("prepared profile=%#v", profile)
 	}
+	resolved, err := resolveSetupSandboxOptions(ctx, store, config.Config{}, setupOptions{}, setupPresenter{output: io.Discard, interactive: true})
+	if err != nil || len(resolved.SandboxProviders) != 1 || resolved.SandboxProviders[0] != profile.Provider ||
+		resolved.ProfileName != profile.Name || resolved.Harness != profile.Harness {
+		t.Fatalf("retained setup options=%#v error=%v", resolved, err)
+	}
 
 	profile, err = retargetGuidedE2BProfile(ctx, store, profile, "https://models.dorf.example.test/v1")
 	if err != nil {

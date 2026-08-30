@@ -576,16 +576,16 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 	if template, err := setupE2BTemplate(setupOptions{E2BTemplate: "operator/custom:exact-build"}); err != nil || template != "operator/custom:exact-build" {
 		t.Fatalf("custom E2B template=%q error=%v", template, err)
 	}
-	automated, err := selectSetupSandboxProviders(context.Background(), config.Config{}, setupOptions{Yes: true}, newSetupPresenter(&strings.Builder{}))
-	if err != nil || len(automated) != 0 {
-		t.Fatalf("common-only automation providers=%v error=%v", automated, err)
+	automated, settled := deriveSetupSandboxOptions(setupOptions{Yes: true}, nil, false)
+	if !settled || len(automated.SandboxProviders) != 0 {
+		t.Fatalf("common-only automation options=%#v settled=%t", automated, settled)
 	}
-	inferred, settled := deriveSetupSandboxProviders(setupOptions{}, true)
-	if settled || len(inferred) != 0 {
-		t.Fatalf("interactive provider selection was skipped: providers=%v settled=%t", inferred, settled)
+	inferred, settled := deriveSetupSandboxOptions(setupOptions{}, nil, true)
+	if settled || len(inferred.SandboxProviders) != 0 {
+		t.Fatalf("interactive provider selection was skipped: options=%#v settled=%t", inferred, settled)
 	}
-	if selected, settled := deriveSetupSandboxProviders(setupOptions{SandboxProviders: sandboxProviderFlags{core.SandboxProviderIncus}}, true); !settled || len(selected) != 1 {
-		t.Fatalf("explicit provider selection=%v settled=%t", selected, settled)
+	if selected, settled := deriveSetupSandboxOptions(setupOptions{SandboxProviders: sandboxProviderFlags{core.SandboxProviderIncus}}, nil, true); !settled || len(selected.SandboxProviders) != 1 {
+		t.Fatalf("explicit provider selection=%#v settled=%t", selected, settled)
 	}
 	for _, test := range []struct {
 		ready map[string]bool
@@ -617,6 +617,13 @@ func TestSetupSandboxOptionsReplayTheRetainedDefaultIdentity(t *testing.T) {
 		IncusNetwork:               "dorfbr0",
 		IncusGatewayURL:            "https://models.dorf.example/v1",
 	}
+	defaultProfile := retainedDefaultSetupProfile([]core.SandboxProfile{
+		{Name: "cloud-codex", Provider: core.SandboxProviderE2B, Harness: "codex"},
+		retained,
+	})
+	if defaultProfile == nil || defaultProfile.Name != retained.Name {
+		t.Fatalf("retained default=%#v", defaultProfile)
+	}
 
 	for _, test := range []struct {
 		name        string
@@ -629,20 +636,20 @@ func TestSetupSandboxOptionsReplayTheRetainedDefaultIdentity(t *testing.T) {
 		harness     string
 	}{
 		{
-			name: "interactive rerun", interactive: true, profile: &retained, settled: true,
+			name: "interactive rerun", interactive: true, profile: defaultProfile, settled: true,
 			providers: []core.SandboxProvider{core.SandboxProviderIncus}, profileName: retained.Name, harness: retained.Harness,
 		},
 		{
-			name: "approved rerun", options: setupOptions{Yes: true}, interactive: true, profile: &retained, settled: true,
+			name: "approved rerun", options: setupOptions{Yes: true}, interactive: true, profile: defaultProfile, settled: true,
 			providers: []core.SandboxProvider{core.SandboxProviderIncus}, profileName: retained.Name, harness: retained.Harness,
 		},
 		{
-			name: "noninteractive rerun", profile: &retained, settled: true,
+			name: "noninteractive rerun", profile: defaultProfile, settled: true,
 			providers: []core.SandboxProvider{core.SandboxProviderIncus}, profileName: retained.Name, harness: retained.Harness,
 		},
 		{
-			name: "explicit provider wins",
-			options: setupOptions{SandboxProviders: sandboxProviderFlags{core.SandboxProviderE2B}}, interactive: true, profile: &retained, settled: true,
+			name:    "explicit provider wins",
+			options: setupOptions{SandboxProviders: sandboxProviderFlags{core.SandboxProviderE2B}}, interactive: true, profile: defaultProfile, settled: true,
 			providers: []core.SandboxProvider{core.SandboxProviderE2B},
 		},
 		{name: "fresh interactive setup", interactive: true},

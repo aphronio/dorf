@@ -80,7 +80,9 @@ The official release configuration selects the exact
 `ghcr.io/aphronio/dorf:MAJOR.MINOR.PATCH` image with `pull_policy: always`. Dorf does not render
 Compose YAML, install Docker, inspect arbitrary Docker resources, or provide a general lifecycle
 wrapper. After `dorf update`, one `dorf setup` run applies the updated installed manifests and
-continues through factual readiness.
+continues through factual readiness. On a rerun without Sandbox setup flags, Dorf resumes with the
+retained default profile's provider, name, and Harness instead of showing the provider or Harness
+selectors. To configure a different named profile, pass one `--sandbox-provider` and `--profile`.
 
 For advanced observation and process operations, use Docker Compose itself from the generated
 project directory:

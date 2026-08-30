@@ -932,15 +932,18 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	presenter.Ready("Job control", "Authenticated deployment-host Client "+hostIdentity.Client.ID)
 	fmt.Fprintln(stdout)
 
-	providers, err := selectSetupSandboxProviders(ctx, cfg, options, presenter)
+	resolvedOptions, err := resolveSetupSandboxOptions(ctx, store, cfg, options, presenter)
 	if err != nil {
 		if errors.Is(err, errSetupCancelled) {
 			presenter.Note("Sandbox setup", "Skipped; no Sandbox provider was prepared")
-			providers = nil
+			options.SandboxProviders = nil
 		} else {
 			return err
 		}
+	} else {
+		options = resolvedOptions
 	}
+	providers := []core.SandboxProvider(options.SandboxProviders)
 	if containsSandboxProvider(providers, core.SandboxProviderIncus) {
 		if err := prepareSetupIncusAuthority(ctx, &cfg, options, providers, paths.ComposeDir, presenter); err != nil {
 			return err
@@ -1019,17 +1022,26 @@ func setupNeedsInteractiveIncusTrustOffer(cfg *config.Config, options setupOptio
 
 var errSetupCancelled = errors.New("setup cancelled")
 
-func selectSetupSandboxProviders(ctx context.Context, cfg config.Config, options setupOptions, presenter setupPresenter) ([]core.SandboxProvider, error) {
-	kvmAvailable := setupKVMDevicePresent()
-	selected, settled := deriveSetupSandboxProviders(options, presenter.interactive)
-	if settled {
-		return selected, nil
+func resolveSetupSandboxOptions(ctx context.Context, store postgres.Store, cfg config.Config, options setupOptions, presenter setupPresenter) (setupOptions, error) {
+	if len(options.SandboxProviders) > 0 {
+		return options, nil
 	}
+	profiles, err := store.SandboxProfiles(ctx)
+	if err != nil {
+		return setupOptions{}, err
+	}
+	resolved, settled := deriveSetupSandboxOptions(options, retainedDefaultSetupProfile(profiles), presenter.interactive)
+	if settled {
+		return resolved, nil
+	}
+	selected := []core.SandboxProvider{}
+	kvmAvailable := setupKVMDevicePresent()
 	remoteIncus := cfg.Incus != nil && strings.HasPrefix(cfg.Incus.Endpoint, "https://")
 	if err := presenter.RunForm(ctx, presenter.ProviderGroup(&selected, kvmAvailable, remoteIncus)); err != nil {
-		return nil, fmt.Errorf("select Sandbox providers: %w", err)
+		return setupOptions{}, fmt.Errorf("select Sandbox providers: %w", err)
 	}
-	return selected, nil
+	resolved.SandboxProviders = selected
+	return resolved, nil
 }
 
 func setupKVMDevicePresent() bool {
@@ -1037,12 +1049,29 @@ func setupKVMDevicePresent() bool {
 	return err == nil && device.Mode()&os.ModeCharDevice != 0
 }
 
-func deriveSetupSandboxProviders(options setupOptions, interactive bool) ([]core.SandboxProvider, bool) {
-	selected := append([]core.SandboxProvider{}, options.SandboxProviders...)
-	if len(selected) > 0 || options.Yes || !interactive {
-		return selected, true
+func deriveSetupSandboxOptions(options setupOptions, retainedDefault *core.SandboxProfile, interactive bool) (setupOptions, bool) {
+	if len(options.SandboxProviders) > 0 {
+		return options, true
 	}
-	return selected, false
+	if retainedDefault != nil {
+		options.SandboxProviders = sandboxProviderFlags{retainedDefault.Provider}
+		options.ProfileName = retainedDefault.Name
+		options.Harness = retainedDefault.Harness
+		return options, true
+	}
+	if options.Yes || !interactive {
+		return options, true
+	}
+	return options, false
+}
+
+func retainedDefaultSetupProfile(profiles []core.SandboxProfile) *core.SandboxProfile {
+	for index := range profiles {
+		if profiles[index].Default {
+			return &profiles[index]
+		}
+	}
+	return nil
 }
 
 func establishSetupIncusAuthority(

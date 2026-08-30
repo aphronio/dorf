@@ -80,6 +80,9 @@ Do not invent another Dorf lifecycle wrapper, edit the protected generated `.env
 foreground Dorf processes. Use Compose directly only for the advanced observation and process
 operations documented in Getting started.
 
+On reruns, follow [Getting started](getting-started.md#1-install-the-application-initialize-a-deployment-host).
+Do not pass Sandbox setup flags unless the operator asked to change Sandbox configuration.
+
 Cloudflare has no shell helper. Follow the domain and editable public-hostname flow in
 [Getting started](getting-started.md#1-install-the-application-initialize-a-deployment-host), pausing
 for the human browser authorization or DNS-replacement choice it requests. Never infer replacement
