@@ -133,9 +133,9 @@ if ! source_is_exact_and_clean; then
   exit 1
 fi
 
-image_output=(--load)
+image_output=(--output "type=docker,dest=$STAGE/container-image.tar,rewrite-timestamp=true")
 if [[ "$PUSH_IMAGE" == true ]]; then
-  image_output=(--push)
+  image_output=(--output "type=registry,rewrite-timestamp=true")
 fi
 docker buildx build \
   --platform linux/amd64 \
@@ -145,10 +145,13 @@ docker buildx build \
   --tag "$CONTAINER_IMAGE" \
   --build-arg "DORF_RELEASE=$VERSION" \
   --build-arg "DORF_BINARY_SHA256=$binary_sha256" \
+  --build-arg "SOURCE_DATE_EPOCH=0" \
   "${image_output[@]}" \
   "$STAGE/context"
 
 if [[ "$PUSH_IMAGE" != true ]]; then
+  docker load --input "$STAGE/container-image.tar" >/dev/null
+  rm -f -- "$STAGE/container-image.tar"
   if [[ "$(docker run "${CONTAINER_PROOF_ARGS[@]}" "$CONTAINER_IMAGE" version)" != "dorf $VERSION" ]]; then
     echo "Release container image reports the wrong product version." >&2
     exit 1

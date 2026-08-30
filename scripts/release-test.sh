@@ -141,22 +141,21 @@ if [[ "${1:-}" == buildx && ( "${2:-}" == version || "${2:-}" == inspect ) ]]; t
 fi
 if [[ "${1:-}" == buildx && "${2:-}" == build ]]; then
   binary_sha256=""
-  load=false
-  push=false
+  image_output=""
+  source_date_epoch=""
   shift 2
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --load)
-        load=true
-        shift
-        ;;
-      --push)
-        push=true
-        shift
+      --output)
+        image_output="$2"
+        shift 2
         ;;
       --build-arg)
         if [[ "$2" == DORF_BINARY_SHA256=* ]]; then
           binary_sha256="${2#DORF_BINARY_SHA256=}"
+        fi
+        if [[ "$2" == SOURCE_DATE_EPOCH=* ]]; then
+          source_date_epoch="${2#SOURCE_DATE_EPOCH=}"
         fi
         shift 2
         ;;
@@ -164,13 +163,20 @@ if [[ "${1:-}" == buildx && "${2:-}" == build ]]; then
     esac
   done
   [[ -n "$binary_sha256" ]] || exit 2
+  [[ "$source_date_epoch" == 0 ]] || exit 3
+  case "$image_output" in
+    type=docker,dest=*,rewrite-timestamp=true) push=false ;;
+    type=registry,rewrite-timestamp=true) push=true ;;
+    *) exit 4 ;;
+  esac
   printf '%s\n' "$binary_sha256" >"$RELEASE_TEST_STATE/binary-sha256"
   if [[ "$push" == true && "${RELEASE_TEST_FAIL_IMAGE_PUSH:-false}" == true ]]; then
     exit 1
   fi
-  if [[ "$load" == true ]]; then
-    : >"$RELEASE_TEST_STATE/image-loaded"
-  fi
+  exit 0
+fi
+if [[ "${1:-}" == load && "${2:-}" == --input && -n "${3:-}" ]]; then
+  : >"$RELEASE_TEST_STATE/image-loaded"
   exit 0
 fi
 if [[ "${1:-}" == run ]]; then
@@ -283,17 +289,36 @@ edit_line_with_flag() {
 assert_registry_push() {
   awk -F '\t' -v ref="$IMAGE_REF" '
     $1 == "docker" && $2 == "buildx" && $3 == "build" {
-      push = platform = tag = 0
+      push = platform = tag = epoch = 0
       for (i = 4; i <= NF; i++) {
-        if ($i == "--push") push = 1
+        if ($i == "--output" && $(i + 1) == "type=registry,rewrite-timestamp=true") push = 1
         if ($i == "--platform" && $(i + 1) == "linux/amd64") platform = 1
         if ($i == "--tag" && $(i + 1) == ref) tag = 1
-        if ($i == "--output") bad_output = 1
+        if ($i == "--build-arg" && $(i + 1) == "SOURCE_DATE_EPOCH=0") epoch = 1
       }
-      if (push && platform && tag && !bad_output) found = 1
+      if (push && platform && tag && epoch) found = 1
     }
     END { exit(found ? 0 : 1) }
-  ' "$EVENTS" || fail "release did not push the exact Linux/amd64 registry image"
+  ' "$EVENTS" || fail "release did not push the reproducible Linux/amd64 registry image"
+}
+
+assert_local_load() {
+  awk -F '\t' -v ref="$IMAGE_REF" '
+    $1 == "docker" && $2 == "buildx" && $3 == "build" {
+      load = tag = epoch = 0
+      for (i = 4; i <= NF; i++) {
+        if ($i == "--output" && $(i + 1) ~ /^type=docker,dest=.+,rewrite-timestamp=true$/) load = 1
+        if ($i == "--tag" && $(i + 1) == ref) tag = 1
+        if ($i == "--build-arg" && $(i + 1) == "SOURCE_DATE_EPOCH=0") epoch = 1
+      }
+      if (load && tag && epoch) found = 1
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$EVENTS" || fail "local build did not export the reproducible container image"
+  awk -F '\t' '
+    $1 == "docker" && $2 == "load" && $3 == "--input" && $4 != "" { found = 1 }
+    END { exit(found ? 0 : 1) }
+  ' "$EVENTS" || fail "local build did not load the reproducible container image"
 }
 
 assert_application_artifacts() {
@@ -388,6 +413,7 @@ test_local_build_leaves_one_usable_image() {
   reset_case
   release_env "$FIXTURE_ROOT/scripts/build-release.sh" "$FIXTURE_ROOT/dist/release"
   [[ -f "$TEST_STATE/image-loaded" ]] || fail "contributor build did not leave a usable local image"
+  assert_local_load
   assert_application_artifacts
 }
 

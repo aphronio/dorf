@@ -32,6 +32,12 @@ load cache, OCI parser, or second release transport. The application archive con
   administrator helpers; and
 - the license.
 
+The container recipe pins its Dockerfile frontend, Debian image, and Debian package snapshot. It
+removes package-manager logs and machine-specific loader cache data, normalizes layer timestamps to
+a fixed epoch, and keeps the application binary in an independently reusable layer. The binary's
+Go VCS metadata remains the source-commit identity. Rebuilding the same release inputs therefore
+produces the same image digest without making unchanged runtime layers commit-specific.
+
 The checksum file identifies the application archive exactly once. The installer verifies the
 complete set before replacing each installed file atomically. It places the binary, both manifests,
 and the remote Incus helper beside one another. The manifests select the published semantic-version

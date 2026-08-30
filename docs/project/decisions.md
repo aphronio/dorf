@@ -2650,7 +2650,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Status:** Accepted implementation direction — 2026-08-26; setup application refined by live
   `v0.5.4` dogfood — 2026-08-26; guided ingress topology refined by D102 — 2026-08-27; remote Incus
   and public Control API terminals passed — 2026-08-27; frozen clean-host reproduction deferred
-  until its trigger — 2026-08-29
+  until its trigger — 2026-08-29; release image made reproducible without collapsing reusable
+  layers — 2026-08-30
 - **Decision:** Replace D071's standalone PostgreSQL container and D100's systemd units with one
   versioned static Dorf Docker Compose project. The
   [Remote Control API](../control-api.md#deployment-services) owns its exact service and network
@@ -2673,7 +2674,12 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Release image:** The release authority builds and pushes one exact Linux/amd64 semantic-version
   image at `ghcr.io/aphronio/dorf:MAJOR.MINOR.PATCH`. Official setup selects that reference with
   `pull_policy: always`. There is no production Docker image tar, local image cache, OCI parser,
-  tag-to-image receipt, or Go-owned image loading and attestation path.
+  tag-to-image receipt, or Go-owned image loading and attestation path. The canonical recipe pins
+  its package inputs and Dockerfile frontend, removes build-host and wall-clock package state, and
+  exports layers at a fixed timestamp. Stable runtime dependencies and the linked Dorf binary stay
+  in separate reusable layers. The exact source commit remains in Go VCS metadata rather than in
+  layer timestamps. This makes same-input release images exact without forcing unchanged runtime
+  layers to change on every commit.
 - **Project topology:** The base project contains Compose-owned PostgreSQL, a one-shot migration,
   the durable worker, and the control API. Successful migration gates the worker and API.
   The Provider Gateway and guided Cloudflare Tunnel are optional profiled foreground services. The
