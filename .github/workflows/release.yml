@@ -47,6 +47,8 @@ jobs:
           echo "Verified CI run $ci_run_id."
       - name: Install the release toolchain
         uses: ./.github/actions/setup-mise
+      - name: Set up the release image builder
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
       - name: Require an already proven Incus image pin
         shell: bash
         run: |

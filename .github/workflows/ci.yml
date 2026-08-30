@@ -20,6 +20,8 @@ jobs:
           persist-credentials: false
       - name: Install the development toolchain
         uses: ./.github/actions/setup-mise
+      - name: Set up the release image builder
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
       - name: Start the disposable development database
         run: docker compose -f compose.dev.yaml up --detach --wait postgres
       - name: Initialize the development database
