@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -601,6 +602,70 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 		if err != nil || got != test.want {
 			t.Fatalf("ready connections=%v got=%q want=%q error=%v", test.ready, got, test.want, err)
 		}
+	}
+}
+
+func TestSetupSandboxOptionsReplayTheRetainedDefaultIdentity(t *testing.T) {
+	retained := core.SandboxProfile{
+		Name:                       "workstation-pi",
+		Provider:                   core.SandboxProviderIncus,
+		Harness:                    "pi",
+		Default:                    true,
+		IncusEndpointAuthorityHash: "retained-authority",
+		IncusProject:               "dorf-remote",
+		IncusStoragePool:           "default",
+		IncusNetwork:               "dorfbr0",
+		IncusGatewayURL:            "https://models.dorf.example/v1",
+	}
+
+	for _, test := range []struct {
+		name        string
+		options     setupOptions
+		interactive bool
+		profile     *core.SandboxProfile
+		settled     bool
+		providers   []core.SandboxProvider
+		profileName string
+		harness     string
+	}{
+		{
+			name: "interactive rerun", interactive: true, profile: &retained, settled: true,
+			providers: []core.SandboxProvider{core.SandboxProviderIncus}, profileName: retained.Name, harness: retained.Harness,
+		},
+		{
+			name: "approved rerun", options: setupOptions{Yes: true}, interactive: true, profile: &retained, settled: true,
+			providers: []core.SandboxProvider{core.SandboxProviderIncus}, profileName: retained.Name, harness: retained.Harness,
+		},
+		{
+			name: "noninteractive rerun", profile: &retained, settled: true,
+			providers: []core.SandboxProvider{core.SandboxProviderIncus}, profileName: retained.Name, harness: retained.Harness,
+		},
+		{
+			name: "explicit provider wins",
+			options: setupOptions{SandboxProviders: sandboxProviderFlags{core.SandboxProviderE2B}}, interactive: true, profile: &retained, settled: true,
+			providers: []core.SandboxProvider{core.SandboxProviderE2B},
+		},
+		{name: "fresh interactive setup", interactive: true},
+		{name: "fresh approved setup", options: setupOptions{Yes: true}, interactive: true, settled: true},
+		{name: "fresh noninteractive setup", settled: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, settled := deriveSetupSandboxOptions(test.options, test.profile, test.interactive)
+			if settled != test.settled || !slices.Equal([]core.SandboxProvider(resolved.SandboxProviders), test.providers) ||
+				resolved.ProfileName != test.profileName || resolved.Harness != test.harness {
+				t.Fatalf("resolved=%#v settled=%t", resolved, settled)
+			}
+		})
+	}
+}
+
+func TestExplicitSetupSandboxOptionsDoNotReadDurableProfiles(t *testing.T) {
+	options := setupOptions{SandboxProviders: sandboxProviderFlags{core.SandboxProviderE2B}}
+	resolved, err := resolveSetupSandboxOptions(
+		context.Background(), postgres.Store{}, config.Config{}, options, newSetupPresenter(&strings.Builder{}),
+	)
+	if err != nil || !slices.Equal(resolved.SandboxProviders, options.SandboxProviders) {
+		t.Fatalf("resolved=%#v error=%v", resolved, err)
 	}
 }
 
