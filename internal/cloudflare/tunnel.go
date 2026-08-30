@@ -119,6 +119,19 @@ type ComposeState struct {
 	Digest    string
 }
 
+type dnsRoute struct {
+	hostname   string
+	label      string
+	configured *bool
+}
+
+func dnsRoutes(state *State) []dnsRoute {
+	return []dnsRoute{
+		{hostname: state.Hostname, label: "Cloudflare hostname", configured: &state.DNSConfigured},
+		{hostname: state.ModelHostname, label: "Cloudflare model hostname", configured: &state.ModelDNSConfigured},
+	}
+}
+
 func (s State) ProbeURL(hostname string) (string, error) {
 	hostname, err := canonicalHostname(hostname)
 	if err != nil {
@@ -448,18 +461,17 @@ func (t Tunnel) reconcile(ctx context.Context, controlHostname, modelHostname st
 	if err != nil {
 		return State{}, err
 	}
-	if found && state.Hostname != controlHostname {
-		return State{}, fmt.Errorf("Dorf already owns Cloudflare hostname %s; refusing to replace it", state.Hostname)
-	}
-	if found && state.ModelHostname != "" && state.ModelHostname != modelHostname {
-		return State{}, fmt.Errorf("Dorf already owns Cloudflare model hostname %s; refusing to replace it", state.ModelHostname)
-	}
 	if found {
+		if state.Hostname != controlHostname {
+			return State{}, fmt.Errorf("Dorf already owns Cloudflare hostname %s; refusing to replace it", state.Hostname)
+		}
 		if state.ModelHostname == "" {
 			return State{}, fmt.Errorf("Cloudflare Tunnel uses the retired single-origin hostname layout")
 		}
-	}
-	if !found {
+		if state.ModelHostname != modelHostname {
+			return State{}, fmt.Errorf("Dorf already owns Cloudflare model hostname %s; refusing to replace it", state.ModelHostname)
+		}
+	} else {
 		nonce, err := randomHex(4)
 		if err != nil {
 			return State{}, err
@@ -490,28 +502,20 @@ func (t Tunnel) reconcile(ctx context.Context, controlHostname, modelHostname st
 			return state, err
 		}
 	}
-	if state.DNSConfigured {
-		present, err := t.dnsRoutePresent(ctx, state.Hostname)
+	for _, route := range dnsRoutes(&state) {
+		if !*route.configured {
+			continue
+		}
+		present, err := t.dnsRoutePresent(ctx, route.hostname)
 		if err != nil {
 			return state, err
 		}
-		if !present {
-			state.DNSConfigured = false
-			if err := t.save(state); err != nil {
-				return state, err
-			}
+		if present {
+			continue
 		}
-	}
-	if state.ModelDNSConfigured {
-		present, err := t.dnsRoutePresent(ctx, state.ModelHostname)
-		if err != nil {
+		*route.configured = false
+		if err := t.save(state); err != nil {
 			return state, err
-		}
-		if !present {
-			state.ModelDNSConfigured = false
-			if err := t.save(state); err != nil {
-				return state, err
-			}
 		}
 	}
 	binary, err := t.ensureBinary(ctx)
@@ -543,52 +547,7 @@ func (t Tunnel) reconcile(ctx context.Context, controlHostname, modelHostname st
 		}
 	}
 	if state.TunnelID == "" {
-		matches, err := t.listByName(ctx, binary, env, certificate, state.TunnelName)
-		if err != nil {
-			return state, err
-		}
-		if len(matches) == 0 {
-			if err := t.Runner.Run(ctx, env, stdout, stderr, binary, "tunnel", "--origincert", certificate, "create", state.TunnelName); err != nil {
-				return state, fmt.Errorf("create Cloudflare Tunnel: %w", err)
-			}
-			matches, err = t.listByName(ctx, binary, env, certificate, state.TunnelName)
-			if err != nil {
-				return state, err
-			}
-		}
-		if len(matches) != 1 || strings.TrimSpace(matches[0].ID) == "" {
-			return state, fmt.Errorf("Cloudflare returned %d exact Tunnels named %s; refusing ambiguous ownership", len(matches), state.TunnelName)
-		}
-		state.TunnelID = matches[0].ID
-		credentialSource := filepath.Join(cloudflaredHome, state.TunnelID+".json")
-		credentialDir := filepath.Join(t.StatePath, "credentials")
-		if err := os.MkdirAll(credentialDir, 0o700); err != nil {
-			return state, err
-		}
-		state.CredentialPath = filepath.Join(credentialDir, state.TunnelID+".json")
-		if _, err := os.Stat(state.CredentialPath); errors.Is(err, os.ErrNotExist) {
-			if _, sourceErr := os.Stat(credentialSource); sourceErr == nil {
-				if err := os.Rename(credentialSource, state.CredentialPath); err != nil {
-					return state, fmt.Errorf("retain exact Cloudflare Tunnel credential: %w", err)
-				}
-			} else if errors.Is(sourceErr, os.ErrNotExist) {
-				// A create response can be lost after Cloudflare commits the Tunnel
-				// but before cloudflared writes its local credential. The temporary
-				// account certificate can recover the exact named Tunnel without
-				// creating a duplicate.
-				if err := t.Runner.Run(ctx, env, stdout, stderr, binary, "tunnel", "--origincert", certificate, "token", "--cred-file", state.CredentialPath, state.TunnelID); err != nil {
-					return state, fmt.Errorf("recover exact Cloudflare Tunnel credential: %w", err)
-				}
-			} else {
-				return state, sourceErr
-			}
-		} else if err != nil {
-			return state, err
-		}
-		if err := os.Chmod(state.CredentialPath, 0o600); err != nil {
-			return state, err
-		}
-		if err := t.save(state); err != nil {
+		if err := t.reconcileTunnelCredential(ctx, &state, binary, env, certificate, cloudflaredHome, stdout, stderr); err != nil {
 			return state, err
 		}
 	}
@@ -606,34 +565,23 @@ func (t Tunnel) reconcile(ctx context.Context, controlHostname, modelHostname st
 	if _, err := t.Runner.Output(ctx, env, binary, "tunnel", "--config", state.ConfigPath, "ingress", "validate"); err != nil {
 		return state, fmt.Errorf("validate Cloudflare Tunnel ingress: %w", err)
 	}
-	if !state.DNSConfigured {
-		// Cloudflare atomically creates an absent record, accepts the existing
-		// CNAME only when it already targets this exact Tunnel, and rejects every
-		// foreign record unless reconciliation carries the operator's retained
-		// replacement choice.
+	// Cloudflare atomically creates an absent record, accepts the existing
+	// CNAME only when it already targets this exact Tunnel, and rejects every
+	// foreign record unless reconciliation carries the operator's retained
+	// replacement choice.
+	for _, route := range dnsRoutes(&state) {
+		if *route.configured {
+			continue
+		}
 		routeArgs := []string{"tunnel", "--origincert", certificate, "route", "dns"}
 		if state.DNSReplacementPending {
 			routeArgs = append(routeArgs, "--overwrite-dns")
 		}
-		routeArgs = append(routeArgs, state.TunnelID, state.Hostname)
+		routeArgs = append(routeArgs, state.TunnelID, route.hostname)
 		if err := t.Runner.Run(ctx, env, stdout, stderr, binary, routeArgs...); err != nil {
-			return state, fmt.Errorf("route Cloudflare hostname: %w", err)
+			return state, fmt.Errorf("route %s: %w", route.label, err)
 		}
-		state.DNSConfigured = true
-		if err := t.save(state); err != nil {
-			return state, err
-		}
-	}
-	if !state.ModelDNSConfigured {
-		routeArgs := []string{"tunnel", "--origincert", certificate, "route", "dns"}
-		if state.DNSReplacementPending {
-			routeArgs = append(routeArgs, "--overwrite-dns")
-		}
-		routeArgs = append(routeArgs, state.TunnelID, state.ModelHostname)
-		if err := t.Runner.Run(ctx, env, stdout, stderr, binary, routeArgs...); err != nil {
-			return state, fmt.Errorf("route Cloudflare model hostname: %w", err)
-		}
-		state.ModelDNSConfigured = true
+		*route.configured = true
 		if err := t.save(state); err != nil {
 			return state, err
 		}
@@ -648,6 +596,55 @@ func (t Tunnel) reconcile(ctx context.Context, controlHostname, modelHostname st
 		return state, fmt.Errorf("remove temporary Cloudflare account authority: %w", err)
 	}
 	return state, nil
+}
+
+func (t Tunnel) reconcileTunnelCredential(ctx context.Context, state *State, binary string, env []string, certificate, cloudflaredHome string, stdout, stderr io.Writer) error {
+	matches, err := t.listByName(ctx, binary, env, certificate, state.TunnelName)
+	if err != nil {
+		return err
+	}
+	if len(matches) == 0 {
+		if err := t.Runner.Run(ctx, env, stdout, stderr, binary, "tunnel", "--origincert", certificate, "create", state.TunnelName); err != nil {
+			return fmt.Errorf("create Cloudflare Tunnel: %w", err)
+		}
+		matches, err = t.listByName(ctx, binary, env, certificate, state.TunnelName)
+		if err != nil {
+			return err
+		}
+	}
+	if len(matches) != 1 || strings.TrimSpace(matches[0].ID) == "" {
+		return fmt.Errorf("Cloudflare returned %d exact Tunnels named %s; refusing ambiguous ownership", len(matches), state.TunnelName)
+	}
+	state.TunnelID = matches[0].ID
+	credentialSource := filepath.Join(cloudflaredHome, state.TunnelID+".json")
+	credentialDir := filepath.Join(t.StatePath, "credentials")
+	if err := os.MkdirAll(credentialDir, 0o700); err != nil {
+		return err
+	}
+	state.CredentialPath = filepath.Join(credentialDir, state.TunnelID+".json")
+	if _, err := os.Stat(state.CredentialPath); errors.Is(err, os.ErrNotExist) {
+		if _, sourceErr := os.Stat(credentialSource); sourceErr == nil {
+			if err := os.Rename(credentialSource, state.CredentialPath); err != nil {
+				return fmt.Errorf("retain exact Cloudflare Tunnel credential: %w", err)
+			}
+		} else if errors.Is(sourceErr, os.ErrNotExist) {
+			// A create response can be lost after Cloudflare commits the Tunnel
+			// but before cloudflared writes its local credential. The temporary
+			// account certificate can recover the exact named Tunnel without
+			// creating a duplicate.
+			if err := t.Runner.Run(ctx, env, stdout, stderr, binary, "tunnel", "--origincert", certificate, "token", "--cred-file", state.CredentialPath, state.TunnelID); err != nil {
+				return fmt.Errorf("recover exact Cloudflare Tunnel credential: %w", err)
+			}
+		} else {
+			return sourceErr
+		}
+	} else if err != nil {
+		return err
+	}
+	if err := os.Chmod(state.CredentialPath, 0o600); err != nil {
+		return err
+	}
+	return t.save(*state)
 }
 
 func (t Tunnel) dnsRoutePresent(ctx context.Context, hostname string) (bool, error) {

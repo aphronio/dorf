@@ -20,7 +20,7 @@ cmd/dorf	validateSetupOptions	43
 internal/cloudflare	(Tunnel).ComposeState	17
 internal/cloudflare	(Tunnel).PrepareRuntimeBinary	27
 internal/cloudflare	(Tunnel).load	22
-internal/cloudflare	(Tunnel).reconcile	83
+internal/cloudflare	(Tunnel).reconcile	59
 internal/codex	(*protocol).reconcileStrictReviewTurn	17
 internal/codex	(Agent).withServerEndpointController	22
 internal/coding	(ProposalRuntime).Observe	27
