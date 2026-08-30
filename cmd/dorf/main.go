@@ -42,6 +42,9 @@ import (
 
 func main() {
 	if err := run(context.Background(), os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
 		fmt.Fprintln(os.Stderr, "dorf:", err)
 		os.Exit(1)
 	}
@@ -876,7 +879,7 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	if err := checkDockerRuntime(ctx); err != nil {
 		return setupBootstrapHandoff(bootstrapDocker, err, stdout)
 	}
-	presenter.Ready("Host runtime", "Docker Engine · Compose")
+	presenter.Ready("Host runtime", "Docker Engine with Compose")
 
 	database, err := hostsetup.InitializeDatabase(cfg.DeploymentPath)
 	if err != nil {
@@ -886,7 +889,7 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	if err != nil {
 		return err
 	}
-	err = presenter.Run(ctx, "Starting Dorf services", func(ctx context.Context) error {
+	err = presenter.Run(ctx, "Checking image, applying migrations, and waiting for healthy services", func(ctx context.Context) error {
 		_, err := prepareSetupDeployment(ctx, options.LocalImage, false)
 		return err
 	})
@@ -951,7 +954,7 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	}
 	var prepared *guidedSetupPrepared
 	if len(providers) == 0 {
-		presenter.Note("Agent Sandboxes", "Skipped for now · run dorf setup again when you’re ready")
+		presenter.Note("Agent Sandboxes", "Skipped for now. Run dorf setup again when you’re ready")
 	} else {
 		value, err := prepareGuidedSetup(ctx, store, &cfg, options, providers, presenter, stdout, stderr)
 		if err != nil {
@@ -963,12 +966,12 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 		}
 		prepared = &value
 		if value.PrivateIPv4 != "" {
-			presenter.Ready("Local Sandbox", "Incus · QEMU · KVM")
+			presenter.Ready("Local Sandbox", "Incus using QEMU/KVM")
 		}
 	}
 	if prepared != nil {
 		if err := makeProviderConnectionReady(ctx, prepared.Connection, func(ctx context.Context) error {
-			return presenter.Run(ctx, "Applying agent services", func(ctx context.Context) error {
+			return presenter.Run(ctx, "Applying agent configuration and waiting for healthy services", func(ctx context.Context) error {
 				_, err := prepareSetupDeployment(ctx, options.LocalImage, true)
 				return err
 			})
@@ -981,7 +984,7 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	}
 	presenter.Section("Ready")
 	if len(providers) == 0 {
-		presenter.Ready("Dorf", "Control plane ready · configure a Sandbox profile before admitting Jobs")
+		presenter.Ready("Dorf", "Control plane ready. Configure a Sandbox profile before admitting Jobs")
 	} else {
 		presenter.Ready("Dorf", "Control plane and durable Job worker ready")
 	}
@@ -1184,13 +1187,13 @@ func setupIncusAuthoritySummary(authority deployment.Incus) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	summary := authority.Endpoint + " · authority " + authorityHash
+	summary := "Endpoint " + authority.Endpoint + "; server SHA-256 " + authorityHash
 	fingerprint, err := authority.ClientCertificateFingerprint()
 	if err != nil {
 		return "", err
 	}
 	if fingerprint != "" {
-		summary += " · client " + fingerprint
+		summary += "; client SHA-256 " + fingerprint
 	}
 	return summary, nil
 }

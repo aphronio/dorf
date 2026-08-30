@@ -148,6 +148,8 @@ func prepareGuidedRemoteGateway(
 			return guidedRemoteGatewayPrepared{}, err
 		}
 		presenter.Ready("E2B access", "Project credential verified on this host")
+	} else if strings.TrimSpace(cfg.E2BAPIKey) != "" {
+		presenter.Note("E2B access", "Project credential configured; not checked in this run")
 	}
 	if !stableHTTPS {
 		return prepared, nil
@@ -311,8 +313,58 @@ func completeGuidedSetup(ctx context.Context, store postgres.Store, cfg config.C
 	if err != nil {
 		return err
 	}
-	presenter.Ready("Default profile", defaultProfile.Name+" · "+string(defaultProfile.Provider)+" · "+defaultProfile.Harness)
+	configuredProfiles, err := store.SandboxProfiles(ctx)
+	if err != nil {
+		return err
+	}
+	presentSetupProfileInventory(presenter, cfg, configuredProfiles)
+	presenter.Ready("Default profile", setupProfileSummary(defaultProfile))
 	return nil
+}
+
+func presentSetupProfileInventory(presenter setupPresenter, cfg config.Config, profiles []core.SandboxProfile) {
+	e2bProfile := false
+	for _, profile := range profiles {
+		if profile.BaseVerified() {
+			presenter.Ready("Sandbox profile", setupProfileSummary(profile))
+		} else {
+			presenter.Note("Sandbox profile", setupProfileSummary(profile))
+		}
+		e2bProfile = e2bProfile || profile.Provider == core.SandboxProviderE2B
+	}
+	if strings.TrimSpace(cfg.E2BAPIKey) != "" && !e2bProfile {
+		presenter.Note("E2B profile", "Not configured. Run dorf profile add --sandbox-provider e2b")
+	}
+}
+
+func setupProfileSummary(profile core.SandboxProfile) string {
+	status := "verification required"
+	if profile.BaseVerified() {
+		status = "verified"
+	}
+	return fmt.Sprintf("%s uses the %s provider with the %s Harness; %s", profile.Name, setupProviderLabel(profile.Provider), setupHarnessLabel(profile.Harness), status)
+}
+
+func setupProviderLabel(provider core.SandboxProvider) string {
+	switch provider {
+	case core.SandboxProviderIncus:
+		return "Incus"
+	case core.SandboxProviderE2B:
+		return "E2B"
+	default:
+		return string(provider)
+	}
+}
+
+func setupHarnessLabel(harness string) string {
+	switch harness {
+	case "codex":
+		return "Codex"
+	case "pi":
+		return "Pi"
+	default:
+		return harness
+	}
 }
 
 func setupHarness(ctx context.Context, options setupOptions, presenter setupPresenter) (string, error) {
@@ -1152,7 +1204,7 @@ func prepareRemoteGateway(ctx context.Context, gatewayStatePath string, plan gui
 		if err != nil {
 			return "", err
 		}
-		presenter.Ready("Cloudflare Tunnel", state.Hostname+" + "+state.ModelHostname+" · prepared")
+		presenter.Ready("Cloudflare Tunnel", "Control API "+state.Hostname+"; Model Gateway "+state.ModelHostname+"; prepared")
 		return plan.URL, nil
 	default:
 		return "", fmt.Errorf("Gateway setup plan is incomplete")
@@ -1185,7 +1237,7 @@ func finalizeRemoteGateway(ctx context.Context, g gateway.Gateway, plan guidedGa
 		}
 		return nil
 	}
-	presenter.Ready("Cloudflare Tunnel", state.Hostname+" + "+state.ModelHostname+" · Compose active")
+	presenter.Ready("Cloudflare Tunnel", "Control API "+state.Hostname+"; Model Gateway "+state.ModelHostname+"; active")
 	controlProbeURL, err := state.ProbeURL(state.Hostname)
 	if err != nil {
 		return err
@@ -1310,7 +1362,6 @@ func setupProfiles(ctx context.Context, store postgres.Store, cfg config.Config,
 		}
 		if plan.Existing != nil && profile.BaseVerified() {
 			profiles = append(profiles, profile)
-			presenter.Ready("Sandbox profile", profile.Name+" · "+string(profile.Provider)+" · verified")
 			continue
 		}
 		err = presenter.Run(ctx, "Verifying "+profile.Name, func(ctx context.Context) error {
@@ -1324,7 +1375,6 @@ func setupProfiles(ctx context.Context, store postgres.Store, cfg config.Config,
 			return nil, err
 		}
 		profiles = append(profiles, profile)
-		presenter.Ready("Sandbox profile", profile.Name+" · "+string(profile.Provider)+" · verified")
 	}
 	return profiles, nil
 }
@@ -1416,7 +1466,7 @@ func setupDefaultProfile(ctx context.Context, store postgres.Store, profiles []c
 		options := make([]setupChoice[string], 0, len(profiles))
 		for _, profile := range profiles {
 			options = append(options, setupChoice[string]{
-				Title: profile.Name, Description: string(profile.Provider) + " · " + profile.Harness, Value: profile.Name,
+				Title: profile.Name, Description: setupProviderLabel(profile.Provider) + " provider with " + setupHarnessLabel(profile.Harness) + " Harness", Value: profile.Name,
 			})
 		}
 		group := huh.NewGroup(setupSelect(presenter, &selected, options...)).

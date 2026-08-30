@@ -1833,8 +1833,14 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Artifact boundary:** `profile create` adopts an existing provider artifact; it does not build one.
   Incus aliases are resolved to an exact image fingerprint before persistence. E2B profiles require
   an exact template-build reference. `profile install` is the official Incus release convenience and
-  creates the same ordinary profile after verified import. Bring-your-own artifacts receive no Dorf
-  provenance or security attestation merely by being admitted.
+  creates the same ordinary profile after verified import. `profile add` is the post-setup guided
+  convenience: it reuses provider access and the model Gateway already owned by the Deployment,
+  selects Dorf's official provider artifact, creates or resumes the same ordinary profile, runs its
+  mandatory verification and cleanup, and preserves an existing default unless explicitly changed;
+  the first verified profile becomes the default. Missing provider access or Gateway configuration
+  returns to `dorf setup`; it never moves those facts or credentials into the profile.
+  Bring-your-own artifacts receive no Dorf provenance or security attestation merely by being
+  admitted.
 - **Verification boundary at acceptance (refined by D089):** Dorf owned one mandatory, versioned
   `base-1` functional probe before a profile could become default or admit a Job. The explicit, potentially billable operation reconciles
   one durably owned disposable Sandbox, verifies a writable workspace, the baseline atomic file

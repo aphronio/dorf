@@ -22,9 +22,11 @@ import (
 
 func profileCommand(ctx context.Context, store postgres.Store, cfg config.Config, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("profile requires: create, install, update, verify, set-default, show, or list")
+		return fmt.Errorf("profile requires: add, create, install, update, verify, set-default, show, or list")
 	}
 	switch args[0] {
+	case "add":
+		return profileAddCommand(ctx, store, cfg, args[1:], stdout, stderr)
 	case "install":
 		return installOfficialIncusProfileWithAuthority(ctx, store, cfg.Incus, args[1:], stdout, stderr)
 	case "create":
@@ -88,7 +90,15 @@ func profileCommand(ctx context.Context, store postgres.Store, cfg config.Config
 			return err
 		}
 		return writeJSON(stdout, map[string]any{"profile": profile.Name, "default": true})
-	case "show":
+	case "show", "list":
+		return profileReadCommand(ctx, store, args, stdout)
+	default:
+		return fmt.Errorf("unsupported profile command %q", args[0])
+	}
+}
+
+func profileReadCommand(ctx context.Context, store postgres.Store, args []string, stdout io.Writer) error {
+	if args[0] == "show" {
 		if len(args) != 2 {
 			return fmt.Errorf("profile show requires NAME")
 		}
@@ -97,22 +107,19 @@ func profileCommand(ctx context.Context, store postgres.Store, cfg config.Config
 			return err
 		}
 		return writeJSON(stdout, profileView(profile))
-	case "list":
-		if len(args) != 1 {
-			return fmt.Errorf("profile list takes no arguments")
-		}
-		profiles, err := store.SandboxProfiles(ctx)
-		if err != nil {
-			return err
-		}
-		views := make([]sandboxProfileView, 0, len(profiles))
-		for _, profile := range profiles {
-			views = append(views, profileView(profile))
-		}
-		return writeJSON(stdout, views)
-	default:
-		return fmt.Errorf("unsupported profile command %q", args[0])
 	}
+	if len(args) != 1 {
+		return fmt.Errorf("profile list takes no arguments")
+	}
+	profiles, err := store.SandboxProfiles(ctx)
+	if err != nil {
+		return err
+	}
+	views := make([]sandboxProfileView, 0, len(profiles))
+	for _, profile := range profiles {
+		views = append(views, profileView(profile))
+	}
+	return writeJSON(stdout, views)
 }
 
 func installOfficialIncusProfile(ctx context.Context, store postgres.Store, args []string, stdout, stderr io.Writer) error {

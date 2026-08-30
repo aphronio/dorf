@@ -159,7 +159,7 @@ func TestSetupRemoteIncusEnrollmentRequiresThePersistenceCommitMarker(t *testing
 	}
 
 	summary, err := setupIncusAuthoritySummary(authority)
-	if err != nil || !strings.Contains(summary, authority.Endpoint) || !strings.Contains(summary, "authority ") || !strings.Contains(summary, "client ") {
+	if err != nil || !strings.Contains(summary, "Endpoint "+authority.Endpoint) || !strings.Contains(summary, "server SHA-256 ") || !strings.Contains(summary, "client SHA-256 ") {
 		t.Fatalf("summary=%q error=%v", summary, err)
 	}
 	for _, secret := range []string{"one-use-offer", strings.TrimSpace(authority.ServerCertificate), strings.TrimSpace(authority.ClientCertificate), strings.TrimSpace(authority.ClientPrivateKey)} {

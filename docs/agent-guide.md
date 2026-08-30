@@ -81,7 +81,11 @@ foreground Dorf processes. Use Compose directly only for the advanced observatio
 operations documented in Getting started.
 
 On reruns, follow [Getting started](getting-started.md#1-install-the-application-initialize-a-deployment-host).
-Do not pass Sandbox setup flags unless the operator asked to change Sandbox configuration.
+Do not pass Sandbox setup flags unless the operator asked to change Sandbox configuration. Read the
+final profile inventory literally: a configured provider credential is not a verified Sandbox
+profile. After deployment readiness, use the linked `dorf profile add` flow for ordinary guided
+profile additions; keep `dorf setup` responsible for missing provider access or Gateway
+configuration.
 
 Cloudflare has no shell helper. Follow the domain and editable public-hostname flow in
 [Getting started](getting-started.md#1-install-the-application-initialize-a-deployment-host), pausing

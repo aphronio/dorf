@@ -8,7 +8,7 @@ cmd/dorf	dockerCommandEnvironment	20
 cmd/dorf	parseSandboxProfile	17
 cmd/dorf	parseSandboxProfilePatch	29
 cmd/dorf	planRemoteGateway	19
-cmd/dorf	profileCommand	28
+cmd/dorf	profileCommand	23
 cmd/dorf	providerCommand	20
 cmd/dorf	publicCommonJob	18
 cmd/dorf	reconcileHostControlClient	19

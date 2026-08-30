@@ -175,6 +175,28 @@ func (p setupPresenter) HarnessGroup(selected *string) *huh.Group {
 		Description("The selected Harness is verified inside every configured Sandbox profile.")
 }
 
+func (p setupPresenter) ProfileProviderGroup(selected *core.SandboxProvider, available []core.SandboxProvider) *huh.Group {
+	choices := make([]setupChoice[core.SandboxProvider], 0, len(available))
+	for _, provider := range available {
+		switch provider {
+		case core.SandboxProviderIncus:
+			choices = append(choices, setupChoice[core.SandboxProvider]{Title: "Incus", Description: "Hardware-isolated Linux VMs on your Incus host", Value: provider})
+		case core.SandboxProviderE2B:
+			choices = append(choices, setupChoice[core.SandboxProvider]{Title: "E2B", Description: "Managed Linux VMs in E2B", Value: provider})
+		}
+	}
+	return huh.NewGroup(setupSelect(p, selected, choices...)).
+		Title("Where should this Sandbox profile run?").
+		Description("Profile add uses provider access already configured by dorf setup.")
+}
+
+func (p setupPresenter) ProfileDefaultGroup(profile, current string, selected *bool) *huh.Group {
+	return huh.NewGroup(
+		huh.NewConfirm().Affirmative("Use " + profile).Negative("Keep " + current).Value(selected),
+	).Title("Make " + profile + " the default Sandbox profile?").
+		Description("Jobs can still select either verified profile explicitly.")
+}
+
 func (p setupPresenter) ConnectionGroup(selected *setupConnectionMode) *huh.Group {
 	return huh.NewGroup(
 		setupSelect(p, selected,

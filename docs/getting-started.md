@@ -80,9 +80,13 @@ The official release configuration selects the exact
 `ghcr.io/aphronio/dorf:MAJOR.MINOR.PATCH` image with `pull_policy: always`. Dorf does not render
 Compose YAML, install Docker, inspect arbitrary Docker resources, or provide a general lifecycle
 wrapper. After `dorf update`, one `dorf setup` run applies the updated installed manifests and
-continues through factual readiness. On a rerun without Sandbox setup flags, Dorf resumes with the
-retained default profile's provider, name, and Harness instead of showing the provider or Harness
-selectors. To configure a different named profile, pass one `--sandbox-provider` and `--profile`.
+continues through factual readiness. While Compose runs, setup names the image check, migration, and
+service-health work rather than reporting a generic service start. On a rerun without Sandbox setup
+flags, Dorf resumes with the retained default profile's provider, name, and Harness instead of
+showing the provider or Harness selectors. Its result lists every retained Sandbox profile and
+reports a configured E2B credential separately from an E2B profile. To add or configure a different
+named profile after the deployment is ready, use `dorf profile add`; do not rerun the whole setup
+flow for ordinary profile management.
 
 For advanced observation and process operations, use Docker Compose itself from the generated
 project directory:
@@ -215,6 +219,22 @@ authority](project/provider-gateway.md) owns retained-candidate replay, protecte
 publication, live verification, and default-commit semantics. Automation can name a candidate with
 `--ai-connection` or explicitly select its authentication mode. Sandbox provider choices remain
 explicit; `dorf setup --yes` does not silently select one.
+
+After initial readiness, `dorf profile add` is the guided profile-management path. It uses provider
+access and the model Gateway already configured by setup, selects the official provider artifact,
+creates or resumes the named profile, performs the mandatory functional verification and cleanup,
+and preserves an existing default unless the operator selects the new profile or passes
+`--set-default`; the first verified profile becomes the default. With no name, it derives
+`incus-HARNESS`, `local-HARNESS`, or `cloud-HARNESS` from the configured provider and Harness.
+Non-interactive use names the provider explicitly:
+
+```bash
+dorf profile add --sandbox-provider e2b --harness codex
+```
+
+Use `profile create` to adopt an exact existing provider artifact, `profile install` for an exact
+official Incus release, `profile update` for an existing definition, and `profile verify` when only
+verification must be rerun. Those precise commands remain the automation and custom-artifact path.
 
 The Provider Gateway joins the static Compose project when an AI connection is configured. Setup
 publishes that profile into the protected `.env`, reapplies the project, and continues to verify and
