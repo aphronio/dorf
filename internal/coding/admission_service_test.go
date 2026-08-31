@@ -88,10 +88,18 @@ func (s *admissionServiceScheduler) ScheduleJobTask(_ context.Context, job core.
 	return job, nil
 }
 
-type admissionServiceProvider struct{ err error }
+type admissionServiceProvider struct {
+	err               error
+	defaultModelCalls int
+}
 
 func (p *admissionServiceProvider) DefaultConnection() (string, error) {
 	return "primary", p.err
+}
+
+func (p *admissionServiceProvider) DefaultModel(string) (string, error) {
+	p.defaultModelCalls++
+	return "gpt-5.6-sol", p.err
 }
 
 func (p *admissionServiceProvider) Check(context.Context, string) error { return p.err }
@@ -115,7 +123,7 @@ func TestAdmissionServiceReconcilesFirstAdmissionRaceAndExactReplay(t *testing.T
 	installations := &admissionServiceInstallations{}
 	service := NewAdmissionService(store, scheduler, provider, installations)
 	request := AdmissionRequest{
-		AdmissionKey: "coding-request", Goal: "preserve exact goal", Model: "gpt-5.6-sol",
+		AdmissionKey: "coding-request", Goal: "preserve exact goal",
 		Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40), BaseBranch: "main",
 	}
 
@@ -124,6 +132,7 @@ func TestAdmissionServiceReconcilesFirstAdmissionRaceAndExactReplay(t *testing.T
 		t.Fatalf("new admission Job=%#v created=%t err=%v", createdJob, created, err)
 	}
 	if store.admitted.SandboxProfile != "cloud" || store.admitted.ProviderConnection != "primary" ||
+		store.admitted.Model != "gpt-5.6-sol" || provider.defaultModelCalls != 1 ||
 		store.admitted.GitHubRepository != "aphronio/dorf" || store.admitted.GitHubInstallation != "42" ||
 		store.admitted.Branch != "dorf/"+core.JobID(request.AdmissionKey) {
 		t.Fatalf("resolved admission=%#v", store.admitted)

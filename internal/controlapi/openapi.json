@@ -701,19 +701,19 @@
       "AdmitDirectJobRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["goal", "model"],
+        "required": ["goal"],
         "properties": {
           "goal": { "type": "string", "minLength": 1 },
           "profile": { "type": "string", "description": "Named verified profile; omitted or empty selects the Deployment default" },
           "ai_connection": { "type": "string", "description": "Named AI connection; omitted or empty selects the Deployment default" },
-          "model": { "type": "string", "minLength": 1 },
+          "model": { "type": "string", "maxLength": 1024, "description": "Harness model override; omitted or empty selects the resolved AI connection's default. The admitted Job always returns the exact resolved model." },
           "reasoning": { "$ref": "#/components/schemas/ReasoningEffort" }
         }
       },
       "AdmitCodingJobRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["goal", "repository", "revision", "base_branch", "model"],
+        "required": ["goal", "repository", "revision", "base_branch"],
         "properties": {
           "goal": { "type": "string", "minLength": 1 },
           "repository": { "type": "string", "minLength": 1 },
@@ -722,14 +722,14 @@
           "branch": { "type": "string", "description": "Omitted or empty derives dorf/<Job ID>" },
           "profile": { "type": "string", "description": "Named verified profile; omitted or empty selects the Deployment default" },
           "ai_connection": { "type": "string", "description": "Named AI connection; omitted or empty selects the Deployment default" },
-          "model": { "type": "string", "minLength": 1 },
+          "model": { "type": "string", "maxLength": 1024, "description": "Harness model override; omitted or empty selects the resolved AI connection's default. The admitted Job always returns the exact resolved model." },
           "reasoning": { "$ref": "#/components/schemas/ReasoningEffort" }
         }
       },
       "AdmitInvestigationJobRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["brief", "repository", "revision", "model"],
+        "required": ["brief", "repository", "revision"],
         "properties": {
           "brief": { "type": "string", "minLength": 1 },
           "repository": {
@@ -741,7 +741,7 @@
           "revision": { "$ref": "#/components/schemas/GitCommitOID" },
           "profile": { "type": "string", "description": "Named verified profile; omitted or empty selects the Deployment default" },
           "ai_connection": { "type": "string", "description": "Named AI connection; omitted or empty selects the Deployment default" },
-          "model": { "type": "string", "minLength": 1 },
+          "model": { "type": "string", "maxLength": 1024, "description": "Harness model override; omitted or empty selects the resolved AI connection's default. The admitted Job always returns the exact resolved model." },
           "reasoning": { "$ref": "#/components/schemas/ReasoningEffort" }
         }
       },

@@ -113,7 +113,8 @@ Deployment; there are no contexts to choose or switch. Prove the binding with `d
 Use `--output json` for a non-interactive receipt, and use `dorf job list` with its opaque returned
 cursor when the human has not supplied a Job ID.
 
-Put the complete goal or Message in a file and use the exact remote commands in Getting started.
+Put the complete goal or Message in a file and follow Getting started for model selection and
+workspace-relative file paths.
 Mutation retry identity is automatic; do not invent or ask the human to manage a key in the ordinary
 flow. Follow may queue, while steer requires the exact active Turn and must not be resent as Follow
 after `steer_unavailable`. Retrieve needed Sandbox files before cleanup. An open Job may be idle after

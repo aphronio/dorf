@@ -49,6 +49,7 @@ type AdmissionScheduler interface {
 // AdmissionProvider owns deployment AI-connection selection and readiness.
 type AdmissionProvider interface {
 	DefaultConnection() (string, error)
+	DefaultModel(string) (string, error)
 	Check(context.Context, string) error
 }
 
@@ -114,6 +115,12 @@ func (s AdmissionService) admitNew(ctx context.Context, request AdmissionRequest
 			return core.Job{}, false, err
 		}
 	}
+	if admission.Model == "" {
+		admission.Model, err = s.provider.DefaultModel(admission.ProviderConnection)
+		if err != nil {
+			return core.Job{}, false, err
+		}
+	}
 	if err := s.provider.Check(ctx, admission.ProviderConnection); err != nil {
 		return core.Job{}, false, fmt.Errorf("AI connection %q is not ready: %w", admission.ProviderConnection, err)
 	}
@@ -153,6 +160,9 @@ func (s AdmissionService) replay(ctx context.Context, request AdmissionRequest) 
 	}
 	admission.SandboxProfile = stored.SandboxProfile
 	admission.ProviderConnection = stored.ProviderConnection
+	if admission.Model == "" {
+		admission.Model = stored.Model
+	}
 	admission.GitHubInstallation = stored.GitHubInstallation
 	admission, err = NormalizeAdmission(admission)
 	if err != nil {
@@ -215,7 +225,7 @@ func normalizeAdmissionRequest(request AdmissionRequest) (Admission, error) {
 	if request.Branch == "" {
 		request.Branch = "dorf/" + core.JobID(request.AdmissionKey)
 	}
-	if invalidAdmissionText(request.Goal, 1<<20, true) || invalidAdmissionText(request.Model, 1024, true) ||
+	if invalidAdmissionText(request.Goal, 1<<20, true) || invalidAdmissionText(request.Model, 1024, false) ||
 		invalidAdmissionText(request.SandboxProfile, 255, false) || invalidAdmissionText(request.ProviderConnection, 255, false) ||
 		invalidAdmissionText(request.Repository, 4096, true) || invalidAdmissionText(request.Revision, 64, true) ||
 		invalidAdmissionText(request.Branch, 1024, true) || invalidAdmissionText(request.BaseBranch, 1024, true) ||

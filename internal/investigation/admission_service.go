@@ -43,6 +43,7 @@ type AdmissionScheduler interface {
 // AdmissionProvider owns deployment AI-connection selection and readiness.
 type AdmissionProvider interface {
 	DefaultConnection() (string, error)
+	DefaultModel(string) (string, error)
 	Check(context.Context, string) error
 }
 
@@ -102,6 +103,12 @@ func (s AdmissionService) admitNew(ctx context.Context, request AdmissionRequest
 			return core.Job{}, false, err
 		}
 	}
+	if admission.Model == "" {
+		admission.Model, err = s.provider.DefaultModel(admission.ProviderConnection)
+		if err != nil {
+			return core.Job{}, false, err
+		}
+	}
 	if err := s.provider.Check(ctx, admission.ProviderConnection); err != nil {
 		return core.Job{}, false, fmt.Errorf("AI connection %q is not ready: %w", admission.ProviderConnection, err)
 	}
@@ -126,6 +133,9 @@ func (s AdmissionService) replay(ctx context.Context, request AdmissionRequest) 
 	}
 	admission.SandboxProfile = job.SandboxProfile
 	admission.ProviderConnection = job.ProviderConnection
+	if admission.Model == "" {
+		admission.Model = job.Model
+	}
 	return s.persistAndSchedule(ctx, admission)
 }
 
@@ -176,7 +186,7 @@ func normalizeAdmissionRequest(request AdmissionRequest) (Admission, error) {
 	if request.ReasoningEffort == "" {
 		request.ReasoningEffort = "high"
 	}
-	if invalidAdmissionText(request.Brief, 1<<20, true) || invalidAdmissionText(request.Model, 1024, true) ||
+	if invalidAdmissionText(request.Brief, 1<<20, true) || invalidAdmissionText(request.Model, 1024, false) ||
 		invalidAdmissionText(request.SandboxProfile, 255, false) || invalidAdmissionText(request.ProviderConnection, 255, false) ||
 		invalidAdmissionText(request.Source.Repository, 4096, true) ||
 		(request.ReasoningEffort != "low" && request.ReasoningEffort != "medium" && request.ReasoningEffort != "high" && request.ReasoningEffort != "xhigh") {

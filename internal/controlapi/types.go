@@ -61,7 +61,7 @@ type AdmitJobRequest struct {
 	Goal         string `json:"goal"`
 	Profile      string `json:"profile"`
 	AIConnection string `json:"ai_connection,omitempty"`
-	Model        string `json:"model"`
+	Model        string `json:"model,omitempty"`
 	Reasoning    string `json:"reasoning,omitempty"`
 }
 
@@ -73,7 +73,7 @@ type AdmitCodingJobRequest struct {
 	Branch       string `json:"branch,omitempty"`
 	Profile      string `json:"profile,omitempty"`
 	AIConnection string `json:"ai_connection,omitempty"`
-	Model        string `json:"model"`
+	Model        string `json:"model,omitempty"`
 	Reasoning    string `json:"reasoning,omitempty"`
 }
 
@@ -83,7 +83,7 @@ type AdmitInvestigationJobRequest struct {
 	Revision     string `json:"revision"`
 	Profile      string `json:"profile,omitempty"`
 	AIConnection string `json:"ai_connection,omitempty"`
-	Model        string `json:"model"`
+	Model        string `json:"model,omitempty"`
 	Reasoning    string `json:"reasoning,omitempty"`
 }
 

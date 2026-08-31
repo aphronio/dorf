@@ -220,7 +220,7 @@ func TestMessageObservationRequiresDurableCompletedOwnershipBeforeProvider(t *te
 }
 
 func TestAuthenticatedClientUsesFixedAdmissionObservations(t *testing.T) {
-	provider := &readerTestProvider{defaultConnection: "primary"}
+	provider := &readerTestProvider{defaultConnection: "primary", defaultModel: "gpt-5.6-sol"}
 	installations := &readerTestInstallations{installation: "42"}
 	handler, err := NewHandler(strings.Repeat("f", 64), Service{Provider: provider, Installations: installations})
 	if err != nil {
@@ -234,6 +234,10 @@ func TestAuthenticatedClientUsesFixedAdmissionObservations(t *testing.T) {
 	connection, err := client.DefaultConnection()
 	if err != nil || connection != "primary" {
 		t.Fatalf("DefaultConnection()=%q err=%v", connection, err)
+	}
+	model, err := client.DefaultModel(connection)
+	if err != nil || model != "gpt-5.6-sol" || provider.modelConnection != connection {
+		t.Fatalf("DefaultModel()=%q err=%v connection=%q", model, err, provider.modelConnection)
 	}
 	if err := client.Check(context.Background(), connection); err != nil || provider.checked != connection {
 		t.Fatalf("Check() error=%v checked=%q", err, provider.checked)
@@ -628,11 +632,18 @@ func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 
 type readerTestProvider struct {
 	defaultConnection string
+	defaultModel      string
+	modelConnection   string
 	checked           string
 	deadline          time.Time
 }
 
 func (p *readerTestProvider) DefaultConnection() (string, error) { return p.defaultConnection, nil }
+
+func (p *readerTestProvider) DefaultModel(connection string) (string, error) {
+	p.modelConnection = connection
+	return p.defaultModel, nil
+}
 
 func (p *readerTestProvider) Check(ctx context.Context, connection string) error {
 	p.checked = connection

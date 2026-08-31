@@ -44,6 +44,7 @@ type AdmissionScheduler interface {
 // AdmissionProvider owns deployment AI-connection selection and readiness.
 type AdmissionProvider interface {
 	DefaultConnection() (string, error)
+	DefaultModel(string) (string, error)
 	Check(context.Context, string) error
 }
 
@@ -103,6 +104,16 @@ func (s AdmissionService) admitNew(ctx context.Context, request AdmissionRequest
 			return core.Job{}, false, err
 		}
 	}
+	if admission.Model == "" {
+		admission.Model, err = s.provider.DefaultModel(admission.ProviderConnection)
+		if err != nil {
+			return core.Job{}, false, err
+		}
+		admission.Model = strings.TrimSpace(admission.Model)
+		if invalidAdmissionText(admission.Model, 1024, true) {
+			return core.Job{}, false, fmt.Errorf("%w: AI connection returned invalid default model", ErrInvalidAdmission)
+		}
+	}
 	if err := s.provider.Check(ctx, admission.ProviderConnection); err != nil {
 		return core.Job{}, false, fmt.Errorf("AI connection %q is not ready: %w", admission.ProviderConnection, err)
 	}
@@ -127,6 +138,9 @@ func (s AdmissionService) replay(ctx context.Context, request AdmissionRequest) 
 	}
 	admission.SandboxProfile = job.SandboxProfile
 	admission.ProviderConnection = job.ProviderConnection
+	if admission.Model == "" {
+		admission.Model = job.Model
+	}
 	return s.persistAndSchedule(ctx, admission)
 }
 
@@ -176,7 +190,7 @@ func normalizeAdmissionRequest(request AdmissionRequest) (core.JobAdmission, err
 	if request.ReasoningEffort == "" {
 		request.ReasoningEffort = "high"
 	}
-	if invalidAdmissionText(request.Goal, 1<<20, true) || invalidAdmissionText(request.Model, 1024, true) ||
+	if invalidAdmissionText(request.Goal, 1<<20, true) || invalidAdmissionText(request.Model, 1024, false) ||
 		invalidAdmissionText(request.SandboxProfile, 255, false) || invalidAdmissionText(request.ProviderConnection, 255, false) ||
 		(request.ReasoningEffort != "low" && request.ReasoningEffort != "medium" && request.ReasoningEffort != "high" && request.ReasoningEffort != "xhigh") {
 		return core.JobAdmission{}, ErrInvalidAdmission

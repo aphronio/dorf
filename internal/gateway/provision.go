@@ -527,7 +527,7 @@ func (g Gateway) ConnectChatGPT(ctx context.Context, name, publishAddress string
 				return fmt.Errorf("AI connection %q was created concurrently", name)
 			}
 		}
-		current = append(current, connection{Name: name, Provider: "chatgpt", AuthMode: "subscription", CredentialRef: changed[0]})
+		current = append(current, connection{Name: name, Provider: "chatgpt", AuthMode: "subscription", CredentialRef: changed[0], DefaultModel: recommendedOpenAIModel})
 		return writePrivateJSON(filepath.Join(g.StatePath, "connections.json"), current)
 	})
 	if err != nil {
@@ -623,7 +623,7 @@ func (g Gateway) recordOpenAIAPIKey(name, apiKey string) (bool, error) {
 	if err := writePrivateFile(filepath.Join(g.StatePath, "credentials", credentialRef), []byte(apiKey+"\n"), 0o600); err != nil {
 		return false, err
 	}
-	connections = append(connections, connection{Name: name, Provider: "openai", AuthMode: "api_key", CredentialRef: credentialRef})
+	connections = append(connections, connection{Name: name, Provider: "openai", AuthMode: "api_key", CredentialRef: credentialRef, DefaultModel: recommendedOpenAIModel})
 	if err := writePrivateJSON(filepath.Join(g.StatePath, "connections.json"), connections); err != nil {
 		_ = os.Remove(filepath.Join(g.StatePath, "credentials", credentialRef))
 		return false, err

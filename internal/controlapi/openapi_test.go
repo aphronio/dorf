@@ -120,6 +120,16 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 		if _, ok := properties["ai_connection"]; !ok {
 			t.Fatalf("%s does not publish ai_connection", schema)
 		}
+		model := objectAt(t, properties, "model")
+		description, ok := model["description"].(string)
+		if !ok || !strings.Contains(description, "AI connection") {
+			t.Fatalf("%s does not explain model omission: %#v", schema, model)
+		}
+		for _, required := range arrayAt(t, document, "components", "schemas", schema, "required") {
+			if required == "model" {
+				t.Fatalf("%s still requires model", schema)
+			}
+		}
 	}
 
 	var published struct {

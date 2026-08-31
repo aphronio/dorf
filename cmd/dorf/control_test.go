@@ -163,7 +163,7 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	}}
 	jobs := &remoteCLIJobs{job: controlapi.DirectJob{Job: controlapi.Job{
 		ID: "job-1", Kind: "direct", Goal: "prove remote control", Profile: "default",
-		Model: "model-1", Reasoning: "high", InitialMessageID: "message-1", Admission: controlapi.Admission{Open: true},
+		Model: "gpt-5.6-sol", Reasoning: "high", InitialMessageID: "message-1", Admission: controlapi.Admission{Open: true},
 		Execution: controlapi.State{State: "idle"}, Cleanup: controlapi.State{State: "not_requested"},
 		Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1", Name: "main"}},
 	}}}
@@ -219,7 +219,7 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	commands := [][]string{
 		{"connect", "--name", "laptop", "--enrollment-file", enrollmentFile, deploymentURL},
 		{"auth", "status"},
-		{"run", "--goal-file", goalFile, "--ai-connection", "personal", "--model", jobs.job.Model},
+		{"run", "--goal-file", goalFile, "--ai-connection", "personal"},
 		{"job", "list"},
 		{"job", "inspect", jobs.job.ID},
 		{"job", "message", "--input-file", messageFile, jobs.job.ID},
@@ -259,7 +259,7 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	if code != "one-time-code" || name != "laptop" || len(credential) != 43 {
 		t.Fatalf("enrollment code=%q name=%q credential length=%d", code, name, len(credential))
 	}
-	wantAdmission := controlapi.AdmitJobRequest{Goal: jobs.job.Goal, AIConnection: "personal", Model: jobs.job.Model, Reasoning: jobs.job.Reasoning}
+	wantAdmission := controlapi.AdmitJobRequest{Goal: jobs.job.Goal, AIConnection: "personal", Reasoning: jobs.job.Reasoning}
 	if admission != wantAdmission {
 		t.Fatalf("Job admission=%#v, want %#v", admission, wantAdmission)
 	}
@@ -364,17 +364,17 @@ func TestRemoteWorkflowCLIUsesExplicitTypedRoutes(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	var codingOutput, investigationOutput strings.Builder
 	if err := remoteWorkflowCommand(context.Background(), client, "https://dorf.example.test",
-		[]string{"run", "coding", "--key", "coding-key", "--goal-file", goalFile, "--repo", "https://github.com/aphronio/dorf.git", "--revision", revision, "--base", "main", "--ai-connection", "coding-connection", "--model", "model"},
+		[]string{"run", "coding", "--key", "coding-key", "--goal-file", goalFile, "--repo", "https://github.com/aphronio/dorf.git", "--revision", revision, "--base", "main", "--ai-connection", "coding-connection"},
 		&codingOutput, &strings.Builder{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := remoteWorkflowCommand(context.Background(), client, "https://dorf.example.test",
-		[]string{"run", "codebase-investigation", "--key", "investigation-key", "--brief-file", briefFile, "--repo", "https://github.com/aphronio/dorf.git", "--revision", revision, "--ai-connection", "investigation-connection", "--model", "model", "--output", "json"},
+		[]string{"run", "codebase-investigation", "--key", "investigation-key", "--brief-file", briefFile, "--repo", "https://github.com/aphronio/dorf.git", "--revision", revision, "--ai-connection", "investigation-connection", "--output", "json"},
 		&investigationOutput, &strings.Builder{}); err != nil {
 		t.Fatal(err)
 	}
 	if codingRequest.Goal != goal || codingRequest.AIConnection != "coding-connection" || investigationRequest.Brief != brief || investigationRequest.AIConnection != "investigation-connection" || !slices.Equal(paths, []string{"/v1/workflows/coding/jobs", "/v1/workflows/codebase-investigation/jobs"}) ||
-		!slices.Equal(keys, []string{"coding-key", "investigation-key"}) {
+		codingRequest.Model != "" || investigationRequest.Model != "" || !slices.Equal(keys, []string{"coding-key", "investigation-key"}) {
 		t.Fatalf("coding=%#v investigation=%#v paths=%q keys=%q", codingRequest, investigationRequest, paths, keys)
 	}
 	if !strings.Contains(codingOutput.String(), "repository: https://github.com/aphronio/dorf.git") ||
@@ -568,6 +568,13 @@ func TestControlAdmissionRejectsValuesPostgresCannotRetain(t *testing.T) {
 		if _, _, err := (controlAPIJobs{}).AdmitDirect(context.Background(), "request", input); !errors.Is(err, controlapi.ErrInvalidInput) {
 			t.Fatalf("input=%#v error=%v, want invalid input", input, err)
 		}
+	}
+}
+
+func TestControlAdmissionAllowsServerResolvedModel(t *testing.T) {
+	admission, err := newControlJobAdmission("request", "goal", "", "", "", "")
+	if err != nil || admission.Model != "" {
+		t.Fatalf("admission=%#v error=%v", admission, err)
 	}
 }
 

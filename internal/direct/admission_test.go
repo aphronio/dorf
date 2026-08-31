@@ -60,13 +60,26 @@ func (admissionServiceScheduler) ScheduleJobTask(_ context.Context, job core.Job
 }
 
 type admissionServiceProvider struct {
-	defaultErr error
-	checkErr   error
-	checked    string
+	defaultErr             error
+	defaultModelErr        error
+	defaultModel           string
+	defaultModelConnection string
+	defaultModelCalls      int
+	checkErr               error
+	checked                string
 }
 
 func (p *admissionServiceProvider) DefaultConnection() (string, error) {
 	return "primary", p.defaultErr
+}
+
+func (p *admissionServiceProvider) DefaultModel(connection string) (string, error) {
+	p.defaultModelCalls++
+	p.defaultModelConnection = connection
+	if p.defaultModel == "" {
+		p.defaultModel = "gpt-5.6-sol"
+	}
+	return p.defaultModel, p.defaultModelErr
 }
 
 func (p *admissionServiceProvider) Check(_ context.Context, connection string) error {
@@ -83,7 +96,7 @@ func TestAdmissionServiceCreateRaceReplaysDurableAdmission(t *testing.T) {
 	store := &admissionServiceStore{
 		job: job, profile: verifiedAdmissionProfile("cloud"), conflictOnce: true,
 	}
-	request := AdmissionRequest{AdmissionKey: "direct-request", Goal: job.Goal, Model: job.Model}
+	request := AdmissionRequest{AdmissionKey: "direct-request", Goal: job.Goal}
 
 	got, created, err := NewAdmissionService(
 		store, admissionServiceScheduler{}, &admissionServiceProvider{},
@@ -100,8 +113,8 @@ func TestAdmissionServiceReplaySkipsVolatileAuthority(t *testing.T) {
 		ProviderConnection: "primary", Model: "model", ReasoningEffort: "high", AdmissionOpen: true,
 	}
 	store := &admissionServiceStore{exists: true, job: job, profileErr: authorityErr}
-	provider := &admissionServiceProvider{defaultErr: authorityErr, checkErr: authorityErr}
-	request := AdmissionRequest{AdmissionKey: "replay", Goal: "goal", Model: "model"}
+	provider := &admissionServiceProvider{defaultErr: authorityErr, defaultModelErr: authorityErr, checkErr: authorityErr}
+	request := AdmissionRequest{AdmissionKey: "replay", Goal: "goal"}
 
 	got, created, err := NewAdmissionService(store, admissionServiceScheduler{}, provider).Admit(context.Background(), request)
 	if err != nil || created || got.ID != job.ID {
@@ -120,7 +133,7 @@ func TestAdmissionServiceRejectsConflictingReplay(t *testing.T) {
 		workflow core.WorkflowName
 	}{
 		"changed input":    {request: AdmissionRequest{AdmissionKey: "replay", Goal: "different", Model: "model"}},
-		"malformed replay": {request: AdmissionRequest{AdmissionKey: "replay", Goal: "goal"}},
+		"malformed replay": {request: AdmissionRequest{AdmissionKey: "replay", Goal: "goal", Model: "model\x00"}},
 		"foreign workflow": {request: request, workflow: "coding-to-proposal"},
 	}
 	for name, test := range tests {
@@ -141,7 +154,6 @@ func TestAdmissionServiceValidatesBeforeMutableAuthority(t *testing.T) {
 	tests := map[string]AdmissionRequest{
 		"missing key":   {Goal: "goal", Model: "model"},
 		"blank goal":    {AdmissionKey: "request", Goal: "  ", Model: "model"},
-		"missing model": {AdmissionKey: "request", Goal: "goal"},
 		"bad reasoning": {AdmissionKey: "request", Goal: "goal", Model: "model", ReasoningEffort: "maximum"},
 	}
 	for name, request := range tests {
@@ -156,21 +168,34 @@ func TestAdmissionServiceValidatesBeforeMutableAuthority(t *testing.T) {
 	}
 }
 
-func TestAdmissionServiceExplicitConnectionBypassesDefault(t *testing.T) {
+func TestAdmissionServiceExplicitConnectionUsesItsDefaultModel(t *testing.T) {
 	defaultErr := errors.New("DefaultConnection must be skipped")
 	job := core.Job{ID: "job-explicit", AdmissionOpen: true}
 	store := &admissionServiceStore{job: job, profile: verifiedAdmissionProfile("explicit-profile"), created: true}
 	provider := &admissionServiceProvider{defaultErr: defaultErr}
 	request := AdmissionRequest{
 		AdmissionKey: "explicit", Goal: "goal", SandboxProfile: " explicit-profile ",
-		ProviderConnection: " explicit-connection ", Model: " model ",
+		ProviderConnection: " explicit-connection ",
 	}
 
 	_, created, err := NewAdmissionService(store, admissionServiceScheduler{}, provider).Admit(context.Background(), request)
 	if err != nil || !created || provider.checked != "explicit-connection" ||
-		store.admitted.SandboxProfile != "explicit-profile" || store.admitted.Model != "model" ||
+		provider.defaultModelConnection != "explicit-connection" || provider.defaultModelCalls != 1 ||
+		store.admitted.SandboxProfile != "explicit-profile" || store.admitted.Model != "gpt-5.6-sol" ||
 		store.admitted.ReasoningEffort != "high" {
-		t.Fatalf("created=%t checked=%q admitted=%#v err=%v", created, provider.checked, store.admitted, err)
+		t.Fatalf("created=%t checked=%q default_model=%q/%d admitted=%#v err=%v", created, provider.checked, provider.defaultModelConnection, provider.defaultModelCalls, store.admitted, err)
+	}
+}
+
+func TestAdmissionServiceExplicitModelBypassesConnectionDefault(t *testing.T) {
+	job := core.Job{ID: "job-explicit-model", AdmissionOpen: true}
+	store := &admissionServiceStore{job: job, profile: verifiedAdmissionProfile("profile"), created: true}
+	provider := &admissionServiceProvider{defaultModelErr: errors.New("DefaultModel must be skipped")}
+	request := AdmissionRequest{AdmissionKey: "explicit-model", Goal: "goal", Model: " model "}
+
+	_, created, err := NewAdmissionService(store, admissionServiceScheduler{}, provider).Admit(context.Background(), request)
+	if err != nil || !created || provider.defaultModelCalls != 0 || store.admitted.Model != "model" {
+		t.Fatalf("created=%t default_model_calls=%d admitted=%#v err=%v", created, provider.defaultModelCalls, store.admitted, err)
 	}
 }
 

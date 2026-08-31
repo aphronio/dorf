@@ -66,6 +66,8 @@ func (p providerCheck) Check(context.Context, string) error { return p.err }
 
 func (providerCheck) DefaultConnection() (string, error) { return "primary", nil }
 
+func (providerCheck) DefaultModel(string) (string, error) { return "gpt-5.6-sol", nil }
+
 type installationDiscovery string
 
 func (i installationDiscovery) DiscoverInstallation(context.Context, string) (string, error) {

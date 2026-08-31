@@ -211,7 +211,7 @@ func remoteRun(ctx context.Context, client *controlclient.Client, deploymentURL 
 	key := set.String("key", "", "stable request identity for explicit replay")
 	goalFile := set.String("goal-file", "", "path containing the complete goal")
 	connection := set.String("ai-connection", "", "named AI connection (default: deployment default)")
-	model := set.String("model", "", "Harness model")
+	model := set.String("model", "", "Harness model (default: selected AI connection)")
 	effort := set.String("reasoning", "high", "Harness reasoning effort")
 	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
 	output := set.String("output", "human", "output format: human or json")
@@ -275,7 +275,7 @@ func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, dep
 	branch := set.String("branch", "", "Job branch (default: dorf/<Job ID>)")
 	profile := set.String("profile", "", "named Sandbox profile (default: deployment default)")
 	connection := set.String("ai-connection", "", "named AI connection (default: deployment default)")
-	model := set.String("model", "", "Harness model")
+	model := set.String("model", "", "Harness model (default: selected AI connection)")
 	reasoning := set.String("reasoning", "high", "Harness reasoning effort")
 	output := set.String("output", "human", "output format: human or json")
 	if err := set.Parse(args); err != nil {
@@ -323,7 +323,7 @@ func remoteInvestigationWorkflow(ctx context.Context, client *controlclient.Clie
 	revision := set.String("revision", "", "exact repository commit OID")
 	profile := set.String("profile", "", "named Sandbox profile (default: deployment default)")
 	connection := set.String("ai-connection", "", "named AI connection (default: deployment default)")
-	model := set.String("model", "", "Harness model")
+	model := set.String("model", "", "Harness model (default: selected AI connection)")
 	reasoning := set.String("reasoning", "high", "Harness reasoning effort")
 	output := set.String("output", "human", "output format: human or json")
 	if err := set.Parse(args); err != nil {
@@ -872,6 +872,7 @@ type controlReader interface {
 	ObserveMessage(context.Context, string, string) (core.MessageResult, error)
 	ObservePullRequest(context.Context, string) (githubapi.PullRequest, error)
 	DefaultConnection() (string, error)
+	DefaultModel(string) (string, error)
 	Check(context.Context, string) error
 	DiscoverInstallation(context.Context, string) (string, error)
 }
@@ -973,7 +974,7 @@ func newControlJobAdmission(key, goal, profile, connection, model, reasoning str
 	model = strings.TrimSpace(model)
 	reasoning = strings.TrimSpace(reasoning)
 	if !validControlAdmissionKey(key) || invalidControlPrompt(goal, 1<<20) ||
-		invalidOptionalControlText(profile, 255) || invalidOptionalControlText(connection, 255) || invalidControlText(model, maxControlModelBytes) {
+		invalidOptionalControlText(profile, 255) || invalidOptionalControlText(connection, 255) || invalidOptionalControlText(model, maxControlModelBytes) {
 		return direct.AdmissionRequest{}, controlapi.ErrInvalidInput
 	}
 	if reasoning == "" {

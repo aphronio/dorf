@@ -37,6 +37,7 @@ const (
 	FileReadPath           = "/v1/files/read"
 	MessageObservationPath = "/v1/messages/observe"
 	DefaultConnectionPath  = "/v1/admission/default-connection"
+	DefaultModelPath       = "/v1/admission/default-model"
 	ConnectionCheckPath    = "/v1/admission/check-connection"
 	GitHubInstallationPath = "/v1/admission/github-installation"
 	PullRequestPath        = "/v1/github/pull-request/observe"
@@ -65,6 +66,7 @@ type Store interface {
 
 type AdmissionProvider interface {
 	DefaultConnection() (string, error)
+	DefaultModel(string) (string, error)
 	Check(context.Context, string) error
 }
 
@@ -224,6 +226,23 @@ func (s Service) DefaultConnection() (string, error) {
 	return connection, nil
 }
 
+func (s Service) DefaultModel(connection string) (string, error) {
+	if !validIdentity(connection) {
+		return "", ErrInvalidRequest
+	}
+	if s.Provider == nil {
+		return "", fmt.Errorf("AI connection observation authority is not configured")
+	}
+	model, err := s.Provider.DefaultModel(connection)
+	if err != nil {
+		return "", err
+	}
+	if !validModel(model) {
+		return "", fmt.Errorf("AI connection returned invalid default model")
+	}
+	return model, nil
+}
+
 func (s Service) Check(ctx context.Context, connection string) error {
 	if !validIdentity(connection) {
 		return ErrInvalidRequest
@@ -291,6 +310,10 @@ func validIdentity(value string) bool {
 	return value != "" && value == strings.TrimSpace(value) && len(value) <= 255 && !strings.ContainsRune(value, 0)
 }
 
+func validModel(value string) bool {
+	return value != "" && value == strings.TrimSpace(value) && len(value) <= 1024 && !strings.ContainsRune(value, 0)
+}
+
 func validRepository(value string) bool {
 	if value == "" || value != strings.TrimSpace(value) || len(value) > 255 || strings.ContainsAny(value, "\x00\\?#") {
 		return false
@@ -325,6 +348,10 @@ type connectionResponse struct {
 	Connection string `json:"connection"`
 }
 
+type modelResponse struct {
+	Model string `json:"model"`
+}
+
 type installationResponse struct {
 	Installation string `json:"installation"`
 }
@@ -354,6 +381,10 @@ func NewHandler(token string, service Service) (http.Handler, error) {
 		DefaultConnectionPath: jsonEndpoint(0, func(context.Context, struct{}) (connectionResponse, error) {
 			connection, err := service.DefaultConnection()
 			return connectionResponse{Connection: connection}, err
+		}),
+		DefaultModelPath: jsonEndpoint(0, func(_ context.Context, input connectionRequest) (modelResponse, error) {
+			model, err := service.DefaultModel(input.Connection)
+			return modelResponse{Model: model}, err
 		}),
 		ConnectionCheckPath: jsonEndpoint(0, func(ctx context.Context, input connectionRequest) (struct{}, error) {
 			return struct{}{}, service.Check(ctx, input.Connection)
@@ -647,6 +678,25 @@ func (c Client) DefaultConnection() (string, error) {
 		return "", ErrUnavailable
 	}
 	return result.Connection, nil
+}
+
+func (c Client) DefaultModel(connection string) (string, error) {
+	response, err := c.request(context.Background(), DefaultModelPath, connectionRequest{Connection: connection})
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", decodeProblem(response)
+	}
+	var result modelResponse
+	if err := decodeJSONResponse(response, &result, maxProblemBytes, "JSON"); err != nil {
+		return "", err
+	}
+	if !validModel(result.Model) {
+		return "", ErrUnavailable
+	}
+	return result.Model, nil
 }
 
 func (c Client) Check(ctx context.Context, connection string) error {

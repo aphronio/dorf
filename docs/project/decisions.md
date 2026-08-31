@@ -2843,6 +2843,11 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   Setup reports ready only after authenticated `GET /v1/me` succeeds. Revocation takes effect
   immediately, and a later setup run enrolls a replacement.
 - **Surface:** Direct, coding, and investigation admissions accept an optional named AI connection.
+  Model is optional at both the CLI and API. The Deployment resolves an omission from the selected
+  AI connection before admission, while an explicit model overrides it for that Job. Every accepted
+  Job durably pins the exact resolved connection and model, and replay uses those pinned values. The
+  CLI also rejects an invalid Sandbox file path with workspace-relative correction before sending
+  it, while the API retains the same exact-read validation for direct callers.
   `PUT /v1/jobs/{job}/abandon` records the coding workflow's idempotent `abandoned` Outcome and then
   requests cleanup. The worker's private reader adds one exact stored-Proposal observation so the
   API receives no GitHub credential or generic GitHub proxy.

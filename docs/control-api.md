@@ -76,7 +76,9 @@ contains only Job kinds understood by this API revision. Investigation admission
 credential-free reachable HTTPS repository and an exact Revision.
 
 Direct and workflow admission may select a named AI connection. Omission uses the deployment
-default, and the admitted Job retains the resolved connection. Job and Message admission and
+default, and the admitted Job retains the resolved connection. Model is also optional. Omission
+uses that resolved connection's default, while an explicit model overrides it for this Job. The
+admitted Job always returns and retains the exact resolved model. Job and Message admission and
 explicit retry take caller-known request identity before transmission.
 Direct HTTP callers supply `Idempotency-Key`; the CLI generates it, retries one ambiguous transport
 or server failure with the same key, and includes it in structured receipts. Exact replay returns the

@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -35,6 +36,10 @@ func TestDownloadSandboxFileWritesExactBytesToExplicitOutput(t *testing.T) {
 	}
 	if _, _, _, err := parseSandboxFileGet([]string{"", "result.bin", "--output=-"}); err == nil {
 		t.Fatal("empty Sandbox identity was accepted")
+	}
+	if _, _, _, err := parseSandboxFileGet([]string{sandboxID, "/workspace/job/result.bin", "--output=-"}); err == nil ||
+		!strings.Contains(err.Error(), "workspace-relative") || !strings.Contains(err.Error(), `use "result.bin"`) {
+		t.Fatalf("absolute Sandbox path guidance=%v", err)
 	}
 	var stdout bytes.Buffer
 	sandbox, relative, destination, err := parseSandboxFileGet([]string{"--output=-", sandboxID, "--", "-result.bin"})

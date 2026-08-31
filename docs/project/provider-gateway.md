@@ -10,7 +10,7 @@ route as an OpenAI Responses provider. `dorf setup` offers subscription device c
 masked API-key input. The standalone `provider connect` command accepts the same choices and reads
 API keys only from a file or standard input. The protected host state retains authenticated
 connection candidates and the selected default; a deployment currently admits one unprefixed
-OpenAI authentication mode at a time.
+OpenAI authentication mode at a time. Each retained connection also owns its default Harness model.
 `provider connect` first prepares that retained candidate and publishes its protected environment
 and profile facts for the shipped static Compose project. It applies that exact project, waits for
 the live Gateway, and only then
@@ -88,6 +88,9 @@ they have no stable hostname or uptime guarantee.
 
 Setup selects one deployment-default AI connection. New Jobs use that default unless the caller
 passes `--ai-connection`; either way, the admitted Job durably pins the resolved connection name.
+When admission omits a model, the Deployment uses the resolved connection's default. An explicit
+model overrides it for that Job. Admission durably pins the exact resolved model, so replay never
+reinterprets a later connection-default change.
 `dorf provider status --profile NAME [--ai-connection CONNECTION]` is the observational deployment check. It
 verifies the selected AI connection and private broker locally, then requests the Profile's exact
 configured `/v1/models` path without a credential and requires the Gateway's HTTP 401 rejection. For

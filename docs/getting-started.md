@@ -344,7 +344,7 @@ Save the complete prompt in `goal.txt`, then use the same CLI to admit and opera
 HTTPS:
 
 ```bash
-dorf run --goal-file goal.txt --ai-connection AI_CONNECTION --model MODEL --reasoning high
+dorf run --goal-file goal.txt --ai-connection AI_CONNECTION --reasoning high
 dorf job list
 dorf job list --limit 25 --output json
 dorf job inspect JOB_ID
@@ -355,7 +355,7 @@ dorf job message --intent steer --input-file correction.txt JOB_ID
 dorf job message inspect JOB_ID MESSAGE_ID
 dorf job retry JOB_ID
 dorf job evidence JOB_ID
-dorf sandbox file get SANDBOX_ID PATH --output DESTINATION
+dorf sandbox file get SANDBOX_ID WORKSPACE_RELATIVE_PATH --output DESTINATION
 dorf job abandon JOB_ID
 dorf job cleanup JOB_ID
 ```
@@ -370,7 +370,6 @@ dorf workflow run coding \
   --revision FULL_COMMIT_OID \
   --base main \
   --ai-connection AI_CONNECTION \
-  --model MODEL \
   --reasoning high
 
 dorf workflow run codebase-investigation \
@@ -378,9 +377,12 @@ dorf workflow run codebase-investigation \
   --repo https://github.com/OWNER/REPOSITORY.git \
   --revision FULL_COMMIT_OID \
   --ai-connection AI_CONNECTION \
-  --model MODEL \
   --reasoning high
 ```
+
+Omit `--model` to use the selected AI connection's default Harness model. Pass `--model MODEL` only
+to override it for this Job. The Deployment resolves either choice before admission, and the
+accepted Job records the exact model it will use.
 
 Remote coding uses the deployment's GitHub integration; its request carries no integration
 credential. Investigation accepts only a credential-free HTTPS repository URL and exact Revision.
@@ -397,6 +399,9 @@ before current work settles. Steer targets only the exact active Turn and never 
 `job watch` reconnects from the canonical snapshot, and Ctrl-C stops only the view. Retry is
 accepted only for eligible failed execution. Evidence is verified metadata. Sandbox file retrieval
 returns exact bytes and must happen before cleanup, which closes Message admission and file reads.
+The requested file path is clean and relative to the Sandbox workspace root. For example, retrieve
+an agent-reported `/workspace/job/result.bin` as `result.bin`; absolute paths, traversal, symlinks,
+directories, and paths outside the workspace are rejected.
 
 Use `--output json` on Job, Message, retry, and Evidence operations and `--output jsonl` on watch for
 stable machine output. The ordinary mutation flow creates retry identity internally and retries the
@@ -427,7 +432,6 @@ precedence. Save the complete prompt in `goal.txt`, then admit it:
 dorf run \
   --goal-file goal.txt \
   --ai-connection AI_CONNECTION \
-  --model MODEL \
   --reasoning high
 
 dorf job watch JOB_ID
@@ -445,7 +449,7 @@ Harness Thread, retrieve an exact workspace file, or request cleanup:
 
 ```bash
 dorf job message --key follow-1 --input-file follow-up.txt JOB_ID
-dorf sandbox file get SANDBOX_ID PATH --output DESTINATION
+dorf sandbox file get SANDBOX_ID WORKSPACE_RELATIVE_PATH --output DESTINATION
 dorf job cleanup JOB_ID
 ```
 
@@ -476,7 +480,6 @@ dorf workflow run coding \
   --branch dorf/my-change-v1 \
   --base main \
   --ai-connection AI_CONNECTION \
-  --model MODEL \
   --reasoning high
 
 dorf job inspect JOB_ID

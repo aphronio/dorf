@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/aphronio/dorf/internal/sandbox"
 )
 
 func parseSandboxFileGet(args []string) (sandboxID, relativePath, output string, err error) {
@@ -37,6 +39,9 @@ func parseSandboxFileGet(args []string) (sandboxID, relativePath, output string,
 	sandboxID, relativePath = strings.TrimSpace(positionals[0]), positionals[1]
 	if sandboxID == "" {
 		return "", "", "", fmt.Errorf("sandbox file get requires an exact Sandbox ID")
+	}
+	if err := sandbox.ValidateWorkspaceRelativePath(relativePath); err != nil {
+		return "", "", "", fmt.Errorf("Sandbox file path %q must be clean and workspace-relative; for example, use %q instead of %q", relativePath, "result.bin", "/workspace/job/result.bin")
 	}
 	return sandboxID, relativePath, output, nil
 }

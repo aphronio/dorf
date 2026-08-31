@@ -116,7 +116,7 @@ func TestHandlerBoundary(t *testing.T) {
 	}
 }
 
-func TestAdmissionsAcceptExplicitAIConnection(t *testing.T) {
+func TestAdmissionsAcceptExplicitAIConnectionAndOmittedModel(t *testing.T) {
 	credential := "dcr_admission-connection"
 	base := controlapi.Job{ID: "job-1"}
 	tests := []struct {
@@ -125,24 +125,28 @@ func TestAdmissionsAcceptExplicitAIConnection(t *testing.T) {
 		body   string
 		jobs   *fakeJobs
 		got    func(*fakeJobs) string
+		model  func(*fakeJobs) string
 	}{
 		{
 			name: "direct", target: "/v1/jobs",
-			body: `{"goal":"ship","model":"model-1","ai_connection":"work-openai"}`,
-			jobs: &fakeJobs{job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindDirect}},
-			got:  func(j *fakeJobs) string { return j.gotInput.AIConnection },
+			body:  `{"goal":"ship","ai_connection":"work-openai"}`,
+			jobs:  &fakeJobs{job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindDirect}},
+			got:   func(j *fakeJobs) string { return j.gotInput.AIConnection },
+			model: func(j *fakeJobs) string { return j.gotInput.Model },
 		},
 		{
 			name: "coding", target: "/v1/workflows/coding/jobs",
-			body: `{"goal":"ship","repository":"https://github.com/acme/widget.git","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","base_branch":"main","model":"model-1","ai_connection":"work-openai"}`,
-			jobs: &fakeJobs{job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindCoding}, view: controlapi.CodingJob{Job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindCoding}}},
-			got:  func(j *fakeJobs) string { return j.codingInput.AIConnection },
+			body:  `{"goal":"ship","repository":"https://github.com/acme/widget.git","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","base_branch":"main","ai_connection":"work-openai"}`,
+			jobs:  &fakeJobs{job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindCoding}, view: controlapi.CodingJob{Job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindCoding}}},
+			got:   func(j *fakeJobs) string { return j.codingInput.AIConnection },
+			model: func(j *fakeJobs) string { return j.codingInput.Model },
 		},
 		{
 			name: "investigation", target: "/v1/workflows/codebase-investigation/jobs",
-			body: `{"brief":"trace it","repository":"https://github.com/acme/widget.git","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","model":"model-1","ai_connection":"work-openai"}`,
-			jobs: &fakeJobs{job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindInvestigation}, view: controlapi.InvestigationJob{Job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindInvestigation}}},
-			got:  func(j *fakeJobs) string { return j.investigationInput.AIConnection },
+			body:  `{"brief":"trace it","repository":"https://github.com/acme/widget.git","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ai_connection":"work-openai"}`,
+			jobs:  &fakeJobs{job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindInvestigation}, view: controlapi.InvestigationJob{Job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindInvestigation}}},
+			got:   func(j *fakeJobs) string { return j.investigationInput.AIConnection },
+			model: func(j *fakeJobs) string { return j.investigationInput.Model },
 		},
 	}
 	for _, test := range tests {
@@ -157,6 +161,9 @@ func TestAdmissionsAcceptExplicitAIConnection(t *testing.T) {
 			requireStatusType(t, response, http.StatusCreated, "application/json")
 			if got := test.got(test.jobs); got != "work-openai" {
 				t.Fatalf("AIConnection=%q, want work-openai", got)
+			}
+			if got := test.model(test.jobs); got != "" {
+				t.Fatalf("Model=%q, want omitted", got)
 			}
 		})
 	}

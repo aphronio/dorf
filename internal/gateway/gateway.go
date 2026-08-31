@@ -33,8 +33,11 @@ type connection struct {
 	Provider      string `json:"provider"`
 	AuthMode      string `json:"auth_mode"`
 	CredentialRef string `json:"credential_ref"`
+	DefaultModel  string `json:"default_model,omitempty"`
 	Default       bool   `json:"default"`
 }
+
+const recommendedOpenAIModel = "gpt-5.6-sol"
 
 type authority struct {
 	GuardKey      string `json:"guard_key"`
@@ -265,6 +268,27 @@ func (g Gateway) DefaultConnection() (string, error) {
 	return name, nil
 }
 
+// DefaultModel returns the model selected by one authenticated AI connection.
+// New Jobs copy this value into durable admission; existing Jobs never consult
+// it again during replay.
+func (g Gateway) DefaultModel(connectionName string) (string, error) {
+	record, err := g.requireConnection(strings.TrimSpace(connectionName))
+	if err != nil {
+		return "", err
+	}
+	model := record.DefaultModel
+	if model == "" {
+		model, err = recommendedModel(record)
+		if err != nil {
+			return "", err
+		}
+	}
+	if !validDefaultModel(model) {
+		return "", fmt.Errorf("AI connection %q has an invalid default model", record.Name)
+	}
+	return model, nil
+}
+
 // ConfiguredConnection reports whether one authenticated connection is
 // retained without selecting it as the deployment default or contacting the
 // live Gateway.
@@ -307,6 +331,15 @@ func (g Gateway) SetDefaultConnection(name string) error {
 		found := false
 		for i := range records {
 			records[i].Default = records[i].Name == name
+			if records[i].Default && records[i].DefaultModel == "" {
+				records[i].DefaultModel, err = recommendedModel(records[i])
+				if err != nil {
+					return err
+				}
+			}
+			if records[i].Default && !validDefaultModel(records[i].DefaultModel) {
+				return fmt.Errorf("AI connection %q has an invalid default model", name)
+			}
 			found = found || records[i].Default
 		}
 		if !found {
@@ -314,6 +347,18 @@ func (g Gateway) SetDefaultConnection(name string) error {
 		}
 		return writePrivateJSON(filepath.Join(g.StatePath, "connections.json"), records)
 	})
+}
+
+func recommendedModel(record connection) (string, error) {
+	if (record.Provider == "chatgpt" && record.AuthMode == "subscription") ||
+		(record.Provider == "openai" && record.AuthMode == "api_key") {
+		return recommendedOpenAIModel, nil
+	}
+	return "", fmt.Errorf("AI connection %q has no default model; pass --model", record.Name)
+}
+
+func validDefaultModel(model string) bool {
+	return model != "" && model == strings.TrimSpace(model) && len(model) <= 1024 && !strings.ContainsRune(model, 0)
 }
 
 // CheckRemote observes whether an HTTPS route reaches a protected Gateway API.
