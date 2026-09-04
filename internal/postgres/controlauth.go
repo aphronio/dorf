@@ -134,15 +134,18 @@ func sameDigest(stored []byte, expected controlauth.Digest) bool {
 	return subtle.ConstantTimeCompare(stored, expected[:]) == 1
 }
 
-func controlClient(id, name string, credentialExpiresAt time.Time) controlauth.Client {
+func controlClient(id, name string, credentialExpiresAt sql.NullTime) controlauth.Client {
 	return controlauth.Client{
-		ID: id, Name: name, CredentialExpiresAt: credentialExpiresAt,
+		ID: id, Name: name, CredentialExpiresAt: credentialExpiresAt.Time,
 	}
 }
 
-func controlClientRecord(id, name, state string, createdAt, expiresAt time.Time, revokedAt sql.NullTime) controlauth.ClientRecord {
+func controlClientRecord(id, name, state string, createdAt time.Time, expiresAt, revokedAt sql.NullTime) controlauth.ClientRecord {
 	client := controlauth.ClientRecord{
-		ID: id, Name: name, State: controlauth.ClientState(state), CreatedAt: createdAt, ExpiresAt: expiresAt,
+		ID: id, Name: name, State: controlauth.ClientState(state), CreatedAt: createdAt,
+	}
+	if expiresAt.Valid {
+		client.ExpiresAt = &expiresAt.Time
 	}
 	if revokedAt.Valid {
 		client.RevokedAt = &revokedAt.Time
@@ -156,4 +159,16 @@ func randomClientID() (string, error) {
 		return "", fmt.Errorf("generate Client ID: %w", err)
 	}
 	return "cli_" + base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+func (s Store) IssueKey(ctx context.Context, name string, credentialDigest controlauth.Digest) (controlauth.ClientRecord, error) {
+	id, err := randomClientID()
+	if err != nil {
+		return controlauth.ClientRecord{}, err
+	}
+	row, err := dbsql.New(s.DB).InsertControlAPIKey(ctx, dbsql.InsertControlAPIKeyParams{ID: id, Name: name, CredentialDigest: credentialDigest[:]})
+	if err != nil {
+		return controlauth.ClientRecord{}, err
+	}
+	return controlClientRecord(row.ID, row.Name, row.State, row.CreatedAt, row.ExpiresAt, row.RevokedAt), nil
 }

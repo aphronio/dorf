@@ -830,3 +830,28 @@ func assertSecretsAbsent(t *testing.T, body string, secrets ...string) {
 		}
 	}
 }
+
+type watchDeadlineJobs struct {
+	*fakeJobs
+	deadline time.Time
+}
+
+func (jobs *watchDeadlineJobs) Get(ctx context.Context, _ string) (controlapi.JobView, error) {
+	jobs.deadline, _ = ctx.Deadline()
+	return nil, controlapi.ErrJobNotFound
+}
+
+func TestNonExpiringClientWatchStillHasAuthenticationDeadline(t *testing.T) {
+	credential := "dcr_non-expiring-client"
+	auth := &fakeAuth{credential: credential, client: controlauth.Client{}}
+	jobs := &watchDeadlineJobs{fakeJobs: &fakeJobs{}}
+	request := httptest.NewRequest(http.MethodGet, "/v1/jobs/job-1/watch", nil)
+	request.Header.Set("Authorization", "Bearer "+credential)
+	request.Header.Set("Accept", "text/event-stream")
+	before := time.Now()
+	controlapi.NewServer(controlapi.Discovery{}, auth, jobs).Handler.ServeHTTP(httptest.NewRecorder(), request)
+	after := time.Now()
+	if jobs.deadline.Before(before.Add(time.Minute)) || jobs.deadline.After(after.Add(time.Minute)) {
+		t.Fatalf("non-expiring Client watch deadline=%v, want one minute authentication lifetime", jobs.deadline)
+	}
+}

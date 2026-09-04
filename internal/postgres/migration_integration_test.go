@@ -114,7 +114,7 @@ insert into dorf.agent_runs(id,job_id,message_id,role,state,sandbox_id) values('
 	if err := tx.QueryRowContext(ctx, `select count(*) from dorf.schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatal(err)
 	}
-	if migrationCount != 1 {
+	if migrationCount != len(dorfMigrations) {
 		t.Fatalf("migration count=%d", migrationCount)
 	}
 }

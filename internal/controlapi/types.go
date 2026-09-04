@@ -41,9 +41,9 @@ type Principal struct {
 }
 
 type Client struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	ExpiresAt time.Time `json:"expires_at"`
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	ExpiresAt *time.Time `json:"expires_at"`
 }
 
 type Identity struct {

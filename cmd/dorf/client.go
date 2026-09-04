@@ -23,7 +23,10 @@ type clientList struct {
 
 func clientCommand(ctx context.Context, store postgres.Store, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("client requires: enroll, list, show, or revoke")
+		return fmt.Errorf("client requires: enroll, issue-key, list, show, or revoke")
+	}
+	if args[0] == "issue-key" {
+		return issueClientKey(ctx, store, args[1:], stdout, stderr)
 	}
 	set := flag.NewFlagSet("client "+args[0], flag.ContinueOnError)
 	set.SetOutput(stderr)
@@ -62,37 +65,46 @@ func clientCommand(ctx context.Context, store postgres.Store, args []string, std
 		}
 		fmt.Fprintln(stdout, "Dorf Clients")
 		for _, client := range clients {
-			fmt.Fprintf(stdout, "  %s  %s  %s  expires %s\n", client.ID, client.Name, client.State, client.ExpiresAt.Format(time.RFC3339))
+			fmt.Fprintf(stdout, "  %s  %s  %s  expires %s\n", client.ID, client.Name, client.State, formatClientExpiry(client.ExpiresAt))
 		}
 		return nil
 	case "show", "revoke":
 		if set.NArg() != 1 {
 			return fmt.Errorf("client %s requires one Client ID", args[0])
 		}
-		var client controlauth.ClientRecord
-		var err error
-		if args[0] == "show" {
-			client, err = auth.GetClient(ctx, set.Arg(0))
-		} else {
-			client, err = auth.Revoke(ctx, set.Arg(0))
-		}
+		client, err := getOrRevokeClient(ctx, auth, args[0], set.Arg(0))
 		if err != nil {
 			return err
 		}
 		if *output == "json" {
 			return writeJSON(stdout, client)
 		}
-		renderClient(stdout, client)
-		return nil
+		return renderClient(stdout, client)
 	default:
-		return fmt.Errorf("client requires: enroll, list, show, or revoke")
+		return fmt.Errorf("client requires: enroll, issue-key, list, show, or revoke")
 	}
 }
 
-func renderClient(output io.Writer, client controlauth.ClientRecord) {
-	fmt.Fprintf(output, "Dorf Client %s\n  Name: %s\n  State: %s\n  Created: %s\n  Expires: %s\n",
-		client.ID, client.Name, client.State, client.CreatedAt.Format(time.RFC3339), client.ExpiresAt.Format(time.RFC3339))
+func renderClient(output io.Writer, client controlauth.ClientRecord) error {
+	text := fmt.Sprintf("Dorf Client %s\n  Name: %s\n  State: %s\n  Created: %s\n  Expires: %s\n",
+		client.ID, client.Name, client.State, client.CreatedAt.Format(time.RFC3339), formatClientExpiry(client.ExpiresAt))
 	if client.RevokedAt != nil {
-		fmt.Fprintf(output, "  Revoked: %s\n", client.RevokedAt.Format(time.RFC3339))
+		text += fmt.Sprintf("  Revoked: %s\n", client.RevokedAt.Format(time.RFC3339))
 	}
+	_, err := io.WriteString(output, text)
+	return err
+}
+
+func formatClientExpiry(expiry *time.Time) string {
+	if expiry == nil {
+		return "never"
+	}
+	return expiry.Format(time.RFC3339)
+}
+
+func getOrRevokeClient(ctx context.Context, auth controlauth.Service, operation, id string) (controlauth.ClientRecord, error) {
+	if operation == "revoke" {
+		return auth.Revoke(ctx, id)
+	}
+	return auth.GetClient(ctx, id)
 }

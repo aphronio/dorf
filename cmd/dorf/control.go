@@ -721,7 +721,7 @@ func renderConnection(output io.Writer, deploymentURL, path string, identity con
 	}
 	fmt.Fprintf(output, "Dorf %s\n  Deployment: %s\n  Principal: %s\n  Client: %s (%s)\n  Credential expires: %s\n  Client configuration: %s\n",
 		state, deploymentURL, identity.Principal.Name, identity.Client.Name, identity.Client.ID,
-		identity.Client.ExpiresAt.Format(time.RFC3339), path)
+		formatClientExpiry(identity.Client.ExpiresAt), path)
 	return nil
 }
 

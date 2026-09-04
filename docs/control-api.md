@@ -13,7 +13,10 @@ providers, Harnesses, Profiles, and integration credentials are not public resou
 One Deployment currently has one `deployment-operator` Principal and may have several independently
 revocable Clients. A host operator creates a short-lived, one-use Enrollment with
 `dorf client enroll`; `dorf connect` redeems it while binding a client-generated opaque bearer
-credential. Dorf stores only the credential digest. Enrollment codes and credentials never belong
+credential. Enrolled credentials expire after 90 days by default. For an unattended integration,
+the host can provision an ordinary Client key with explicitly no expiry. Its identity and inventory
+report `expires_at: null`; it remains valid until revoked. Both paths use the same bearer
+authentication and Client revocation. Dorf stores only the credential digest. Enrollment codes and credentials never belong
 in URLs, Jobs, Profiles, logs, or provider configuration.
 
 The remote CLI retains one normalized Deployment URL and its credential in an owner-only file. It
@@ -25,6 +28,7 @@ Client lifecycle remains host-owned:
 
 ```text
 dorf client enroll [--output json]
+dorf client issue-key --name NAME --credential-file PATH --no-expiry [--output json]
 dorf client list [--output json]
 dorf client show [--output json] CLIENT_ID
 dorf client revoke [--output json] CLIENT_ID

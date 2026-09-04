@@ -45,7 +45,7 @@ type Enrollment struct {
 type Client struct {
 	ID                  string
 	Name                string
-	CredentialExpiresAt time.Time
+	CredentialExpiresAt time.Time // Zero means the host issued a non-expiring credential.
 }
 
 type ClientState string
@@ -63,11 +63,12 @@ type ClientRecord struct {
 	Name      string      `json:"name"`
 	State     ClientState `json:"state"`
 	CreatedAt time.Time   `json:"created_at"`
-	ExpiresAt time.Time   `json:"expires_at"`
+	ExpiresAt *time.Time  `json:"expires_at"`
 	RevokedAt *time.Time  `json:"revoked_at"`
 }
 
 type Store interface {
+	IssueKey(context.Context, string, Digest) (ClientRecord, error)
 	CreateEnrollment(context.Context, string, Digest, time.Duration) (time.Time, error)
 	RedeemEnrollment(context.Context, string, Digest, string, Digest, time.Duration) (Client, bool, error)
 	AuthenticateCredential(context.Context, Digest) (Client, error)
@@ -130,6 +131,18 @@ func (s Service) Redeem(ctx context.Context, enrollmentToken, name, credential s
 		return Client{}, false, fmt.Errorf("%w: credential lifetime must be between 1ms and 5 years", ErrInvalidInput)
 	}
 	return s.Store.RedeemEnrollment(ctx, enrollmentID, digest(enrollmentToken), name, digest(credential), lifetime)
+}
+
+// IssueKey registers a host-provisioned credential with no expiry.
+func (s Service) IssueKey(ctx context.Context, name, credential string) (ClientRecord, error) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if !clientNamePattern.MatchString(name) {
+		return ClientRecord{}, fmt.Errorf("%w: Client name must contain 1-63 lowercase letters, digits, dots, underscores, or hyphens", ErrInvalidInput)
+	}
+	if !credentialPattern.MatchString(credential) {
+		return ClientRecord{}, fmt.Errorf("%w: malformed Client credential", ErrInvalidInput)
+	}
+	return s.Store.IssueKey(ctx, name, digest(credential))
 }
 
 func (s Service) Authenticate(ctx context.Context, credential string) (Client, error) {

@@ -425,6 +425,25 @@ All three commands accept `--output json` before the Client ID where applicable.
 idempotent and makes subsequent authenticated requests from that Client fail without changing other
 Clients or Jobs. Client administration is deliberately not a remote API.
 
+For an unattended integration, issue a dedicated key on the deployment host:
+
+```bash
+dorf client issue-key --name agent0 --credential-file /protected/path/agent0.key --no-expiry
+```
+
+The parent directory must already exist and be controlled by the operator. The command creates a
+new owner-only file containing only the bearer credential and refuses existing files or symlinks.
+It prints the Client ID and public metadata, never the credential. JSON output is available with
+`--output json`. Transfer the file through your protected secret-delivery path, then configure the
+integration to send its contents as `Authorization: Bearer <credential>` to the Deployment HTTPS
+origin. Do not put the credential in shell arguments, logs, or source control.
+
+The explicit `--no-expiry` key remains valid until you revoke its Client ID. To rotate, issue a new
+key into a new file, update the integration, verify authentication, then revoke the previous Client.
+If database registration fails, the command retains the protected file because the commit outcome
+may be uncertain. Inspect the Client inventory and revoke any unwanted Client before retrying with
+a new file. A failed file write never registers a Client.
+
 ## 4. Run a direct Job on the deployment host
 
 Setup enrolls an ordinary deployment-host Client after the Compose API becomes ready. The Client

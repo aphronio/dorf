@@ -36,7 +36,7 @@ const (
 	initialFromID       = "dorf:initial"
 )
 
-var dorfMigrations = []string{"001_greenfield.sql"}
+var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql"}
 
 type Store struct{ DB *sql.DB }
 

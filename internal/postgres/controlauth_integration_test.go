@@ -217,7 +217,7 @@ func findControlClient(clients []controlauth.ClientRecord, id string) (controlau
 
 func sameControlClientRecord(left, right controlauth.ClientRecord) bool {
 	if left.ID != right.ID || left.Name != right.Name || left.State != right.State ||
-		!left.CreatedAt.Equal(right.CreatedAt) || !left.ExpiresAt.Equal(right.ExpiresAt) {
+		!left.CreatedAt.Equal(right.CreatedAt) || !(left.ExpiresAt == nil && right.ExpiresAt == nil || left.ExpiresAt != nil && right.ExpiresAt != nil && left.ExpiresAt.Equal(*right.ExpiresAt)) {
 		return false
 	}
 	return left.RevokedAt == nil && right.RevokedAt == nil ||

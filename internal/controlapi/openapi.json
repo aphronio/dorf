@@ -686,7 +686,7 @@
         "properties": {
           "id": { "type": "string", "minLength": 1 },
           "name": { "type": "string", "minLength": 1 },
-          "expires_at": { "type": "string", "format": "date-time" }
+          "expires_at": { "type": ["string", "null"], "format": "date-time" }
         }
       },
       "Identity": {

@@ -741,7 +741,7 @@ func problem(code string) Problem {
 }
 
 func identity(client controlauth.Client) Identity {
-	return Identity{Principal: Principal{ID: controlauth.DeploymentOperatorPrincipalID, Name: "Deployment operator"}, Client: Client{ID: client.ID, Name: client.Name, ExpiresAt: client.CredentialExpiresAt}}
+	return Identity{Principal: Principal{ID: controlauth.DeploymentOperatorPrincipalID, Name: "Deployment operator"}, Client: Client{ID: client.ID, Name: client.Name, ExpiresAt: credentialExpiry(client.CredentialExpiresAt)}}
 }
 
 func createdStatus(created bool) int {
@@ -749,4 +749,11 @@ func createdStatus(created bool) int {
 		return http.StatusCreated
 	}
 	return http.StatusOK
+}
+
+func credentialExpiry(expiry time.Time) *time.Time {
+	if expiry.IsZero() {
+		return nil
+	}
+	return &expiry
 }

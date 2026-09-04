@@ -16,13 +16,13 @@ select id,name,credential_expires_at
 from dorf.control_clients
 where credential_digest=$1
   and revoked_at is null
-  and credential_expires_at>clock_timestamp()
+  and (credential_expires_at is null or credential_expires_at>clock_timestamp())
 `
 
 type AuthenticateControlClientRow struct {
 	ID                  string
 	Name                string
-	CredentialExpiresAt time.Time
+	CredentialExpiresAt sql.NullTime
 }
 
 func (q *Queries) AuthenticateControlClient(ctx context.Context, credentialDigest []byte) (AuthenticateControlClientRow, error) {
@@ -66,7 +66,7 @@ type GetControlClientRow struct {
 	Name      string
 	State     string
 	CreatedAt time.Time
-	ExpiresAt time.Time
+	ExpiresAt sql.NullTime
 	RevokedAt sql.NullTime
 }
 
@@ -110,6 +110,41 @@ func (q *Queries) GetControlEnrollmentForUpdate(ctx context.Context, id string) 
 	return i, err
 }
 
+const insertControlAPIKey = `-- name: InsertControlAPIKey :one
+insert into dorf.control_clients(id,name,credential_digest,credential_expires_at)
+values ($1,$2,$3,null)
+returning id,name,'active'::text as state,created_at,credential_expires_at as expires_at,revoked_at
+`
+
+type InsertControlAPIKeyParams struct {
+	ID               string
+	Name             string
+	CredentialDigest []byte
+}
+
+type InsertControlAPIKeyRow struct {
+	ID        string
+	Name      string
+	State     string
+	CreatedAt time.Time
+	ExpiresAt sql.NullTime
+	RevokedAt sql.NullTime
+}
+
+func (q *Queries) InsertControlAPIKey(ctx context.Context, arg InsertControlAPIKeyParams) (InsertControlAPIKeyRow, error) {
+	row := q.db.QueryRowContext(ctx, insertControlAPIKey, arg.ID, arg.Name, arg.CredentialDigest)
+	var i InsertControlAPIKeyRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.State,
+		&i.CreatedAt,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+	)
+	return i, err
+}
+
 const insertControlClient = `-- name: InsertControlClient :one
 with db_time as (select clock_timestamp() as now)
 insert into dorf.control_clients(id,name,credential_digest,credential_expires_at,created_at)
@@ -128,7 +163,7 @@ type InsertControlClientParams struct {
 type InsertControlClientRow struct {
 	ID                  string
 	Name                string
-	CredentialExpiresAt time.Time
+	CredentialExpiresAt sql.NullTime
 }
 
 func (q *Queries) InsertControlClient(ctx context.Context, arg InsertControlClientParams) (InsertControlClientRow, error) {
@@ -182,7 +217,7 @@ type ListControlClientsRow struct {
 	Name      string
 	State     string
 	CreatedAt time.Time
-	ExpiresAt time.Time
+	ExpiresAt sql.NullTime
 	RevokedAt sql.NullTime
 }
 
@@ -229,7 +264,7 @@ type RevokeControlClientRow struct {
 	Name      string
 	State     string
 	CreatedAt time.Time
-	ExpiresAt time.Time
+	ExpiresAt sql.NullTime
 	RevokedAt sql.NullTime
 }
 

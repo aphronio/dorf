@@ -159,6 +159,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D100: Automation contract and managed host services stay narrow](decisions/D100-automation-contract-and-managed-host-services-stay-narrow.md) (`partial`). Changing the automation API contract, Client administration, or service lifecycle.
 - [D102: One guided Dorf domain publishes two distinct public origins](decisions/D102-one-guided-dorf-domain-publishes-two-distinct-public-origins.md) (`current`). Changing guided Cloudflare ingress or either public Dorf origin.
 - [D103: Every ordinary CLI Job operation uses the authenticated control API](decisions/D103-every-ordinary-cli-job-operation-uses-the-authenticated-control-api.md) (`current`). Changing how CLI Job operations reach deployment authority.
+- [D105: Host-issued integration keys use ordinary revocable Clients](decisions/D105-host-issued-integration-keys-use-ordinary-revocable-clients.md) (`current`). Provisioning bearer credentials for unattended integrations.
 
 ## Deployment and setup
 
@@ -180,6 +181,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D101: Compose owns deployment lifecycle; bootstrap privilege stays explicit](decisions/D101-compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit.md) (`current`). Changing Compose topology, setup-applied lifecycle, bootstrap, or release images.
 - [D102: One guided Dorf domain publishes two distinct public origins](decisions/D102-one-guided-dorf-domain-publishes-two-distinct-public-origins.md) (`current`). Changing guided Cloudflare ingress or either public Dorf origin.
 - [D103: Every ordinary CLI Job operation uses the authenticated control API](decisions/D103-every-ordinary-cli-job-operation-uses-the-authenticated-control-api.md) (`current`). Changing how CLI Job operations reach deployment authority.
+- [D105: Host-issued integration keys use ordinary revocable Clients](decisions/D105-host-issued-integration-keys-use-ordinary-revocable-clients.md) (`current`). Provisioning bearer credentials for unattended integrations.
 
 ## Persistence
 

@@ -28,7 +28,7 @@ select id,name,credential_expires_at
 from dorf.control_clients
 where credential_digest=sqlc.arg(credential_digest)
   and revoked_at is null
-  and credential_expires_at>clock_timestamp();
+  and (credential_expires_at is null or credential_expires_at>clock_timestamp());
 
 -- name: ListControlClients :many
 with db_time as (select clock_timestamp() as now)
@@ -60,3 +60,8 @@ set revoked_at=coalesce(revoked_at,clock_timestamp())
 where id=sqlc.arg(id)
 returning id,name,'revoked'::text as state,created_at,
           credential_expires_at as expires_at,revoked_at;
+
+-- name: InsertControlAPIKey :one
+insert into dorf.control_clients(id,name,credential_digest,credential_expires_at)
+values (sqlc.arg(id),sqlc.arg(name),sqlc.arg(credential_digest),null)
+returning id,name,'active'::text as state,created_at,credential_expires_at as expires_at,revoked_at;
