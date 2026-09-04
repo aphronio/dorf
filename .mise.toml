@@ -3,7 +3,7 @@ go = "1.26.5"
 sqlc = "1.31.1"
 "github:earendil-works/absurd" = { version = "0.5.0", asset_pattern = "absurdctl" }
 "aqua:golangci/golangci-lint" = "2.13.1"
-"aqua:lycheeverse/lychee" = "0.24.2"
+"github:lycheeverse/lychee" = { version = "0.24.2", version_prefix = "lychee-v" }
 "go:github.com/fzipp/gocyclo/cmd/gocyclo" = "0.6.0"
 
 [env]
