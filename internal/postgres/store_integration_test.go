@@ -23,7 +23,6 @@ import (
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
-	profileapp "github.com/aphronio/dorf/internal/profile"
 	policy "github.com/aphronio/dorf/internal/review"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -126,41 +125,41 @@ type integrationExecution interface {
 type integrationRuntimeResolver struct {
 	execution            integrationExecution
 	files                core.SandboxFileReader
-	profile              profileapp.Runtime
+	profile              string
 	codingRuntime        coding.Runtime
 	investigationRuntime investigation.Runtime
 }
 
 func (r integrationRuntimeResolver) ResolveDirect(_ context.Context, name string) (direct.Runtime, error) {
-	if name != r.profile.SandboxProfile {
+	if name != r.profile {
 		return direct.Runtime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
 	}
-	return direct.Runtime{Profile: r.profile, Execution: r.execution}, nil
+	return direct.Runtime{SandboxProfile: r.profile, Execution: r.execution}, nil
 }
 
 func (r integrationRuntimeResolver) ResolveSandbox(_ context.Context, name string) (core.SandboxRuntime, error) {
-	if name != r.profile.SandboxProfile {
+	if name != r.profile {
 		return core.SandboxRuntime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
 	}
-	return core.SandboxRuntime{Execution: r.execution, Files: r.files, SandboxProfile: r.profile.SandboxProfile}, nil
+	return core.SandboxRuntime{Execution: r.execution, Files: r.files, SandboxProfile: r.profile}, nil
 }
 
 func (r integrationRuntimeResolver) ResolveCleanup(_ context.Context, name string) (core.CleanupRuntime, error) {
-	if name != r.profile.SandboxProfile {
+	if name != r.profile {
 		return core.CleanupRuntime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
 	}
-	return core.CleanupRuntime{Execution: r.execution, SandboxProfile: r.profile.SandboxProfile}, nil
+	return core.CleanupRuntime{Execution: r.execution, SandboxProfile: r.profile}, nil
 }
 
 func (r integrationRuntimeResolver) ResolveCoding(_ context.Context, name string) (coding.Runtime, error) {
-	if name != r.codingRuntime.Profile.SandboxProfile {
+	if name != r.codingRuntime.SandboxProfile {
 		return coding.Runtime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
 	}
 	return r.codingRuntime, nil
 }
 
 func (r integrationRuntimeResolver) ResolveInvestigation(_ context.Context, name string) (investigation.Runtime, error) {
-	if name != r.investigationRuntime.Profile.SandboxProfile {
+	if name != r.investigationRuntime.SandboxProfile {
 		return investigation.Runtime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
 	}
 	return r.investigationRuntime, nil
@@ -215,13 +214,12 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 		WithAgentExecution(integrationAgentExecution{store: store, externals: externals})
 	workspaceExecutor := gitworkspace.NewExecutor(execution, externals, nil)
 	codingService := coding.NewService(workspaceExecutor, store, externals, blob.Store{}, func(context.Context) error { return nil })
-	runtimeProfile := profileapp.Runtime{SandboxProfile: "incus"}
-	investigationService := investigation.NewService(workspaceExecutor)
+	runtimeProfile := "incus"
 	resolver := integrationRuntimeResolver{
 		execution:            execution,
 		profile:              runtimeProfile,
-		codingRuntime:        coding.Runtime{Profile: runtimeProfile, Agent: execution, Coding: codingService},
-		investigationRuntime: investigation.Runtime{Profile: runtimeProfile, Agent: execution, Investigation: investigationService},
+		codingRuntime:        coding.Runtime{SandboxProfile: runtimeProfile, Agent: execution, Coding: codingService},
+		investigationRuntime: investigation.Runtime{SandboxProfile: runtimeProfile, Agent: execution, Investigation: workspaceExecutor},
 	}
 	application := core.Application{Store: store, Tasks: client, SandboxRuntimes: resolver, CleanupRuntimes: resolver}
 	application.RegisterCleanup()
@@ -242,7 +240,7 @@ func TestActiveWorkerRecoversOrphanedCleanupRequestAndScheduledReplayIsInert(t *
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	key := fmt.Sprintf("cleanup-request-recovery-%d", time.Now().UnixNano())
-	job, created, err := store.AdmitCoding(ctx, codingJobInput(key, "recover explicit cleanup scheduling", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/cleanup-recovery"))
+	job, created, err := admitCodingFixture(t, store, ctx, codingJobInput(key, "recover explicit cleanup scheduling", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/cleanup-recovery"))
 	if err != nil || !created {
 		t.Fatalf("admit Job=%#v created=%t err=%v", job, created, err)
 	}
@@ -263,8 +261,8 @@ func TestActiveWorkerRecoversOrphanedCleanupRequestAndScheduledReplayIsInert(t *
 		<-recoveryDone
 	})
 
-	// This is the crash boundary: the request is durable, but no caller Spawns
-	// or attaches cleanup. The already-running recovery loop must do so.
+	// Older releases could commit a cleanup request without its task. Keep
+	// recovering that retained state, including writes during rolling upgrades.
 	if err := store.RequestCleanup(ctx, job.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -315,10 +313,10 @@ func TestWorkflowEnsureAndCleanupSerializeBothWinnerOrders(t *testing.T) {
 		WithAgentExecution(integrationAgentExecution{store: store, externals: externals.integrationExternals})
 	workspace := gitworkspace.NewExecutor(execution, externals, nil)
 	service := coding.NewService(workspace, store, externals, blob.Store{}, absurdruntime.RequireClaim)
-	profile := profileapp.Runtime{SandboxProfile: "incus"}
+	profile := "incus"
 	resolver := integrationRuntimeResolver{
 		execution: execution, profile: profile,
-		codingRuntime: coding.Runtime{Profile: profile, Agent: execution, Coding: service},
+		codingRuntime: coding.Runtime{SandboxProfile: profile, Agent: execution, Coding: service},
 	}
 	client := newFaultClient(t, store, fmt.Sprintf("dorf_workflow_cleanup_race_%d", time.Now().UnixNano()))
 	application := core.Application{Store: store, Tasks: client, SandboxRuntimes: resolver, CleanupRuntimes: resolver}
@@ -331,7 +329,7 @@ func TestWorkflowEnsureAndCleanupSerializeBothWinnerOrders(t *testing.T) {
 	}()
 	t.Cleanup(func() { stopWorker(); <-workerDone })
 
-	job, created, err := store.AdmitCoding(ctx, codingJobInput(
+	job, created, err := admitCodingFixture(t, store, ctx, codingJobInput(
 		fmt.Sprintf("ensure-wins-%d", time.Now().UnixNano()), "ensure wins the effect fence",
 		"2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/ensure-wins",
 	))
@@ -383,13 +381,13 @@ func TestWorkflowEnsureAndCleanupSerializeBothWinnerOrders(t *testing.T) {
 	loserService := coding.NewService(loserWorkspace, store, loserExternals, blob.Store{}, absurdruntime.RequireClaim)
 	loserResolver := integrationRuntimeResolver{
 		execution: loserExecution, profile: profile,
-		codingRuntime: coding.Runtime{Profile: profile, Agent: loserExecution, Coding: loserService},
+		codingRuntime: coding.Runtime{SandboxProfile: profile, Agent: loserExecution, Coding: loserService},
 	}
 	loserClient := newFaultClient(t, store, fmt.Sprintf("dorf_cleanup_wins_%d", time.Now().UnixNano()))
 	loserApplication := core.Application{Store: store, Tasks: loserClient, SandboxRuntimes: loserResolver, CleanupRuntimes: loserResolver}
 	loserApplication.RegisterCleanup()
 	coding.Register(loserApplication, store, loserResolver)
-	loser, created, err := store.AdmitCoding(ctx, codingJobInput(
+	loser, created, err := admitCodingFixture(t, store, ctx, codingJobInput(
 		fmt.Sprintf("cleanup-wins-%d", time.Now().UnixNano()), "cleanup wins before ensure",
 		"2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/cleanup-wins",
 	))
@@ -433,7 +431,7 @@ func codingAdmissionRequest(input coding.Admission) coding.AdmissionRequest {
 func TestPostgresDirectBootstrapFollowAndExplicitCleanup(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
-	job, created, err := direct.NewAdmissionService(store, core.Application{Store: store, Tasks: client}, providerCheck{}).Admit(ctx, direct.AdmissionRequest{
+	job, created, err := direct.NewAdmissionService(store, client.QueueName(), providerCheck{}).Admit(ctx, direct.AdmissionRequest{
 		AdmissionKey: fmt.Sprintf("direct-execution-%d", time.Now().UnixNano()),
 		Goal:         "prove the direct client execution boundary", SandboxProfile: "incus",
 		ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
@@ -525,7 +523,7 @@ func TestPostgresDirectAdmissionReplayRecoversTaskAttachment(t *testing.T) {
 		AdmissionKey: fmt.Sprintf("direct-%d", time.Now().UnixNano()), Goal: "produce a caller-owned result",
 		SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
 	}
-	job, created, err := store.AdmitDirect(ctx, input)
+	job, created, err := admitDirectFixture(t, store, ctx, input)
 	if err != nil || !created || job.Workflow != "" || job.WorkflowRevision != "" {
 		t.Fatalf("direct admission job=%#v created=%t err=%v", job, created, err)
 	}
@@ -534,14 +532,14 @@ func TestPostgresDirectAdmissionReplayRecoversTaskAttachment(t *testing.T) {
 		ProviderConnection: input.ProviderConnection, Model: input.Model, ReasoningEffort: input.ReasoningEffort,
 	}
 	recovered, created, err := direct.NewAdmissionService(
-		store, core.Application{Store: store, Tasks: client},
+		store, client.QueueName(),
 		providerCheck{err: errors.New("provider unavailable during admission recovery")},
 	).Admit(ctx, request)
 	if err != nil || created || recovered.ID != job.ID || recovered.CurrentTaskID == "" {
 		t.Fatalf("client scheduling recovery job=%#v created=%t err=%v", recovered, created, err)
 	}
 	replayed, created, err := direct.NewAdmissionService(
-		store, core.Application{Store: store, Tasks: client},
+		store, client.QueueName(),
 		providerCheck{err: errors.New("provider unavailable during replay")},
 	).Admit(ctx, request)
 	if err != nil || created || replayed.ID != job.ID || replayed.CurrentTaskID != recovered.CurrentTaskID {
@@ -579,13 +577,13 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	blocked := input
 	blocked.AdmissionKey += "-provider-blocked"
 	application := core.Application{Store: store, Tasks: client}
-	if _, _, err := coding.NewAdmissionService(store, application, providerCheck{err: errors.New("provider is not ready")}, installationDiscovery("42")).Admit(ctx, codingAdmissionRequest(blocked)); err == nil {
+	if _, _, err := coding.NewAdmissionService(store, application.Tasks.QueueName(), providerCheck{err: errors.New("provider is not ready")}, installationDiscovery("42")).Admit(ctx, codingAdmissionRequest(blocked)); err == nil {
 		t.Fatal("new Job bypassed provider readiness")
 	}
 	if _, err := store.Job(ctx, core.JobID(blocked.AdmissionKey)); !errors.Is(err, postgres.ErrNotFound) {
 		t.Fatalf("failed provider preflight persisted Job: %v", err)
 	}
-	admissions := coding.NewAdmissionService(store, application, providerCheck{}, installationDiscovery("42"))
+	admissions := coding.NewAdmissionService(store, application.Tasks.QueueName(), providerCheck{}, installationDiscovery("42"))
 	request := codingAdmissionRequest(input)
 	job, created, err := admissions.Admit(ctx, request)
 	if err != nil || !created {
@@ -594,7 +592,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	if job.SandboxProfile != "incus" || job.Workflow != coding.Workflow || job.WorkflowRevision != coding.WorkflowRevision {
 		t.Fatalf("admitted Job profile/Workflow=%#v", job)
 	}
-	repeatedJob, created, err := coding.NewAdmissionService(store, application, providerCheck{err: errors.New("Gateway unavailable during retry")}, installationDiscovery("unavailable")).Admit(ctx, request)
+	repeatedJob, created, err := coding.NewAdmissionService(store, application.Tasks.QueueName(), providerCheck{err: errors.New("Gateway unavailable during retry")}, installationDiscovery("unavailable")).Admit(ctx, request)
 	if err != nil || created || repeatedJob.ID != job.ID || repeatedJob.CurrentTaskID != job.CurrentTaskID {
 		t.Fatalf("same-key replay with the same complete authority=%#v created=%v err=%v", repeatedJob, created, err)
 	}
@@ -605,7 +603,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	}
 	changedStoredBase := input
 	changedStoredBase.BaseBranch = changedBase.BaseBranch
-	if _, _, err := store.AdmitCoding(ctx, changedStoredBase); !errors.Is(err, postgres.ErrAdmissionConflict) || !errors.Is(err, coding.ErrAdmissionConflict) {
+	if _, _, err := admitCodingFixture(t, store, ctx, changedStoredBase); !errors.Is(err, postgres.ErrAdmissionConflict) || !errors.Is(err, coding.ErrAdmissionConflict) {
 		t.Fatalf("durable changed base error=%v, want storage and coding admission conflict", err)
 	}
 	storedAuthority, err := store.CodingJob(ctx, job.ID)
@@ -842,7 +840,7 @@ func TestSandboxProfileVerificationHasOneOwnerAndReleasesAfterCrash(t *testing.T
 	}
 	input := codingJobInput("verification-fence-"+name, "wait for the exact profile proof", strings.Repeat("a", 40), "dorf/verification-fence")
 	input.SandboxProfile = name
-	job, created, err := store.AdmitCoding(ctx, input)
+	job, created, err := admitCodingFixture(t, store, ctx, input)
 	if err != nil || !created || job.SandboxProfile != name || resumed.OwnershipNonce != first.OwnershipNonce {
 		t.Fatalf("admission after resumed verification Job=%#v created=%v resumed=%#v err=%v", job, created, resumed, err)
 	}
@@ -885,7 +883,7 @@ func TestSandboxProfileVerificationTransitionSerializesNewAdmission(t *testing.T
 	admitted := make(chan admissionResult, 1)
 	go func() {
 		close(started)
-		_, created, err := store.AdmitCoding(ctx, input)
+		_, created, err := admitCodingFixture(t, store, ctx, input)
 		admitted <- admissionResult{created: created, err: err}
 	}()
 	<-started
@@ -957,7 +955,7 @@ func TestSandboxProfilesAreVerifiedDefaultedAndImmutableWhileInUse(t *testing.T)
 	input := codingJobInput("profile-immutability-"+name, "bounded implementation", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/profile-immutability")
 	input.SandboxProfile = name
 	input.BaseBranch = "main"
-	job, created, err := store.AdmitCoding(ctx, input)
+	job, created, err := admitCodingFixture(t, store, ctx, input)
 	if err != nil || !created {
 		t.Fatalf("admit created=%v err=%v", created, err)
 	}
@@ -965,14 +963,14 @@ func TestSandboxProfilesAreVerifiedDefaultedAndImmutableWhileInUse(t *testing.T)
 	if err != nil || reverifying.BaseVerified() || activeVerification.OwnershipNonce == refreshedVerification.OwnershipNonce {
 		t.Fatalf("active Job fresh verification profile=%#v receipt=%#v err=%v", reverifying, activeVerification, err)
 	}
-	replayed, created, err := store.AdmitCoding(ctx, input)
+	replayed, created, err := admitCodingFixture(t, store, ctx, input)
 	if err != nil || created || replayed.ID != job.ID {
 		t.Fatalf("existing admission replay during verification Job=%#v created=%v err=%v", replayed, created, err)
 	}
 	fenced := input
 	fenced.AdmissionKey += "-during-reverify"
 	fenced.Branch += "-during-reverify"
-	if _, _, err := store.AdmitCoding(ctx, fenced); err == nil || !strings.Contains(err.Error(), core.BaseProfileContract) {
+	if _, _, err := admitCodingFixture(t, store, ctx, fenced); err == nil || !strings.Contains(err.Error(), core.BaseProfileContract) {
 		t.Fatalf("new Job admitted through unsettled verification: %v", err)
 	}
 	verificationFailure := errors.New("transient verification failure")
@@ -982,7 +980,7 @@ func TestSandboxProfilesAreVerifiedDefaultedAndImmutableWhileInUse(t *testing.T)
 	if err := store.RecordSandboxProfileVerificationCleanup(ctx, activeVerification); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.AdmitCoding(ctx, fenced); err == nil || !strings.Contains(err.Error(), core.BaseProfileContract) {
+	if _, _, err := admitCodingFixture(t, store, ctx, fenced); err == nil || !strings.Contains(err.Error(), core.BaseProfileContract) {
 		t.Fatalf("new Job admitted through failed verification: %v", err)
 	}
 	_, retryVerification, err := store.BeginSandboxProfileVerification(ctx, name)
@@ -995,7 +993,7 @@ func TestSandboxProfilesAreVerifiedDefaultedAndImmutableWhileInUse(t *testing.T)
 	if err := store.RecordSandboxProfileVerificationCleanup(ctx, retryVerification); err != nil {
 		t.Fatal(err)
 	}
-	admittedAfterRetry, created, err := store.AdmitCoding(ctx, fenced)
+	admittedAfterRetry, created, err := admitCodingFixture(t, store, ctx, fenced)
 	if err != nil || !created || admittedAfterRetry.SandboxProfile != name {
 		t.Fatalf("admission after verification retry Job=%#v created=%v err=%v", admittedAfterRetry, created, err)
 	}
@@ -1026,14 +1024,14 @@ func TestSandboxProfilesAreVerifiedDefaultedAndImmutableWhileInUse(t *testing.T)
 	if !changed.CreatedAt.Equal(stored.CreatedAt) {
 		t.Fatalf("patch changed profile creation time: got=%s want=%s", changed.CreatedAt, stored.CreatedAt)
 	}
-	repeated, created, err := store.AdmitCoding(ctx, input)
+	repeated, created, err := admitCodingFixture(t, store, ctx, input)
 	if err != nil || created || repeated.ID != job.ID {
 		t.Fatalf("completed Job idempotency depended on updated profile verification: Job=%#v created=%v err=%v", repeated, created, err)
 	}
 	unverified := input
 	unverified.AdmissionKey += "-new"
 	unverified.Branch += "-new"
-	if _, _, err := store.AdmitCoding(ctx, unverified); err == nil || !strings.Contains(err.Error(), core.BaseProfileContract) {
+	if _, _, err := admitCodingFixture(t, store, ctx, unverified); err == nil || !strings.Contains(err.Error(), core.BaseProfileContract) {
 		t.Fatalf("new Job admitted through updated unverified profile: %v", err)
 	}
 }
@@ -1093,7 +1091,7 @@ func TestUnavailableSandboxProfileFencesNewJobsAndPreservesExactAttention(t *tes
 	input := codingJobInput("profile-unavailable-"+name, "bounded implementation", strings.Repeat("a", 40), "dorf/profile-unavailable")
 	input.SandboxProfile = name
 	input.BaseBranch = "main"
-	job, created, err := store.AdmitCoding(ctx, input)
+	job, created, err := admitCodingFixture(t, store, ctx, input)
 	if err != nil || !created {
 		t.Fatalf("admit created=%v err=%v", created, err)
 	}
@@ -1123,7 +1121,7 @@ func TestUnavailableSandboxProfileFencesNewJobsAndPreservesExactAttention(t *tes
 	newInput := input
 	newInput.AdmissionKey += "-new"
 	newInput.Branch += "-new"
-	if _, _, err := store.AdmitCoding(ctx, newInput); err == nil || !strings.Contains(err.Error(), core.BaseProfileContract) {
+	if _, _, err := admitCodingFixture(t, store, ctx, newInput); err == nil || !strings.Contains(err.Error(), core.BaseProfileContract) {
 		t.Fatalf("new Job admitted through unavailable profile: %v", err)
 	}
 	cleaning := requestCleanupIntegration(t, core.Application{Store: store, Tasks: client}, job.ID)
@@ -1259,7 +1257,7 @@ func TestCompletedSteerReceiptKeepsActiveTurnNonterminalAndWorkflowAttentionClea
 	externals := &integrationExternals{turns: []core.HarnessTurn{{ID: targetTurnID, Status: "inProgress"}}}
 	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
 		WithAgentExecution(resultBoundaryAgentExecution{externals: externals})
-	resolver := integrationRuntimeResolver{execution: execution, profile: profileapp.Runtime{SandboxProfile: job.SandboxProfile}}
+	resolver := integrationRuntimeResolver{execution: execution, profile: job.SandboxProfile}
 	application := core.Application{Store: store, Tasks: client, SandboxRuntimes: resolver}
 	service := coding.NewService(gitworkspace.NewExecutor(execution, externals, nil), store, externals, blob.Store{}, absurdruntime.RequireClaim)
 	taskName := "dorf-active-steer-result-proof-v1"
@@ -1518,7 +1516,7 @@ func TestTerminalHarnessTurnAllowsSameThreadFollowFIFO(t *testing.T) {
 func TestEarlyCodingFollowsAdoptAuthoritativeThreadAndSubmitDistinctTurns(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
-	job, created, err := store.AdmitCoding(ctx, codingJobInput(
+	job, created, err := admitCodingFixture(t, store, ctx, codingJobInput(
 		fmt.Sprintf("early-follow-%d", time.Now().UnixNano()),
 		"execute every accepted early follow in FIFO order",
 		strings.Repeat("e", 40),
@@ -1646,7 +1644,7 @@ func TestEarlyCodingFollowNoThreadPredecessorRules(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			_, store, _ := testDatabase(t)
 			ctx := context.Background()
-			job, created, err := store.AdmitCoding(ctx, codingJobInput(
+			job, created, err := admitCodingFixture(t, store, ctx, codingJobInput(
 				fmt.Sprintf("early-no-thread-%s-%d", strings.ReplaceAll(test.name, " ", "-"), time.Now().UnixNano()),
 				"initial work", strings.Repeat("f", 40), "dorf/early-no-thread",
 			))
@@ -1810,7 +1808,7 @@ func prepareTransportIntegrationJob(t *testing.T, store postgres.Store, label st
 	ctx := context.Background()
 	revision := strings.Repeat("a", 40)
 	key := fmt.Sprintf("%s-%d", label, time.Now().UnixNano())
-	admitted, created, err := store.AdmitCoding(ctx, codingJobInput(key, "transport proof", revision, "dorf/"+label))
+	admitted, created, err := admitCodingFixture(t, store, ctx, codingJobInput(key, "transport proof", revision, "dorf/"+label))
 	if err != nil || !created {
 		t.Fatalf("admit=%#v created=%v err=%v", admitted, created, err)
 	}
@@ -1827,7 +1825,7 @@ func TestChangedAndUnchangedRevisionObservationsLinkExactImplementationAgentRuns
 	ctx := context.Background()
 	start, changed := strings.Repeat("1", 40), strings.Repeat("2", 40)
 	input := codingJobInput(fmt.Sprintf("revision-evidence-%d", time.Now().UnixNano()), "bounded implementation", start, "dorf/revision-evidence")
-	admitted, created, err := store.AdmitCoding(ctx, input)
+	admitted, created, err := admitCodingFixture(t, store, ctx, input)
 	if err != nil || !created {
 		t.Fatalf("admit=%#v created=%v err=%v", admitted, created, err)
 	}
@@ -1844,7 +1842,7 @@ func TestChangedAndUnchangedRevisionObservationsLinkExactImplementationAgentRuns
 	if err := store.RecordRevisionObservation(ctx, job.ID, changedRun.ID, changedObservation, changedEvidence); err != nil {
 		t.Fatalf("changed Revision observation: %v", err)
 	}
-	replayed, created, err := store.AdmitCoding(ctx, input)
+	replayed, created, err := admitCodingFixture(t, store, ctx, input)
 	if err != nil || created || replayed.ID != job.ID {
 		t.Fatalf("admission replay after Revision advance=%#v created=%v err=%v", replayed, created, err)
 	}
@@ -2338,7 +2336,7 @@ func actionIntegrationJob(t *testing.T, suffix string) (*sql.DB, postgres.Store,
 	t.Helper()
 	db, store, _ := testDatabase(t)
 	ctx := context.Background()
-	job, created, err := store.AdmitCoding(ctx, codingJobInput(
+	job, created, err := admitCodingFixture(t, store, ctx, codingJobInput(
 		fmt.Sprintf("action-%s-%d", suffix, time.Now().UnixNano()),
 		"prove durable Action custody",
 		strings.Repeat("a", 40),
@@ -2418,7 +2416,7 @@ func TestSandboxActionAttentionPersistsAcrossRetryAndClearsOnSuccess(t *testing.
 func TestJobHandleEnsuresStableDefaultAndNamedSandboxes(t *testing.T) {
 	db, store, job := actionIntegrationJob(t, "handle-sandbox-identity")
 	ctx := context.Background()
-	foreign, created, err := store.AdmitCoding(ctx, codingJobInput(
+	foreign, created, err := admitCodingFixture(t, store, ctx, codingJobInput(
 		fmt.Sprintf("foreign-sandbox-owner-%d", time.Now().UnixNano()), "own a conflicting Sandbox identity",
 		strings.Repeat("b", 40), "dorf/foreign-sandbox-owner",
 	))
@@ -2434,7 +2432,7 @@ func TestJobHandleEnsuresStableDefaultAndNamedSandboxes(t *testing.T) {
 
 	externals := &integrationExternals{}
 	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim)
-	profile := profileapp.Runtime{SandboxProfile: job.SandboxProfile}
+	profile := job.SandboxProfile
 	resolver := integrationRuntimeResolver{execution: execution, profile: profile}
 	client := newFaultClient(t, store, "dorf-handle-sandbox-identity-"+job.ID)
 	application := core.Application{Store: store, Tasks: client, SandboxRuntimes: resolver}
@@ -2895,7 +2893,7 @@ func prepareReviewIntegrationJob(t *testing.T, store postgres.Store, suffix stri
 	t.Helper()
 	ctx := context.Background()
 	start, revision := strings.Repeat("a", 40), strings.Repeat("b", 40)
-	admitted, created, err := store.AdmitCoding(ctx, codingJobInput(fmt.Sprintf("review-policy-%s-%d", strings.ReplaceAll(suffix, " ", "-"), time.Now().UnixNano()), "bounded implementation", start, "dorf/review-policy"))
+	admitted, created, err := admitCodingFixture(t, store, ctx, codingJobInput(fmt.Sprintf("review-policy-%s-%d", strings.ReplaceAll(suffix, " ", "-"), time.Now().UnixNano()), "bounded implementation", start, "dorf/review-policy"))
 	if err != nil || !created {
 		t.Fatalf("admit=%#v created=%v err=%v", admitted, created, err)
 	}
@@ -2924,7 +2922,7 @@ func TestRevisionObservationBoundaryIncludesLateSteeringAtomically(t *testing.T)
 	revision := strings.Repeat("7", 40)
 	branch := "dorf/revision-observation-boundary"
 	key := fmt.Sprintf("revision-observation-boundary-%d", time.Now().UnixNano())
-	job, created, err := store.AdmitCoding(ctx, codingJobInput(key, "bounded implementation", start, branch))
+	job, created, err := admitCodingFixture(t, store, ctx, codingJobInput(key, "bounded implementation", start, branch))
 	if err != nil || !created {
 		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
 	}
@@ -3216,7 +3214,7 @@ func TestJobTaskAttachmentFencesStaleEffectsAndAgentSelection(t *testing.T) {
 	ctx := context.Background()
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	input := codingJobInput("reattach-cas-"+suffix, "preserve one task binding", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/reattach-cas")
-	job, created, err := store.AdmitCoding(ctx, input)
+	job, created, err := admitCodingFixture(t, store, ctx, input)
 	if err != nil || !created {
 		t.Fatalf("admit created=%v err=%v", created, err)
 	}

@@ -7,7 +7,9 @@ import (
 	"strings"
 
 	"github.com/aphronio/dorf/internal/core"
+	"github.com/aphronio/dorf/internal/gateway"
 	githubapi "github.com/aphronio/dorf/internal/github"
+	profileapp "github.com/aphronio/dorf/internal/profile"
 )
 
 var (
@@ -36,20 +38,13 @@ type AdmissionStore interface {
 	JobExists(context.Context, string) (bool, error)
 	Job(context.Context, string) (core.Job, error)
 	CodingJob(context.Context, string) (Job, error)
-	SandboxProfile(context.Context, string) (core.SandboxProfile, error)
-	DefaultSandboxProfile(context.Context) (core.SandboxProfile, error)
-	AdmitCoding(context.Context, Admission) (core.Job, bool, error)
-}
-
-// AdmissionScheduler reconciles the one deterministic coding task attachment.
-type AdmissionScheduler interface {
-	ScheduleJobTask(context.Context, core.Job, string, string) (core.Job, error)
+	profileapp.SelectionStore
+	AdmitCoding(context.Context, Admission, string) (core.Job, bool, error)
 }
 
 // AdmissionProvider owns deployment AI-connection selection and readiness.
 type AdmissionProvider interface {
-	DefaultConnection() (string, error)
-	DefaultModel(string) (string, error)
+	gateway.ModelDefaults
 	Check(context.Context, string) error
 }
 
@@ -60,13 +55,13 @@ type InstallationDiscovery interface {
 
 type AdmissionService struct {
 	store         AdmissionStore
-	scheduler     AdmissionScheduler
+	queueName     string
 	provider      AdmissionProvider
 	installations InstallationDiscovery
 }
 
-func NewAdmissionService(store AdmissionStore, scheduler AdmissionScheduler, provider AdmissionProvider, installations InstallationDiscovery) AdmissionService {
-	return AdmissionService{store: store, scheduler: scheduler, provider: provider, installations: installations}
+func NewAdmissionService(store AdmissionStore, queueName string, provider AdmissionProvider, installations InstallationDiscovery) AdmissionService {
+	return AdmissionService{store: store, queueName: queueName, provider: provider, installations: installations}
 }
 
 func (s AdmissionService) Admit(ctx context.Context, request AdmissionRequest) (core.Job, bool, error) {
@@ -98,28 +93,20 @@ func (s AdmissionService) admitNew(ctx context.Context, request AdmissionRequest
 	if err != nil {
 		return core.Job{}, false, err
 	}
-	profile, err := s.selectProfile(ctx, admission.SandboxProfile)
+	profile, err := profileapp.SelectVerified(ctx, s.store, admission.SandboxProfile)
 	if err != nil {
+		if admission.SandboxProfile != "" {
+			return core.Job{}, false, fmt.Errorf("%w: %v", ErrInvalidAdmission, err)
+		}
 		return core.Job{}, false, err
 	}
 	if err := requireRemoteGitCapability(profile); err != nil {
 		return core.Job{}, false, fmt.Errorf("%w: %v", ErrInvalidAdmission, err)
 	}
 	admission.SandboxProfile = profile.Name
-	if s.provider == nil {
-		return core.Job{}, false, fmt.Errorf("provider readiness is not configured")
-	}
-	if admission.ProviderConnection == "" {
-		admission.ProviderConnection, err = s.provider.DefaultConnection()
-		if err != nil {
-			return core.Job{}, false, err
-		}
-	}
-	if admission.Model == "" {
-		admission.Model, err = s.provider.DefaultModel(admission.ProviderConnection)
-		if err != nil {
-			return core.Job{}, false, err
-		}
+	admission.ProviderConnection, admission.Model, err = gateway.ResolveModel(s.provider, admission.ProviderConnection, admission.Model)
+	if err != nil {
+		return core.Job{}, false, err
 	}
 	if err := s.provider.Check(ctx, admission.ProviderConnection); err != nil {
 		return core.Job{}, false, fmt.Errorf("AI connection %q is not ready: %w", admission.ProviderConnection, err)
@@ -135,7 +122,7 @@ func (s AdmissionService) admitNew(ctx context.Context, request AdmissionRequest
 	if err != nil {
 		return core.Job{}, false, fmt.Errorf("validate resolved coding admission: %w", err)
 	}
-	return s.persistAndSchedule(ctx, admission)
+	return s.store.AdmitCoding(ctx, admission, s.queueName)
 }
 
 func (s AdmissionService) replay(ctx context.Context, request AdmissionRequest) (core.Job, bool, error) {
@@ -168,45 +155,7 @@ func (s AdmissionService) replay(ctx context.Context, request AdmissionRequest) 
 	if err != nil {
 		return core.Job{}, false, err
 	}
-	return s.persistAndSchedule(ctx, admission)
-}
-
-func (s AdmissionService) persistAndSchedule(ctx context.Context, admission Admission) (core.Job, bool, error) {
-	job, created, err := s.store.AdmitCoding(ctx, admission)
-	if err != nil || !job.AdmissionOpen {
-		return job, created, err
-	}
-	if s.scheduler == nil {
-		return core.Job{}, created, fmt.Errorf("coding admission scheduling is not configured")
-	}
-	job, err = s.scheduler.ScheduleJobTask(ctx, job, TaskName, TaskKey(job.ID))
-	return job, created, err
-}
-
-func (s AdmissionService) selectProfile(ctx context.Context, requested string) (core.SandboxProfile, error) {
-	var (
-		profile core.SandboxProfile
-		err     error
-	)
-	if requested == "" {
-		profile, err = s.store.DefaultSandboxProfile(ctx)
-	} else {
-		profile, err = s.store.SandboxProfile(ctx, requested)
-	}
-	if err != nil {
-		if requested != "" {
-			return core.SandboxProfile{}, fmt.Errorf("%w: %v", ErrInvalidAdmission, err)
-		}
-		return core.SandboxProfile{}, err
-	}
-	if !profile.BaseVerified() {
-		err := fmt.Errorf("Sandbox profile %q has not completed Dorf %s verification and cleanup", profile.Name, core.BaseProfileContract)
-		if requested != "" {
-			return core.SandboxProfile{}, fmt.Errorf("%w: %v", ErrInvalidAdmission, err)
-		}
-		return core.SandboxProfile{}, err
-	}
-	return profile, nil
+	return s.store.AdmitCoding(ctx, admission, s.queueName)
 }
 
 func normalizeAdmissionRequest(request AdmissionRequest) (Admission, error) {

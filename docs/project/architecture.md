@@ -67,9 +67,18 @@ request from success, failure, an Outcome, inactivity, or a need for human input
 ## Execution model
 
 One admission creates one durable execution owner with complete bounded intent and a stable
-idempotency identity. A workflow-driven Job also pins its workflow version. If recording and
-scheduling cannot share one transaction, recovery reconciles the boundary rather than assuming both
-happened.
+idempotency identity. A workflow-driven Job also pins its workflow version. Admission records the
+Job, consumer-owned input, initial execution facts, Absurd task, and task attachment in one
+PostgreSQL transaction. Ordinary task handoffs also commit scheduling and attachment together.
+The consuming adapter supplies task identity; the shared transaction does not interpret workflow
+policy. Absurd's public SQL functions provide this transaction boundary.
+
+A requested cleanup closes admission, cancels the previous task, and schedules and attaches cleanup
+in one transaction under the Job's external-effect fence. A task requesting its own cleanup may
+complete, but loses execution authority when the cleanup attachment commits. A failed scheduling
+transaction rolls back admission closure and cancellation along with the new task. Replay and
+recovery still reconcile incomplete admission and cleanup records from older writers, including
+during a rolling upgrade.
 
 A Job records an append-only ordered chain of Absurd task attachments. The latest attachment is its
 current execution task; task names are observations, not hard-coded Job phases. A workflow may hand
@@ -258,6 +267,10 @@ Sandbox and Harness implementations meet provider-neutral custody contracts. Eve
 operation carries exact Dorf ownership while provider locators, lifecycle APIs, command transports,
 topology, and connection capabilities remain adapter-private. Consumer code selects a verified
 profile rather than branching on provider or Harness identity.
+
+The shipped workflows use the baseline Sandbox and Harness contracts. There is no separate
+optional provider-capability declaration or matching layer. Add an extension only when a concrete
+workflow requires behavior beyond that baseline and an adapter can prove it.
 
 A profile is not usable until Dorf's functional probe and exact proof-resource cleanup complete. A
 provider/profile is not supported until its required route and Harness capabilities are admitted

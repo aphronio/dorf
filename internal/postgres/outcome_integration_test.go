@@ -56,7 +56,7 @@ func preparePublishedOutcomeJob(t *testing.T, store postgres.Store, label string
 
 func TestPostgresPreProposalAbandonmentIsTerminalAndIdempotent(t *testing.T) {
 	_, store, _ := testDatabase(t)
-	job, created, err := store.AdmitCoding(context.Background(), codingJobInput(
+	job, created, err := admitCodingFixture(t, store, context.Background(), codingJobInput(
 		"pre-proposal-abandon-"+fmt.Sprint(time.Now().UnixNano()),
 		"stop this coding Job",
 		strings.Repeat("a", 40),

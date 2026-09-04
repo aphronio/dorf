@@ -513,14 +513,17 @@ func controlTestHandler(store postgres.Store, tasks *absurd.Client, provider gat
 }
 
 func controlTestHandlerWithGitHub(store postgres.Store, tasks *absurd.Client, provider gateway.Gateway, auth controlauth.Service, runtimes core.SandboxRuntimeResolver, evidence blob.Store, github coding.InstallationDiscovery) http.Handler {
-	application := coreApplication(store, tasks)
+	queueName := config.QueueName
+	if tasks != nil {
+		queueName = tasks.QueueName()
+	}
 	reader := controlreader.Service{Store: store, Runtimes: runtimes, Provider: provider, Installations: github}
 	return controlapi.NewServer(controlapi.Discovery{Product: "dorf"}, auth,
 		controlAPIJobs{
 			store: store, tasks: tasks,
-			directAdmissions:        direct.NewAdmissionService(store, application, reader),
-			codingAdmissions:        coding.NewAdmissionService(store, application, reader, reader),
-			investigationAdmissions: investigation.NewAdmissionService(store, application, reader),
+			directAdmissions:        direct.NewAdmissionService(store, queueName, reader),
+			codingAdmissions:        coding.NewAdmissionService(store, queueName, reader, reader),
+			investigationAdmissions: investigation.NewAdmissionService(store, queueName, reader),
 			reader:                  reader, evidence: evidence,
 		}).Handler
 }

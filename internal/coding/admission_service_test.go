@@ -42,7 +42,7 @@ func (s *admissionServiceStore) DefaultSandboxProfile(_ context.Context) (core.S
 	return s.profile, s.profileErr
 }
 
-func (s *admissionServiceStore) AdmitCoding(_ context.Context, input Admission) (core.Job, bool, error) {
+func (s *admissionServiceStore) AdmitCoding(_ context.Context, input Admission, _ string) (core.Job, bool, error) {
 	s.admitted = input
 	if s.conflictOnce {
 		s.conflictOnce = false
@@ -51,7 +51,7 @@ func (s *admissionServiceStore) AdmitCoding(_ context.Context, input Admission) 
 	created := s.job.ID == ""
 	if created {
 		s.job = core.Job{
-			ID: core.JobID(input.AdmissionKey), AdmissionKey: input.AdmissionKey,
+			ID: core.JobID(input.AdmissionKey), CurrentTaskID: "task-retained", AdmissionKey: input.AdmissionKey,
 			Workflow: input.Workflow, WorkflowRevision: input.WorkflowRevision, Goal: input.Goal,
 			SandboxProfile: input.SandboxProfile, ProviderConnection: input.ProviderConnection,
 			Model: input.Model, ReasoningEffort: input.ReasoningEffort, AdmissionOpen: true,
@@ -76,16 +76,6 @@ func (s *admissionServiceStore) AdmitCoding(_ context.Context, input Admission) 
 		}
 	}
 	return s.job, created, nil
-}
-
-type admissionServiceScheduler struct{}
-
-func (s *admissionServiceScheduler) ScheduleJobTask(_ context.Context, job core.Job, taskName, taskKey string) (core.Job, error) {
-	if taskName != TaskName || taskKey != TaskKey(job.ID) {
-		return core.Job{}, errors.New("wrong coding task identity")
-	}
-	job.CurrentTaskID = "task-retained"
-	return job, nil
 }
 
 type admissionServiceProvider struct {
@@ -118,10 +108,9 @@ func (g *admissionServiceInstallations) DiscoverInstallation(_ context.Context, 
 
 func TestAdmissionServiceReconcilesFirstAdmissionRaceAndExactReplay(t *testing.T) {
 	store := &admissionServiceStore{profile: verifiedAdmissionProfile("cloud", true)}
-	scheduler := &admissionServiceScheduler{}
 	provider := &admissionServiceProvider{}
 	installations := &admissionServiceInstallations{}
-	service := NewAdmissionService(store, scheduler, provider, installations)
+	service := NewAdmissionService(store, "test-queue", provider, installations)
 	request := AdmissionRequest{
 		AdmissionKey: "coding-request", Goal: "preserve exact goal",
 		Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40), BaseBranch: "main",
@@ -192,7 +181,7 @@ func TestAdmissionServiceValidatesAndRequiresRemoteGitBeforeExternalAuthority(t 
 			store := &admissionServiceStore{profile: test.profile, profileErr: test.profileErr}
 			provider := &admissionServiceProvider{err: errors.New("external authority called")}
 			installations := &admissionServiceInstallations{err: errors.New("external authority called")}
-			_, _, err := NewAdmissionService(store, &admissionServiceScheduler{}, provider, installations).Admit(context.Background(), request)
+			_, _, err := NewAdmissionService(store, "test-queue", provider, installations).Admit(context.Background(), request)
 			if !errors.Is(err, ErrInvalidAdmission) {
 				t.Fatalf("error=%v, want invalid admission", err)
 			}

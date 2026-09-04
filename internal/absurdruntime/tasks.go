@@ -14,6 +14,7 @@ const (
 func TaskSpawnOptions(queueName, idempotencyKey string) absurd.SpawnOptions {
 	return absurd.SpawnOptions{
 		QueueName:      queueName,
+		MaxAttempts:    5,
 		IdempotencyKey: idempotencyKey,
 		RetryStrategy: &absurd.RetryStrategy{
 			Kind:        "exponential",

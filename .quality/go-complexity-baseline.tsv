@@ -44,7 +44,6 @@ internal/controlreader	(Service).ReadFile	25
 internal/controlreader	NewClient	21
 internal/core	(AgentHandle).Message	28
 internal/core	(Application).VerifyAttachedTask	19
-internal/core	(Application).requestCleanup	16
 internal/core	(ExecutionService).ObserveSettledAgentMessage	21
 internal/core	(ExecutionService).PrepareCleanup	16
 internal/core	(ExecutionService).ReconcileJobAgent	30
@@ -89,8 +88,7 @@ internal/postgres	(Store).RecordSandboxProfileUnavailable	16
 internal/postgres	(Store).RedeemEnrollment	19
 internal/postgres	(Store).RetryFailedJob	23
 internal/postgres	(Store).UpdateSandboxProfile	18
-internal/postgres	(Store).attachJobTask	25
-internal/postgres	admitJob	28
+internal/postgres	admitJob	23
 internal/postgres	admitMessageTx	26
 internal/postgres	applySandboxProfilePatch	26
 internal/postgres	authorizeSandboxActionTx	27

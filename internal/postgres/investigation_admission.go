@@ -10,7 +10,7 @@ import (
 	"github.com/aphronio/dorf/internal/postgres/dbsql"
 )
 
-func (s Store) AdmitInvestigation(ctx context.Context, input investigation.Admission) (core.Job, bool, error) {
+func (s Store) AdmitInvestigation(ctx context.Context, input investigation.Admission, queueName string) (core.Job, bool, error) {
 	normalized, err := investigation.NormalizeAdmission(input)
 	if err != nil {
 		return core.Job{}, false, fmt.Errorf("%w: %v", investigation.ErrInvalidAdmission, err)
@@ -19,7 +19,7 @@ func (s Store) AdmitInvestigation(ctx context.Context, input investigation.Admis
 	if err != nil {
 		return core.Job{}, false, fmt.Errorf("%w: %v", investigation.ErrInvalidAdmission, err)
 	}
-	job, created, err := admitJob(ctx, s, normalized.JobAdmission, func(ctx context.Context, queries *dbsql.Queries, ids admittedJobIDs) error {
+	job, created, err := admitJob(ctx, s, normalized.JobAdmission, queueName, investigation.TaskName, investigation.TaskKey(core.JobID(normalized.AdmissionKey)), func(ctx context.Context, queries *dbsql.Queries, ids admittedJobIDs) error {
 		if _, err := queries.InsertCodebaseInvestigationSource(ctx, investigationSourceParams(ids.jobID, normalized.Source)); err != nil {
 			return err
 		}

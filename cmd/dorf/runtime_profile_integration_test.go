@@ -15,6 +15,7 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/deployment"
 	"github.com/aphronio/dorf/internal/postgres"
+	"github.com/earendil-works/absurd/sdks/go/absurd"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -156,7 +157,16 @@ func TestAdmittedJobRuntimeIgnoresLaterVerificationReceiptState(t *testing.T) {
 		Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40), Branch: "dorf/runtime-reverify",
 		GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield",
 	}
-	job, created, err := store.AdmitCoding(ctx, input)
+	queue := fmt.Sprintf("dorf_runtime_profile_%d", time.Now().UnixNano())
+	tasks, err := absurd.New(absurd.Options{DB: db, QueueName: queue})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tasks.CreateQueue(ctx, queue); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tasks.DropQueue(context.Background(), queue); _ = tasks.Close() })
+	job, created, err := store.AdmitCoding(ctx, input, queue)
 	if err != nil || !created {
 		t.Fatalf("admit Job=%#v created=%v err=%v", job, created, err)
 	}
@@ -175,7 +185,7 @@ func TestAdmittedJobRuntimeIgnoresLaterVerificationReceiptState(t *testing.T) {
 			t.Fatalf("%s Sandbox runtime=%#v err=%v", state, sandbox, err)
 		}
 		workflow, err := resolver.ResolveCoding(ctx, job.SandboxProfile)
-		if err != nil || workflow.Profile.SandboxProfile != name || workflow.Agent == nil || workflow.Coding == nil {
+		if err != nil || workflow.SandboxProfile != name || workflow.Agent == nil || workflow.Coding == nil {
 			t.Fatalf("%s coding runtime=%#v err=%v", state, workflow, err)
 		}
 	}

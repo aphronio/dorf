@@ -20,7 +20,6 @@ import (
 	outcomeapp "github.com/aphronio/dorf/internal/outcome"
 	piagent "github.com/aphronio/dorf/internal/pi"
 	"github.com/aphronio/dorf/internal/postgres"
-	profileapp "github.com/aphronio/dorf/internal/profile"
 	"github.com/aphronio/dorf/internal/publication"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/terminal"
@@ -41,7 +40,7 @@ func (r profileRuntimeResolver) ResolveCleanup(ctx context.Context, name string)
 	}
 	return core.CleanupRuntime{
 		Execution:      resolved.Execution,
-		SandboxProfile: resolved.Profile.SandboxProfile,
+		SandboxProfile: resolved.SandboxProfile,
 	}, nil
 }
 
@@ -53,7 +52,7 @@ func (r profileRuntimeResolver) ResolveSandbox(ctx context.Context, name string)
 	return core.SandboxRuntime{
 		Execution:      resolved.Execution,
 		Files:          resolved.Externals,
-		SandboxProfile: resolved.Profile.SandboxProfile,
+		SandboxProfile: resolved.SandboxProfile,
 	}, nil
 }
 
@@ -72,9 +71,9 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 	}.WithClaimCheck(absurdruntime.RequireClaim)
 	outcomeService := (outcomeapp.Service{Store: r.store, GitHub: githubClient}).WithClaimCheck(absurdruntime.RequireClaim)
 	return coding.Runtime{
-		Profile: resolved.Profile,
-		Agent:   resolved.Execution,
-		Coding:  codingService,
+		SandboxProfile: resolved.SandboxProfile,
+		Agent:          resolved.Execution,
+		Coding:         codingService,
 		Proposal: coding.ProposalRuntime{
 			Publication: publicationService, GitHub: githubClient,
 			Outcome: outcomeService, Store: r.store,
@@ -99,8 +98,7 @@ func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, name s
 		return investigation.Runtime{}, err
 	}
 	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, gitworkspace.Workspace{Transport: resolved.Sandbox, Workspace: resolved.Sandbox.Workspace()}, resolved.Ownership)
-	service := investigation.NewService(workspaceExecutor)
-	return investigation.Runtime{Profile: resolved.Profile, Agent: resolved.Execution, Investigation: service}, nil
+	return investigation.Runtime{SandboxProfile: resolved.SandboxProfile, Agent: resolved.Execution, Investigation: workspaceExecutor}, nil
 }
 
 func (r profileRuntimeResolver) ResolveDirect(ctx context.Context, name string) (direct.Runtime, error) {
@@ -108,16 +106,16 @@ func (r profileRuntimeResolver) ResolveDirect(ctx context.Context, name string) 
 	if err != nil {
 		return direct.Runtime{}, err
 	}
-	return direct.Runtime{Profile: resolved.Profile, Execution: resolved.Execution}, nil
+	return direct.Runtime{SandboxProfile: resolved.SandboxProfile, Execution: resolved.Execution}, nil
 }
 
 type resolvedBaseRuntime struct {
-	Profile   profileapp.Runtime
-	Execution core.ExecutionService
-	Externals terminal.Externals
-	Review    coding.ReviewExecution
-	Sandbox   provider.Sandbox
-	Ownership func(context.Context, string) (provider.Ownership, error)
+	SandboxProfile string
+	Execution      core.ExecutionService
+	Externals      terminal.Externals
+	Review         coding.ReviewExecution
+	Sandbox        provider.Sandbox
+	Ownership      func(context.Context, string) (provider.Ownership, error)
 }
 
 // Runtime resolution is downstream of Job admission. The Job's immutable
@@ -157,9 +155,9 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (r
 	execution := core.NewExecutionService(r.store, externals, r.barrier, absurdruntime.RequireClaim).
 		WithAgentExecution(composedAgentExecution{store: r.store, externals: externals, review: review})
 	return resolvedBaseRuntime{
-		Profile:   profileapp.Runtime{SandboxProfile: profile.Name},
-		Execution: execution,
-		Externals: externals, Review: review, Sandbox: sandbox, Ownership: ownership,
+		SandboxProfile: profile.Name,
+		Execution:      execution,
+		Externals:      externals, Review: review, Sandbox: sandbox, Ownership: ownership,
 	}, nil
 }
 

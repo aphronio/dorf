@@ -10,7 +10,7 @@ import (
 	"github.com/aphronio/dorf/internal/postgres/dbsql"
 )
 
-func (s Store) AdmitCoding(ctx context.Context, input coding.Admission) (core.Job, bool, error) {
+func (s Store) AdmitCoding(ctx context.Context, input coding.Admission, queueName string) (core.Job, bool, error) {
 	normalized, err := coding.NormalizeAdmission(input)
 	if err != nil {
 		return core.Job{}, false, fmt.Errorf("%w: %v", coding.ErrInvalidAdmission, err)
@@ -19,7 +19,7 @@ func (s Store) AdmitCoding(ctx context.Context, input coding.Admission) (core.Jo
 	if err != nil {
 		return core.Job{}, false, fmt.Errorf("%w: %v", coding.ErrInvalidAdmission, err)
 	}
-	job, created, err := admitJob(ctx, s, normalized.JobAdmission, func(ctx context.Context, queries *dbsql.Queries, ids admittedJobIDs) error {
+	job, created, err := admitJob(ctx, s, normalized.JobAdmission, queueName, coding.TaskName, coding.TaskKey(core.JobID(normalized.AdmissionKey)), func(ctx context.Context, queries *dbsql.Queries, ids admittedJobIDs) error {
 		if _, err := queries.InsertCodingToProposalInput(ctx, dbsql.InsertCodingToProposalInputParams{
 			JobID: ids.jobID, Repository: normalized.Repository, StartingRevision: normalized.Revision, Revision: normalized.Revision,
 			Branch: normalized.Branch, GithubRepository: normalized.GitHubRepository,

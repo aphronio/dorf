@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/aphronio/dorf/internal/core"
-	"github.com/aphronio/dorf/internal/gitworkspace"
 )
 
 type Store interface {
@@ -15,12 +14,4 @@ type Store interface {
 	Actions(context.Context, string) ([]core.Action, error)
 	CodebaseInvestigationMessages(context.Context, string) ([]MessageRecord, error)
 	SetWorkflowAttention(context.Context, string, string, string) error
-}
-
-type Service struct {
-	gitworkspace.Execution
-}
-
-func NewService(execution gitworkspace.Execution) Service {
-	return Service{Execution: execution}
 }

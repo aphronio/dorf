@@ -42,6 +42,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D095: The CLI is Dorf's first direct trusted client](decisions/D095-the-cli-is-dorf-s-first-direct-trusted-client.md) (`partial`). Changing direct Job semantics or the CLI's role as a Core client.
 - [D096: Follow and steer are invariant custody; cleanup timing remains consumer policy](decisions/D096-follow-and-steer-are-invariant-custody-cleanup-timing-remains-consumer-policy.md) (`current`). Changing follow, steer, or consumer-controlled cleanup semantics.
 - [D104: Technology choices stay replaceable](decisions/D104-technology-choices-stay-replaceable.md) (`current`). Reviewing a technology replacement, migration, or compatibility obligation.
+- [D107: Commit Job task scheduling and attachment together](decisions/D107-commit-job-task-scheduling-and-attachment-together.md) (`current`). Changing admission, task handoffs, cleanup scheduling, or recovery across Absurd and Dorf.
 
 ## Workflows
 
@@ -80,6 +81,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D093: GitHub authentication is an optional deployment integration](decisions/D093-github-authentication-is-an-optional-deployment-integration.md) (`current`). Changing GitHub App setup, credential custody, or repository token minting.
 - [D096: Follow and steer are invariant custody; cleanup timing remains consumer policy](decisions/D096-follow-and-steer-are-invariant-custody-cleanup-timing-remains-consumer-policy.md) (`current`). Changing follow, steer, or consumer-controlled cleanup semantics.
 - [D099: Fixed typed workflow admission reuses remote Job control](decisions/D099-fixed-typed-workflow-admission-reuses-remote-job-control.md) (`current`). Changing remote admission or projection for a built-in typed workflow.
+- [D106: Remove unused workflow capability declarations](decisions/D106-remove-unused-workflow-capability-declarations.md) (`current`). Adding optional provider requirements or workflow runtime metadata.
 
 ## Interaction
 
@@ -119,6 +121,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D091: Profile verification gates admission, not admitted runtime](decisions/D091-profile-verification-gates-admission-not-admitted-runtime.md) (`current`). Changing profile verification, concurrent admission, or admitted runtime resolution.
 - [D092: Investigation reports remain Sandbox files](decisions/D092-investigation-reports-remain-sandbox-files.md) (`current`). Changing how investigation reports are produced, accessed, or retained.
 - [D101: Compose owns deployment lifecycle; bootstrap privilege stays explicit](decisions/D101-compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit.md) (`current`). Changing Compose topology, setup-applied lifecycle, bootstrap, or release images.
+- [D106: Remove unused workflow capability declarations](decisions/D106-remove-unused-workflow-capability-declarations.md) (`current`). Adding optional provider requirements or workflow runtime metadata.
 
 ## Harnesses
 
@@ -206,6 +209,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D091: Profile verification gates admission, not admitted runtime](decisions/D091-profile-verification-gates-admission-not-admitted-runtime.md) (`current`). Changing profile verification, concurrent admission, or admitted runtime resolution.
 - [D092: Investigation reports remain Sandbox files](decisions/D092-investigation-reports-remain-sandbox-files.md) (`current`). Changing how investigation reports are produced, accessed, or retained.
 - [D094: Published PostgreSQL migrations are immutable and append-only](decisions/D094-published-postgresql-migrations-are-immutable-and-append-only.md) (`current`). Changing a published PostgreSQL schema or the migration runner.
+- [D107: Commit Job task scheduling and attachment together](decisions/D107-commit-job-task-scheduling-and-attachment-together.md) (`current`). Changing admission, task handoffs, cleanup scheduling, or recovery across Absurd and Dorf.
 
 ## GitHub integration
 

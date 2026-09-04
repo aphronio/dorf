@@ -232,3 +232,8 @@ func (handleTestStore) RecordSandboxProfileUnavailable(context.Context, string, 
 }
 func (handleTestStore) SetCleanupAttention(context.Context, string, string) error { return nil }
 func (handleTestStore) CompleteCleanup(context.Context, string, string) error     { return nil }
+
+func (handleTestStore) ScheduleCleanup(context.Context, string, string, string) error { return nil }
+func (handleTestStore) ScheduleJobTask(context.Context, string, string, string, string) error {
+	return nil
+}

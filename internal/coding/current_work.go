@@ -40,17 +40,28 @@ type Work struct {
 }
 
 func (w Work) Description() string {
-	definition := WorkflowDefinition()
-	if w.Kind == WorkAction {
-		return definition.ActionLabel(w.ActionKind)
-	}
-	if w.Kind == WorkWaitAgent {
+	switch w.Kind {
+	case WorkAction:
+		return actionLabel(w.ActionKind)
+	case WorkWaitAgent:
 		return "Awaiting Agent result"
-	}
-	if w.Kind == WorkRecordReview {
+	case WorkRecordReview:
 		return "Record reviewer feedback"
+	case WorkComplete:
+		return "Complete"
+	case WorkAttention:
+		return "Needs attention"
+	case WorkObserveRevision:
+		return "Inspecting implementation checkout"
+	case WorkChooseReview:
+		return "Choosing deterministic review"
+	case WorkPublishProposal:
+		return "Publishing exact-Revision Proposal"
+	case WorkObserveProposal:
+		return "Waiting for Proposal decision"
+	default:
+		return humanizeIdentifier(string(w.Kind))
 	}
-	return definition.OperationLabel(string(w.Kind), humanizeIdentifier(string(w.Kind)))
 }
 
 // Snapshot is Dorf's concrete, coding-specific read model. It is loaded once

@@ -16,7 +16,6 @@ import (
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
-	profileapp "github.com/aphronio/dorf/internal/profile"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
@@ -33,11 +32,11 @@ func TestPostgresCodebaseInvestigationIdentityAndFollowUps(t *testing.T) {
 		},
 		Source: investigation.Source{Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40)},
 	}
-	job, created, err := store.AdmitInvestigation(ctx, input)
+	job, created, err := admitInvestigationFixture(t, store, ctx, input)
 	if err != nil || !created || job.Workflow != input.Workflow || job.WorkflowRevision != input.WorkflowRevision {
 		t.Fatalf("Job=%#v created=%v err=%v", job, created, err)
 	}
-	repeated, created, err := store.AdmitInvestigation(ctx, input)
+	repeated, created, err := admitInvestigationFixture(t, store, ctx, input)
 	if err != nil || created || repeated.ID != job.ID {
 		t.Fatalf("idempotent Job=%#v created=%v err=%v", repeated, created, err)
 	}
@@ -47,11 +46,11 @@ func TestPostgresCodebaseInvestigationIdentityAndFollowUps(t *testing.T) {
 	}
 	changedSource := input
 	changedSource.Source.Repository = "https://github.com/aphronio/other.git"
-	if _, _, err := store.AdmitInvestigation(ctx, changedSource); !errors.Is(err, postgres.ErrAdmissionConflict) || !errors.Is(err, investigation.ErrAdmissionConflict) {
+	if _, _, err := admitInvestigationFixture(t, store, ctx, changedSource); !errors.Is(err, postgres.ErrAdmissionConflict) || !errors.Is(err, investigation.ErrAdmissionConflict) {
 		t.Fatalf("same admission key changed source identity: %v", err)
 	}
 	changedWorkflow := codingJobInput(key, input.Goal, input.Source.Revision, "dorf/cross-workflow")
-	if _, _, err := store.AdmitCoding(ctx, changedWorkflow); err == nil {
+	if _, _, err := admitCodingFixture(t, store, ctx, changedWorkflow); err == nil {
 		t.Fatal("same admission key changed workflow identity")
 	}
 	if _, err := store.DB.ExecContext(ctx, `insert into dorf.coding_to_proposal_inputs(job_id,workflow_name,repository,starting_revision,revision,branch,github_repository,github_installation_id,base_branch) values($1,'coding-to-proposal',$2,$3,$3,$4,$5,$6,$7)`,
@@ -194,11 +193,10 @@ func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *test
 	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
 		WithAgentExecution(investigationAgentExecution{store: store, externals: externals})
 	workspaceExecutor := gitworkspace.NewExecutor(execution, externals, nil)
-	service := investigation.NewService(workspaceExecutor)
-	runtimeProfile := profileapp.Runtime{SandboxProfile: "incus"}
+	runtimeProfile := "incus"
 	resolver := integrationRuntimeResolver{
 		execution: execution, files: externals, profile: runtimeProfile,
-		investigationRuntime: investigation.Runtime{Profile: runtimeProfile, Agent: execution, Investigation: service},
+		investigationRuntime: investigation.Runtime{SandboxProfile: runtimeProfile, Agent: execution, Investigation: workspaceExecutor},
 	}
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	client := newFaultClient(t, store, "dorf_investigation_idle_"+suffix)
@@ -209,7 +207,7 @@ func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *test
 	application.RegisterCleanup()
 	investigation.Register(application, store, resolver)
 	source := investigation.Source{Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("d", 40)}
-	job, created, err := investigation.NewAdmissionService(store, application, providerCheck{}).Admit(ctx, investigation.AdmissionRequest{
+	job, created, err := investigation.NewAdmissionService(store, application.Tasks.QueueName(), providerCheck{}).Admit(ctx, investigation.AdmissionRequest{
 		AdmissionKey: "investigation-terminal-" + suffix,
 		Brief:        "Find one concrete simplification.", SandboxProfile: "incus",
 		ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",

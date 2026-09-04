@@ -1519,9 +1519,9 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 	auth := controlauth.Service{Store: store}
 	jobs := controlAPIJobs{
 		store: store, tasks: tasks,
-		directAdmissions:        direct.NewAdmissionService(store, coreApplication(store, tasks), reader),
-		codingAdmissions:        coding.NewAdmissionService(store, coreApplication(store, tasks), reader, reader),
-		investigationAdmissions: investigation.NewAdmissionService(store, coreApplication(store, tasks), reader),
+		directAdmissions:        direct.NewAdmissionService(store, config.QueueName, reader),
+		codingAdmissions:        coding.NewAdmissionService(store, config.QueueName, reader, reader),
+		investigationAdmissions: investigation.NewAdmissionService(store, config.QueueName, reader),
 		reader:                  reader, evidence: blob.Store{Root: cfg.BlobRoot},
 	}
 	server := controlapi.NewServer(controlapi.Discovery{

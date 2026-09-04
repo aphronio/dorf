@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -24,24 +23,10 @@ func MessageWakeEvent(jobID string, sequence int64) string {
 // ScheduleJobTask reconciles one consumer-owned task with the Job's durable
 // current attachment. The concrete consumer owns the task name and idempotency key.
 func (a Application) ScheduleJobTask(ctx context.Context, job Job, taskName, taskKey string) (Job, error) {
-	err := a.Store.WithJobFence(ctx, job.ID, func() error {
-		current, err := a.Store.Job(ctx, job.ID)
-		if err != nil {
-			return err
-		}
-		if !current.AdmissionOpen || current.CleanupState != CleanupPending {
-			return fmt.Errorf("Job %s cannot schedule ordinary work after cleanup begins", job.ID)
-		}
-		spawned, err := a.Tasks.Spawn(ctx, taskName, JobTaskParams{JobID: job.ID, PreviousTaskID: current.CurrentTaskID}, absurdruntime.TaskSpawnOptions(a.Tasks.QueueName(), taskKey))
-		if err != nil {
-			return fmt.Errorf("schedule admitted Job in Absurd: %w", err)
-		}
-		if err := a.Store.AttachJobTask(ctx, job.ID, current.CurrentTaskID, spawned.TaskID, taskName); err != nil {
-			return fmt.Errorf("attach Job task: %w", err)
-		}
-		return nil
-	})
-	if err != nil {
+	if a.Tasks == nil {
+		return Job{}, fmt.Errorf("Job task scheduling is not configured")
+	}
+	if err := a.Store.ScheduleJobTask(ctx, a.Tasks.QueueName(), job.ID, taskName, taskKey); err != nil {
 		return Job{}, err
 	}
 	return a.Store.Job(ctx, job.ID)

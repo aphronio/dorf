@@ -33,7 +33,7 @@ func normalizeCoreAdmission(input core.JobAdmission) (core.JobAdmission, error) 
 
 type admittedJobIDs struct{ jobID, messageID, sandboxID string }
 
-func admitJob(ctx context.Context, store Store, coreInput core.JobAdmission, recordTypedFacts func(context.Context, *dbsql.Queries, admittedJobIDs) error) (core.Job, bool, error) {
+func admitJob(ctx context.Context, store Store, coreInput core.JobAdmission, queueName, taskName, taskKey string, recordTypedFacts func(context.Context, *dbsql.Queries, admittedJobIDs) error) (core.Job, bool, error) {
 	id := core.JobID(coreInput.AdmissionKey)
 	tx, err := store.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -85,20 +85,13 @@ func admitJob(ctx context.Context, store Store, coreInput core.JobAdmission, rec
 		return core.Job{}, false, fmt.Errorf("Job %s initial message conflicts with complete admission input", id)
 	}
 	sandboxID := core.MainSandboxName(id)
-	ownerNonce, err := reviewNonce()
-	if err != nil {
+	if err := reserveAdmittedSandbox(ctx, queries, id, sandboxID); err != nil {
 		return core.Job{}, false, err
 	}
-	if err := expectOneRows(queries.ReserveSandbox(ctx, dbsql.ReserveSandboxParams{ID: sandboxID, JobID: id, Name: core.DefaultSandbox, OwnershipNonce: ownerNonce})); err != nil {
-		reserved, getErr := queries.GetSandbox(ctx, sandboxID)
-		if getErr != nil {
-			return core.Job{}, false, err
-		}
-		if reserved.ID != sandboxID || reserved.JobID != id || reserved.Name != core.DefaultSandbox || !sha256Digest.MatchString(reserved.OwnershipNonce) {
-			return core.Job{}, false, fmt.Errorf("Job %s default Sandbox conflicts with its exact owned identity", id)
-		}
-	}
 	if err := recordTypedFacts(ctx, queries, admittedJobIDs{jobID: id, messageID: initial.ID, sandboxID: sandboxID}); err != nil {
+		return core.Job{}, false, err
+	}
+	if err := scheduleJobTaskTx(ctx, tx, queueName, id, taskName, taskKey, true); err != nil {
 		return core.Job{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -106,4 +99,21 @@ func admitJob(ctx context.Context, store Store, coreInput core.JobAdmission, rec
 	}
 	job, err := store.Job(ctx, id)
 	return job, rows == 1, err
+}
+
+func reserveAdmittedSandbox(ctx context.Context, queries *dbsql.Queries, id, sandboxID string) error {
+	ownerNonce, err := reviewNonce()
+	if err != nil {
+		return err
+	}
+	if err := expectOneRows(queries.ReserveSandbox(ctx, dbsql.ReserveSandboxParams{ID: sandboxID, JobID: id, Name: core.DefaultSandbox, OwnershipNonce: ownerNonce})); err != nil {
+		reserved, getErr := queries.GetSandbox(ctx, sandboxID)
+		if getErr != nil {
+			return err
+		}
+		if reserved.ID != sandboxID || reserved.JobID != id || reserved.Name != core.DefaultSandbox || !sha256Digest.MatchString(reserved.OwnershipNonce) {
+			return fmt.Errorf("Job %s default Sandbox conflicts with its exact owned identity", id)
+		}
+	}
+	return nil
 }

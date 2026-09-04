@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/core"
-	"github.com/aphronio/dorf/internal/profile"
+	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -21,9 +21,9 @@ const (
 func TaskKey(jobID string) string { return "codebase-investigation:v2:" + jobID }
 
 type Runtime struct {
-	Profile       profile.Runtime
-	Agent         core.AgentReconciliation
-	Investigation Service
+	SandboxProfile string
+	Agent          core.AgentReconciliation
+	Investigation  gitworkspace.Execution
 }
 
 type RuntimeResolver interface {
@@ -91,9 +91,8 @@ func runtimeForJob(ctx context.Context, store Store, runtimes RuntimeResolver, j
 	if err != nil {
 		return Runtime{}, err
 	}
-	definition := WorkflowDefinition()
-	if job.Workflow != definition.Name || job.WorkflowRevision != definition.Revision {
-		detail := fmt.Sprintf("Job requires workflow %s revision %s, but task executes %s revision %s", job.Workflow, job.WorkflowRevision, definition.Name, definition.Revision)
+	if job.Workflow != Workflow || job.WorkflowRevision != WorkflowRevision {
+		detail := fmt.Sprintf("Job requires workflow %s revision %s, but task executes %s revision %s", job.Workflow, job.WorkflowRevision, Workflow, WorkflowRevision)
 		return Runtime{}, recordRuntimeAttention(ctx, store, job.ID, "workflow-profile", detail)
 	}
 	if runtimes == nil {
@@ -103,12 +102,9 @@ func runtimeForJob(ctx context.Context, store Store, runtimes RuntimeResolver, j
 	if err != nil {
 		return Runtime{}, fmt.Errorf("resolve Sandbox profile %q: %w", job.SandboxProfile, err)
 	}
-	if configured := strings.TrimSpace(runtime.Profile.SandboxProfile); configured != job.SandboxProfile {
+	if configured := strings.TrimSpace(runtime.SandboxProfile); configured != job.SandboxProfile {
 		detail := fmt.Sprintf("Job requires Sandbox profile %q, but this worker resolved %q", job.SandboxProfile, configured)
 		return Runtime{}, recordRuntimeAttention(ctx, store, job.ID, "sandbox-profile", detail)
-	}
-	if err := runtime.Profile.Require(definition.Name, definition.Revision, definition.RequiredProviderCapabilities); err != nil {
-		return Runtime{}, recordRuntimeAttention(ctx, store, job.ID, "provider-capabilities", err.Error())
 	}
 	return runtime, nil
 }

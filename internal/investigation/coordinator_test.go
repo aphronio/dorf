@@ -7,7 +7,6 @@ import (
 
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
-	"github.com/aphronio/dorf/internal/profile"
 )
 
 func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
@@ -81,21 +80,5 @@ func TestInvestigationAgentPromptOwnsReportPathAndPortableCitations(t *testing.T
 		if !strings.Contains(input, required) {
 			t.Fatalf("investigation input lacks %q:\n%s", required, input)
 		}
-	}
-}
-
-func TestProviderCapabilityAdmissionUsesOnlyOptionalProviderPrimitives(t *testing.T) {
-	browser := profile.Capability("browser-workload")
-	definition := Definition{Name: "browser-verification", Revision: "1", RequiredProviderCapabilities: []profile.Capability{browser}}
-	err := (profile.Runtime{SandboxProfile: "incus"}).Require(definition.Name, definition.Revision, definition.RequiredProviderCapabilities)
-	if err == nil || !strings.Contains(err.Error(), string(browser)) {
-		t.Fatalf("missing provider capability error=%v", err)
-	}
-	workflow := WorkflowDefinition()
-	if len(workflow.RequiredProviderCapabilities) != 0 {
-		t.Fatalf("investigation unexpectedly requires provider capabilities: %v", workflow.RequiredProviderCapabilities)
-	}
-	if err := (profile.Runtime{SandboxProfile: "e2b"}).Require(workflow.Name, workflow.Revision, workflow.RequiredProviderCapabilities); err != nil {
-		t.Fatal(err)
 	}
 }

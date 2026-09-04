@@ -11,7 +11,7 @@ import (
 	"github.com/aphronio/dorf/internal/postgres/dbsql"
 )
 
-func (s Store) AdmitDirect(ctx context.Context, input core.JobAdmission) (core.Job, bool, error) {
+func (s Store) AdmitDirect(ctx context.Context, input core.JobAdmission, queueName string) (core.Job, bool, error) {
 	input.Workflow = core.WorkflowName(strings.TrimSpace(string(input.Workflow)))
 	input.WorkflowRevision = strings.TrimSpace(input.WorkflowRevision)
 	if input.Workflow != "" || input.WorkflowRevision != "" {
@@ -21,7 +21,7 @@ func (s Store) AdmitDirect(ctx context.Context, input core.JobAdmission) (core.J
 	if err != nil {
 		return core.Job{}, false, err
 	}
-	job, created, err := admitJob(ctx, s, normalized, func(ctx context.Context, queries *dbsql.Queries, ids admittedJobIDs) error {
+	job, created, err := admitJob(ctx, s, normalized, queueName, direct.TaskName, direct.TaskKey(core.JobID(normalized.AdmissionKey)), func(ctx context.Context, queries *dbsql.Queries, ids admittedJobIDs) error {
 		_, err := queries.InsertAdmittedAgentRun(ctx, dbsql.InsertAdmittedAgentRunParams{
 			ID: core.AgentRunID(ids.messageID), JobID: ids.jobID, MessageID: ids.messageID,
 			Role: direct.DirectAgentRole, SandboxID: ids.sandboxID,

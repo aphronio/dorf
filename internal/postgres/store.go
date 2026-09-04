@@ -558,20 +558,19 @@ func (s Store) attachJobTask(ctx context.Context, jobID, expectedCurrentTaskID, 
 		return err
 	}
 	defer tx.Rollback()
-	queries := dbsql.New(tx)
+	if err := attachJobTaskTx(ctx, dbsql.New(tx), jobID, expectedCurrentTaskID, taskID, taskName, cleanup); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func attachJobTaskTx(ctx context.Context, queries *dbsql.Queries, jobID, expectedCurrentTaskID, taskID, taskName string, cleanup bool) error {
 	current, err := queries.GetCurrentJobTaskForUpdate(ctx, jobID)
 	if err != nil {
 		return err
 	}
-	if cleanup {
-		if current.AdmissionOpen || (current.CleanupState != core.CleanupRequested && current.CleanupState != core.CleanupScheduled) {
-			return fmt.Errorf("Job %s cannot attach cleanup from state %s", jobID, current.CleanupState)
-		}
-		if current.CleanupState == core.CleanupScheduled && current.TaskID != taskID {
-			return fmt.Errorf("Job %s already has cleanup task %s", jobID, current.TaskID)
-		}
-	} else if !current.AdmissionOpen || current.CleanupState != core.CleanupPending {
-		return fmt.Errorf("Job %s cannot attach ordinary task after cleanup begins", jobID)
+	if err := validateTaskAttachmentState(current, jobID, taskID, cleanup); err != nil {
+		return err
 	}
 	if current.TaskID == taskID {
 		if current.TaskName != taskName {
@@ -600,7 +599,21 @@ func (s Store) attachJobTask(ctx context.Context, jobID, expectedCurrentTaskID, 
 			return fmt.Errorf("Job %s cleanup scheduling did not settle", jobID)
 		}
 	}
-	return tx.Commit()
+	return nil
+}
+
+func validateTaskAttachmentState(current dbsql.GetCurrentJobTaskForUpdateRow, jobID, taskID string, cleanup bool) error {
+	if cleanup {
+		if current.AdmissionOpen || (current.CleanupState != core.CleanupRequested && current.CleanupState != core.CleanupScheduled) {
+			return fmt.Errorf("Job %s cannot attach cleanup from state %s", jobID, current.CleanupState)
+		}
+		if current.CleanupState == core.CleanupScheduled && current.TaskID != taskID {
+			return fmt.Errorf("Job %s already has cleanup task %s", jobID, current.TaskID)
+		}
+	} else if !current.AdmissionOpen || current.CleanupState != core.CleanupPending {
+		return fmt.Errorf("Job %s cannot attach ordinary task after cleanup begins", jobID)
+	}
+	return nil
 }
 
 func (s Store) GetOrCreateSandboxAction(ctx context.Context, sandboxID string, kind core.ActionKind) (core.Action, error) {

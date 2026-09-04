@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/core"
-	"github.com/aphronio/dorf/internal/profile"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -25,8 +24,8 @@ type Execution interface {
 }
 
 type Runtime struct {
-	Profile   profile.Runtime
-	Execution Execution
+	SandboxProfile string
+	Execution      Execution
 }
 
 type RuntimeResolver interface {
@@ -64,8 +63,8 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 		if err != nil {
 			return core.TaskResultV1{}, fmt.Errorf("resolve Sandbox profile %q: %w", job.SandboxProfile, err)
 		}
-		if strings.TrimSpace(runtime.Profile.SandboxProfile) != job.SandboxProfile {
-			return core.TaskResultV1{}, fmt.Errorf("Job requires Sandbox profile %q, but this worker resolved %q", job.SandboxProfile, runtime.Profile.SandboxProfile)
+		if strings.TrimSpace(runtime.SandboxProfile) != job.SandboxProfile {
+			return core.TaskResultV1{}, fmt.Errorf("Job requires Sandbox profile %q, but this worker resolved %q", job.SandboxProfile, runtime.SandboxProfile)
 		}
 		if runtime.Execution == nil {
 			return core.TaskResultV1{}, fmt.Errorf("direct Agent runtime is not configured")

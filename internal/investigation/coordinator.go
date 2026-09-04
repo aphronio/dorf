@@ -27,17 +27,20 @@ type Work struct {
 }
 
 func (w Work) Description() string {
-	if w.Kind == "" {
-		return "No current workflow operation"
-	}
-	definition := WorkflowDefinition()
-	if w.Kind == WorkAction {
-		return definition.ActionLabel(w.ActionKind)
-	}
-	if w.Kind == WorkWaitAgent {
+	switch w.Kind {
+	case WorkAction:
+		return actionLabel(w.ActionKind)
+	case WorkWaitAgent:
 		return "Awaiting investigator result"
+	case "":
+		return "No current workflow operation"
+	case WorkComplete:
+		return "Complete"
+	case WorkAttention:
+		return "Needs attention"
+	default:
+		return humanizeIdentifier(string(w.Kind))
 	}
-	return definition.OperationLabel(string(w.Kind), humanizeIdentifier(string(w.Kind)))
 }
 
 type Snapshot struct {
@@ -166,7 +169,7 @@ func messageAttention(message MessageRecord) string {
 	return "investigator Harness work ended with outcome " + message.Outcome
 }
 
-func Run(ctx context.Context, custody core.JobHandle, service Service, store Store, jobID string) (Work, error) {
+func Run(ctx context.Context, custody core.JobHandle, service gitworkspace.Execution, store Store, jobID string) (Work, error) {
 	for {
 		snapshot, err := LoadSnapshot(ctx, store, jobID)
 		if err != nil {
@@ -202,7 +205,7 @@ Dorf codebase-investigation contract:
 - If there is no useful finding, say that plainly in the report.`, strings.TrimSpace(input), source.Revision, ReportPath)
 }
 
-func runInvestigationAction(ctx context.Context, custody core.JobHandle, service Service, snapshot Snapshot, work Work) error {
+func runInvestigationAction(ctx context.Context, custody core.JobHandle, service gitworkspace.Execution, snapshot Snapshot, work Work) error {
 	if work.Scope != snapshot.MainSandbox.ID || work.FactID != core.ScopedActionID(snapshot.Job.ID, work.ActionKind, work.Scope) {
 		return fmt.Errorf("investigation Action does not match the exact main Sandbox")
 	}

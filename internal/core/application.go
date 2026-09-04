@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/sandbox"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
@@ -58,7 +57,8 @@ type ApplicationStore interface {
 	CleanupRequests(context.Context) ([]string, error)
 	WithJobFence(context.Context, string, func() error) error
 	AttachJobTask(context.Context, string, string, string, string) error
-	RequestCleanup(context.Context, string) error
+	ScheduleCleanup(context.Context, string, string, string) error
+	ScheduleJobTask(context.Context, string, string, string, string) error
 	AttachCleanupTask(context.Context, string, string, string, string) error
 	RecordSandboxProfileUnavailable(context.Context, string, string, string, error) error
 	SetCleanupAttention(context.Context, string, string) error
@@ -90,65 +90,17 @@ type Application struct {
 }
 
 func (a Application) requestCleanup(ctx context.Context, jobID string) (Job, error) {
-	job, err := a.Store.Job(ctx, jobID)
-	if err != nil {
+	if a.Tasks == nil {
+		return Job{}, fmt.Errorf("cleanup scheduling is not configured")
+	}
+	if err := a.Store.ScheduleCleanup(ctx, a.Tasks.QueueName(), jobID, currentTaskID(ctx)); err != nil {
 		return Job{}, err
 	}
-	if job.CleanupState == CleanupComplete {
-		return job, nil
-	}
-	if job.CleanupState == CleanupScheduled {
-		return job, nil
-	}
-	if job.CleanupState == CleanupPending {
-		if err := a.Store.WithJobFence(ctx, jobID, func() error {
-			return a.Store.RequestCleanup(ctx, jobID)
-		}); err != nil {
-			return Job{}, err
-		}
-	}
-	job, err = a.Store.Job(ctx, jobID)
-	if err != nil {
-		return Job{}, err
-	}
-	// Another requester or continuous recovery may have attached the cleanup task
-	// after this caller observed requested. Never cancel that winning cleanup.
-	if job.CleanupState == CleanupScheduled || job.CleanupState == CleanupComplete {
-		return job, nil
-	}
-	skipTaskID := currentTaskID(ctx)
-	if err := a.cancelAttachedTask(ctx, job, skipTaskID); err != nil {
-		return Job{}, err
-	}
-
-	var result Job
-	err = a.Store.WithJobFence(ctx, jobID, func() error {
-		current, err := a.Store.Job(ctx, jobID)
-		if err != nil {
-			return err
-		}
-		if current.CleanupState == CleanupScheduled || current.CleanupState == CleanupComplete {
-			result = current
-			return nil
-		}
-		if err := a.cancelAttachedTask(ctx, current, skipTaskID); err != nil {
-			return err
-		}
-		spawned, err := a.Tasks.Spawn(ctx, CleanupTaskName, JobTaskParams{JobID: jobID, PreviousTaskID: current.CurrentTaskID}, absurdruntime.TaskSpawnOptions(a.Tasks.QueueName(), "cleanup:v3:"+jobID))
-		if err != nil {
-			return fmt.Errorf("schedule cleanup in Absurd: %w", err)
-		}
-		if err := a.Store.AttachCleanupTask(ctx, jobID, current.CurrentTaskID, spawned.TaskID, CleanupTaskName); err != nil {
-			return err
-		}
-		result, err = a.Store.Job(ctx, jobID)
-		return err
-	})
-	return result, err
+	return a.Store.Job(ctx, jobID)
 }
 
-// RecoverCleanupRequests schedules every explicit cleanup request that was
-// durably recorded before its public Absurd Spawn could be attached.
+// RecoverCleanupRequests completes retained requests from deployments that
+// recorded cleanup before scheduling and attachment became atomic.
 func (a Application) RecoverCleanupRequests(ctx context.Context) error {
 	jobIDs, err := a.Store.CleanupRequests(ctx)
 	if err != nil {
@@ -162,8 +114,8 @@ func (a Application) RecoverCleanupRequests(ctx context.Context) error {
 	return nil
 }
 
-// ReconcileCleanupRequests continuously closes the only public Spawn gap:
-// a durable cleanup request whose requester exited before attaching cleanup.
+// ReconcileCleanupRequests also covers older writers during a rolling upgrade.
+// New cleanup requests commit their task attachment atomically.
 func (a Application) ReconcileCleanupRequests(ctx context.Context, interval time.Duration) error {
 	if interval <= 0 {
 		return fmt.Errorf("cleanup reconciliation interval must be positive")
@@ -180,24 +132,6 @@ func (a Application) ReconcileCleanupRequests(ctx context.Context, interval time
 		case <-ticker.C:
 		}
 	}
-}
-
-func (a Application) cancelAttachedTask(ctx context.Context, job Job, skipTaskID string) error {
-	taskID := job.CurrentTaskID
-	if taskID == "" || taskID == skipTaskID {
-		return nil
-	}
-	if err := a.Tasks.CancelTask(ctx, a.Tasks.QueueName(), taskID); err != nil {
-		return fmt.Errorf("cancel attached Absurd task %s: %w", taskID, err)
-	}
-	snapshot, err := a.Tasks.FetchTaskResult(ctx, a.Tasks.QueueName(), taskID)
-	if err != nil {
-		return err
-	}
-	if snapshot == nil || !snapshot.IsTerminal() {
-		return fmt.Errorf("attached Absurd task %s did not reach a public terminal result", taskID)
-	}
-	return nil
 }
 
 func currentTaskID(ctx context.Context) string {
