@@ -1,37 +1,25 @@
 # Dorf Guidance
 
-## Documentation
+## Authorities
 
-Start with the [documentation map](docs/README.md). Read only the authority it identifies for the
-task. Before finishing a change, use the same map to update only the authorities whose documented
-behavior changed.
+Start with the [documentation map](docs/README.md). Read the owner of the boundary you are changing
+and update it when its documented behavior changes. Follow
+[CONTRIBUTING.md](CONTRIBUTING.md) for setup, verification, DCO sign-off, and consequential decisions.
 
-## Operating rules
+Before changing Dorf Core or product direction, apply the
+[North Star product boundary](docs/project/north-star.md#product-boundary). Push back on violations,
+even when a native workflow ships in the Dorf repository or binary.
 
-- Read the relevant authority before changing its boundary. For a consequential product,
-  architecture, or technology choice, follow the
-  [decision procedure](CONTRIBUTING.md#record-a-decision).
-- Before changing Dorf Core or product direction, apply and defend the
-  [North Star product boundary](docs/project/north-star.md#product-boundary). Treat a violation as a
-  reason to push back, including when a native workflow ships in the Dorf repository or binary.
-- Execute deterministic setup and verification through repository-owned commands before spending
-  agent context. Keep Dorf integration at the development-tooling seam and out of managed product
-  code.
-- For fast Go feedback, run `mise run lint` and `mise run complexity`; follow their printed
-  remediation instead of editing recorded complexity ceilings by hand.
-- Update the [Agent Guide](docs/agent-guide.md) only when agent-specific authority, human pauses,
-  secret handling, safety, or handback changes. General operator behavior belongs in the authority
-  selected by the documentation map.
-- For PostgreSQL changes, edit the schema and query sources rather than generated `dbsql` files;
-  regenerate and check them through the repository's `sql:generate` and `sql:check` tasks.
-- Use the GitHub CLI (`gh`) for GitHub issues, pull requests, and other repository operations. Do not
-  use the Codex GitHub app for those operations.
-- Put Markdown issue and PR bodies in a temporary file and pass it with `--body-file`; do not place
-  backticked Markdown directly in a shell command.
+For delegated installation or operation, follow the [Agent Guide](docs/agent-guide.md).
 
-## Verification
+## Development
 
-Follow the exact repository verification sequence and database exception in
-[CONTRIBUTING.md](CONTRIBUTING.md). For changes to durable storage, SQL, transactions, or
-sequencing, run the PostgreSQL-backed integration coverage before pushing. Match any real Sandbox,
-Harness, Provider Gateway, or external-authority proof to the boundary changed.
+- Use repository-managed commands. For fast Go feedback, run `mise run lint` and
+  `mise run complexity`; follow their remediation rather than editing complexity ceilings by hand.
+- For PostgreSQL changes, edit schema and query sources, then use `sql:generate` and `sql:check`.
+  Do not hand-edit generated `dbsql` files.
+- Durable storage, SQL, transaction, and sequencing changes require
+  PostgreSQL-backed integration coverage before pushing. Match live Sandbox, Harness, Provider
+  Gateway, or external-authority proof to the boundary changed.
+- Use `gh` for GitHub repository operations, not the Codex GitHub app.
+  Write Markdown issue and PR bodies to a temporary file and pass it with `--body-file`.
