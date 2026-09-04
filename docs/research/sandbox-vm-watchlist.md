@@ -1,14 +1,14 @@
-# Sandbox and VM Provider Watchlist
+# Sandbox and VM provider watchlist snapshot
 
-Last reviewed: 2026-08-14
+Snapshot date: 2026-08-14
 
-This is the non-normative watchlist to consult whenever Dorf discusses, compares, or selects a
-Sandbox or VM provider. It tracks candidates; it does not establish product requirements, support
-claims, or an implementation roadmap. Recheck current primary sources before making a decision.
+This archived, non-normative snapshot records how Dorf ranked Sandbox and VM candidates on
+2026-08-14. Its rankings, prices, capabilities, and proposed evaluation sequence are not current
+guidance. Recheck current primary sources before making a decision.
 
-## What we value
+## Criteria used for the snapshot
 
-Priority is based on the desired disposable-workstation experience, in this order:
+The 2026-08-14 ranking used the desired disposable-workstation experience in this order:
 
 1. **VM fidelity:** a dedicated kernel or hardware microVM, root access, systemd, persistent disk,
    and normal Linux behavior.
@@ -21,11 +21,11 @@ Priority is based on the desired disposable-workstation experience, in this orde
 5. **Value and adoption friction:** starter credits or a useful free tier, transparent usage
    pricing, good price-to-capability ratio, and no mandatory cloud account for a local-only runtime.
 
-The first portability proof must also preserve Dorf's authority over Jobs, Messages, AgentRuns,
-Evidence, Provider Routes, outcomes, and cleanup. A provider should supply machines, not replace
-Dorf with another workflow or agent control plane.
+The planned first portability proof also had to preserve Dorf's authority over Jobs, Messages,
+AgentRuns, Evidence, Provider Routes, outcomes, and cleanup. The snapshot treated providers as
+machine suppliers rather than replacements for Dorf's workflow or agent control plane.
 
-## P0 — evaluate first
+## P0 in the 2026-08-14 snapshot
 
 - [E2B](https://e2b.dev/docs) — Managed in-house Firecracker-like microVM runtime with an explicit
   Docker and Docker Compose template, browsers, public endpoints, pause/resume, snapshots, metadata,
@@ -56,7 +56,7 @@ Dorf with another workflow or agent control plane.
   Docker-in-Docker, custom images, browsers, tunnels, snapshots, metadata, and a complete REST API;
   good trial value, while private owner networking and some persistence features are paid upgrades.
 
-## P1 — strong watch; spike after the P0 finalists
+## P1 in the 2026-08-14 snapshot
 
 - [Freestyle VMs](https://www.freestyle.sh/products/vms) — Managed hardware microVMs with root,
   systemd, nested KVM, persistent disk, suspend, snapshots, forks, endpoints, and private VPC access;
@@ -95,7 +95,7 @@ Dorf with another workflow or agent control plane.
   microVMs with persistent disks, pause/resume, forks, PTYs, and durable exec IDs; preview preemption,
   an eight-hour powered-session limit, and missing private networking currently block a real proof.
 
-## P2 — watch, but capability or maturity is a weaker match
+## P2 in the 2026-08-14 snapshot
 
 - [Cloudflare Sandbox](https://developers.cloudflare.com/sandbox/) — GA isolated VMs with rich exec,
   files, browser workloads, endpoints, excellent egress controls, and credential injection; idle
@@ -114,7 +114,7 @@ Dorf with another workflow or agent control plane.
   over Cloudflare execution backends; interesting future work, but preview-only and too overlapping
   with Dorf's workspace and runtime composition.
 
-## P3 — adjacent or currently unsuitable for the next provider proof
+## P3 in the 2026-08-14 snapshot
 
 - [Miren Runtime](https://miren.md/) — Mature open container PaaS with Dockerfiles, disks, networking,
   and exec, but its apps, versions, pools, routing, and scaling form a second orchestrator rather than
@@ -132,28 +132,30 @@ Dorf with another workflow or agent control plane.
   [Runra](https://runra.dev/) before evaluating it.
 - **Box** — this list assumes [Box by ASCII](https://box.ascii.dev/).
 
-## Evaluation sequence
+## Evaluation sequence proposed on 2026-08-14
 
-The **E2B**, **smol cloud**, and **smolvm local v1.8.0** capability spikes are complete. The current
-working preference is one narrow **E2B** second-provider slice first because its bounded proof passed
-the most complete workstation terminal. This is not yet a support or adapter decision. Keep smol
-local/cloud next in line after its DNS, explicit-network, prepared-image, and remote Provider Gateway
-gaps are resolved. Continue to **Namespace**, **Daytona VM**, and **Runloop** only if needed. Revisit
-**Freestyle** when a fixed $50/month persistence commitment is justified.
+The **E2B**, **smol cloud**, and **smolvm local v1.8.0** capability spikes were complete. The working
+preference was one narrow **E2B** second-provider slice first because its bounded proof passed the
+most complete workstation terminal. This was not a support or adapter decision. The proposed order
+then put smol local/cloud next after resolving its DNS, explicit-network, prepared-image, and remote
+Provider Gateway gaps. **Namespace**, **Daytona VM**, and **Runloop** followed if needed.
+**Freestyle** was deferred until a fixed $50/month persistence commitment could be justified.
 
-Use the same acceptance bar for every candidate: immutable image, Docker Compose, headless browser,
-authenticated served endpoint, scoped Provider Gateway route, controller-loss reconciliation,
-stop/start persistence, and confirmed deletion.
+The proposed acceptance bar for every candidate was: immutable image, Docker Compose, headless
+browser, authenticated served endpoint, scoped Provider Gateway route, controller-loss
+reconciliation, stop/start persistence, and confirmed deletion.
 
-The adapter implementation remains open. Compare the provider's official SDK, a small direct or
-generated Go client, and a narrowly isolated SDK sidecar only against the operations earned by the
-E2B slice; do not build a provider registry or cross-language adapter framework in advance. Dorf's
+The adapter implementation was open. The proposal compared the provider's official SDK, a small
+direct or generated Go client, and a narrowly isolated SDK sidecar only against the operations
+earned by the E2B slice. It rejected building a provider registry or cross-language adapter
+framework in advance. Dorf's
 use of [Absurd's official Go SDK](https://github.com/earendil-works/absurd/tree/main/sdks), alongside
 its Python and TypeScript SDKs, is a useful upstream-maintenance precedent—not a requirement that
 every Sandbox provider expose all three languages.
 
-For the next local profile, rerun **smolvm** only after its DNS/control-plane gap changes in a newer
-pinned release; otherwise spike **Hypeman** next. Compare **Docker Sandboxes** only if its built-in
-Docker Compose experience outweighs mandatory account sign-in and proprietary distribution. Test
-Linux and Apple silicon where applicable. The same combined Harness image should be expressed as a
-reproducible OCI build rather than preserving Incus-specific packaging.
+For the next local profile, the snapshot proposed rerunning **smolvm** only after its DNS/control-plane
+gap changed in a newer pinned release, with **Hypeman** next otherwise. It proposed comparing
+**Docker Sandboxes** only if its built-in Docker Compose experience outweighed mandatory account
+sign-in and proprietary distribution, testing Linux and Apple silicon where applicable, and
+expressing the combined Harness image as a reproducible OCI build rather than preserving
+Incus-specific packaging.

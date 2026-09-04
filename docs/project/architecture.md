@@ -27,40 +27,20 @@ flowchart LR
 ```
 
 Dorf runs as a stateful control-plane deployment. Native workflows compose one small application
-boundary in-process. Remote and deployment-host CLI clients use the same authenticated API through
-guided Cloudflare, operator-owned HTTPS ingress, or the fixed host-loopback HTTP listener. The API
-projects a deliberately narrow closed set: direct Jobs and typed admission for the compiled coding
-and codebase-investigation workflows, followed by their common Job interaction surface. This is not
-a network exposure of Core itself, a workflow registry, a client SDK, or an embeddable-runtime
-contract. One versioned static Docker Compose project supervises the accepted deployment; the
-[Remote Control API](../control-api.md#deployment-services) owns its exact service inventory,
-capability custody, and network segmentation. Custom public Control API ingress remains
-operator-owned; D102's guided Cloudflare path is the only setup-owned exception.
-
-Compose is the only supervisor in the managed shape. The project uses its own PostgreSQL service,
-segmented bridge networks, setup's protected generated `.env`, and a narrow authenticated reader
-hosted by the worker so the public API never receives provider credentials or provider mutation
-authority. Static manifests ship beside the binary. Setup writes that protected `.env`, applies only
-those exact manifests through Compose, and probes readiness; it exposes no general lifecycle wrapper
-or arbitrary Docker reconciliation. A human or deployment agent uses Compose directly only for
-advanced operations, and no Dorf workload or Sandbox mounts the host Docker socket.
-`DORF_DATABASE_URL` is only a development, test, or explicitly manually supervised process
-override. Host prerequisites and bootstrap privilege follow the single
-[deployment-host setup procedure](../getting-started.md#1-install-the-application-initialize-a-deployment-host);
-version-matched helpers are explicit administrator handoffs, not another reconciler. Setup
-materializes same-host prerequisite helpers; the installer places the remote Incus helper beside
-the binary for use on a separate workstation.
+boundary in-process. CLI clients use the authenticated control projection. The
+[Remote Control API](../control-api.md) owns the current external contract and managed deployment
+boundary. [Getting started](../getting-started.md) owns installation and operation. The checked-in
+[`deploy/compose.yaml`](../../deploy/compose.yaml) owns the exact service and network inventory.
 
 Absurd owns when durable work is eligible, claimed, checkpointed, retried, sleeping, waiting, or
 cancelled. It does not own Dorf's product vocabulary or become the only place where a Job's truth can
 be understood.
 
-Layer ownership follows the [North Star product boundary](north-star.md#product-boundary). Its
-technical consequence here is that the durable custody layer records stable Job and resource facts
-and reconciles requested effects, while workflow/client policy enters only through explicit calls.
-Adapters translate existing authorities; they do not invent another workflow.
-
 ## Authority model
+
+The [North Star product boundary](north-star.md#product-boundary) owns the allocation of product
+responsibility. This table records where the accepted implementation keeps or observes each class
+of fact.
 
 | Fact | Authority |
 | --- | --- |
@@ -205,47 +185,11 @@ needed, and when to request cleanup. Workflow clients delegate those decisions t
 workflow. Native workflows compose the in-process Core contract. CLI clients, including the
 deployment-host CLI, use the authenticated control projection.
 
-The external projection serves one configured Dorf Deployment over authenticated HTTPS. It admits a
-direct Job or either of two fixed typed workflows—coding and codebase investigation—and returns one
-closed flat Job union. All three kinds share canonical inspect/watch, invariant Messages, eligible
-retry, exact Sandbox reads, verified Evidence metadata, and requested cleanup. Its bounded Job index
-contains only immutable identity, kind, and admission time; canonical Job reads own mutable state.
-The Deployment publishes the exact OpenAPI 3.1 schema and one central Problem catalog. It does not
-expose a generic workflow payload or registry, PostgreSQL, Absurd, provider or Harness operations,
-transcript resources, or Core as a generic network or embeddable runtime. Named deployment contexts,
-MCP, a control-plane UI, language SDKs, and a generic public workflow API remain deferred. The
-[Remote Control API](../control-api.md) is the current transport and service authority.
-
-The deployment has one operator Principal. An operator-issued, short-lived, one-use Enrollment lets
-a Client register a client-generated opaque credential; only its digest is retained server-side,
-and each Client can be revoked independently. Setup creates one ordinary Client for the deployment
-host and stores its proof separately from the remote `client.json`. The host Client uses the fixed
-`http://127.0.0.1:8745` origin. An explicit remote `client.json` takes precedence. Compose maps the
-API's HTTP listener only to host loopback; operator-owned HTTPS ingress on the host fronts that
-port, while the guided Cloudflare Tunnel reaches it over the Compose ingress network. The
-[Provider Gateway authority](provider-gateway.md) owns the exact two-origin mapping. The API admits
-and projects Jobs but does not register execution handlers; a separate durable
-worker claims and reconciles the attached Absurd tasks and hosts the fixed authenticated reads the
-API cannot perform without provider authority. The static Compose project supervises both
-long-running responsibilities after its one-shot migration completes. Setup prepares protected
-`.env`, applies that exact project, waits for its services, and verifies readiness. The operator or
-deployment agent uses ordinary Compose directly only for advanced observation and process
-operations.
-General ingress management, multi-user identity, roles, organizations, billing, and quotas remain
-separate work.
-
-A direct Job has no workflow identity. Its first Message carries the caller's exact prompt through
-the `direct` Agent role, and successful work remains open and idle until a caller requests cleanup.
-The authenticated projection reuses Core's Follow, Steer, retry, and exact Sandbox file mechanisms
-without changing their invariants or transferring result meaning and cleanup timing into Core. The
-client—not Core—decides what the work means and when retained resources may be released.
-
-The two workflow routes invoke the compiled typed workflow admissions;
-they do not make the workflow module contract public. Coding retains its Proposal, Outcome, and
-policy that requests cleanup once a terminal Outcome is observed. Investigation retains its exact
-source and report-path policy. Investigation admission accepts only a credential-free reachable
-HTTPS repository and an exact Revision. Their Job views add only their typed fields to the common
-projection.
+The external projection is not a network exposure of Core. The
+[Remote Control API](../control-api.md) owns its supported Job kinds, operations, authentication,
+transport behavior, and managed service boundary. Its published OpenAPI document owns exact request,
+response, and Problem shapes. The [Provider Gateway](provider-gateway.md) owns model-route authority,
+and [`deploy/compose.yaml`](../../deploy/compose.yaml) owns exact process supervision.
 
 ## Native workflow composition
 
@@ -259,21 +203,10 @@ in the [North Star](north-star.md), while concrete behavior lives in code and it
 Git, coding, GitHub, publication, and human-in-the-loop behavior are workflow/module/client policy.
 They may use the Sandbox and Agent handles but are not Core capabilities or provider behavior.
 
-Reusable external-authority integrations are deployment modules composed beside Core. The GitHub
-integration uses a static, backend-free launcher for GitHub's POST-only App Manifest flow, renders
-the returned one-time code for manual transfer to the waiting CLI, and retains the protected
-credential bundle only after verifying the App identity and exact supported permission envelope.
-Setup then directs the operator to the reusable App installation URL, waits for explicit completion,
-and makes one bounded App-authenticated observation; readiness requires at least one installation.
-A rerun proves both App identity and installation without terminal input when already converged, or
-resumes the same installation step when the configured App has none. No polling service, durable
-installation fact, or repository authority enters Core or deployment configuration. Runtime
-operations discover their exact repository installation, verify any
-repository or base authority they need, and mint short-lived repository-scoped tokens with the least
-required subset of the App's admitted permissions. A selected profile's coding runtime composes that
-deployment integration; the durable profile definition stores no GitHub credentials or scope, and
-Job requests do not repeat them. Core knows nothing about GitHub. Credential-free access to a public
-Git repository does not require the integration.
+Reusable external-authority integrations are deployment modules composed beside Core. Each module
+owns its authentication, readiness, observations, and least-authority credentials. Core does not
+gain knowledge of the external product. [Getting started](../getting-started.md) owns current setup
+procedures, while code and tests own the exact integration behavior.
 
 ## Failure and code evolution
 
@@ -284,25 +217,18 @@ Git repository does not require the integration.
 - **External ambiguity:** inspect the external authority; never infer success from timeout or retry
   blindly.
 - **Poison work:** bounded attempts, time, cost, and attention stop infinite agent or provider spend.
-- **Operator retry:** after repairing the cause of the Job's latest attached execution task's
-  terminal failure, `dorf job retry JOB_ID` uses Absurd's public retry API to add exactly one bounded
-  attempt to that same task. Existing checkpoints and Dorf facts remain authoritative; scheduling
-  is not reported as successful resumption.
+- **Operator recovery:** the [Remote Control API](../control-api.md) owns current recovery operations,
+  and [Support](../support.md) owns their diagnosis.
 - **Code changes:** prefer short-lived Jobs, additive compatible task results where practical, and
   versioned workflow code. Let active Jobs drain on their pinned version rather than translating
   opaque execution history.
 
-## Local, on-premise, and hosted shapes
+## Deployment shapes
 
-The first product is local-first. PostgreSQL, Dorf executors, Incus, the Provider Gateway when used,
-and agent services run on infrastructure controlled by the owner. The ordinary supported path
-requires no Dorf-hosted durability account and exposes no host Docker socket to workloads.
-
-"Infrastructure you control" may later include a local machine, bring-your-own-cloud or on-premise
-execution, or a deliberately selected managed Sandbox provider. Support is expressed through
-verified profiles, not a promise that every Harness works on every provider. Multi-tenant
-authentication, billing, quotas, hosted secrets, and untrusted extension execution are separate
-product requirements; they are not implied by choosing Absurd.
+Dorf separates its owner-controlled control plane from Profile-selected Sandbox providers. A
+provider may be local, remote, or managed without becoming the authority for Jobs or workflow
+policy. The [North Star](north-star.md) owns that product direction, and [Support](../support.md) owns
+the combinations currently proved.
 
 Deployment configuration owns host locations and credentials. Durable Jobs retain stable logical
 connection and provider identities, not controller filesystem paths or copied secrets.
@@ -316,42 +242,15 @@ receipt while Jobs continue against the unchanged definition, fencing new admiss
 attempt settles successfully. Profiles are immutable while a referencing Job has incomplete
 cleanup; an update clears verification and default status. Credentials remain host configuration.
 
-Deployment configuration owns at most one Incus endpoint and client identity. Incus Profiles bind
-that endpoint's public identity together with their restricted project, storage pool, network,
-exact image and disk contract, and exact guest-reachable Provider Gateway URL. The adapter may use
-the same Incus API over a local Unix socket or remote HTTPS and obtains controller-to-guest app-server
-streams through Incus port forwarding. Guided setup may observe one unambiguous prepared local
-bridge once to create an exact private Gateway URL in a Profile; admission and runtime use only that
-persisted definition. That local setup convenience never applies to a remote endpoint, and the
-controller path itself does not infer or supply the separate guest-to-Gateway route. Support
-requires the complete selected topology to pass live proof. The supported remote path uses native
-Incus HTTPS on one Tailscale address, a project-restricted client certificate, an
-administrator-owned isolated bridge, and a stable HTTPS Provider Gateway URL.
+Provider adapters own their endpoint identity, topology, transport, and credentials. A Profile
+retains only the exact provider and route configuration required to reproduce its verified behavior.
 
-### Current dogfood deployment terminals
+### Deployment proof
 
-The local workstation terminal runs the Dorf Compose project beside an operator-prepared local
-Incus/KVM endpoint on one owner-controlled machine. Its private Provider Gateway requires no cloud
-controller, public Gateway hostname, or tunnel.
-
-The cloud controller terminal runs the Dorf Compose project on an ordinary shared Linux VM without
-Incus or KVM. Managed E2B Sandboxes reach only the scoped Gateway through a stable
-deployment-owned outbound HTTPS tunnel; administration and storage remain private.
-
-The remote Incus terminal combines those hosts. The Compose controller runs without KVM and reaches
-native Incus HTTPS on the owner-controlled workstation through one Tailscale TCP 8443 grant. Job VMs
-use the workstation's isolated bridge for public IPv4 egress and use the controller's stable HTTPS
-Provider Gateway for model access. The controller has no route to guest addresses; the Incus
-port-forward API carries Harness traffic.
-
-Live proof selects the terminal that exercises the changed authority. Local Incus, image, KVM, or
-private-network changes require the workstation terminal. E2B, remote Gateway, and cloud
-self-hosting changes require the cloud-controller terminal. Remote Incus enrollment, isolation, or
-port-forward changes require the combined terminal. Provider-neutral lifecycle, setup,
-profile, or portability changes that claim to serve both require both fresh terminals. Other Core
-and workflow slices require one real end-to-end terminal on the relevant target, not both by
-default. Host requirements derive from the selected Sandbox profiles; Incus and KVM are not
-universal Dorf prerequisites.
+[Support](../support.md) owns current platforms, deployment shapes, and host requirements.
+[Getting started](../getting-started.md) owns their procedures. A live proof must exercise the
+authority changed by the slice. A provider-neutral claim needs proof on every Profile that the claim
+names; unrelated slices need one relevant end-to-end terminal.
 
 ## Harness and Sandbox adapters
 
@@ -364,7 +263,7 @@ A profile is not usable until Dorf's functional probe and exact proof-resource c
 provider/profile is not supported until its required route and Harness capabilities are admitted
 and proved end to end. Current support claims belong in operator documentation, not this boundary.
 
-Go remains the core. A language-specific executor is justified only when a concrete provider SDK or
+Go is the current core language. A language-specific executor is justified only when a concrete provider SDK or
 workflow need makes that boundary materially smaller. It consumes a dedicated queue through a small
 versioned contract and may not leak vendor types into core Job authority.
 
@@ -399,15 +298,14 @@ keeps this explicit runner until concrete migration volume proves a framework sm
 
 ## Replacement and portability
 
-- Do not build a Python compatibility facade, dual-write SQLite and PostgreSQL, or migrate old local
-  data.
+Apply [Vertical slices, replaceable technology, and preserved
+evidence](principles.md#vertical-slices-replaceable-technology-and-preserved-evidence) before
+preserving an implementation choice.
+
 - Do not create a generic durable-engine interface. Keep Absurd sequencing localized and domain
   facts, deterministic policy, Actions, observations, and reconciliation independent.
 - Use Absurd's public APIs for production behavior. Raw tables may support version-pinned tests or
   operator diagnostics but are not workflow authority.
-- Preserve useful provisioning assets and observed behavior, not obsolete package or schema shape.
-- Delete implementation and coupled tests after the replacing vertical slice reaches the same real
-  terminal.
 
 If Dorf outgrows Absurd, completed Jobs remain historical domain records, active short-lived Jobs can
 drain, and new Jobs can begin on the replacement. Raw checkpoint history is not a portability

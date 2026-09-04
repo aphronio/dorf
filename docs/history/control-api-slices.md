@@ -5,10 +5,9 @@
 > [Getting started](../getting-started.md). This record preserves the discovery, proof, test, and
 > simplification discipline used by the four completed slices.
 
-This was the high-level execution plan for the
-[Remote Control API Design](control-api-design.md). It deliberately avoided prescribing packages,
-tables, helper types, or internal call graphs; each slice first had to discover the smallest truthful
-shape in the code that existed when the slice started.
+This was the high-level execution plan for the Remote Control API. It deliberately avoided
+prescribing packages, tables, helper types, or internal call graphs; each slice first had to discover
+the smallest truthful shape in the code that existed when the slice started.
 
 Its status markers record completed implementation and proof, not release availability.
 
@@ -96,13 +95,12 @@ unrelated deployment inventory is unchanged.
 **Client result:** From another machine, a person enrolls one CLI Client, connects to the single Dorf
 Deployment, admits a direct Job, inspects it, and requests cleanup without SSH.
 
-This slice establishes the smallest HTTPS discovery, authentication, error, receipt, and Job
-representation contracts needed by that journey. The delivered routes and commands are recorded in
-the design's [resource model](control-api-design.md#resource-model) and
-[CLI vocabulary](control-api-design.md#cli-developer-and-agent-experience). The CLI generates
-request identity before admission and hides it from the ordinary human flow. Client configuration
-and its client-generated credential live in one dedicated owner-only file rather than deployment
-configuration or a new keyring abstraction.
+This slice established the smallest HTTPS discovery, authentication, error, receipt, and Job
+representation contracts needed by that journey. The shipped routes and commands now live in the
+[Remote Control API](../control-api.md). The CLI generates request identity before admission and
+hides it from the ordinary human flow. Client configuration and its client-generated credential
+live in one dedicated owner-only file rather than deployment configuration or a new keyring
+abstraction.
 
 The real HTTPS proof enrolled a remote CLI, discarded the first admission response, recovered the
 same Job through exact replay, completed a Turn through the real Sandbox and Harness, and observed
@@ -235,6 +233,5 @@ webhooks, or a web UI. Let subsequent real clients decide which of those is the 
 
 ## Completion
 
-The final slice consolidated current behavior into the product, architecture, API, setup, support,
-and Agent Guide authorities. This plan and its working design are retained only as non-normative
-history rather than a second roadmap.
+The final slice consolidated behavior into the product, architecture, API, setup, support, and Agent
+Guide authorities. This plan remains only as non-normative history rather than a second roadmap.

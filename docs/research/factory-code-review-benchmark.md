@@ -128,31 +128,25 @@ Pareto frontier: MiniMax M2.7 → Kimi K2.5 → GPT-5.4 Mini → GPT-5.2.
   files) with cheap models look competitive — eight MiniMax M2.7 runs cost
   less than one GPT-5.2 run.
 
-## Implications for the Dorf Review Block
+## Dorf hypotheses recorded on 2026-04-29
 
-These are pointers, not commitments — they should be debated against
-[principles.md](../project/principles.md) before they become design.
+The following hypotheses were recorded from the benchmark on 2026-04-29. They are not current Dorf
+requirements or design guidance.
 
-- **Two-pass review is the durable primitive.** Recall first (candidates),
-  precision second (validator). Worth modelling explicitly in dorf's
-  review pipeline rather than relying on a single agent prompt.
-- **Reasoning effort is a first-class input.** Default to `high` on the review
-  pass; expose it as a knob so we can A/B against `medium` once we have our
-  own golden set.
-- **Skill-driven rubric + structured output.** Keep the review rubric and
-  output format in a versioned skill file the agent loads, not buried in
-  glue code. Mirrors Factory's `code-review` skill.
-- **Severity tags + machine-parseable findings.** `[P0|P1|P2]` tagged JSON
-  lets the validator pass and downstream UI consume reviews deterministically.
-- **Model selection is per-task, not global.** GPT-5.2 for "best overall",
-  Kimi K2.5 / GLM-5.1 / Gemini 3 Flash for cheap multi-pass strategies. We
-  should let `.dorf.toml` override model + reasoning effort per repo.
-- **Build our own golden set early.** Factory's results show the answer is
-  workload-specific (e.g., Kimi K2.5 has the best precision in the table at
-  71.5%, but worst recall). For dorf repos we should curate a small
-  golden set of past bugs to score model choice against our actual code.
-- **Watch token cost, not just price/PR.** GPT-5.5 burns 4.2M tokens/PR for
-  worse F1 than GPT-5.2 at 462K — token budget alone is not a quality signal.
-- **Compound passes beat one frontier pass for the cost.** Worth experimenting
-  with N-of-K ensemble voting on a cheap model once the single-pass pipeline
-  is stable.
+- **Two-pass review might outperform one prompt.** The proposed pipeline generated candidates for
+  recall, then validated them for precision.
+- **Reasoning effort might need per-review control.** The proposed experiment compared `high` with
+  `medium` after Dorf had its own golden set.
+- **Skill-driven rubric + structured output.** The proposal put the review rubric and output format
+  in a versioned skill file loaded by the agent, mirroring Factory's `code-review` skill.
+- **Severity tags could make findings machine-readable.** The proposal used `[P0|P1|P2]` tagged JSON
+  for validator and UI consumption.
+- **Model selection might vary by task.** The recorded candidates were GPT-5.2 for the benchmark's
+  best overall score and Kimi K2.5, GLM-5.1, or Gemini 3 Flash for cheaper multi-pass experiments.
+  A repository setting could have controlled model and reasoning effort.
+- **A Dorf-specific golden set would test transferability.** Factory's result was workload-specific.
+  Kimi K2.5, for example, had 71.5% precision but 40.7% recall in the recorded table.
+- **Token use needed separate measurement.** GPT-5.5 used 4.2M tokens per PR for a lower F1 than
+  GPT-5.2 at 462K in this snapshot.
+- **Cheap compound passes warranted an experiment.** The proposed experiment used N-of-K ensemble
+  voting after establishing a single-pass baseline.

@@ -1,10 +1,11 @@
-# E2B Capability Proof
+# Archived E2B capability proof
 
 Observed on 2026-08-14 with the E2B Hobby account, JavaScript SDK 2.39.0 for capability and template
 construction, and Dorf's native Go adapter for lifecycle, execution, and profile qualification. E2B
-completed the D063 second-provider Codex coding-to-PR terminal but is not yet a supported deployment
-profile because its reverse route remains disposable. The ranked candidate list remains the
-[Sandbox and VM Provider Watchlist](sandbox-vm-watchlist.md).
+completed the D063 second-provider Codex coding-to-PR terminal. At that date it was not a supported
+deployment profile because its reverse route remained disposable. This file preserves that dated
+proof and makes no current support claim. For current support and setup, see
+[Support](../support.md) and [Getting started](../getting-started.md).
 
 ## Result
 
@@ -116,7 +117,7 @@ profile manifest are retained locally under ignored `.dorf/e2b-spike/evidence.js
 `dist/e2b-template/profile.json`. No API key, Provider Route, or upstream credential entered either
 template, Sandbox, evidence file, manifest, or logs.
 
-## What remains unproved
+## Unproved as of 2026-08-14
 
 - E2B has official JavaScript and Python SDKs but no official Go SDK. The initial Go boundary is a
   handwritten client over the four lifecycle operations in E2B's current
@@ -132,5 +133,6 @@ template, Sandbox, evidence file, manifest, or logs.
 - The Hobby one-hour continuous runtime, sustained cost, regional behavior, service reliability,
   and the new custom runtime's detailed isolation guarantees were not evaluated.
 
-E2B has completed the provider-neutral coding-to-PR proof. Do not call the disposable-tunnel profile
-a supported deployment until stable reverse-route operations and their recovery behavior are proven.
+As of 2026-08-14, E2B had completed the provider-neutral coding-to-PR proof, but the disposable-tunnel
+profile was not supported. Stable reverse-route operations and their recovery behavior had not been
+proved. [Support](../support.md) and [Getting started](../getting-started.md) own the current status.

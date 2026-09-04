@@ -5,10 +5,10 @@ provider on a private host that the Dorf worker cannot reach directly. Examples 
 Incus host, a local VM service on dedicated metal, and a future Mac or smol machine provider.
 
 This document records a starting point, not an accepted `Node` concept or support claim. The
-[architecture](../project/architecture.md#current-dogfood-deployment-terminals) and
-[D101](../project/decisions.md#d101--compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit)
-remain authoritative for the supported remote Incus topology. Update those authorities before
-replacing that topology.
+[deployment proof boundary](../project/architecture.md#deployment-proof) defines the proof rule.
+[Support](../support.md) owns the current remote Incus support claim. The
+[D101 lifecycle decision](../project/decisions/D101-compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit.md)
+preserves why Compose owns deployment lifecycle.
 
 ## Classify the provider endpoint first
 

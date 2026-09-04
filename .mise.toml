@@ -3,6 +3,7 @@ go = "1.26.5"
 sqlc = "1.31.1"
 "github:earendil-works/absurd" = { version = "0.5.0", asset_pattern = "absurdctl" }
 "aqua:golangci/golangci-lint" = "2.13.1"
+"aqua:lycheeverse/lychee" = "0.24.2"
 "go:github.com/fzipp/gocyclo/cmd/gocyclo" = "0.6.0"
 
 [env]
@@ -44,6 +45,19 @@ run = "go run ./cmd/dorf-brand-terminal"
 description = "Fail when the generated terminal brand lockup is stale"
 run = "go run ./cmd/dorf-brand-terminal --check"
 
+[tasks."decisions:generate"]
+description = "Regenerate the decision guides from authoritative decision records"
+run = "go run ./cmd/dorf-decision-index"
+
+[tasks."decisions:check"]
+description = "Fail when decision metadata or generated guides are invalid or stale"
+run = "go run ./cmd/dorf-decision-index --check"
+
+[tasks."docs:check"]
+description = "Check decision records and local documentation links"
+depends = ["decisions:check"]
+run = "lychee --offline --include-fragments --no-progress --extensions md ."
+
 [tasks."test:fast"]
 description = "Run Go tests without PostgreSQL-backed cases"
 run = "DORF_TEST_DATABASE_URL= go test ./..."
@@ -74,6 +88,7 @@ run = "scripts/check-go-complexity.sh update"
 
 [tasks.check]
 description = "Run the repository's deterministic SQL and Go checks"
+depends = ["docs:check"]
 run = """
 sqlc diff
 sqlc vet

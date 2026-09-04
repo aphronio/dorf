@@ -1,6 +1,6 @@
 <picture>
   <source media="(prefers-reduced-motion: reduce)" srcset="assets/cover.png">
-  <img alt="Workers continuing their jobs inside isolated Rooms in the Dorf village" src="assets/cover.gif">
+  <img alt="Agents continuing Jobs inside isolated Sandboxes in the Dorf village" src="assets/cover.gif">
 </picture>
 
 <p align="center"><strong>Your agents. Your infrastructure. One API.</strong></p>
@@ -29,7 +29,7 @@ Deployment-host CLI       Remote clients       Native workflows
 
 Dorf is a stateful, self-hosted control plane, not an agent framework or an embeddable runtime SDK.
 Native workflows compose Core in-process. The client boundary is intentionally narrow: an enrolled
-CLI can admit a direct Job or either fixed built-in workflow and operate their common interaction
+CLI can admit a direct Job or a documented built-in workflow and operate their common interaction
 loop—Messages, observation, eligible recovery, exact Sandbox files, verified Evidence metadata,
 cleanup, and bounded Job listing—through one configured Dorf deployment. The deployment-host CLI
 uses fixed authenticated loopback HTTP; remote clients use operator-owned HTTPS ingress. Each
@@ -39,7 +39,7 @@ protected configuration and applies that exact Compose project. Operators use Co
 for advanced lifecycle operations. Generic workflow registration, client SDKs, MCP, and a
 control-plane UI remain later work.
 
-The direct CLI path runs caller-owned prompts without workflow policy. Built-in workflows cover
+The direct CLI path runs caller-owned prompts without workflow policy. Built-in workflows include
 coding to a verified pull-request Proposal and repository-grounded codebase investigation. See
 [Getting started](docs/getting-started.md) for supported deployment, profiles, commands, and inputs.
 To hand installation or operation to an agent, point it at the concise
@@ -47,26 +47,8 @@ To hand installation or operation to an agent, point it at the concise
 The stable remote contract and deployment boundary are in the
 [Remote Control API reference](docs/control-api.md).
 
-## Build
+## Build and contribute
 
-```bash
-mise trust --yes
-mise install --locked
-mise run build
-.dorf/bin/dorf version
-```
-
-## Development
-
-Development requires Mise and Docker Compose. Dorf and its checks run natively; Compose supplies the
-disposable PostgreSQL dependency:
-
-```bash
-docker compose -f compose.dev.yaml up --detach --wait postgres
-mise install --locked
-mise run db:init
-mise run check
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete repository contract.
+Follow [CONTRIBUTING.md](CONTRIBUTING.md) for the repository-managed setup, build, and verification
+contract.
 Architecture and authority details are indexed in [docs/README.md](docs/README.md).

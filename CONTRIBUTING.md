@@ -14,16 +14,39 @@ mise exec -- go version -m .dorf/bin/dorf
 ```
 
 Contributors and coding agents provide Mise and Docker Compose. Mise installs the locked native
-toolchain, while `compose.dev.yaml` supplies PostgreSQL 17.10 at
-`127.0.0.1:55432/dorf_test`. Mise uses the matching connection URL unless
-`DORF_TEST_DATABASE_URL` overrides it; skip the Compose start when using that external database.
+toolchain, while [`compose.dev.yaml`](compose.dev.yaml) supplies disposable PostgreSQL. The
+repository-default test database URL lives in [`.mise.toml`](.mise.toml);
+`DORF_TEST_DATABASE_URL` may override it. Skip the Compose start when using an external database.
 `mise run db:init` idempotently initializes the Absurd and Dorf schemas. `mise run check` rejects
 stale generated SQL and runs query preparation, Go tests, and vet without rebuilding an image.
 Self-hosted deployments use the published image through `deploy/compose.yaml` and do not require
 Mise.
 
-Read [AGENTS.md](AGENTS.md) before changing a documented product, architecture, storage, provider,
-setup, image, or release boundary.
+Use the [documentation map](docs/README.md) to find the authority for a product, architecture,
+storage, provider, setup, image, or release boundary before changing it. Coding agents must also
+follow [AGENTS.md](AGENTS.md).
+
+Run `mise run docs:check` for focused documentation validation. It checks decision records and
+generated indexes, then validates repository-local paths and heading anchors in Markdown. It makes
+no network requests and does not decide whether prose still describes the product correctly.
+
+## Record a decision
+
+For a new consequential product, architecture, or technology choice:
+
+1. Update the document that owns the current boundary.
+2. Add the next contiguous `DNNN-stable-slug.md` record under `docs/project/decisions/`. Keep that
+   filename for the life of the record.
+3. Set `Applicability`, `Areas`, `Read when`, and `Decision history`. The generator validates these
+   routing fields.
+4. Run `mise run decisions:generate`.
+
+If the choice revises or reverses an earlier decision, add a new record. Do not rewrite the earlier
+decision or its rationale. Change its `Applicability` to `partial` or `historical`, and append the
+new decision ID to its `Decision history`. Then regenerate both indexes.
+
+Edit an existing record without adding a new one only to clarify its wording, correct an error, or
+append evidence that does not change the choice.
 
 ## DCO sign-off
 

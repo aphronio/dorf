@@ -4,8 +4,10 @@ Non-normative research captured 2026-07-24. Supports issue-driven research into 
 can let a user sign in once with a ChatGPT subscription and then spawn many sandboxes, each running
 its own real Codex app-server, without repeating login per sandbox.
 
-**Outcome (2026-07-29):** decided — see D035 in `docs/project/decisions.md` and
-`docs/history/model-auth-broker.md`. This document remains the evidence base.
+**Outcome (2026-07-29):** decided. See
+[D035](../project/decisions/D035-brokered-model-plane-authentication-credential-free-sandbox-images.md)
+and [`model-auth-broker.md`](../history/model-auth-broker.md). This document remains the evidence
+base.
 
 ## Two independent layers
 

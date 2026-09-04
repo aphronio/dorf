@@ -17,8 +17,8 @@ when the consumer defines one, and execution of requested cleanup. A Harness may
 durable sessions; Dorf does not compete by duplicating them.
 
 This is the product and experience direction. It is not an API inventory, schema, package plan, or
-issue backlog. Current support claims and operator steps belong in the README and getting-started
-guide; implementation detail belongs in code.
+issue backlog. Current support belongs in [Support](../support.md), operator steps belong in
+[Getting started](../getting-started.md), and implementation detail belongs in code.
 
 ## Ten-second model
 
@@ -44,8 +44,8 @@ admission selects a verified profile and rejects combinations whose configuratio
 dependencies, credentials, host constraints, tools, isolation, recovery, or observation contract
 has not been proved.
 
-Dorf does not own the user's memory, priorities, or cross-Job life. A personal assistant such as
-Agent0, a CLI, CI, or another trusted client decides what to delegate and how separate Jobs compose.
+Dorf does not own the user's memory, priorities, or cross-Job life. A personal assistant, CLI, CI,
+or another trusted client decides what to delegate and how separate Jobs compose.
 A workflow owns Job semantics, policy, evaluation, and what its Outcome means. Dorf owns custody of
 execution and durable attachment of that Outcome. A client may instead drive Core mechanisms
 directly and retain that policy itself. Native Dorf workflows and trusted client adapters reach the
@@ -57,8 +57,8 @@ AgentRuns, return the exact bytes of a caller-selected Sandbox file while that S
 available, retain Evidence, and reconcile cleanup after a caller requests it. It does
 not decide that a report is accepted, that a Job is semantically finished, that another Job should be
 started, or that resources should now be released. Those choices belong to a workflow or to a client
-such as Agent0, n8n, a UI, CI, or a human-operated CLI. Shipping a native workflow in the same
-repository, process, or binary does not move its policy into Core.
+such as a personal assistant, n8n, a UI, CI, or a human-operated CLI. Shipping a native workflow in
+the same repository, process, or binary does not move its policy into Core.
 
 Message intent is reusable custody rather than consumer policy. While admission is open, an accepted
 follow joins the FIFO, reuses the authoritative retained Harness Thread, and receives a distinct
@@ -136,7 +136,7 @@ Each workflow or client keeps its policy small and explicit in ordinary code. Do
 configurable DAG engine: Absurd owns generic task execution mechanics, while Dorf and its consumers
 retain the product facts needed to explain and recover the Job.
 
-## Two examples
+## Workflow examples
 
 ### Coding to a verified proposal
 
@@ -224,20 +224,18 @@ The intended authoring unit is a versioned, inspectable workflow contract:
 - evaluation cases and honest terminal conditions; and
 - source, version, provenance, and upgrade policy.
 
-Agents and developers should author ordinary code with excellent scaffolding, machine-readable
+Agents and developers should author ordinary code with good tools, machine-readable
 contracts, fixtures, local evaluation, and diagnostics. An agent may propose workflow changes, but a
 new version must pass its checks and evaluations and receive any required capability approval before
 activation. Humans must be able to inspect, edit, fork, pin, and roll back what the agent built.
 
-Native workflows compose the intended Core contract in-process. External-client surfaces project
-only the operations their real use has earned: one configured deployment now admits direct Jobs and
-the two fixed built-in workflows, then exposes their common interaction, bounded listing, inspection,
-and cleanup surface through one published OpenAPI contract. Generic workflow compatibility, thin
-SDKs, MCP, a control-plane UI, and named multi-deployment contexts remain uncommitted. Dynamic
-agent-authored recipes are a later UX layer, not the requirements driver for Core. Dorf does not
-become a generic automation canvas, graph framework, agent builder, or model/tool Harness.
+Native workflows compose the intended Core contract in-process. External clients receive only the
+operations that real use has earned. The [Remote Control API](../control-api.md) owns the current
+external contract and deferred additions. Dynamic agent-authored recipes do not drive Core
+requirements. Dorf does not become a generic automation canvas, graph framework, agent builder, or
+model or tool Harness.
 
-Native workflows are demos and showcases of compositions available over Core, not compatibility
+Native workflows are examples and proofs of compositions available over Core, not compatibility
 constraints or privileged product contracts. They remain Core consumers even when compiled into the
 Dorf binary. They may own rich domain policy, terminal conditions, and cleanup requests, but that
 policy must remain outside the Core contract and must not create a privileged execution path.
@@ -252,8 +250,7 @@ policy must remain outside the Core contract and must not create a privileged ex
 - one mutable Sandbox shared by unrelated simultaneous Jobs;
 - persistent Worker personalities or cross-Job memory without a real consumer;
 - a mandatory agent review ritual without an earned workflow need;
-- compatibility with superseded Python, SQLite, Worker, Room, or Assignment representations; and
-- preservation or migration of pre-release local data.
+- compatibility work without a real consumer, retained deployment, or published contract.
 
 ## Proof that the North Star is real
 
@@ -266,8 +263,5 @@ and cleanup is retryable and honest.
 
 Dorf's portability claim is real when common consumer and workflow code has no Harness- or
 Sandbox-specific branches beyond profile selection and capability admission. D063 records the
-current proof order.
-
-Mac-like environments and sensitive enterprise experimentation motivate future profiles, but they
-are not current support claims. General workflow authoring follows portability proof; it does not
-lead it.
+accepted proof rationale. Current support and completed proofs belong in their owning operational
+and historical documents. General workflow authoring follows portability proof; it does not lead it.

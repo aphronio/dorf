@@ -1,6 +1,8 @@
 # Getting started
 
-Check [Support and diagnostics](support.md) before installing Dorf.
+Check the [supported-platform matrix and host prerequisites](support.md) before installing Dorf.
+This guide provides commands for the supported configurations; it does not define platform
+support.
 
 ## 1. Install the application; initialize a deployment host
 
@@ -293,7 +295,7 @@ observation through the App authority and prints `GitHub integration ready` only
 at least one installation.
 
 The App registration uses the fixed module permission envelope owned by
-[D093](project/decisions.md#d093--github-authentication-is-an-optional-deployment-integration).
+[D093](project/decisions/D093-github-authentication-is-an-optional-deployment-integration.md).
 Runtime operations still mint repository-scoped tokens with only their exact required subset. Setup
 runs no local callback listener or hosted relay and does not select, poll, or verify a repository.
 Repeating setup remotely proves the configured App identity, permission envelope, and presence of an
@@ -314,8 +316,9 @@ published host port `8745`. The Provider Gateway uses the separate model origin 
 or the exact custom route selected with `--gateway-url`; it provides model access to Sandboxes, not
 Dorf client operations. Before Enrollment, complete the continuous setup flow in
 [the deployment-host procedure](#1-install-the-application-initialize-a-deployment-host). The
-[Remote Control API](control-api.md#deployment-services) owns the exact capability and service
-boundary.
+[Remote Control API](control-api.md#deployment-services) explains the operator-facing service
+boundary; the checked-in [`deploy/compose.yaml`](../deploy/compose.yaml) owns the exact managed
+service and network inventory.
 
 On the deployment host, create a one-use Enrollment:
 
@@ -340,8 +343,8 @@ For non-interactive enrollment, put only the code in a protected file and pass
 one normalized Deployment URL and its client-generated credential in a dedicated owner-only file;
 there are no named contexts or context switching.
 
-Save the complete prompt in `goal.txt`, then use the same CLI to admit and operate a direct Job over
-HTTPS:
+Save the complete prompt in `goal.txt`, then use the same CLI to admit a direct Job and perform the
+operations needed for this walkthrough:
 
 ```bash
 dorf run --goal-file goal.txt --ai-connection AI_CONNECTION --reasoning high
@@ -360,8 +363,8 @@ dorf job abandon JOB_ID
 dorf job cleanup JOB_ID
 ```
 
-To delegate one of the two built-in workflows instead, save the complete coding goal or
-investigation brief in a file and use its typed admission command:
+To delegate a documented built-in workflow instead, save its complete input in a file and use its
+typed admission command:
 
 ```bash
 dorf workflow run coding \
@@ -386,7 +389,7 @@ accepted Job records the exact model it will use.
 
 Remote coding uses the deployment's GitHub integration; its request carries no integration
 credential. Investigation accepts only a credential-free HTTPS repository URL and exact Revision.
-Both workflow Jobs use the same inspect, watch, Message, retry, file, Evidence, and cleanup commands
+These workflow Jobs use the same inspect, watch, Message, retry, file, Evidence, and cleanup commands
 shown above.
 Investigation remains open and idle after settled work until the client requests cleanup. Coding
 requests cleanup once it observes a terminal GitHub Outcome, so retrieve any needed Sandbox file

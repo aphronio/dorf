@@ -118,21 +118,36 @@ proof order and mechanical oracle.
 Prefer a small concrete implementation over a registry or framework whose second member does not
 exist. Do not generalize workflow authoring before Core portability is proved.
 
-## Vertical slices, deletion, and no compatibility tax
+## Vertical slices, replaceable technology, and preserved evidence
 
 Architecture advances through narrow slices that end in real Job behavior. A schema, abstraction,
 or mocked adapter is not a terminal. Dogfood the smallest new path, use its evidence to shape the
 next slice, and delete redundant implementation when the replacement is authoritative. Choose the
-relevant live terminal from the current deployment shapes in the
-[architecture](architecture.md#current-dogfood-deployment-terminals).
+live terminal that exercises the changed authority. [Support](../support.md) owns the current
+deployment shapes.
 
-There are no existing users or local data to preserve during the Go and Absurd replacement. Do not
-add migrations, dual writes, facades, deprecated commands, or compatibility tests for the Python
-and SQLite implementation.
+No model, model configuration, library version, framework, language, abstraction, database shape,
+or existing code is permanent. Replace or delete one when it blocks the product direction or costs
+more to understand and maintain than a better design. Rewrite from scratch when removing old
+assumptions produces the smaller and clearer system.
+
+Every extra concept increases the context that a human or agent must load before making a safe
+change. Prefer fewer concepts, less code, and direct ownership. Upgrade a dependency when the newer
+version removes code or concepts without losing required behavior. Do not maintain compatibility
+for a hypothetical consumer.
+
+During the single-user stage, prototype data may be reset after an explicit preservation decision
+and the user's approval. Preserve useful Job history, Evidence, evaluations, dogfood proof, observed
+failures, and usage, cost, or outcome history when they can improve later work. Delete caches,
+rebuildable projections, obsolete schemas, and records that have no remaining product, evaluation,
+or audit value.
 
 Deletion is product work. Agents are exceptionally good at adding plausible code, so every workflow
 and abstraction must also make redundancy, simplification, and removal visible. A smaller system
 with the same proven behavior is an improvement.
+
+Ask two questions before preserving an existing choice: Would Dorf choose it if development started
+today? Which accumulated evidence must survive its replacement?
 
 ## Tests buy confidence, not inventory
 

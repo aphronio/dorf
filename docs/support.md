@@ -3,7 +3,7 @@
 The managed deployment shape is x86_64 Linux with an operator-prepared Docker Engine and Compose
 plugin. The current early release line is proven on the live controller, remote Incus workstation,
 and public Control API path recorded by
-[D101](project/decisions.md#d101--compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit).
+[D101](project/decisions/D101-compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit.md).
 Its frozen clean-host reproduction remains deferred until the first external operator or a material
 installation, bootstrap, Compose, or packaging change. Local profiles additionally require an
 operator-prepared usable Incus endpoint and KVM; cloud-only E2B deployments do not. Setup does not
@@ -75,8 +75,9 @@ origin. Rerun `dorf setup` to apply the exact installed project as needed and pr
 and other prepared authorities. Setup does not install host prerequisites, repair arbitrary Docker
 resources, or replace the direct advanced Compose operations in the deployment-host procedure.
 
-The [deployment service authority](control-api.md#deployment-services) owns the capability and
-network boundary, while Getting started alone owns lifecycle commands. A deployment using
+The checked-in [`deploy/compose.yaml`](../deploy/compose.yaml) owns the exact managed service and
+network inventory. The [deployment service explanation](control-api.md#deployment-services) covers
+the operator-facing boundary, while Getting started alone owns lifecycle commands. A deployment using
 `DORF_DATABASE_URL` or separately supervised processes is outside this managed topology and must
 own its own supervision and configuration custody. A remote client must not perform any of these
 host actions.

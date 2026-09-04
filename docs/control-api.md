@@ -43,30 +43,12 @@ agent-specific protocol.
 
 ## Resources
 
-The published OpenAPI document is the exact authority for request and response schemas, required
-headers, enum values, content types, status codes, and the closed `direct`, `coding`, and
-`codebase-investigation` Job union. Its current resource shape is:
-
-```text
-GET   /v1
-GET   /v1/openapi.json
-POST  /v1/auth/enrollments/redeem
-GET   /v1/me
-
-GET   /v1/jobs
-POST  /v1/jobs
-POST  /v1/workflows/coding/jobs
-POST  /v1/workflows/codebase-investigation/jobs
-GET   /v1/jobs/{job}
-GET   /v1/jobs/{job}/watch
-POST  /v1/jobs/{job}/messages
-GET   /v1/jobs/{job}/messages/{message}
-POST  /v1/jobs/{job}/retries
-GET   /v1/jobs/{job}/evidence
-PUT   /v1/jobs/{job}/abandon
-PUT   /v1/jobs/{job}/cleanup
-GET   /v1/sandboxes/{sandbox}/files?path=PATH
-```
+[`internal/controlapi/openapi.json`](../internal/controlapi/openapi.json) is the checked-in authority
+for the complete HTTP operation, request, response, schema, status, and Problem inventory. Each
+Deployment serves that same OpenAPI document at `GET /v1/openapi.json`; discovery at `GET /v1`
+links to it. Use the document served by the Deployment when generating a client or making direct
+HTTP calls. The prose below explains behavior that clients need to handle, but it is not an
+operation or schema inventory.
 
 Job listing is newest-first keyset traversal of current facts, not a frozen snapshot. `limit`
 defaults to 50 and accepts 1–100. Each item is deliberately only `id`, `kind`, and `admitted_at`;
@@ -106,25 +88,21 @@ that representation, so clients must also handle transport and generic HTTP serv
 
 ## Deployment services
 
-The accepted managed deployment is one versioned Docker Compose project. Its complete supported
-terminal remains gated by
-[D101's live proof](project/decisions.md#d101--compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit):
+The accepted managed deployment is one versioned Docker Compose project. The checked-in
+[`deploy/compose.yaml`](../deploy/compose.yaml) owns the exact managed service and network inventory;
+the release installs its versioned static counterpart. The optional local-Incus overlay gives only
+the worker access to the configured Incus Unix socket. A remote Incus endpoint instead uses its
+HTTPS and mTLS adapter. The supported remote topology and isolation procedure are in
+[Getting started](getting-started.md#prepare-a-remote-incus-workstation).
+
+At the operator level, the Deployment has two public flows:
 
 ```text
-Remote Client -> HTTPS Deployment origin
-                 | guided cloudflared -> control-api:8745 (Compose ingress)
-                 ` custom host ingress -> 127.0.0.1:8745
-Sandbox       -> HTTPS model origin -> same Tunnel -> provider-gateway:8317
-
-PostgreSQL -> migrate -> worker + authenticated narrow reads <- control-api
+Remote Client -> HTTPS Control API origin
+                 | guided deployment ingress
+                 ` operator-managed ingress
+Sandbox       -> HTTPS model origin -> Provider Gateway
 ```
-
-PostgreSQL, the one-shot migration, the control API, and the durable worker are always in the base
-project, even when no Sandbox provider is selected. Migration must complete successfully before
-the worker or API starts. The worker hosts the independently authenticated, fixed read endpoint
-needed by the API; it is not another service or lifecycle. The Provider Gateway and guided named
-Cloudflare Tunnel are optional foreground services under the same Compose supervisor. Guided setup
-attaches only the control API and Provider Gateway to the Tunnel's ingress network.
 
 The API receives its database URL, read-only API state, and an independently derived reader token
 through the protected Compose environment. It receives no Incus socket or identity, E2B key,
@@ -133,15 +111,10 @@ only default and named AI-connection observation, GitHub installation discovery,
 Job Proposal observation, an exact Job-owned Sandbox file read, and one settled Message result. It
 has no generic proxy, provider selector, credential response, or mutation operation.
 
-Bridge networks keep database access, API-to-worker reads, worker-to-Gateway calls, runtime egress,
-and Gateway ingress explicit. PostgreSQL and the control API publish only on host loopback; the
-control API also joins the optional guided ingress network. The Gateway publishes only an explicitly
-selected Profile route. The one-shot
-migration uses runtime egress only to retrieve its checksum-pinned Absurd schema before exiting. The
-project uses no host networking and mounts no host Docker socket. The optional local-Incus overlay
-gives only the worker the exact configured Incus Unix socket; a remote Incus endpoint uses its
-explicit HTTPS and mTLS adapter instead. The supported remote topology and its isolation procedure
-are defined in [Getting started](getting-started.md#prepare-a-remote-incus-workstation).
+The Compose manifest encodes startup dependencies, health checks, published ports, profile-gated
+services, and network attachment. The project uses no host networking and mounts no host Docker
+socket. [D101](project/decisions/D101-compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit.md)
+records the live proof for this boundary.
 
 The release installs static `dorf-compose.yaml` and `dorf-compose-incus.yaml` manifests beside the
 binary. One continuous `dorf setup` flow writes the protected `.env`, applies only those exact

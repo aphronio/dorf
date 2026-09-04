@@ -1,128 +1,65 @@
-# Shared Provider Gateway
+# Provider Gateway authority
 
-The Provider Gateway is a sibling application subsystem. It owns durable upstream Provider
-AI connections and revocable consumer-specific Inference Routes; it does not own Job sequencing,
-Sandbox lifecycle, transcripts, review, or repository policy.
+This document owns the Provider Gateway's stable responsibility and security boundaries.
+[Getting started](../getting-started.md) owns setup procedures. [Support](../support.md) owns current
+support and diagnostics. Code owns exact broker versions, filesystem paths, configuration fields,
+and protocol behavior.
 
-The supported AI connection is either a ChatGPT subscription or one OpenAI API key through the pinned
-broker. Codex consumes its scoped route through Responses WebSockets; Pi consumes the same scoped
-route as an OpenAI Responses provider. `dorf setup` offers subscription device confirmation or a
-masked API-key input. The standalone `provider connect` command accepts the same choices and reads
-API keys only from a file or standard input. The protected host state retains authenticated
-connection candidates and the selected default; a deployment currently admits one unprefixed
-OpenAI authentication mode at a time. Each retained connection also owns its default Harness model.
-`provider connect` first prepares that retained candidate and publishes its protected environment
-and profile facts for the shipped static Compose project. It applies that exact project, waits for
-the live Gateway, and only then
-verifies and selects the candidate as the deployment default. Publication, application, or
-verification failure preserves the previous healthy default. Prepared state alone is never treated
-as runtime readiness.
+## Ownership
 
-Executable code owns the exact broker version and artifact integrity. Each Sandbox receives only a
-scoped route and its selected Harness configuration.
+The Provider Gateway is a sibling application subsystem. It owns upstream AI Connections and
+revocable consumer-specific Inference Routes. It does not own Job sequencing, Sandbox lifecycle,
+agent transcripts, review, or repository policy.
 
-The Go Job path creates, observes, and revokes routes directly. AI connection data, broker route
-configuration and keys, and the broker executable live under Dorf's resolved XDG host data layout
-at `dorf/provider-gateway`. The overall XDG data root remains configurable through its standard
-authority; the Gateway-specific `DORF_PROVIDER_GATEWAY_STATE` name is container-only and ignored as
-an ambient host relocation.
-Compose bind-mounts the resolved host source at the fixed container path
-`/var/lib/dorf/.local/share/dorf/provider-gateway` (and its `cloudflare` child); neither enters a
-Sandbox image. Dorf retains only the exact route identity derivation and Action settlement state
-needed for reconciliation.
-Route creation asks the live scoped Gateway whether it advertises the Job's opaque model and fails
-before Harness submission when it cannot route it. Dorf retains no model catalog; the Harness and
-upstream Provider remain authoritative for actual execution.
-An unadvertised model remains visible as exact Action-sourced Job attention while the durable task
-retries. Inspection names the model and offers repair or cleanup; a later successful route check
-clears only that Action's attention.
+An AI Connection retains one upstream authentication method and its default Harness model in
+protected host storage. Dorf verifies a candidate before it becomes the deployment default. A failed
+candidate does not replace the last verified default.
 
-Every Sandbox Profile owns one exact guest-reachable `/v1` Gateway URL. E2B requires HTTPS. An Incus
-Profile may use an operator-routed private or VPN address or public HTTPS. Guided local setup has one
-narrow convenience: through the configured local Unix endpoint, it may resolve one unambiguous
-prepared bridge IPv4 once, publish the Gateway there, and persist the exact
-`http://IP:8317/v1` value in the new Profile. Multiple candidate networks stop setup. Admission and
-runtime consume that persisted value and never resolve or infer a bridge route again.
+An Inference Route grants one consumer access through an opaque model name and a revocable key. A
+Sandbox receives only that route and its Harness configuration. It never receives an upstream
+credential or Gateway management authority.
 
-The Incus adapter reaches guest app servers through its Deployment's one configured local Unix or
-remote HTTPS endpoint; that controller path does not create the separate guest-to-Gateway path. A
-remote endpoint never uses guided bridge inference. The supported remote Incus path uses the exact
-stable HTTPS Gateway URL selected by setup; its endpoint, port-forward, guest model turn, worker
-recovery, file retrieval, route revocation, and VM cleanup passed together. The
-[remote Incus workstation procedure](../getting-started.md#prepare-a-remote-incus-workstation) owns
-the network and enrollment steps.
+The Dorf Job path creates, observes, and revokes Routes through stable Actions. Dorf retains the
+Route identity and settlement facts required for reconciliation. The live Gateway remains the
+authority for whether it can route an advertised model.
 
-An existing operator-owned HTTPS `/v1` URL is the universal remote Gateway contract. Advanced
-`--gateway-url` supplies that route without changing Control API ingress. The
-[deployment-host procedure](../getting-started.md#1-install-the-application-initialize-a-deployment-host)
-owns guided Cloudflare prompts, automation inputs, and DNS-replacement consent. Its selected Dorf
-domain remains untouched at the apex. When its two exact direct-child hostnames are Cloudflare
-delegated, setup reconciles one named, outbound-only Tunnel with these routes:
+## Network boundary
 
-```text
-https://CONTROL_HOST/v1  -> control-api:8745
-https://MODEL_HOST/v1    -> provider-gateway:8317
-```
+Every Sandbox Profile names one exact guest-reachable Gateway URL. Profile verification proves that
+the selected provider, route, and Harness work together. Provider-specific network requirements
+belong in [Support](../support.md), and their setup belongs in [Getting started](../getting-started.md).
 
-The Control origin is printed for `dorf connect`; the exact Model URL is persisted in the Sandbox
-Profile. The Tunnel state retains both hostnames and replays them unchanged. They share Tunnel
-custody, not protocol or application authority. Dorf never requests Cloudflare's overwrite behavior
-without the operator choice defined by the setup procedure. Browser authorization creates a broad
-Cloudflare account certificate only for Tunnel and DNS reconciliation; setup removes it after those
-account-level mutations settle.
+Controller-to-Sandbox traffic and Sandbox-to-Gateway traffic are separate paths. A provider adapter
+may implement the first path. It must not infer or silently create the second.
 
-The Gateway and configured `cloudflared` process are foreground siblings in Dorf's static Compose
-project; there is no host Cloudflare service. The Tunnel receives no upstream Provider or Client
-credential and exposes only each hostname's `/v1` surface plus one random nonsecret deployment
-probe. Setup requires public Control API discovery, the probe's HTTP 204, and anonymous
-`/v1/models` access returning the Gateway's HTTP 401. This proves both configured hostnames reach
-the Dorf-owned Tunnel. Operator-owned Gateway ingress retains only the universal protected-API
-check because Dorf does not own its routing configuration.
+The Control API and the Provider Gateway are separate authenticated origins. The checked-in
+[`deploy/compose.yaml`](../../deploy/compose.yaml) owns their exact process and network topology.
+Getting started owns the current guided and operator-managed ingress procedures.
 
-The E2B adapter defaults to restricting Sandbox egress to the configured Gateway hostname, and the
-Gateway's revocable consumer key remains the request capability. A repository profile may
-explicitly admit general internet egress when clean setup and agent work require changing package,
-redirect, or documentation hosts; that broader policy is visible deployment configuration and does
-not give the Sandbox an upstream credential. Disposable Quick Tunnels remain proof tooling only;
-they have no stable hostname or uptime guarantee.
+## Selection and observation
 
-Setup selects one deployment-default AI connection. New Jobs use that default unless the caller
-passes `--ai-connection`; either way, the admitted Job durably pins the resolved connection name.
-When admission omits a model, the Deployment uses the resolved connection's default. An explicit
-model overrides it for that Job. Admission durably pins the exact resolved model, so replay never
-reinterprets a later connection-default change.
-`dorf provider status --profile NAME [--ai-connection CONNECTION]` is the observational deployment check. It
-verifies the selected AI connection and private broker locally, then requests the Profile's exact
-configured `/v1/models` path without a credential and requires the Gateway's HTTP 401 rejection. For
-the guided direct Incus route it first requires the publish address retained in protected `.env` to
-equal the Profile URL; for HTTPS it also attests Dorf-owned Tunnel identity when applicable. It
-never starts the broker, repairs ingress, resolves an Incus bridge, or creates a consumer route.
-Profile verification remains historical artifact proof; status reports current Gateway reachability
-separately and exits unsuccessfully when either authority is not ready. Use `--json` for the same
-machine-readable facts.
+Setup selects one default AI Connection. A Job may select another named connection when the public
+contract permits it. Admission resolves and retains both the exact connection and the exact model,
+so later default changes cannot reinterpret an existing Job.
+
+[Support](../support.md) owns the current readiness command and its interpretation. Observation must
+not start the broker, repair ingress, infer a private route, or create an Inference Route.
 
 ## Security and recovery
 
-- Upstream OAuth or API-key state stays in protected host storage.
-- The pinned broker executable and Dorf launch inputs are attested. The running broker owns and may
-  normalize its protected active configuration, so those mutable bytes are not treated as a second
-  immutable launch authority.
-- Route keys are broker-local capabilities, never upstream credentials.
-- Compose keeps the broker private; any guest-reachable route is an explicit verified Profile field,
-  never a wildcard or inferred public listener.
-- The guided Cloudflare routes forward only the `/v1` surface on each hostname; their one nonsecret
-  deployment-probe path terminates with HTTP 204 and every path outside those surfaces terminates
-  with HTTP 404.
-- A remote route is admitted only as an exact HTTPS `/v1` URL; query credentials and userinfo are
-  rejected. E2B egress is default-deny unless its selected profile explicitly admits internet access.
+- Upstream authentication and Gateway management state stay in protected host storage.
+- Dorf attests the broker executable and its launch inputs. The running broker owns its mutable
+  active configuration.
+- Route keys are consumer capabilities, never upstream credentials.
+- A remote Profile admits one exact protected Gateway URL, not a wildcard listener.
 - Route creation and revocation use stable Action identities and authenticated management calls.
-- Remote status probes send no Gateway credential and reject open or intermediary-blocked endpoints.
-- Missing, ambiguous, stale, or non-WebSocket authentication fails before Sandbox mutation.
-- Cleanup is incomplete until the exact Sandbox route is revoked or attention remains observable.
-- Logs and CLI output never render upstream, management, guard, route, GitHub, or Harness control
+- Remote readiness probes send no Gateway credential and reject an open endpoint.
+- Missing, ambiguous, stale, or unsupported authentication fails before Sandbox mutation.
+- Cleanup remains incomplete until the consumer's exact Route is revoked or the failure remains
+  visible as attention.
+- Logs and CLI output never render upstream, management, Route, GitHub, or Harness control
   credentials.
 
-Do not add provider pooling, fallback, quotas, an ingress registry, another broker, or a wire dialect
-until a concrete validated consumer requires it. D036 remains the governing Gateway decision; D065
-records Pi's reuse of the route, D070 owns Profile fields, and D101 owns deployment supervision.
-D047 changes the control plane from Python to Go, not this connection/route authority model.
+Do not add connection pooling, fallback, quotas, an ingress registry, another broker, or another
+wire protocol until a verified consumer requires it. The [Decision Log](decisions.md) preserves the
+rationale for accepted implementations; this document remains the current subsystem authority.
