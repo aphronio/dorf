@@ -26,7 +26,7 @@ external memory service, transcript mirror, backup, or Sandbox replacement was
 introduced. This does not establish outcomes for arbitrary commands interrupted
 by a crash or recovery after Sandbox disk loss.
 
-## New message-control implementation
+## New message-control verification
 
 Local PostgreSQL tests cover automatic steering and follow selection, immutable
 request replay after state changes, interruption through an attached Steer, and
@@ -38,5 +38,27 @@ intent, accepted Stop replay, missing targets, and a delivered Steer whose answe
 is still pending. CLI tests exercise authenticated automatic messaging and Stop
 through the command dispatcher.
 
-The deployed API proof for the new default and Stop operation is pending the
-0.5.16 deployment. The test Job remains open for that proof; cleanup is pending.
+Dorf 0.5.16 was published from `fc971cd190445d49fcb07184ce13d0c07315e48a`
+after [CI passed](https://github.com/aphronio/dorf/actions/runs/34403922481).
+The [release workflow](https://github.com/aphronio/dorf/actions/runs/34404230559)
+verified and published the immutable release. The host and enrolled local CLI
+installed the published archive through `dorf update`; the host applied its
+manifest and migration through `dorf setup --yes`. The public API reported
+`0.5.16` and `message_interrupt`.
+
+All live checks used the original Job and Sandbox above, through the enrolled CLI:
+
+| Check | Message | Observed result |
+| --- | --- | --- |
+| Default message while idle after deployment | `message-0da8f06d395787837fd1451a` | Resolved to Follow and completed with the original phrase |
+| Start a native shell-tool turn | `message-3117084e74991b350b5101c0` | Resolved to Follow; observed running before the correction and Stop |
+| Default correction during active work | `message-ed2571287432047e17bc44f5` | Resolved to Steer; native delivery completed while the answer remained pending |
+| Stop through the delivered Steer | `message-ed2571287432047e17bc44f5` | API recorded `interrupt_requested=true`; the original Follow subsequently reported outcome `interrupted` |
+| New turn after Stop | `message-49e5747d6e57db9905523295` | Resolved to Follow and was observed running |
+| Replay old Stop and old automatic message during the successor | Original Steer above | Returned the original Message; the successor remained running with `interrupt_requested=false` |
+| Reuse the old message key with a changed requested intent | Original Steer above | Rejected with HTTP 409 `idempotency_conflict` |
+| Successor completion | `message-49e5747d6e57db9905523295` | Completed normally with the original phrase |
+
+Final host `dorf doctor` checks all reported `ready`. Requested cleanup of only
+this proof Job reached the public terminal cleanup state `complete`, with
+admission closed. No proof Sandbox was retained.
