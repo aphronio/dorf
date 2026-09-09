@@ -354,8 +354,10 @@ dorf job inspect JOB_ID
 dorf job watch JOB_ID
 dorf job watch --output jsonl JOB_ID
 dorf job message --input-file follow-up.txt JOB_ID
+dorf job message --intent follow --input-file queued.txt JOB_ID
 dorf job message --intent steer --input-file correction.txt JOB_ID
 dorf job message inspect JOB_ID MESSAGE_ID
+dorf job message interrupt JOB_ID MESSAGE_ID
 dorf job retry JOB_ID
 dorf job evidence JOB_ID
 dorf sandbox file get SANDBOX_ID WORKSPACE_RELATIVE_PATH --output DESTINATION
@@ -475,10 +477,24 @@ dorf sandbox file get SANDBOX_ID WORKSPACE_RELATIVE_PATH --output DESTINATION
 dorf job cleanup JOB_ID
 ```
 
-Follow-up Messages may be queued while earlier work is active; Dorf delivers them FIFO as distinct
-Turns on the retained Thread. Use `--intent steer` only to target the exact active Turn. Steer has
-priority over queued follows, never falls back to a new Turn, and fails honestly if that Turn has
-already become terminal. The CLI owns the raw prompt and the meaning of any resulting prose or files;
+The default `--intent auto` steers an active Turn or admits a Follow when none is active. Dorf
+chooses once at admission and preserves that choice on replay. Use `--intent follow` to queue a
+distinct Turn even while earlier work is active, or `--intent steer` to require an active target.
+An admitted Steer has priority over queued follows, never falls back to a new Turn, and fails
+honestly if its target becomes terminal before delivery.
+
+For a direct Codex Job, `dorf job message interrupt JOB_ID MESSAGE_ID` requests Stop for that
+Message's exact Turn. It also accepts a Steer Message attached to the Turn. Inspect the Message
+until its result reports the observed outcome; `interrupt_requested` records acceptance, not
+completion. Repeating Stop is safe, including after a successor Turn starts. An already settled
+target is a no-op. A Message without a bound Turn cannot yet be interrupted.
+
+An open direct Job retains its Sandbox and native conversation between messages. A worker restart
+reconnects to the retained runtime. Codex session files remain on the Sandbox disk; losing that
+disk loses the session. There is no backup or Sandbox replacement recovery. Request cleanup only
+when the retained workspace and conversation are no longer needed.
+
+The CLI owns the raw prompt and the meaning of any resulting prose or files;
 Dorf owns durable delivery, recovery, the exact
 Job-owned Sandbox, and execution of explicit cleanup. No workflow identity, Git repository, or
 GitHub integration is required.

@@ -132,6 +132,16 @@ Message delivery. Internal delivery reconciliation alternates observation with a
 durable wait, so an accepted steer can wake and overtake polling without another controller path or
 duplicate Turn.
 
+The remote message default resolves automatic intent at admission: steer an active Turn, otherwise
+follow. The accepted request intent and the resolved delivery intent are different facts; both are
+retained so replay never reselects a target. Explicit follow and steer keep their invariant semantics.
+
+An interrupt is a monotonic request on the original Turn-starting AgentRun. A client may address a
+steer Message, but the request binds its original Turn rather than the latest run. Acceptance and
+native execution share the Job effect fence with cleanup. The existing execution task services Stop
+before pending messages, observes the exact native Turn, and records its actual outcome. A lost
+acknowledgement causes observation of that same Turn, never interruption of a successor.
+
 Consumers and workflows choose a typed execution envelope, including Role, capability, and any input
 Revision, but do not authorize message intent, reorder accepted input, or choose Thread semantics.
 Follow and steer retain the invariant behavior above. A workflow may still choose separate Sandboxes

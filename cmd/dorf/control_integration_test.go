@@ -106,6 +106,45 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 		t.Fatalf("Message conflict=%#v", problem)
 	}
 
+	initialRun := core.AgentRunID(replayed.InitialMessageID)
+	if err := store.PrepareAgentRun(ctx, initialRun, "codex", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindAgentRun(ctx, initialRun, "codex", "control-thread", "control-turn", "inProgress"); err != nil {
+		t.Fatal(err)
+	}
+	auto := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/messages", credential, messageKey+"-auto", controlapi.SendMessageRequest{Text: "correct the active answer"})
+	var steering controlapi.Message
+	controlTestJSON(t, auto, http.StatusCreated, &steering)
+	if steering.Intent != "steer" {
+		t.Fatalf("omitted intent did not steer active work: %+v", steering)
+	}
+	if err := store.PrepareAgentRun(ctx, core.AgentRunID(steering.ID), "codex", "control-turn"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindSteer(ctx, core.AgentRunID(steering.ID), "control-turn", "inProgress"); err != nil {
+		t.Fatal(err)
+	}
+	readSteer := controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID+"/messages/"+steering.ID, credential, "", nil)
+	controlTestJSON(t, readSteer, http.StatusOK, &steering)
+	if steering.Result != nil {
+		t.Fatalf("delivered steer fabricated a terminal reply: %+v", steering)
+	}
+	interruptPath := "/v1/jobs/" + committed.ID + "/messages/" + steering.ID + "/interrupt"
+	for range 2 {
+		stop := controlTestRequest(t, restarted, http.MethodPut, interruptPath, credential, "", nil)
+		var stopped controlapi.Message
+		controlTestJSON(t, stop, http.StatusOK, &stopped)
+		if !stopped.InterruptRequested || stopped.ID != steering.ID || stopped.Result != nil {
+			t.Fatalf("interrupt did not return exact accepted custody: %+v", stopped)
+		}
+	}
+	missingStop := controlTestRequest(t, restarted, http.MethodPut, "/v1/jobs/"+committed.ID+"/messages/missing/interrupt", credential, "", nil)
+	controlTestJSON(t, missingStop, http.StatusNotFound, &problem)
+	if problem.Code != "message_not_found" {
+		t.Fatalf("unknown interrupt target=%+v", problem)
+	}
+
 	file := controlTestRequest(t, restarted, http.MethodGet, "/v1/sandboxes/"+replayed.Sandboxes[0].ID+"/files?path=result.bin", credential, "", nil)
 	if file.Code != http.StatusOK || !bytes.Equal(file.Body.Bytes(), fileBytes) {
 		t.Fatalf("Sandbox file status=%d bytes=%v", file.Code, file.Body.Bytes())

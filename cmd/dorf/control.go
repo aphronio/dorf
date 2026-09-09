@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/clientconfig"
+	"github.com/aphronio/dorf/internal/codex"
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlapi"
@@ -379,6 +381,9 @@ func remoteJobCommand(ctx context.Context, args []string, stdout, stderr io.Writ
 	case "watch":
 		return remoteJobWatch(ctx, client, args[1:], stdout, stderr)
 	case "message":
+		if len(args) > 1 && args[1] == "interrupt" {
+			return remoteMessageInterrupt(ctx, cfg, client, args[2:], stdout, stderr)
+		}
 		if len(args) > 1 && args[1] == "inspect" {
 			return remoteMessageInspect(ctx, client, args[2:], stdout, stderr)
 		}
@@ -493,7 +498,7 @@ func remoteMessageSend(ctx context.Context, cfg clientconfig.Config, client *con
 	set.SetOutput(stderr)
 	key := set.String("key", "", "stable request identity for explicit replay")
 	inputFile := set.String("input-file", "", "path containing the complete Message")
-	intent := set.String("intent", "follow", "delivery intent: follow or steer")
+	intent := set.String("intent", "auto", "delivery intent: auto (steer active work, follow when idle), follow, or steer")
 	output := set.String("output", "human", "output format: human or json")
 	if err := set.Parse(args); err != nil {
 		return err
@@ -504,8 +509,8 @@ func remoteMessageSend(ctx context.Context, cfg clientconfig.Config, client *con
 	if err := validateOutput(*output); err != nil {
 		return err
 	}
-	if *intent != "follow" && *intent != "steer" {
-		return fmt.Errorf("message intent must be follow or steer")
+	if *intent != "auto" && *intent != "follow" && *intent != "steer" {
+		return fmt.Errorf("message intent must be auto, follow, or steer")
 	}
 	input, err := readInput(*inputFile, "job message", "Message")
 	if err != nil {
@@ -635,6 +640,9 @@ func remoteSandboxCommand(ctx context.Context, client *controlclient.Client, arg
 func renderRemoteMessage(output io.Writer, message controlapi.Message) {
 	fmt.Fprintf(output, "  sequence: %d\n  intent: %s\n  delivery: %s\n  admitted: %s\n",
 		message.Sequence, message.Intent, message.Delivery.State, message.AdmittedAt.Format(time.RFC3339))
+	if message.InterruptRequested {
+		fmt.Fprintln(output, "  interrupt: requested")
+	}
 	if message.Result != nil {
 		fmt.Fprintf(output, "  outcome: %s\n", message.Result.Outcome)
 		if message.Result.Output != "" {
@@ -1022,6 +1030,8 @@ func (a controlAPIJobs) SendMessage(ctx context.Context, jobID, key string, inpu
 	}
 	var options []core.MessageOption
 	switch input.Intent {
+	case "", string(core.MessageAuto):
+		options = append(options, core.PreferSteer())
 	case string(core.MessageFollow):
 	case string(core.MessageSteer):
 		options = append(options, core.Steer())
@@ -1053,16 +1063,11 @@ func (a controlAPIJobs) GetMessage(ctx context.Context, jobID, messageID string)
 	if err != nil {
 		return controlapi.Message{}, err
 	}
-	var delivery *core.Delivery
-	for i := range deliveries {
-		if deliveries[i].Message.ID == messageID {
-			delivery = &deliveries[i]
-			break
-		}
-	}
-	if delivery == nil {
+	index := slices.IndexFunc(deliveries, func(delivery core.Delivery) bool { return delivery.Message.ID == messageID })
+	if index < 0 {
 		return controlapi.Message{}, controlapi.ErrMessageNotFound
 	}
+	delivery := deliveries[index]
 	message, run := delivery.Message, delivery.AgentRun
 	deliveryState, err := publicMessageDeliveryState(run.State)
 	if err != nil {
@@ -1072,6 +1077,9 @@ func (a controlAPIJobs) GetMessage(ctx context.Context, jobID, messageID string)
 	if job.CleanupState == core.CleanupPending {
 		switch run.State {
 		case core.AgentRunCompleted:
+			if run.TurnOutcome == "" {
+				break
+			}
 			if a.reader == nil {
 				return controlapi.Message{}, fmt.Errorf("control reader is not configured")
 			}
@@ -1097,8 +1105,63 @@ func (a controlAPIJobs) GetMessage(ctx context.Context, jobID, messageID string)
 	}
 	return controlapi.Message{
 		ID: message.ID, JobID: job.ID, Sequence: message.Sequence, Intent: string(message.Intent),
-		Delivery: controlapi.State{State: deliveryState}, Result: result, Attention: attention, AdmittedAt: message.AdmittedAt,
+		InterruptRequested: run.InterruptRequested,
+		Delivery:           controlapi.State{State: deliveryState}, Result: result, Attention: attention, AdmittedAt: message.AdmittedAt,
 	}, nil
+}
+
+func (a controlAPIJobs) InterruptMessage(ctx context.Context, jobID, messageID string) (controlapi.Message, error) {
+	job, err := a.supportedJob(ctx, jobID)
+	if err != nil {
+		return controlapi.Message{}, err
+	}
+	if job.Workflow != "" {
+		return controlapi.Message{}, controlapi.ErrInterruptUnavailable
+	}
+	execution, err := a.store.AgentMessageExecution(ctx, messageID)
+	if errors.Is(err, postgres.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
+		return controlapi.Message{}, controlapi.ErrMessageNotFound
+	}
+	if err != nil {
+		return controlapi.Message{}, err
+	}
+	if execution.Job.ID != job.ID {
+		return controlapi.Message{}, controlapi.ErrMessageNotFound
+	}
+	if execution.AgentRun.Harness != codex.Harness {
+		return controlapi.Message{}, controlapi.ErrInterruptUnavailable
+	}
+	if err := a.store.RequestMessageInterrupt(ctx, job.ID, messageID); err != nil {
+		if errors.Is(err, core.ErrMessageInterruptUnavailable) || errors.Is(err, core.ErrMessageAdmissionClosed) {
+			return controlapi.Message{}, controlapi.ErrInterruptUnavailable
+		}
+		return controlapi.Message{}, err
+	}
+	return a.GetMessage(ctx, job.ID, messageID)
+}
+
+func remoteMessageInterrupt(ctx context.Context, cfg clientconfig.Config, client *controlclient.Client, args []string, stdout, stderr io.Writer) error {
+	set := flag.NewFlagSet("job message interrupt", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	output := set.String("output", "human", "output format: human or json")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if set.NArg() != 2 {
+		return fmt.Errorf("job message interrupt requires one Job ID and Message ID")
+	}
+	if err := validateOutput(*output); err != nil {
+		return err
+	}
+	message, err := client.InterruptMessage(ctx, set.Arg(0), set.Arg(1))
+	if err != nil {
+		return err
+	}
+	if *output == "json" {
+		return writeJSON(stdout, remoteMessageReceipt{Deployment: cfg.DeploymentURL, Message: message})
+	}
+	renderRemoteMessage(stdout, message)
+	return nil
 }
 
 func publicMessageDeliveryState(state core.AgentRunState) (string, error) {
@@ -1526,7 +1589,7 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 	}
 	server := controlapi.NewServer(controlapi.Discovery{
 		Product: "dorf", Version: version.Version,
-		Capabilities: []string{"direct_jobs", "coding_jobs", "codebase_investigation_jobs", "job_list", "job_watch", "messages", "job_retry", "job_abandon", "sandbox_files", "evidence"},
+		Capabilities: []string{"direct_jobs", "coding_jobs", "codebase_investigation_jobs", "job_list", "job_watch", "messages", "message_interrupt", "job_retry", "job_abandon", "sandbox_files", "evidence"},
 	}, auth, jobs)
 	serverCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()

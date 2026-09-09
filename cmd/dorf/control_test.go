@@ -696,6 +696,12 @@ func (j *remoteCLIJobs) GetMessage(_ context.Context, jobID, messageID string) (
 	return controlapi.Message{ID: messageID, JobID: jobID, Sequence: 2, Intent: "follow", Delivery: controlapi.State{State: "completed"}}, nil
 }
 
+func (j *remoteCLIJobs) InterruptMessage(ctx context.Context, jobID, messageID string) (controlapi.Message, error) {
+	message, err := j.GetMessage(ctx, jobID, messageID)
+	message.InterruptRequested = err == nil
+	return message, err
+}
+
 func (j *remoteCLIJobs) Retry(_ context.Context, jobID, _ string) (controlapi.Retry, bool, error) {
 	if jobID != j.job.ID {
 		return controlapi.Retry{}, false, controlapi.ErrJobNotFound

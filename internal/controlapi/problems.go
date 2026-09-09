@@ -27,6 +27,7 @@ var problemCatalog = []ProblemDescriptor{
 	describeProblem(409, "idempotency_conflict", "Idempotency-Key is bound to different input", false),
 	describeProblem(400, "idempotency_key_required", "Exactly one valid Idempotency-Key is required", false),
 	describeProblem(500, "internal_error", "The request could not be completed", true),
+	describeProblem(409, "interrupt_unavailable", "No supported bound turn can accept an interrupt", false),
 	describeProblem(400, "invalid_cursor", "Cursor is invalid", false),
 	describeProblem(422, "invalid_file_path", "Sandbox file path must be clean and workspace-relative", false),
 	describeProblem(422, "invalid_input", "Input could not be accepted", false),

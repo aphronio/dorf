@@ -290,6 +290,15 @@ func (c *Client) Message(ctx context.Context, jobID, messageID string) (controla
 	return response, err
 }
 
+func (c *Client) InterruptMessage(ctx context.Context, jobID, messageID string) (controlapi.Message, error) {
+	if jobID == "" || messageID == "" {
+		return controlapi.Message{}, fmt.Errorf("interrupt requires exact Job and Message identities")
+	}
+	var response controlapi.Message
+	err := c.do(ctx, http.MethodPut, []string{"v1", "jobs", jobID, "messages", messageID, "interrupt"}, nil, true, "", &response)
+	return response, err
+}
+
 // Retry admits or replays one explicit retry request using caller-retained
 // request identity.
 func (c *Client) Retry(ctx context.Context, jobID, key string) (controlapi.Retry, error) {

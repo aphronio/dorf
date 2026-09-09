@@ -55,7 +55,7 @@ select id,job_id,message_id,state,
        coalesce(turn_id,'') as turn_id,coalesce(turn_outcome,'') as turn_outcome,
        coalesce(attention,'') as attention,role,coalesce(input_revision,'') as input_revision,
        coalesce(capability,'') as capability,coalesce(sandbox_id,'') as sandbox_id,
-       coalesce(submission_nonce,'') as submission_nonce,started_at,finished_at
+       coalesce(submission_nonce,'') as submission_nonce,started_at,finished_at,interrupt_requested
 from dorf.agent_runs
 where message_id=sqlc.arg(message_id)::text;
 
@@ -153,3 +153,19 @@ where m.job_id=sqlc.arg(job_id)
   and (ar.state in ('submitting','active','uncertain')
        or (ar.baseline_turn_id is not null and ar.state not in ('completed','failed','interrupted')))
 order by m.sequence,ar.id;
+
+-- name: GetMessageInterruptTarget :one
+select source.id,source.state,source.interrupt_requested
+from dorf.agent_runs requested
+join dorf.agent_runs source on source.job_id=requested.job_id
+    and source.sandbox_id=requested.sandbox_id and source.harness=requested.harness
+    and source.thread_id=requested.thread_id
+    and source.turn_id=coalesce(requested.turn_id, (
+        select steer_target_turn_id from dorf.job_messages where id=requested.message_id
+    ))
+join dorf.job_messages origin on origin.id=source.message_id and origin.delivery_intent='follow'
+where requested.job_id=sqlc.arg(job_id) and requested.message_id=sqlc.arg(message_id);
+
+-- name: RequestAgentRunInterrupt :execrows
+update dorf.agent_runs set interrupt_requested=true
+where id=sqlc.arg(run_id) and state in ('active','uncertain') and turn_id is not null;

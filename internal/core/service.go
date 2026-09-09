@@ -205,16 +205,15 @@ func (s ExecutionService) ReconcileJobAgent(ctx context.Context, jobID string) (
 		if err != nil {
 			return err
 		}
-		if run.State == AgentRunCompleted {
+		if run.hasPendingInterrupt() {
+			return s.interruptAgentMessage(ctx, run, operation)
+		}
+		switch run.State {
+		case AgentRunCompleted, AgentRunActive:
 			_, err := s.executeAgentRun(ctx, delivery, operation, "")
 			return err
-		}
-		if run.State == AgentRunFailed || run.State == AgentRunInterrupted {
+		case AgentRunFailed, AgentRunInterrupted:
 			return nil
-		}
-		if run.State == AgentRunActive {
-			_, err := s.executeAgentRun(ctx, delivery, operation, "")
-			return err
 		}
 		if err := s.deliver(ctx, authoritative.Job, delivery, operation, input); err != nil {
 			return err

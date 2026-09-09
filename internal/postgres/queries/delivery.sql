@@ -1,6 +1,6 @@
 -- name: NextAgentMessage :one
 with current_turn_start as (
-    select m.id as message_id,ar.turn_id,ar.state
+    select m.id as message_id,ar.turn_id,ar.state,ar.interrupt_requested
     from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id
     where m.job_id=sqlc.arg(job_id) and ar.turn_id is not null
       and m.delivery_intent='follow'
@@ -19,6 +19,8 @@ with current_turn_start as (
       and ar.state in ('pending','submitting','uncertain') and ar.turn_id is null
     order by m.sequence limit 1
 ), candidate as (
+    select message_id,-1 as priority,0 as sequence from current_turn_start where interrupt_requested
+    union all
     select message_id,0 as priority,sequence from unsettled_steer
     union all
     select message_id,1,0 from current_turn_start

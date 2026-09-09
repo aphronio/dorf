@@ -196,6 +196,45 @@ func (a Agent) SteerTurn(ctx context.Context, owner provider.Ownership, sessionI
 	return acceptedTurnID, err
 }
 
+func (a Agent) InterruptTurn(ctx context.Context, owner provider.Ownership, threadID, turnID string) (core.HarnessBinding, error) {
+	ctx, cancel := a.timeoutContext(ctx)
+	defer cancel()
+	binding := core.HarnessBinding{Harness: Harness, ThreadID: threadID}
+	err := a.withServer(ctx, owner, func(p *protocol) error {
+		var err error
+		binding.Turn, err = p.interruptTurn(ctx, threadID, turnID)
+		return err
+	})
+	return binding, err
+}
+
+func (p *protocol) interruptTurn(ctx context.Context, threadID, turnID string) (TurnOutcome, error) {
+	if err := p.resumeThread(ctx, threadID); err != nil {
+		return TurnOutcome{}, err
+	}
+	turn, err := p.exactTurn(ctx, threadID, turnID)
+	if err != nil || turn.Terminal() {
+		return turn, err
+	}
+	if _, err := p.call(ctx, "turn/interrupt", map[string]any{"threadId": threadID, "turnId": turnID}); err != nil {
+		return TurnOutcome{}, err
+	}
+	return p.exactTurn(ctx, threadID, turnID)
+}
+
+func (p *protocol) exactTurn(ctx context.Context, threadID, turnID string) (TurnOutcome, error) {
+	turns, err := p.readTurns(ctx, threadID)
+	if err != nil {
+		return TurnOutcome{}, err
+	}
+	for _, turn := range turns {
+		if turn.ID == turnID {
+			return turn, nil
+		}
+	}
+	return TurnOutcome{}, &attentionError{reason: "bound Codex turn is missing from its thread"}
+}
+
 func (a Agent) WaitTurn(ctx context.Context, owner provider.Ownership, threadID, turnID string) (core.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()

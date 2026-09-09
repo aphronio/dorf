@@ -54,6 +54,7 @@ func newHandlerContext(discovery Discovery, auth Auth, jobs Jobs, shutdown conte
 	h.mux.HandleFunc("/v1/jobs/{job}/watch", h.authenticate(h.watchRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/messages", h.authenticate(h.sendMessageRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/messages/{message}", h.authenticate(h.messageRoute))
+	h.mux.HandleFunc("/v1/jobs/{job}/messages/{message}/interrupt", h.authenticate(h.interruptMessageRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/retries", h.authenticate(h.retryRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/evidence", h.authenticate(h.evidenceRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/abandon", h.authenticate(h.abandonRoute))
@@ -271,6 +272,18 @@ func (h *handler) messageRoute(w http.ResponseWriter, r *http.Request, _ control
 		}
 		h.reply(w, http.StatusOK, message)
 	}
+}
+
+func (h *handler) interruptMessageRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
+	if !h.exact(w, r, http.MethodPut, false) {
+		return
+	}
+	message, err := h.jobs.InterruptMessage(r.Context(), r.PathValue("job"), r.PathValue("message"))
+	if err != nil {
+		h.serviceError(w, r, err)
+		return
+	}
+	h.reply(w, http.StatusOK, message)
 }
 
 func (h *handler) retryRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
@@ -664,6 +677,10 @@ func (h *handler) decode(w http.ResponseWriter, r *http.Request, output any) boo
 }
 
 func (h *handler) serviceError(w http.ResponseWriter, r *http.Request, err error) {
+	if code := messageProblemCode(err); code != "" {
+		h.fail(w, problem(code))
+		return
+	}
 	var value Problem
 	switch {
 	case errors.Is(err, controlauth.ErrUnauthenticated):
@@ -689,10 +706,6 @@ func (h *handler) serviceError(w http.ResponseWriter, r *http.Request, err error
 		value = problem("file_not_found")
 	case errors.Is(err, ErrFileUnavailable):
 		value = problem("file_unavailable")
-	case errors.Is(err, ErrSteerUnavailable):
-		value = problem("steer_unavailable")
-	case errors.Is(err, ErrMessageUnavailable):
-		value = problem("message_unavailable")
 	case errors.Is(err, ErrRetryUnavailable):
 		value = problem("retry_unavailable")
 	case errors.Is(err, ErrAbandonUnavailable):
@@ -707,6 +720,19 @@ func (h *handler) serviceError(w http.ResponseWriter, r *http.Request, err error
 		value = problem("internal_error")
 	}
 	h.fail(w, value)
+}
+
+func messageProblemCode(err error) string {
+	switch {
+	case errors.Is(err, ErrSteerUnavailable):
+		return "steer_unavailable"
+	case errors.Is(err, ErrInterruptUnavailable):
+		return "interrupt_unavailable"
+	case errors.Is(err, ErrMessageUnavailable):
+		return "message_unavailable"
+	default:
+		return ""
+	}
 }
 
 func (h *handler) authError(w http.ResponseWriter) {

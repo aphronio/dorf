@@ -61,6 +61,7 @@ func TestHandlerBoundary(t *testing.T) {
 		{http.MethodGet, "/v1/jobs?limit=1", nil},
 		{http.MethodPost, "/v1/jobs/job-1/messages", strings.NewReader(`{}`)},
 		{http.MethodGet, "/v1/jobs/job-1/messages/message-1", nil},
+		{http.MethodPut, "/v1/jobs/job-1/messages/message-1/interrupt", nil},
 		{http.MethodPost, "/v1/jobs/job-1/retries", nil},
 		{http.MethodGet, "/v1/jobs/job-1/evidence", nil},
 		{http.MethodPut, "/v1/jobs/job-1/abandon", nil},
@@ -739,6 +740,12 @@ func (j *fakeJobs) GetMessage(_ context.Context, jobID, messageID string) (contr
 		return controlapi.Message{}, controlapi.ErrMessageNotFound
 	}
 	return j.message, nil
+}
+
+func (j *fakeJobs) InterruptMessage(ctx context.Context, jobID, messageID string) (controlapi.Message, error) {
+	message, err := j.GetMessage(ctx, jobID, messageID)
+	message.InterruptRequested = err == nil
+	return message, err
 }
 
 func (j *fakeJobs) Retry(_ context.Context, jobID, key string) (controlapi.Retry, bool, error) {

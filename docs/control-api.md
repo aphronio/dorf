@@ -80,6 +80,20 @@ then requests cleanup. Cleanup remains separate from execution and Outcome. A se
 internal encoded JSON observation exceeds 16 MiB returns
 the published `message_unavailable` Problem rather than a partial result.
 
+Message requests default to `auto`: choose steer against the active Turn at admission, otherwise
+admit a follow. The stored request intent distinguishes automatic selection from explicit follow
+or steer, so replay cannot change either the request or its resolved target. A delivered steer
+can have a null result while its Turn is still active; clients wait for the result, not merely
+delivery acknowledgement, before presenting the final answer.
+
+A direct Codex Message can request interruption of its exact native Turn. This idempotent request
+also accepts a steer attached to that Turn; it never targets a successor and does not close Job
+admission or clean up the Sandbox. Dorf stores acceptance before contacting Codex, prioritizes Stop
+over pending message delivery, and reconciles the native outcome after an uncertain acknowledgement.
+`interrupt_requested` is acceptance, while the Message result is the observed outcome. An already
+terminal target is a no-op. Unbound Messages and unsupported Job or Harness combinations return
+`interrupt_unavailable`. Interruption is available through the `message_interrupt` discovery capability.
+
 Sandbox files are exact, caller-selected, workspace-relative regular-file reads at Sandbox level.
 The server enforces Job custody and the cleanup fence; the response includes exact bytes, length, and
 digest. There is no remote file write, listing, glob, archive, or directory API. Evidence responses

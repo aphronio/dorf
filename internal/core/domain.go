@@ -203,26 +203,32 @@ type Message struct {
 type MessageDeliveryIntent string
 
 const (
+	MessageAuto   MessageDeliveryIntent = "auto"
 	MessageFollow MessageDeliveryIntent = "follow"
 	MessageSteer  MessageDeliveryIntent = "steer"
 )
+
+func (intent MessageDeliveryIntent) accepts(resolved MessageDeliveryIntent) bool {
+	return intent == MessageAuto || intent == resolved
+}
 
 // AgentRun is the durable delivery of one Message to an agent harness. A Follow
 // binds a new Turn; a Steer remains bound to the exact active Turn captured at
 // admission and never falls back to creating a Turn.
 type AgentRun struct {
-	ID               string        `json:"id"`
-	JobID            string        `json:"job_id"`
-	MessageID        string        `json:"message_id"`
-	Harness          string        `json:"harness,omitempty"`
-	ThreadID         string        `json:"thread_id,omitempty"`
-	State            AgentRunState `json:"state"`
-	BaselineRecorded bool          `json:"baseline_recorded"`
-	BaselineTurnID   string        `json:"baseline_turn_id,omitempty"`
-	TurnID           string        `json:"turn_id,omitempty"`
-	TurnOutcome      string        `json:"turn_outcome,omitempty"`
-	Attention        string        `json:"attention,omitempty"`
-	Role             string        `json:"role"`
+	ID                 string        `json:"id"`
+	JobID              string        `json:"job_id"`
+	MessageID          string        `json:"message_id"`
+	Harness            string        `json:"harness,omitempty"`
+	ThreadID           string        `json:"thread_id,omitempty"`
+	State              AgentRunState `json:"state"`
+	BaselineRecorded   bool          `json:"baseline_recorded"`
+	BaselineTurnID     string        `json:"baseline_turn_id,omitempty"`
+	TurnID             string        `json:"turn_id,omitempty"`
+	TurnOutcome        string        `json:"turn_outcome,omitempty"`
+	InterruptRequested bool          `json:"interrupt_requested"`
+	Attention          string        `json:"attention,omitempty"`
+	Role               string        `json:"role"`
 	// InputRevision is the accepted checkout when this delivery begins. A
 	// later git-revision Evidence records what the AgentRun left behind.
 	InputRevision   string    `json:"input_revision,omitempty"`

@@ -137,7 +137,7 @@ func createReviewRunTx(ctx context.Context, queries *dbsql.Queries, jobID, revis
 	message.Sequence = sequence
 	if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{
 		ID: message.ID, JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID,
-		Sequence: message.Sequence, Input: message.Input, DeliveryIntent: message.Intent,
+		Sequence: message.Sequence, Input: message.Input, DeliveryIntent: message.Intent, RequestedIntent: string(message.Intent),
 	}); err != nil {
 		return "", err
 	}
@@ -245,7 +245,7 @@ func (s Store) RecordReviewFeedback(ctx context.Context, runID string, outcome c
 		}
 		if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{
 			ID: expectedMessage.ID, JobID: expectedMessage.JobID, FromKind: expectedMessage.FromKind, FromID: expectedMessage.FromID,
-			Sequence: expectedMessage.Sequence, Input: expectedMessage.Input, DeliveryIntent: expectedMessage.Intent,
+			Sequence: expectedMessage.Sequence, Input: expectedMessage.Input, DeliveryIntent: expectedMessage.Intent, RequestedIntent: string(expectedMessage.Intent),
 		}); err != nil {
 			return core.Message{}, false, err
 		}

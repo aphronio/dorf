@@ -25,3 +25,7 @@ type Harness interface {
 	RecoverStrictReviewTurn(context.Context, provider.Ownership, string, provider.ReviewMetadata, string, string, string, string) (core.HarnessBinding, error)
 	ReadStrictReviewTurn(context.Context, provider.Ownership, string, provider.ReviewMetadata, string, string, string, string, string, string) (core.HarnessBinding, error)
 }
+
+type InterruptibleHarness interface {
+	InterruptTurn(context.Context, provider.Ownership, string, string) (core.HarnessBinding, error)
+}

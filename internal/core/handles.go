@@ -55,6 +55,10 @@ type MessageOption struct {
 // admits an ordinary FIFO follow.
 func Steer() MessageOption { return MessageOption{intent: MessageSteer} }
 
+// PreferSteer chooses Steer at admission when an active Turn exists; otherwise
+// it admits a Follow. The resolved intent and target never change afterward.
+func PreferSteer() MessageOption { return MessageOption{intent: MessageAuto} }
+
 func (h JobHandle) ID() string { return h.id }
 
 func (h SandboxHandle) ID() string { return h.id }
@@ -220,7 +224,9 @@ func (h AgentHandle) Message(ctx context.Context, key, input string, options ...
 	}
 	if len(options) == 1 {
 		intent = options[0].intent
-		if intent != MessageSteer {
+		switch intent {
+		case MessageSteer, MessageAuto:
+		default:
 			return MessageReceipt{}, fmt.Errorf("unsupported Agent Message delivery option")
 		}
 	}
@@ -240,7 +246,7 @@ func (h AgentHandle) Message(ctx context.Context, key, input string, options ...
 	expectedID := MessageID(h.jobID, MessageFromHuman, key)
 	targetValid := message.Intent == MessageFollow && message.TargetTurnID == "" || message.Intent == MessageSteer && message.TargetTurnID != ""
 	if message.ID != expectedID || message.JobID != h.jobID || admitted.SandboxID != h.sandboxID || message.FromKind != MessageFromHuman || message.FromID != key ||
-		message.Input != input || message.Sequence <= 0 || message.Intent != intent || !targetValid {
+		message.Input != input || message.Sequence <= 0 || !intent.accepts(message.Intent) || !targetValid {
 		return MessageReceipt{}, fmt.Errorf("Agent Message admission returned a foreign receipt")
 	}
 	if h.application.Tasks == nil {

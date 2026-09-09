@@ -33,6 +33,7 @@ select coalesce(turn_id,'') as turn_id,coalesce(harness,'') as harness,
        coalesce(thread_id,'') as thread_id
 from dorf.agent_runs ar
 where ar.job_id=$1 and ar.state='active' and ar.turn_id is not null
+  and not ar.interrupt_requested
   and ar.role=$2 and ar.sandbox_id=$3
   and (
     select count(*) from dorf.agent_runs active
@@ -191,7 +192,7 @@ func (q *Queries) GetMessage(ctx context.Context, messageID string) (GetMessageR
 }
 
 const getMessageBySender = `-- name: GetMessageBySender :one
-select id,job_id,from_kind,from_id,sequence,input,delivery_intent,
+select id,job_id,from_kind,from_id,sequence,input,delivery_intent,requested_intent,
        coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at
 from dorf.job_messages
 where job_id=$1 and from_kind=$2
@@ -212,6 +213,7 @@ type GetMessageBySenderRow struct {
 	Sequence          int64
 	Input             string
 	DeliveryIntent    core.MessageDeliveryIntent
+	RequestedIntent   string
 	SteerTargetTurnID string
 	AdmittedAt        time.Time
 }
@@ -227,6 +229,7 @@ func (q *Queries) GetMessageBySender(ctx context.Context, arg GetMessageBySender
 		&i.Sequence,
 		&i.Input,
 		&i.DeliveryIntent,
+		&i.RequestedIntent,
 		&i.SteerTargetTurnID,
 		&i.AdmittedAt,
 	)
@@ -258,12 +261,12 @@ func (q *Queries) InsertInitialMessage(ctx context.Context, arg InsertInitialMes
 
 const insertMessage = `-- name: InsertMessage :exec
 insert into dorf.job_messages(
-    id,job_id,from_kind,from_id,sequence,input,delivery_intent,steer_target_turn_id
+    id,job_id,from_kind,from_id,sequence,input,delivery_intent,steer_target_turn_id,requested_intent
 )
 values(
     $1,$2,$3,$4,
     $5,$6,$7,
-    nullif($8::text,'')
+    nullif($8::text,''),$9
 )
 `
 
@@ -276,6 +279,7 @@ type InsertMessageParams struct {
 	Input             string
 	DeliveryIntent    core.MessageDeliveryIntent
 	SteerTargetTurnID string
+	RequestedIntent   string
 }
 
 func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) error {
@@ -288,6 +292,7 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) er
 		arg.Input,
 		arg.DeliveryIntent,
 		arg.SteerTargetTurnID,
+		arg.RequestedIntent,
 	)
 	return err
 }
@@ -305,7 +310,14 @@ select m.id as message_id,m.job_id as message_job_id,m.from_kind,m.from_id,m.seq
        coalesce(ar.turn_outcome,'') as turn_outcome,
        coalesce(ar.attention,'') as attention,coalesce(ar.role,'') as role,coalesce(ar.input_revision,'') as input_revision,
        coalesce(ar.capability,'') as capability,coalesce(ar.sandbox_id,'') as sandbox_id,
-       coalesce(ar.submission_nonce,'') as submission_nonce,ar.started_at,ar.finished_at
+       coalesce(ar.submission_nonce,'') as submission_nonce,ar.started_at,ar.finished_at,
+       exists (
+           select 1 from dorf.agent_runs source
+           where source.job_id=ar.job_id and source.sandbox_id=ar.sandbox_id
+             and source.harness=ar.harness and source.thread_id=ar.thread_id
+             and source.turn_id=coalesce(ar.turn_id,m.steer_target_turn_id)
+             and source.interrupt_requested
+       ) as interrupt_requested
 from dorf.job_messages m
 left join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=$1
@@ -313,34 +325,35 @@ order by m.sequence
 `
 
 type ListDeliveriesRow struct {
-	MessageID         string
-	MessageJobID      string
-	FromKind          core.MessageFromKind
-	FromID            string
-	Sequence          int64
-	Input             string
-	DeliveryIntent    core.MessageDeliveryIntent
-	SteerTargetTurnID string
-	AdmittedAt        time.Time
-	AgentRunPresent   bool
-	AgentRunID        string
-	AgentRunJobID     string
-	AgentRunMessageID string
-	State             core.AgentRunState
-	Harness           string
-	ThreadID          string
-	BaselineRecorded  bool
-	BaselineTurnID    string
-	TurnID            string
-	TurnOutcome       string
-	Attention         string
-	Role              string
-	InputRevision     string
-	Capability        string
-	SandboxID         string
-	SubmissionNonce   string
-	StartedAt         sql.NullTime
-	FinishedAt        sql.NullTime
+	MessageID          string
+	MessageJobID       string
+	FromKind           core.MessageFromKind
+	FromID             string
+	Sequence           int64
+	Input              string
+	DeliveryIntent     core.MessageDeliveryIntent
+	SteerTargetTurnID  string
+	AdmittedAt         time.Time
+	AgentRunPresent    bool
+	AgentRunID         string
+	AgentRunJobID      string
+	AgentRunMessageID  string
+	State              core.AgentRunState
+	Harness            string
+	ThreadID           string
+	BaselineRecorded   bool
+	BaselineTurnID     string
+	TurnID             string
+	TurnOutcome        string
+	Attention          string
+	Role               string
+	InputRevision      string
+	Capability         string
+	SandboxID          string
+	SubmissionNonce    string
+	StartedAt          sql.NullTime
+	FinishedAt         sql.NullTime
+	InterruptRequested bool
 }
 
 func (q *Queries) ListDeliveries(ctx context.Context, jobID string) ([]ListDeliveriesRow, error) {
@@ -381,6 +394,7 @@ func (q *Queries) ListDeliveries(ctx context.Context, jobID string) ([]ListDeliv
 			&i.SubmissionNonce,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.InterruptRequested,
 		); err != nil {
 			return nil, err
 		}

@@ -4,7 +4,7 @@ values(sqlc.arg(id),sqlc.arg(job_id),'human',sqlc.arg(from_id),1,sqlc.arg(input)
 on conflict(job_id,from_kind,from_id) do nothing;
 
 -- name: GetMessageBySender :one
-select id,job_id,from_kind,from_id,sequence,input,delivery_intent,
+select id,job_id,from_kind,from_id,sequence,input,delivery_intent,requested_intent,
        coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at
 from dorf.job_messages
 where job_id=sqlc.arg(job_id) and from_kind=sqlc.arg(from_kind)
@@ -21,6 +21,7 @@ select coalesce(turn_id,'') as turn_id,coalesce(harness,'') as harness,
        coalesce(thread_id,'') as thread_id
 from dorf.agent_runs ar
 where ar.job_id=sqlc.arg(job_id) and ar.state='active' and ar.turn_id is not null
+  and not ar.interrupt_requested
   and ar.role=sqlc.arg(role) and ar.sandbox_id=sqlc.arg(sandbox_id)
   and (
     select count(*) from dorf.agent_runs active
@@ -44,12 +45,12 @@ where job_id=sqlc.arg(job_id);
 
 -- name: InsertMessage :exec
 insert into dorf.job_messages(
-    id,job_id,from_kind,from_id,sequence,input,delivery_intent,steer_target_turn_id
+    id,job_id,from_kind,from_id,sequence,input,delivery_intent,steer_target_turn_id,requested_intent
 )
 values(
     sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(from_kind),sqlc.arg(from_id),
     sqlc.arg(sequence),sqlc.arg(input),sqlc.arg(delivery_intent),
-    nullif(sqlc.arg(steer_target_turn_id)::text,'')
+    nullif(sqlc.arg(steer_target_turn_id)::text,''),sqlc.arg(requested_intent)
 );
 
 -- name: GetFirstUnsettledInput :one
@@ -94,7 +95,14 @@ select m.id as message_id,m.job_id as message_job_id,m.from_kind,m.from_id,m.seq
        coalesce(ar.turn_outcome,'') as turn_outcome,
        coalesce(ar.attention,'') as attention,coalesce(ar.role,'') as role,coalesce(ar.input_revision,'') as input_revision,
        coalesce(ar.capability,'') as capability,coalesce(ar.sandbox_id,'') as sandbox_id,
-       coalesce(ar.submission_nonce,'') as submission_nonce,ar.started_at,ar.finished_at
+       coalesce(ar.submission_nonce,'') as submission_nonce,ar.started_at,ar.finished_at,
+       exists (
+           select 1 from dorf.agent_runs source
+           where source.job_id=ar.job_id and source.sandbox_id=ar.sandbox_id
+             and source.harness=ar.harness and source.thread_id=ar.thread_id
+             and source.turn_id=coalesce(ar.turn_id,m.steer_target_turn_id)
+             and source.interrupt_requested
+       ) as interrupt_requested
 from dorf.job_messages m
 left join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=sqlc.arg(job_id)

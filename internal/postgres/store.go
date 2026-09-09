@@ -36,7 +36,7 @@ const (
 	initialFromID       = "dorf:initial"
 )
 
-var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql"}
+var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql"}
 
 type Store struct{ DB *sql.DB }
 
@@ -244,8 +244,8 @@ func normalizeMessage(input core.MessageAdmission) (core.MessageAdmission, error
 	if len(input.FromID) > 256 {
 		return core.MessageAdmission{}, fmt.Errorf("from ID must be at most 256 characters")
 	}
-	if input.Intent != core.MessageFollow && input.Intent != core.MessageSteer {
-		return core.MessageAdmission{}, fmt.Errorf("message intent must be follow or steer")
+	if input.Intent != core.MessageFollow && input.Intent != core.MessageSteer && input.Intent != core.MessageAuto {
+		return core.MessageAdmission{}, fmt.Errorf("message intent must be auto, follow, or steer")
 	}
 	if len(input.Input) > 1<<20 {
 		return core.MessageAdmission{}, fmt.Errorf("message input exceeds 1 MiB")
@@ -273,7 +273,7 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 	if err == nil {
 		message := messageFromValues(row.ID, row.JobID, row.FromKind, row.FromID, row.Sequence, row.Input, row.DeliveryIntent, row.SteerTargetTurnID)
 		message.AdmittedAt = row.AdmittedAt
-		if message.Input != input.Input || message.Intent != input.Intent {
+		if message.Input != input.Input || row.RequestedIntent != string(input.Intent) {
 			return core.Message{}, false, fmt.Errorf("%w: sender %s/%q", core.ErrMessageReplayConflict, input.FromKind, input.FromID)
 		}
 		run, runErr := queries.GetAgentRunByMessage(ctx, message.ID)
@@ -301,34 +301,25 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 	if run.Role == "" || run.SandboxID != input.SandboxID {
 		return core.Message{}, false, fmt.Errorf("Message execution envelope returned a foreign Sandbox delivery")
 	}
-	harness, threadID, targetTurnID := "", "", ""
-	if input.Intent == core.MessageSteer {
-		active, err := queries.GetActiveAgentTurn(ctx, dbsql.GetActiveAgentTurnParams{
-			JobID: input.JobID, Role: run.Role, SandboxID: run.SandboxID,
-		})
-		if errors.Is(err, sql.ErrNoRows) {
-			return core.Message{}, false, core.ErrMessageSteerUnavailable
-		}
-		if err != nil {
-			return core.Message{}, false, err
-		}
-		targetTurnID, harness, threadID = active.TurnID, active.Harness, active.ThreadID
+	target, err := resolveMessageTarget(ctx, queries, input, run)
+	if err != nil {
+		return core.Message{}, false, err
 	}
 	var message core.Message
-	message.TargetTurnID = targetTurnID
+	message.TargetTurnID = target.turnID
 	message.Sequence, err = queries.NextMessageSequence(ctx, input.JobID)
 	if err != nil {
 		return core.Message{}, false, err
 	}
 	message.ID = core.MessageID(input.JobID, input.FromKind, input.FromID)
-	message.JobID, message.FromKind, message.FromID, message.Input, message.Intent = input.JobID, input.FromKind, input.FromID, input.Input, input.Intent
-	if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{ID: message.ID, JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID, Sequence: message.Sequence, Input: message.Input, DeliveryIntent: message.Intent, SteerTargetTurnID: message.TargetTurnID}); err != nil {
+	message.JobID, message.FromKind, message.FromID, message.Input, message.Intent = input.JobID, input.FromKind, input.FromID, input.Input, target.intent
+	if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{ID: message.ID, JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID, Sequence: message.Sequence, Input: message.Input, DeliveryIntent: message.Intent, RequestedIntent: string(input.Intent), SteerTargetTurnID: message.TargetTurnID}); err != nil {
 		return core.Message{}, false, err
 	}
 	runID := core.AgentRunID(message.ID)
 	rows, err := queries.InsertAdmittedAgentRun(ctx, dbsql.InsertAdmittedAgentRunParams{
 		ID: runID, JobID: message.JobID, MessageID: message.ID,
-		Harness: nullableString(harness), ThreadID: nullableString(threadID),
+		Harness: nullableString(target.harness), ThreadID: nullableString(target.threadID),
 		Role: run.Role, InputRevision: nullableString(run.InputRevision),
 		Capability: nullableString(run.Capability), SandboxID: run.SandboxID,
 	})
@@ -341,6 +332,33 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 	}
 	message.AdmittedAt = storedMessage.AdmittedAt
 	return message, true, nil
+}
+
+type messageTarget struct {
+	intent   core.MessageDeliveryIntent
+	harness  string
+	threadID string
+	turnID   string
+}
+
+func resolveMessageTarget(ctx context.Context, queries *dbsql.Queries, input core.MessageAdmission, run admittedAgentRun) (messageTarget, error) {
+	target := messageTarget{intent: core.MessageFollow}
+	if input.Intent == core.MessageFollow {
+		return target, nil
+	}
+	active, err := queries.GetActiveAgentTurn(ctx, dbsql.GetActiveAgentTurnParams{
+		JobID: input.JobID, Role: run.Role, SandboxID: run.SandboxID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		if input.Intent == core.MessageSteer {
+			return messageTarget{}, core.ErrMessageSteerUnavailable
+		}
+		return target, nil
+	}
+	if err != nil {
+		return messageTarget{}, err
+	}
+	return messageTarget{intent: core.MessageSteer, harness: active.Harness, threadID: active.ThreadID, turnID: active.TurnID}, nil
 }
 
 func allocateMessageSequenceTx(ctx context.Context, tx *sql.Tx, jobID string) (int64, error) {
@@ -738,6 +756,7 @@ func (s Store) Deliveries(ctx context.Context, jobID string) ([]core.Delivery, e
 		run.Capability = r.Capability
 		run.SandboxID = r.SandboxID
 		run.SubmissionNonce = r.SubmissionNonce
+		run.InterruptRequested = r.InterruptRequested
 		run.StartedAt = timeValue(r.StartedAt)
 		run.FinishedAt = timeValue(r.FinishedAt)
 		out = append(out, core.Delivery{Message: message, AgentRun: run})
@@ -808,6 +827,7 @@ func (s Store) AgentMessageExecution(ctx context.Context, messageID string) (cor
 	run.Capability = runRow.Capability
 	run.SandboxID = runRow.SandboxID
 	run.SubmissionNonce = runRow.SubmissionNonce
+	run.InterruptRequested = runRow.InterruptRequested
 	run.StartedAt = timeValue(runRow.StartedAt)
 	run.FinishedAt = timeValue(runRow.FinishedAt)
 	job, err := s.Job(ctx, message.JobID)

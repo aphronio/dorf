@@ -157,30 +157,31 @@ select id,job_id,message_id,state,
        coalesce(turn_id,'') as turn_id,coalesce(turn_outcome,'') as turn_outcome,
        coalesce(attention,'') as attention,role,coalesce(input_revision,'') as input_revision,
        coalesce(capability,'') as capability,coalesce(sandbox_id,'') as sandbox_id,
-       coalesce(submission_nonce,'') as submission_nonce,started_at,finished_at
+       coalesce(submission_nonce,'') as submission_nonce,started_at,finished_at,interrupt_requested
 from dorf.agent_runs
 where message_id=$1::text
 `
 
 type GetAgentRunByMessageRow struct {
-	ID               string
-	JobID            string
-	MessageID        string
-	State            core.AgentRunState
-	Harness          string
-	ThreadID         string
-	BaselineRecorded bool
-	BaselineTurnID   string
-	TurnID           string
-	TurnOutcome      string
-	Attention        string
-	Role             string
-	InputRevision    string
-	Capability       string
-	SandboxID        string
-	SubmissionNonce  string
-	StartedAt        sql.NullTime
-	FinishedAt       sql.NullTime
+	ID                 string
+	JobID              string
+	MessageID          string
+	State              core.AgentRunState
+	Harness            string
+	ThreadID           string
+	BaselineRecorded   bool
+	BaselineTurnID     string
+	TurnID             string
+	TurnOutcome        string
+	Attention          string
+	Role               string
+	InputRevision      string
+	Capability         string
+	SandboxID          string
+	SubmissionNonce    string
+	StartedAt          sql.NullTime
+	FinishedAt         sql.NullTime
+	InterruptRequested bool
 }
 
 func (q *Queries) GetAgentRunByMessage(ctx context.Context, messageID string) (GetAgentRunByMessageRow, error) {
@@ -205,6 +206,7 @@ func (q *Queries) GetAgentRunByMessage(ctx context.Context, messageID string) (G
 		&i.SubmissionNonce,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.InterruptRequested,
 	)
 	return i, err
 }
@@ -290,6 +292,37 @@ func (q *Queries) GetLatestAgentThreadBinding(ctx context.Context, arg GetLatest
 	row := q.db.QueryRowContext(ctx, getLatestAgentThreadBinding, arg.JobID, arg.Role, arg.SandboxID)
 	var i GetLatestAgentThreadBindingRow
 	err := row.Scan(&i.Harness, &i.ThreadID)
+	return i, err
+}
+
+const getMessageInterruptTarget = `-- name: GetMessageInterruptTarget :one
+select source.id,source.state,source.interrupt_requested
+from dorf.agent_runs requested
+join dorf.agent_runs source on source.job_id=requested.job_id
+    and source.sandbox_id=requested.sandbox_id and source.harness=requested.harness
+    and source.thread_id=requested.thread_id
+    and source.turn_id=coalesce(requested.turn_id, (
+        select steer_target_turn_id from dorf.job_messages where id=requested.message_id
+    ))
+join dorf.job_messages origin on origin.id=source.message_id and origin.delivery_intent='follow'
+where requested.job_id=$1 and requested.message_id=$2
+`
+
+type GetMessageInterruptTargetParams struct {
+	JobID     string
+	MessageID string
+}
+
+type GetMessageInterruptTargetRow struct {
+	ID                 string
+	State              core.AgentRunState
+	InterruptRequested bool
+}
+
+func (q *Queries) GetMessageInterruptTarget(ctx context.Context, arg GetMessageInterruptTargetParams) (GetMessageInterruptTargetRow, error) {
+	row := q.db.QueryRowContext(ctx, getMessageInterruptTarget, arg.JobID, arg.MessageID)
+	var i GetMessageInterruptTargetRow
+	err := row.Scan(&i.ID, &i.State, &i.InterruptRequested)
 	return i, err
 }
 
@@ -499,6 +532,19 @@ type PropagateTurnOutcomeToSteersParams struct {
 func (q *Queries) PropagateTurnOutcomeToSteers(ctx context.Context, arg PropagateTurnOutcomeToSteersParams) error {
 	_, err := q.db.ExecContext(ctx, propagateTurnOutcomeToSteers, arg.TurnOutcome, arg.RunID, arg.TurnID)
 	return err
+}
+
+const requestAgentRunInterrupt = `-- name: RequestAgentRunInterrupt :execrows
+update dorf.agent_runs set interrupt_requested=true
+where id=$1 and state in ('active','uncertain') and turn_id is not null
+`
+
+func (q *Queries) RequestAgentRunInterrupt(ctx context.Context, runID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, requestAgentRunInterrupt, runID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const setAgentRunAttention = `-- name: SetAgentRunAttention :execrows

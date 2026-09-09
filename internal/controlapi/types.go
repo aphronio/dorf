@@ -12,20 +12,21 @@ import (
 )
 
 var (
-	ErrInvalidInput        = errors.New("invalid control API input")
-	ErrInvalidCursor       = errors.New("invalid control API Job cursor")
-	ErrJobNotFound         = errors.New("control API Job not found")
-	ErrMessageNotFound     = errors.New("control API Message not found")
-	ErrSandboxNotFound     = errors.New("control API Sandbox not found")
-	ErrInvalidFilePath     = errors.New("control API Sandbox file path invalid")
-	ErrFileNotFound        = errors.New("control API Sandbox file not found")
-	ErrFileUnavailable     = errors.New("control API Sandbox file unavailable")
-	ErrMessageUnavailable  = errors.New("control API Message cannot be accepted")
-	ErrSteerUnavailable    = errors.New("control API steer cannot be accepted")
-	ErrRetryUnavailable    = errors.New("control API Job retry unavailable")
-	ErrAbandonUnavailable  = errors.New("control API Job abandon unavailable")
-	ErrEvidenceUnverified  = errors.New("control API Evidence could not be verified")
-	ErrIdempotencyConflict = errors.New("idempotency key is bound to different input")
+	ErrInvalidInput         = errors.New("invalid control API input")
+	ErrInvalidCursor        = errors.New("invalid control API Job cursor")
+	ErrJobNotFound          = errors.New("control API Job not found")
+	ErrMessageNotFound      = errors.New("control API Message not found")
+	ErrSandboxNotFound      = errors.New("control API Sandbox not found")
+	ErrInvalidFilePath      = errors.New("control API Sandbox file path invalid")
+	ErrFileNotFound         = errors.New("control API Sandbox file not found")
+	ErrFileUnavailable      = errors.New("control API Sandbox file unavailable")
+	ErrMessageUnavailable   = errors.New("control API Message cannot be accepted")
+	ErrSteerUnavailable     = errors.New("control API steer cannot be accepted")
+	ErrInterruptUnavailable = errors.New("control API interrupt cannot be accepted")
+	ErrRetryUnavailable     = errors.New("control API Job retry unavailable")
+	ErrAbandonUnavailable   = errors.New("control API Job abandon unavailable")
+	ErrEvidenceUnverified   = errors.New("control API Evidence could not be verified")
+	ErrIdempotencyConflict  = errors.New("idempotency key is bound to different input")
 )
 
 type Discovery struct {
@@ -207,20 +208,21 @@ type Sandbox struct {
 
 type SendMessageRequest struct {
 	Text   string `json:"text"`
-	Intent string `json:"intent"`
+	Intent string `json:"intent,omitempty"`
 }
 
 // Message projects one accepted delivery without exposing its Harness Thread,
 // Turn, or internal AgentRun identity.
 type Message struct {
-	ID         string         `json:"id"`
-	JobID      string         `json:"job_id"`
-	Sequence   int64          `json:"sequence"`
-	Intent     string         `json:"intent"`
-	Delivery   State          `json:"delivery"`
-	Result     *MessageResult `json:"result"`
-	Attention  *Attention     `json:"attention"`
-	AdmittedAt time.Time      `json:"admitted_at"`
+	InterruptRequested bool           `json:"interrupt_requested"`
+	ID                 string         `json:"id"`
+	JobID              string         `json:"job_id"`
+	Sequence           int64          `json:"sequence"`
+	Intent             string         `json:"intent"`
+	Delivery           State          `json:"delivery"`
+	Result             *MessageResult `json:"result"`
+	Attention          *Attention     `json:"attention"`
+	AdmittedAt         time.Time      `json:"admitted_at"`
 }
 
 type MessageResult struct {
@@ -282,6 +284,7 @@ type Jobs interface {
 	Get(context.Context, string) (JobView, error)
 	SendMessage(context.Context, string, string, SendMessageRequest) (Message, bool, error)
 	GetMessage(context.Context, string, string) (Message, error)
+	InterruptMessage(context.Context, string, string) (Message, error)
 	Retry(context.Context, string, string) (Retry, bool, error)
 	Abandon(context.Context, string) (JobView, error)
 	ReadSandboxFile(context.Context, string, string) ([]byte, error)

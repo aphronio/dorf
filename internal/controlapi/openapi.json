@@ -387,6 +387,29 @@
         }
       }
     },
+    "/v1/jobs/{job}/messages/{message}/interrupt": {
+      "put": {
+        "operationId": "interruptJobMessage",
+        "summary": "Request interruption of the exact Turn for a direct Codex Message",
+        "description": "Idempotent. A Steer addresses its original Turn, never a successor. A settled target is a no-op. Inspect the result for the observed outcome.",
+        "tags": ["Messages"],
+        "parameters": [
+          { "$ref": "#/components/parameters/JobID" },
+          { "$ref": "#/components/parameters/MessageID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current Message after accepting Stop or observing a settled target",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Message" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/v1/jobs/{job}/retries": {
       "post": {
         "operationId": "retryJob",
@@ -977,20 +1000,21 @@
       "SendMessageRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["text", "intent"],
+        "required": ["text"],
         "properties": {
           "text": { "type": "string", "minLength": 1 },
-          "intent": { "type": "string", "enum": ["follow", "steer"] }
+          "intent": { "type": "string", "enum": ["auto", "follow", "steer"], "default": "auto", "description": "Steer active work or follow when idle, resolved once at admission." }
         }
       },
       "Message": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "job_id", "sequence", "intent", "delivery", "result", "attention", "admitted_at"],
+        "required": ["id", "job_id", "sequence", "intent", "delivery", "result", "attention", "admitted_at", "interrupt_requested"],
         "properties": {
           "id": { "type": "string", "minLength": 1 },
           "job_id": { "type": "string", "minLength": 1 },
           "sequence": { "type": "integer", "minimum": 1 },
+          "interrupt_requested": { "type": "boolean", "description": "Stop was accepted for this exact Turn; the result reports its observed outcome." },
           "intent": { "type": "string", "enum": ["follow", "steer"] },
           "delivery": { "$ref": "#/components/schemas/MessageDeliveryState" },
           "result": {

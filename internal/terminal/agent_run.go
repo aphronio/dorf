@@ -27,6 +27,18 @@ func NewAgentRunOperation(externals Externals, execution core.AgentMessageExecut
 
 func (o AgentRunOperation) Harness() string { return o.externals.Agent.Name() }
 
+func (o AgentRunOperation) Interrupt(ctx context.Context, run core.AgentRun) (core.HarnessBinding, error) {
+	owner, err := o.owner(ctx, run)
+	if err != nil {
+		return core.HarnessBinding{}, err
+	}
+	harness, ok := o.externals.Agent.(InterruptibleHarness)
+	if !ok {
+		return core.HarnessBinding{}, fmt.Errorf("Harness does not support exact-turn interruption")
+	}
+	return harness.InterruptTurn(ctx, owner, run.ThreadID, run.TurnID)
+}
+
 func (o AgentRunOperation) Submit(ctx context.Context, run core.AgentRun, input string) (core.HarnessBinding, error) {
 	owner, err := o.owner(ctx, run)
 	if err != nil {
