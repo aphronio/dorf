@@ -7,13 +7,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/core"
-	"github.com/aphronio/dorf/internal/postgres"
+	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
-func TestDirectAutomaticMessagesAndExactInterruptSurviveReopen(t *testing.T) {
-	_, store, _ := testDatabase(t)
-	ctx := context.Background()
+func TestDirectAutomaticMessagesAndExactInterruptReconciliation(t *testing.T) {
+	_, store, client := testDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	job, _, err := admitDirectFixture(t, store, ctx, core.JobAdmission{
 		AdmissionKey: fmt.Sprintf("assistant-%d", time.Now().UnixNano()), Goal: "retain this conversation",
 		SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "low",
@@ -55,46 +57,101 @@ func TestDirectAutomaticMessagesAndExactInterruptSurviveReopen(t *testing.T) {
 	if err := store.RequestMessageInterrupt(ctx, job.ID, steer.Message.ID); err != nil {
 		t.Fatal(err)
 	}
-	reopened := postgres.Store{DB: store.DB}
-	selected, err := reopened.AgentMessage(ctx, job.ID)
+	selected, err := store.AgentMessage(ctx, job.ID)
 	if err != nil || selected == nil || selected.MessageID != initial.Message.ID {
 		t.Fatalf("interrupt did not take priority over queued input: %+v %v", selected, err)
 	}
-	observed, err := reopened.AgentMessageExecution(ctx, initial.Message.ID)
+	observed, err := store.AgentMessageExecution(ctx, initial.Message.ID)
 	if err != nil || !observed.AgentRun.InterruptRequested {
 		t.Fatalf("interrupt was not durable: %+v %v", observed.AgentRun, err)
 	}
-	deliveries, err := reopened.Deliveries(ctx, job.ID)
+	deliveries, err := store.Deliveries(ctx, job.ID)
 	if err != nil || !deliveries[0].AgentRun.InterruptRequested || deliveries[1].AgentRun.InterruptRequested || !deliveries[2].AgentRun.InterruptRequested {
 		t.Fatalf("interrupt projection did not follow the exact Turn: %+v %v", deliveries, err)
 	}
-	if err := reopened.BindAgentRun(ctx, initial.AgentRun.ID, "codex", "assistant-thread", "first-turn", "interrupted"); err != nil {
+	native := &interruptIntegrationOperation{
+		integrationAgentOperation: integrationAgentOperation{externals: &integrationExternals{
+			turns: []core.HarnessTurn{{ID: "first-turn", Status: "inProgress"}},
+		}},
+		expectedRunID: initial.AgentRun.ID,
+	}
+	execution := core.NewExecutionService(store, nil, nil, absurdruntime.RequireClaim).
+		WithAgentExecution(resultBoundaryAgentExecution{operation: native})
+	taskName := "dorf-message-interrupt-proof-v1"
+	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
+		for _, observation := range []struct {
+			turn, outcome string
+			wantErr       bool
+			wantState     core.AgentRunState
+		}{
+			{"foreign-turn", "completed", true, core.AgentRunActive},
+			{"first-turn", "inProgress", false, core.AgentRunActive},
+			{"first-turn", "interrupted", false, core.AgentRunInterrupted},
+		} {
+			native.binding = core.HarnessBinding{Harness: "codex", ThreadID: "assistant-thread",
+				Turn: core.HarnessTurn{ID: observation.turn, Status: observation.outcome}}
+			_, reconcileErr := execution.ReconcileJobAgent(taskCtx, job.ID)
+			if (reconcileErr != nil) != observation.wantErr {
+				return core.TaskResultV1{}, fmt.Errorf("interrupt observation %s/%s: %v", observation.turn, observation.outcome, reconcileErr)
+			}
+			observed, err := store.AgentMessageExecution(taskCtx, initial.Message.ID)
+			if err != nil || observed.AgentRun.State != observation.wantState || observed.AgentRun.TurnID != "first-turn" {
+				return core.TaskResultV1{}, fmt.Errorf("interrupt observation changed wrong state or target: %+v %v", observed.AgentRun, err)
+			}
+		}
+		return core.TaskResultV1{JobID: job.ID, Outcome: "interrupted"}, nil
+	}))
+	spawned, err := client.Spawn(ctx, taskName, core.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: taskName + ":" + job.ID})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := reopened.FailAgentRun(ctx, core.AgentRunID(steer.Message.ID), "steer target settled before delivery"); err != nil {
+	if err := store.AttachJobTask(ctx, job.ID, "", spawned.TaskID, taskName); err != nil {
 		t.Fatal(err)
 	}
-	next, err := codingDelivery(ctx, reopened, job.ID)
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "interrupt-proof", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.AwaitTaskResult(ctx, client.QueueName(), spawned.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FailAgentRun(ctx, core.AgentRunID(steer.Message.ID), "steer target settled before delivery"); err != nil {
+		t.Fatal(err)
+	}
+	next, err := codingDelivery(ctx, store, job.ID)
 	if err != nil || next == nil || next.Message.ID != idle.Message.ID || next.AgentRun.ThreadID != "assistant-thread" {
 		t.Fatalf("follow did not retain the conversation: %+v %v", next, err)
 	}
-	if err := reopened.PrepareAgentRun(ctx, next.AgentRun.ID, "codex", "first-turn"); err != nil {
+	if err := store.PrepareAgentRun(ctx, next.AgentRun.ID, "codex", "first-turn"); err != nil {
 		t.Fatal(err)
 	}
-	if err := reopened.BindAgentRun(ctx, next.AgentRun.ID, "codex", "assistant-thread", "second-turn", "inProgress"); err != nil {
+	if err := store.BindAgentRun(ctx, next.AgentRun.ID, "codex", "assistant-thread", "second-turn", "inProgress"); err != nil {
 		t.Fatal(err)
 	}
-	if err := reopened.RequestMessageInterrupt(ctx, job.ID, steer.Message.ID); err != nil {
+	if err := store.RequestMessageInterrupt(ctx, job.ID, steer.Message.ID); err != nil {
 		t.Fatal(err)
 	}
-	observed, err = reopened.AgentMessageExecution(ctx, next.Message.ID)
+	observed, err = store.AgentMessageExecution(ctx, next.Message.ID)
 	if err != nil || observed.AgentRun.InterruptRequested {
 		t.Fatalf("old interrupt targeted successor: %+v %v", observed.AgentRun, err)
 	}
-	if replay, err := reopened.AdmitDirectMessage(ctx, activeInput); err != nil || replay.Created || replay.Message != steer.Message {
+	if replay, err := store.AdmitDirectMessage(ctx, activeInput); err != nil || replay.Created || replay.Message != steer.Message {
 		t.Fatalf("auto replay retargeted successor: %+v %v", replay, err)
 	}
-	if err := reopened.RequestMessageInterrupt(ctx, "foreign-job", steer.Message.ID); !errors.Is(err, core.ErrMessageInterruptUnavailable) {
+	if err := store.RequestMessageInterrupt(ctx, "foreign-job", steer.Message.ID); !errors.Is(err, core.ErrMessageInterruptUnavailable) {
 		t.Fatalf("foreign Job accepted interrupt: %v", err)
 	}
+}
+
+// Only the native boundary is simulated; selection, claims, and recording use the worker and PostgreSQL.
+type interruptIntegrationOperation struct {
+	integrationAgentOperation
+	expectedRunID string
+	binding       core.HarnessBinding
+}
+
+func (o *interruptIntegrationOperation) Interrupt(_ context.Context, run core.AgentRun) (core.HarnessBinding, error) {
+	if run.ID != o.expectedRunID || run.Harness != "codex" || run.ThreadID != "assistant-thread" || run.TurnID != "first-turn" {
+		return core.HarnessBinding{}, fmt.Errorf("interrupt targeted a different run: %+v", run)
+	}
+	return o.binding, nil
 }

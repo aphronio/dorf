@@ -12,7 +12,6 @@ import (
 
 	"github.com/aphronio/dorf/internal/clientconfig"
 	"github.com/aphronio/dorf/internal/controlapi"
-	"github.com/aphronio/dorf/internal/controlclient"
 )
 
 func TestMessageCLIDefaultAndExactStop(t *testing.T) {
@@ -39,21 +38,24 @@ func TestMessageCLIDefaultAndExactStop(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(message)
 	}))
 	defer server.Close()
-	client, err := controlclient.New(server.URL, "test-credential", server.Client().Transport)
-	if err != nil {
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = server.Client().Transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	if err := clientconfig.Save(clientconfig.Path(root), clientconfig.Config{DeploymentURL: server.URL, Credential: "test-credential"}); err != nil {
 		t.Fatal(err)
 	}
 	input := filepath.Join(t.TempDir(), "message.txt")
 	if err := os.WriteFile(input, []byte("correction"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg := clientconfig.Config{DeploymentURL: server.URL}
 	var output, diagnostic bytes.Buffer
-	if err := remoteMessageSend(context.Background(), cfg, client, []string{"--key", "send-key", "--input-file", input, "--output", "json", "job"}, &output, &diagnostic); err != nil {
+	if err := run(context.Background(), []string{"job", "message", "--key", "send-key", "--input-file", input, "--output", "json", "job"}, &output, &diagnostic); err != nil {
 		t.Fatal(err)
 	}
 	output.Reset()
-	if err := remoteMessageInterrupt(context.Background(), cfg, client, []string{"--output", "json", "job", "message"}, &output, &diagnostic); err != nil {
+	if err := run(context.Background(), []string{"job", "message", "interrupt", "--output", "json", "job", "message"}, &output, &diagnostic); err != nil {
 		t.Fatal(err)
 	}
 	var receipt remoteMessageReceipt

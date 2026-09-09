@@ -30,10 +30,13 @@ by a crash or recovery after Sandbox disk loss.
 
 Local PostgreSQL tests cover automatic steering and follow selection, immutable
 request replay after state changes, interruption through an attached Steer, and
-protection of successor Turns. Native protocol tests cover uncertain interrupt
+protection of successor Turns. An Absurd task drives worker reconciliation against
+PostgreSQL, rejecting foreign Turn observations and distinguishing accepted
+interrupts from observed completion. Native protocol tests cover uncertain interrupt
 acknowledgement and exact-target observation. HTTP integration tests cover omitted
 intent, accepted Stop replay, missing targets, and a delivered Steer whose answer
-is still pending. CLI tests exercise authenticated automatic messaging and Stop.
+is still pending. CLI tests exercise authenticated automatic messaging and Stop
+through the command dispatcher.
 
 The deployed API proof for the new default and Stop operation is pending the
 0.5.16 deployment. The test Job remains open for that proof; cleanup is pending.
