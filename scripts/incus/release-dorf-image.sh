@@ -145,7 +145,7 @@ prove_harness() {
     --base "${BASE_BRANCH:-main}" \
     --ai-connection "$AI_CONNECTION" \
     --profile "$profile_name" \
-    --model gpt-5.6-sol \
+    --model gpt-6-astra \
     --reasoning low)"
   JOB_ID="$(jq -er .job_id <<<"$admission")"
   inspection="$(drive_job_until "$JOB_ID" '.observed_facts.agent_runs | any(.message_id != null and .turn_outcome != null)' "$harness turn")"

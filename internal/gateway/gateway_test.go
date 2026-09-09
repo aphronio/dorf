@@ -400,7 +400,7 @@ func TestDefaultAIConnectionIsExplicitAndUnique(t *testing.T) {
 	if _, err := g.DefaultConnection(); err == nil || !strings.Contains(err.Error(), "no default AI connection") {
 		t.Fatalf("missing default error=%v", err)
 	}
-	if got, err := g.DefaultModel("primary"); err != nil || got != "gpt-5.6-sol" {
+	if got, err := g.DefaultModel("primary"); err != nil || got != "gpt-6-astra" {
 		t.Fatalf("legacy connection default model=%q err=%v", got, err)
 	}
 	if err := g.SetDefaultConnection("primary"); err != nil {
@@ -409,14 +409,14 @@ func TestDefaultAIConnectionIsExplicitAndUnique(t *testing.T) {
 	if got, err := g.DefaultConnection(); err != nil || got != "primary" {
 		t.Fatalf("default=%q err=%v", got, err)
 	}
-	if got, err := g.DefaultModel("primary"); err != nil || got != "gpt-5.6-sol" {
+	if got, err := g.DefaultModel("primary"); err != nil || got != "gpt-6-astra" {
 		t.Fatalf("default model=%q err=%v", got, err)
 	}
 	var records []connection
 	if err := readJSON(filepath.Join(state, "connections.json"), &records); err != nil {
 		t.Fatal(err)
 	}
-	if records[0].DefaultModel != "gpt-5.6-sol" {
+	if records[0].DefaultModel != "gpt-6-astra" {
 		t.Fatalf("selected connection default model=%q", records[0].DefaultModel)
 	}
 	records = append(records, connection{Name: "second", Provider: "deepseek", AuthMode: "api_key", CredentialRef: "deepseek-0123456789abcdef.key", Default: true})

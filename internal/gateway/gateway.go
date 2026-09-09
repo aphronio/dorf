@@ -37,7 +37,7 @@ type connection struct {
 	Default       bool   `json:"default"`
 }
 
-const recommendedOpenAIModel = "gpt-5.6-sol"
+const recommendedOpenAIModel = "gpt-6-astra"
 
 type authority struct {
 	GuardKey      string `json:"guard_key"`

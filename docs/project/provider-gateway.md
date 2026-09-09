@@ -42,6 +42,12 @@ Setup selects one default AI Connection. A Job may select another named connecti
 contract permits it. Admission resolves and retains both the exact connection and the exact model,
 so later default changes cannot reinterpret an existing Job.
 
+New OpenAI and ChatGPT connections use the recommended model defined in
+[`internal/gateway/gateway.go`](../../internal/gateway/gateway.go). Updating that recommendation
+also applies to connections without a saved model; it does not replace a saved connection model.
+An explicit Job model overrides the connection default. Verify the selected model through the live
+Gateway before relying on it, since upstream access can differ by connection.
+
 [Support](../support.md) owns the current readiness command and its interpretation. Observation must
 not start the broker, repair ingress, infer a private route, or create an Inference Route.
 
