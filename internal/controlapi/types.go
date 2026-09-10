@@ -59,7 +59,7 @@ type RedeemRequest struct {
 }
 
 type AdmitJobRequest struct {
-	Goal         string `json:"goal"`
+	AgentsMD     string `json:"agents_md,omitempty"`
 	Profile      string `json:"profile"`
 	AIConnection string `json:"ai_connection,omitempty"`
 	Model        string `json:"model,omitempty"`
@@ -67,7 +67,6 @@ type AdmitJobRequest struct {
 }
 
 type AdmitCodingJobRequest struct {
-	Goal         string `json:"goal"`
 	Repository   string `json:"repository"`
 	Revision     string `json:"revision"`
 	BaseBranch   string `json:"base_branch"`
@@ -79,7 +78,6 @@ type AdmitCodingJobRequest struct {
 }
 
 type AdmitInvestigationJobRequest struct {
-	Brief        string `json:"brief"`
 	Repository   string `json:"repository"`
 	Revision     string `json:"revision"`
 	Profile      string `json:"profile,omitempty"`
@@ -110,18 +108,16 @@ type JobList struct {
 // Job contains only the fields common to every supported public Job kind.
 // Canonical reads return one of the concrete JobView implementations below.
 type Job struct {
-	ID               string     `json:"id"`
-	Kind             string     `json:"kind"`
-	Goal             string     `json:"goal"`
-	Profile          string     `json:"profile"`
-	Model            string     `json:"model"`
-	Reasoning        string     `json:"reasoning"`
-	InitialMessageID string     `json:"initial_message_id"`
-	Admission        Admission  `json:"admission"`
-	Execution        State      `json:"execution"`
-	Attention        *Attention `json:"attention"`
-	Cleanup          State      `json:"cleanup"`
-	Sandboxes        []Sandbox  `json:"sandboxes"`
+	ID        string     `json:"id"`
+	Kind      string     `json:"kind"`
+	Profile   string     `json:"profile"`
+	Model     string     `json:"model"`
+	Reasoning string     `json:"reasoning"`
+	Admission Admission  `json:"admission"`
+	Execution State      `json:"execution"`
+	Attention *Attention `json:"attention"`
+	Cleanup   State      `json:"cleanup"`
+	Sandboxes []Sandbox  `json:"sandboxes"`
 }
 
 // JobView is the closed discriminated union returned by Job inspection and

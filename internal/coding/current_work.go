@@ -213,6 +213,9 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []ReviewRunView) Wor
 	}
 
 	if plan == nil {
+		if len(f.Messages) == 0 {
+			return Work{}
+		}
 		return f.work(WorkChooseReview, f.Job.Revision, attentionDetail(f.Job, ReviewPolicyAttentionSource(f.Job.Revision), ""))
 	}
 

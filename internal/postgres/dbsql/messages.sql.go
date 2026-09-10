@@ -236,29 +236,6 @@ func (q *Queries) GetMessageBySender(ctx context.Context, arg GetMessageBySender
 	return i, err
 }
 
-const insertInitialMessage = `-- name: InsertInitialMessage :exec
-insert into dorf.job_messages(id,job_id,from_kind,from_id,sequence,input)
-values($1,$2,'human',$3,1,$4)
-on conflict(job_id,from_kind,from_id) do nothing
-`
-
-type InsertInitialMessageParams struct {
-	ID     string
-	JobID  string
-	FromID string
-	Input  string
-}
-
-func (q *Queries) InsertInitialMessage(ctx context.Context, arg InsertInitialMessageParams) error {
-	_, err := q.db.ExecContext(ctx, insertInitialMessage,
-		arg.ID,
-		arg.JobID,
-		arg.FromID,
-		arg.Input,
-	)
-	return err
-}
-
 const insertMessage = `-- name: InsertMessage :exec
 insert into dorf.job_messages(
     id,job_id,from_kind,from_id,sequence,input,delivery_intent,steer_target_turn_id,requested_intent
@@ -428,7 +405,7 @@ select coalesce(
         select min(m.sequence)
         from dorf.job_messages m
         join dorf.agent_runs ar on ar.message_id=m.id
-        where m.job_id=$1 and m.sequence>1
+        where m.job_id=$1
           and ar.state='pending' and ar.turn_id is null
           and not exists (
               select 1

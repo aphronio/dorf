@@ -52,7 +52,7 @@ func (s *admissionServiceStore) AdmitCoding(_ context.Context, input Admission, 
 	if created {
 		s.job = core.Job{
 			ID: core.JobID(input.AdmissionKey), CurrentTaskID: "task-retained", AdmissionKey: input.AdmissionKey,
-			Workflow: input.Workflow, WorkflowRevision: input.WorkflowRevision, Goal: input.Goal,
+			Workflow: input.Workflow, WorkflowRevision: input.WorkflowRevision,
 			SandboxProfile: input.SandboxProfile, ProviderConnection: input.ProviderConnection,
 			Model: input.Model, ReasoningEffort: input.ReasoningEffort, AdmissionOpen: true,
 		}
@@ -65,7 +65,7 @@ func (s *admissionServiceStore) AdmitCoding(_ context.Context, input Admission, 
 		expected := Admission{
 			JobAdmission: core.JobAdmission{
 				AdmissionKey: s.job.AdmissionKey, Workflow: s.job.Workflow, WorkflowRevision: s.job.WorkflowRevision,
-				Goal: s.job.Goal, SandboxProfile: s.job.SandboxProfile, ProviderConnection: s.job.ProviderConnection,
+				SandboxProfile: s.job.SandboxProfile, ProviderConnection: s.job.ProviderConnection,
 				Model: s.job.Model, ReasoningEffort: s.job.ReasoningEffort,
 			},
 			Repository: s.typed.Repository, Revision: s.typed.StartingRevision, Branch: s.typed.Branch,
@@ -112,8 +112,8 @@ func TestAdmissionServiceReconcilesFirstAdmissionRaceAndExactReplay(t *testing.T
 	installations := &admissionServiceInstallations{}
 	service := NewAdmissionService(store, "test-queue", provider, installations)
 	request := AdmissionRequest{
-		AdmissionKey: "coding-request", Goal: "preserve exact goal",
-		Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40), BaseBranch: "main",
+		AdmissionKey: "coding-request",
+		Repository:   "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40), BaseBranch: "main",
 	}
 
 	createdJob, created, err := service.Admit(context.Background(), request)
@@ -157,7 +157,7 @@ func TestAdmissionServiceReconcilesFirstAdmissionRaceAndExactReplay(t *testing.T
 
 func TestAdmissionServiceValidatesAndRequiresRemoteGitBeforeExternalAuthority(t *testing.T) {
 	valid := AdmissionRequest{
-		AdmissionKey: "request", Goal: "goal", Model: "model", Repository: "https://github.com/aphronio/dorf.git",
+		AdmissionKey: "request", Model: "model", Repository: "https://github.com/aphronio/dorf.git",
 		Revision: strings.Repeat("a", 40), BaseBranch: "main",
 	}
 	tests := map[string]struct {

@@ -110,6 +110,10 @@ insert into dorf.agent_runs(id,job_id,message_id,role,state,sandbox_id) values('
 	if err := migrateDorf(ctx, tx); err != nil {
 		t.Fatalf("baseline replay: %v", err)
 	}
+	var retainedInput string
+	if err := tx.QueryRowContext(ctx, `select input from dorf.job_messages where id='message-current'`).Scan(&retainedInput); err != nil || retainedInput != "run direct caller intent" {
+		t.Fatalf("original Message changed during migration: %q err=%v", retainedInput, err)
+	}
 	var migrationCount int
 	if err := tx.QueryRowContext(ctx, `select count(*) from dorf.schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatal(err)

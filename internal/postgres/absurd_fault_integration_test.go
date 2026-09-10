@@ -290,7 +290,7 @@ func admitFaultJob(t *testing.T, store postgres.Store, suffix string) core.Job {
 	t.Helper()
 	job, created, err := admitCodingFixture(t, store, context.Background(), codingJobInput(
 		"absurd-fault-"+suffix,
-		"prove late work cannot duplicate one logical external effect",
+
 		"2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c",
 		"dorf/absurd-fault-"+suffix,
 	))

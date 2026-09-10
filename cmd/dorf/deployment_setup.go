@@ -168,10 +168,10 @@ type deploymentConfigurationSource struct {
 }
 
 // prepareSetupDeployment writes only the protected inputs consumed by the
-// installed static manifests. prepareOptional refreshes already-authorized
-// Gateway and Tunnel runtime state before projecting it.
-func prepareSetupDeployment(ctx context.Context, localImage string, prepareOptional bool) (composeconfig.Image, error) {
-	source, err := currentDeploymentConfigurationSource(ctx, prepareOptional)
+// installed static manifests, refreshing the retained Gateway and Tunnel runtime
+// before projecting their current launch authority.
+func prepareSetupDeployment(ctx context.Context, localImage string) (composeconfig.Image, error) {
+	source, err := currentDeploymentConfigurationSource(ctx)
 	if err != nil {
 		return composeconfig.Image{}, err
 	}
@@ -186,11 +186,11 @@ func prepareSetupDeployment(ctx context.Context, localImage string, prepareOptio
 // while projecting newly prepared optional state and reapplying that exact
 // project.
 func refreshExistingDeploymentConfig(ctx context.Context) error {
-	_, err := prepareSetupDeployment(ctx, "", true)
+	_, err := prepareSetupDeployment(ctx, "")
 	return err
 }
 
-func currentDeploymentConfigurationSource(ctx context.Context, prepareOptional bool) (deploymentConfigurationSource, error) {
+func currentDeploymentConfigurationSource(ctx context.Context) (deploymentConfigurationSource, error) {
 	paths, err := config.CurrentOperatorPaths()
 	if err != nil {
 		return deploymentConfigurationSource{}, err
@@ -217,10 +217,8 @@ func currentDeploymentConfigurationSource(ctx context.Context, prepareOptional b
 		Paths: paths, Deployment: stored, BaseFile: baseFile, IncusFile: incusFile,
 		UID: os.Geteuid(), GID: os.Getegid(),
 	}
-	if prepareOptional {
-		if err := prepareOptionalDeploymentRuntime(ctx, paths.DataDir); err != nil {
-			return deploymentConfigurationSource{}, err
-		}
+	if err := prepareOptionalDeploymentRuntime(ctx, paths.DataDir); err != nil {
+		return deploymentConfigurationSource{}, err
 	}
 	return deploymentConfigurationSourceWithOptionalState(source)
 }

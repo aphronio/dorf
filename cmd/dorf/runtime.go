@@ -216,7 +216,7 @@ func (s composedAgentExecution) ResolveAgentPrompt(ctx context.Context, executio
 		if err != nil {
 			return "", err
 		}
-		if execution.AgentRun.Role != investigation.InitialAgentRole || execution.AgentRun.Capability != investigation.InitialAgentCapability ||
+		if execution.AgentRun.Role != investigation.AgentRole || execution.AgentRun.Capability != investigation.AgentCapability ||
 			execution.AgentRun.InputRevision != source.Revision || execution.AgentRun.SandboxID != core.MainSandboxName(execution.Job.ID) {
 			return "", fmt.Errorf("Message %s conflicts with the exact investigation Agent contract", execution.Message.ID)
 		}
@@ -246,7 +246,7 @@ func (s composedAgentExecution) ResolveAgentRunOperation(ctx context.Context, ex
 	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Role == "implement":
 		operation, err := terminal.NewAgentRunOperation(s.externals, execution)
 		return operation, err
-	case execution.Job.Workflow == investigation.Workflow && execution.Job.WorkflowRevision == investigation.WorkflowRevision && execution.AgentRun.Role == investigation.InitialAgentRole:
+	case execution.Job.Workflow == investigation.Workflow && execution.Job.WorkflowRevision == investigation.WorkflowRevision && execution.AgentRun.Role == investigation.AgentRole:
 		operation, err := terminal.NewAgentRunOperation(s.externals, execution)
 		return operation, err
 	default:

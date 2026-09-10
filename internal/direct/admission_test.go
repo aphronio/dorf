@@ -41,7 +41,7 @@ func (s *admissionServiceStore) AdmitDirect(_ context.Context, input core.JobAdm
 		return core.Job{}, false, ErrAdmissionConflict
 	}
 	expected := core.JobAdmission{
-		AdmissionKey: s.job.AdmissionKey, Goal: s.job.Goal, SandboxProfile: s.job.SandboxProfile,
+		AdmissionKey: s.job.AdmissionKey, AgentsMD: s.job.AgentsMD, SandboxProfile: s.job.SandboxProfile,
 		ProviderConnection: s.job.ProviderConnection, Model: s.job.Model, ReasoningEffort: s.job.ReasoningEffort,
 	}
 	if s.job.AdmissionKey != "" && input != expected {
@@ -80,14 +80,14 @@ func (p *admissionServiceProvider) Check(_ context.Context, connection string) e
 
 func TestAdmissionServiceCreateRaceReplaysDurableAdmission(t *testing.T) {
 	job := core.Job{
-		ID: "job-direct-request", AdmissionKey: "direct-request", Goal: "preserve exact goal",
+		ID: "job-direct-request", AdmissionKey: "direct-request", AgentsMD: "preserve exact goal",
 		SandboxProfile: "cloud", ProviderConnection: "primary", Model: "gpt-5.6-sol",
 		ReasoningEffort: "high", AdmissionOpen: true,
 	}
 	store := &admissionServiceStore{
 		job: job, profile: verifiedAdmissionProfile("cloud"), conflictOnce: true,
 	}
-	request := AdmissionRequest{AdmissionKey: "direct-request", Goal: job.Goal}
+	request := AdmissionRequest{AdmissionKey: "direct-request", AgentsMD: job.AgentsMD}
 
 	got, created, err := NewAdmissionService(
 		store, "test-queue", &admissionServiceProvider{},
@@ -100,12 +100,12 @@ func TestAdmissionServiceCreateRaceReplaysDurableAdmission(t *testing.T) {
 func TestAdmissionServiceReplaySkipsVolatileAuthority(t *testing.T) {
 	authorityErr := errors.New("volatile authority must be skipped")
 	job := core.Job{
-		ID: "job-replay", AdmissionKey: "replay", Goal: "goal", SandboxProfile: "cloud",
+		ID: "job-replay", AdmissionKey: "replay", AgentsMD: "goal", SandboxProfile: "cloud",
 		ProviderConnection: "primary", Model: "model", ReasoningEffort: "high", AdmissionOpen: true,
 	}
 	store := &admissionServiceStore{exists: true, job: job, profileErr: authorityErr}
 	provider := &admissionServiceProvider{defaultErr: authorityErr, defaultModelErr: authorityErr, checkErr: authorityErr}
-	request := AdmissionRequest{AdmissionKey: "replay", Goal: "goal"}
+	request := AdmissionRequest{AdmissionKey: "replay", AgentsMD: "goal"}
 
 	got, created, err := NewAdmissionService(store, "test-queue", provider).Admit(context.Background(), request)
 	if err != nil || created || got.ID != job.ID {
@@ -114,17 +114,17 @@ func TestAdmissionServiceReplaySkipsVolatileAuthority(t *testing.T) {
 }
 
 func TestAdmissionServiceRejectsConflictingReplay(t *testing.T) {
-	request := AdmissionRequest{AdmissionKey: "replay", Goal: "goal", Model: "model"}
+	request := AdmissionRequest{AdmissionKey: "replay", AgentsMD: "goal", Model: "model"}
 	job := core.Job{
-		ID: "job-replay", AdmissionKey: "replay", Goal: "goal", SandboxProfile: "cloud",
+		ID: "job-replay", AdmissionKey: "replay", AgentsMD: "goal", SandboxProfile: "cloud",
 		ProviderConnection: "primary", Model: "model", ReasoningEffort: "high", AdmissionOpen: true,
 	}
 	tests := map[string]struct {
 		request  AdmissionRequest
 		workflow core.WorkflowName
 	}{
-		"changed input":    {request: AdmissionRequest{AdmissionKey: "replay", Goal: "different", Model: "model"}},
-		"malformed replay": {request: AdmissionRequest{AdmissionKey: "replay", Goal: "goal", Model: "model\x00"}},
+		"changed input":    {request: AdmissionRequest{AdmissionKey: "replay", AgentsMD: "different", Model: "model"}},
+		"malformed replay": {request: AdmissionRequest{AdmissionKey: "replay", AgentsMD: "goal", Model: "model\x00"}},
 		"foreign workflow": {request: request, workflow: "coding-to-proposal"},
 	}
 	for name, test := range tests {
@@ -143,9 +143,9 @@ func TestAdmissionServiceRejectsConflictingReplay(t *testing.T) {
 func TestAdmissionServiceValidatesBeforeMutableAuthority(t *testing.T) {
 	authorityErr := errors.New("mutable authority must be skipped")
 	tests := map[string]AdmissionRequest{
-		"missing key":   {Goal: "goal", Model: "model"},
-		"blank goal":    {AdmissionKey: "request", Goal: "  ", Model: "model"},
-		"bad reasoning": {AdmissionKey: "request", Goal: "goal", Model: "model", ReasoningEffort: "maximum"},
+		"missing key":          {AgentsMD: "goal", Model: "model"},
+		"invalid instructions": {AdmissionKey: "request", AgentsMD: "\x00", Model: "model"},
+		"bad reasoning":        {AdmissionKey: "request", AgentsMD: "goal", Model: "model", ReasoningEffort: "maximum"},
 	}
 	for name, request := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -165,7 +165,7 @@ func TestAdmissionServiceExplicitConnectionUsesItsDefaultModel(t *testing.T) {
 	store := &admissionServiceStore{job: job, profile: verifiedAdmissionProfile("explicit-profile"), created: true}
 	provider := &admissionServiceProvider{defaultErr: defaultErr}
 	request := AdmissionRequest{
-		AdmissionKey: "explicit", Goal: "goal", SandboxProfile: " explicit-profile ",
+		AdmissionKey: "explicit", AgentsMD: "goal", SandboxProfile: " explicit-profile ",
 		ProviderConnection: " explicit-connection ",
 	}
 
@@ -182,7 +182,7 @@ func TestAdmissionServiceExplicitModelBypassesConnectionDefault(t *testing.T) {
 	job := core.Job{ID: "job-explicit-model", AdmissionOpen: true}
 	store := &admissionServiceStore{job: job, profile: verifiedAdmissionProfile("profile"), created: true}
 	provider := &admissionServiceProvider{defaultModelErr: errors.New("DefaultModel must be skipped")}
-	request := AdmissionRequest{AdmissionKey: "explicit-model", Goal: "goal", Model: " model "}
+	request := AdmissionRequest{AdmissionKey: "explicit-model", AgentsMD: "goal", Model: " model "}
 
 	_, created, err := NewAdmissionService(store, "test-queue", provider).Admit(context.Background(), request)
 	if err != nil || !created || provider.defaultModelCalls != 0 || store.admitted.Model != "model" {

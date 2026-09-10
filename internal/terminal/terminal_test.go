@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -10,6 +11,44 @@ import (
 	incustest "github.com/aphronio/dorf/internal/incus/testkit"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
+
+func TestSandboxPreparationInstallsInstructionsBeforeItCanSucceed(t *testing.T) {
+	job := core.Job{ID: "job-instructions", AgentsMD: "Keep replies brief.\n"}
+	owned := core.Sandbox{ID: "sandbox-instructions", JobID: job.ID, OwnershipNonce: "owned"}
+	sandbox := &instructionsSandbox{writeErr: errors.New("temporary file transport failure")}
+	externals := Externals{Sandbox: sandbox}
+	if err := externals.SandboxCreate(context.Background(), job, owned); !errors.Is(err, sandbox.writeErr) {
+		t.Fatalf("preparation completed without instructions: %v", err)
+	}
+	sandbox.writeErr = nil
+	if err := externals.SandboxCreate(context.Background(), job, owned); err != nil {
+		t.Fatal(err)
+	}
+	if sandbox.path != "/workspace/job/AGENTS.md" || sandbox.contents != job.AgentsMD || sandbox.owner != ownershipMetadata(owned) {
+		t.Fatalf("instructions were not installed in the exact owned workspace: %#v", sandbox)
+	}
+}
+
+type instructionsSandbox struct {
+	provider.Sandbox
+	owner          provider.Ownership
+	path, contents string
+	writeErr       error
+	created        bool
+}
+
+func (*instructionsSandbox) Workspace() string { return "/workspace/job" }
+func (s *instructionsSandbox) ReconcileOwnedCreate(context.Context, provider.Ownership) error {
+	s.created = true
+	return nil
+}
+func (s *instructionsSandbox) PutFile(_ context.Context, owner provider.Ownership, path string, contents []byte) error {
+	if !s.created {
+		return errors.New("workspace is not created")
+	}
+	s.owner, s.path, s.contents = owner, path, string(contents)
+	return s.writeErr
+}
 
 func TestHarnessObservationNeverFallsBackFromExactSandbox(t *testing.T) {
 	requested := make([]string, 0, 2)

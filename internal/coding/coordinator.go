@@ -41,9 +41,6 @@ func RunJob(ctx context.Context, custody core.JobHandle, service CodingExecution
 			return Work{}, err
 		}
 		work := projection.CurrentWork
-		if work.Kind == WorkComplete || work.Kind == WorkAttention {
-			return work, nil
-		}
 		job := snapshot.Job
 
 		switch work.Kind {
@@ -53,7 +50,7 @@ func RunJob(ctx context.Context, custody core.JobHandle, service CodingExecution
 			err = absurdruntime.RunFactStep(ctx, "dorf/review-feedback/v1/"+work.FactID, work.FactID, func(workCtx context.Context) error {
 				return service.RecordReviewResult(workCtx, job, work.FactID)
 			})
-		case WorkWaitAgent:
+		case "", WorkComplete, WorkAttention, WorkWaitAgent:
 			return work, nil
 		case WorkObserveRevision:
 			err = runRevisionStep(ctx, service, job, snapshot, work)

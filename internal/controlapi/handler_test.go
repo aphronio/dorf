@@ -88,19 +88,19 @@ func TestHandlerBoundary(t *testing.T) {
 	replayedRedemption := do(http.MethodPost, "/v1/auth/enrollments/redeem", "", "", strings.NewReader(redeemBody))
 	requireStatusType(t, replayedRedemption, http.StatusOK, "application/json")
 
-	missingKey := do(http.MethodPost, "/v1/jobs", credential, "", strings.NewReader(`{"goal":"ship it","profile":"default","model":"model-1","reasoning":"high"}`))
+	missingKey := do(http.MethodPost, "/v1/jobs", credential, "", strings.NewReader(`{"agents_md":"ship it","profile":"default","model":"model-1","reasoning":"high"}`))
 	requireProblem(t, missingKey, http.StatusBadRequest, "idempotency_key_required")
 
-	strict := do(http.MethodPost, "/v1/jobs", credential, "request-key-2", strings.NewReader(`{"goal":"ship it","profile":"default","model":"model-1","reasoning":"high","provider_credential":"leak"}`))
+	strict := do(http.MethodPost, "/v1/jobs", credential, "request-key-2", strings.NewReader(`{"agents_md":"ship it","profile":"default","model":"model-1","reasoning":"high","provider_credential":"leak"}`))
 	requireProblem(t, strict, http.StatusBadRequest, "invalid_json")
 	expandedGoal := strings.Repeat("\x00", 1<<20)
-	expandedBody, err := json.Marshal(controlapi.AdmitJobRequest{Goal: expandedGoal, Profile: "default"})
+	expandedBody, err := json.Marshal(controlapi.AdmitJobRequest{AgentsMD: expandedGoal, Profile: "default"})
 	if err != nil || len(expandedBody) <= 6<<20 {
 		t.Fatalf("encode expanded 1 MiB goal: bytes=%d err=%v", len(expandedBody), err)
 	}
 	expanded := do(http.MethodPost, "/v1/jobs", credential, "request-key-expanded", bytes.NewReader(expandedBody))
 	requireStatusType(t, expanded, http.StatusCreated, "application/json")
-	if jobs.gotInput.Goal != expandedGoal {
+	if jobs.gotInput.AgentsMD != expandedGoal {
 		t.Fatal("JSON escaping changed the exact 1 MiB goal")
 	}
 	wrongMethod := do(http.MethodDelete, "/v1/jobs/job-1", credential, "", nil)
@@ -130,21 +130,21 @@ func TestAdmissionsAcceptExplicitAIConnectionAndOmittedModel(t *testing.T) {
 	}{
 		{
 			name: "direct", target: "/v1/jobs",
-			body:  `{"goal":"ship","ai_connection":"work-openai"}`,
+			body:  `{"agents_md":"ship","ai_connection":"work-openai"}`,
 			jobs:  &fakeJobs{job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindDirect}},
 			got:   func(j *fakeJobs) string { return j.gotInput.AIConnection },
 			model: func(j *fakeJobs) string { return j.gotInput.Model },
 		},
 		{
 			name: "coding", target: "/v1/workflows/coding/jobs",
-			body:  `{"goal":"ship","repository":"https://github.com/acme/widget.git","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","base_branch":"main","ai_connection":"work-openai"}`,
+			body:  `{"repository":"https://github.com/acme/widget.git","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","base_branch":"main","ai_connection":"work-openai"}`,
 			jobs:  &fakeJobs{job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindCoding}, view: controlapi.CodingJob{Job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindCoding}}},
 			got:   func(j *fakeJobs) string { return j.codingInput.AIConnection },
 			model: func(j *fakeJobs) string { return j.codingInput.Model },
 		},
 		{
 			name: "investigation", target: "/v1/workflows/codebase-investigation/jobs",
-			body:  `{"brief":"trace it","repository":"https://github.com/acme/widget.git","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ai_connection":"work-openai"}`,
+			body:  `{"repository":"https://github.com/acme/widget.git","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ai_connection":"work-openai"}`,
 			jobs:  &fakeJobs{job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindInvestigation}, view: controlapi.InvestigationJob{Job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindInvestigation}}},
 			got:   func(j *fakeJobs) string { return j.investigationInput.AIConnection },
 			model: func(j *fakeJobs) string { return j.investigationInput.Model },
@@ -252,7 +252,7 @@ func TestJobConditionalGetAndDirectInteractionRoutes(t *testing.T) {
 		AdmittedAt: time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC),
 	}
 	jobs := &fakeJobs{
-		job:     controlapi.Job{ID: "job-1", Kind: "direct", Goal: "ship", InitialMessageID: "message-1", Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1", Name: "default"}}},
+		job:     controlapi.Job{ID: "job-1", Kind: "direct", Model: "ship", Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1", Name: "default"}}},
 		message: message, messageCreated: true,
 		retry: controlapi.Retry{JobID: "job-1", State: "scheduled"}, retryCreated: true,
 	}
@@ -322,7 +322,7 @@ func TestJobConditionalGetAndDirectInteractionRoutes(t *testing.T) {
 
 func TestAbandonIsAuthenticatedIdempotentAndReturnsCanonicalJob(t *testing.T) {
 	credential := "dcr_abandon"
-	job := controlapi.CodingJob{Job: controlapi.Job{ID: "job-coding", Kind: controlapi.JobKindCoding, Goal: "ship"}}
+	job := controlapi.CodingJob{Job: controlapi.Job{ID: "job-coding", Kind: controlapi.JobKindCoding, Model: "ship"}}
 	jobs := &fakeJobs{job: job.Job, view: job}
 	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs).Handler
 	put := func() *httptest.ResponseRecorder {
@@ -349,7 +349,7 @@ func TestAbandonIsAuthenticatedIdempotentAndReturnsCanonicalJob(t *testing.T) {
 func TestConcreteWorkflowJobRepresentationDrivesETag(t *testing.T) {
 	credential := "dcr_control-client"
 	base := controlapi.Job{
-		ID: "job-coding", Kind: controlapi.JobKindCoding, Goal: "ship",
+		ID: "job-coding", Kind: controlapi.JobKindCoding, Model: "ship",
 	}
 	coding := controlapi.CodingJob{
 		Job: base, WorkflowRevision: "3", Repository: "https://github.com/acme/widget.git", Revision: strings.Repeat("b", 40),
@@ -416,7 +416,7 @@ func TestSandboxFileResponseContract(t *testing.T) {
 
 func TestJobWatchEmitsChangedSnapshotsAndStopsOnServerShutdown(t *testing.T) {
 	credential := "dcr_control-client"
-	jobs := &fakeJobs{job: controlapi.Job{ID: "job-1", Kind: "direct", Goal: "first", Sandboxes: []controlapi.Sandbox{}}}
+	jobs := &fakeJobs{job: controlapi.Job{ID: "job-1", Kind: "direct", Model: "first", Sandboxes: []controlapi.Sandbox{}}}
 	api := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs)
 
 	open := func(lastID string) (*streamResponse, context.CancelFunc, <-chan struct{}) {
@@ -440,7 +440,7 @@ func TestJobWatchEmitsChangedSnapshotsAndStopsOnServerShutdown(t *testing.T) {
 	firstResponse, cancelFirst, firstDone := open("")
 	firstResponse.awaitFlush(t)
 	firstID, firstJob := readSnapshotEvent(t, bufio.NewReader(bytes.NewReader(firstResponse.bytes())))
-	if firstJob.Goal != "first" || len(firstID) != 64 {
+	if firstJob.Model != "first" || len(firstID) != 64 {
 		t.Fatalf("first snapshot id/job=%q/%#v", firstID, firstJob)
 	}
 	if status, header, bounded := firstResponse.metadata(); status != http.StatusOK || header.Get("Content-Type") != "text/event-stream" || header.Get("Cache-Control") != "no-store, no-transform" || !bounded {
@@ -460,11 +460,11 @@ func TestJobWatchEmitsChangedSnapshotsAndStopsOnServerShutdown(t *testing.T) {
 		t.Fatalf("matching Last-Event-ID replayed unchanged snapshot: %q", got)
 	}
 	jobs.mu.Lock()
-	jobs.job.Goal = "changed"
+	jobs.job.Model = "changed"
 	jobs.mu.Unlock()
 	resumedResponse.awaitFlush(t)
 	changedID, changedJob := readSnapshotEvent(t, bufio.NewReader(bytes.NewReader(resumedResponse.bytes())))
-	if changedJob.Goal != "changed" || changedID == firstID {
+	if changedJob.Model != "changed" || changedID == firstID {
 		t.Fatalf("changed snapshot id/job=%q/%#v after %q", changedID, changedJob, firstID)
 	}
 

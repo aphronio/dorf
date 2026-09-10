@@ -240,7 +240,7 @@ func TestActiveWorkerRecoversOrphanedCleanupRequestAndScheduledReplayIsInert(t *
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	key := fmt.Sprintf("cleanup-request-recovery-%d", time.Now().UnixNano())
-	job, created, err := admitCodingFixture(t, store, ctx, codingJobInput(key, "recover explicit cleanup scheduling", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/cleanup-recovery"))
+	job, created, err := admitCodingFixture(t, store, ctx, codingJobInput(key, "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/cleanup-recovery"))
 	if err != nil || !created {
 		t.Fatalf("admit Job=%#v created=%t err=%v", job, created, err)
 	}
@@ -330,7 +330,7 @@ func TestWorkflowEnsureAndCleanupSerializeBothWinnerOrders(t *testing.T) {
 	t.Cleanup(func() { stopWorker(); <-workerDone })
 
 	job, created, err := admitCodingFixture(t, store, ctx, codingJobInput(
-		fmt.Sprintf("ensure-wins-%d", time.Now().UnixNano()), "ensure wins the effect fence",
+		fmt.Sprintf("ensure-wins-%d", time.Now().UnixNano()),
 		"2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/ensure-wins",
 	))
 	if err != nil || !created {
@@ -388,7 +388,7 @@ func TestWorkflowEnsureAndCleanupSerializeBothWinnerOrders(t *testing.T) {
 	loserApplication.RegisterCleanup()
 	coding.Register(loserApplication, store, loserResolver)
 	loser, created, err := admitCodingFixture(t, store, ctx, codingJobInput(
-		fmt.Sprintf("cleanup-wins-%d", time.Now().UnixNano()), "cleanup wins before ensure",
+		fmt.Sprintf("cleanup-wins-%d", time.Now().UnixNano()),
 		"2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/cleanup-wins",
 	))
 	if err != nil || !created {
@@ -409,10 +409,10 @@ func TestWorkflowEnsureAndCleanupSerializeBothWinnerOrders(t *testing.T) {
 	}
 }
 
-func codingJobInput(key, goal, revision, branch string) coding.Admission {
+func codingJobInput(key, revision, branch string) coding.Admission {
 	return coding.Admission{
 		JobAdmission: core.JobAdmission{
-			AdmissionKey: key, Goal: goal, SandboxProfile: "incus", ProviderConnection: "primary",
+			AdmissionKey: key, SandboxProfile: "incus", ProviderConnection: "primary",
 			Model: "gpt-5.6-sol", ReasoningEffort: "high",
 		},
 		Repository: "https://github.com/aphronio/dorf.git", Revision: revision, Branch: branch,
@@ -422,7 +422,7 @@ func codingJobInput(key, goal, revision, branch string) coding.Admission {
 
 func codingAdmissionRequest(input coding.Admission) coding.AdmissionRequest {
 	return coding.AdmissionRequest{
-		AdmissionKey: input.AdmissionKey, Goal: input.Goal, SandboxProfile: input.SandboxProfile,
+		AdmissionKey: input.AdmissionKey, SandboxProfile: input.SandboxProfile,
 		ProviderConnection: input.ProviderConnection, Model: input.Model, ReasoningEffort: input.ReasoningEffort,
 		Repository: input.Repository, Revision: input.Revision, Branch: input.Branch, BaseBranch: input.BaseBranch,
 	}
@@ -433,7 +433,7 @@ func TestPostgresDirectBootstrapFollowAndExplicitCleanup(t *testing.T) {
 	ctx := context.Background()
 	job, created, err := direct.NewAdmissionService(store, client.QueueName(), providerCheck{}).Admit(ctx, direct.AdmissionRequest{
 		AdmissionKey: fmt.Sprintf("direct-execution-%d", time.Now().UnixNano()),
-		Goal:         "prove the direct client execution boundary", SandboxProfile: "incus",
+		AgentsMD:     "prove the direct client execution boundary", SandboxProfile: "incus",
 		ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
 	})
 	if err != nil || !created || job.CurrentTaskID == "" {
@@ -455,12 +455,8 @@ func TestPostgresDirectBootstrapFollowAndExplicitCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !job.AdmissionOpen || job.CleanupState != core.CleanupPending || job.WorkflowAttention != "" ||
-		len(actions) != 2 || actions[0].Kind != core.ActionSandboxCreate || actions[1].Kind != core.ActionRouteCreate ||
-		actions[0].SettledAt.After(actions[1].CreatedAt) || len(deliveries) != 1 ||
-		deliveries[0].AgentRun.Role != direct.DirectAgentRole || deliveries[0].AgentRun.State != core.AgentRunCompleted ||
-		deliveries[0].AgentRun.StartedAt.IsZero() || actions[1].SettledAt.After(deliveries[0].AgentRun.StartedAt) {
-		t.Fatalf("direct bootstrap did not settle create → route → Agent and remain open: job=%#v actions=%#v deliveries=%#v", job, actions, deliveries)
+	if !job.AdmissionOpen || job.CleanupState != core.CleanupPending || job.WorkflowAttention != "" || len(deliveries) != 0 || len(actions) != 2 {
+		t.Fatalf("Job setup should be idle with no Messages: job=%#v actions=%#v deliveries=%#v", job, actions, deliveries)
 	}
 	idleTask, err := client.FetchTaskResult(ctx, client.QueueName(), job.CurrentTaskID)
 	if err != nil || idleTask == nil || idleTask.State != absurd.TaskSleeping {
@@ -475,6 +471,17 @@ func TestPostgresDirectBootstrapFollowAndExplicitCleanup(t *testing.T) {
 	sandbox, err := handle.DefaultSandbox(ctx)
 	if err != nil {
 		t.Fatal(err)
+	}
+	first, err := sandbox.Agent().Message(ctx, "direct-message", "prove the direct client execution boundary")
+	if err != nil || !first.Created || first.Sequence != 1 {
+		t.Fatalf("first Message=%#v err=%v", first, err)
+	}
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "direct-message", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	deliveries, err = store.Deliveries(ctx, job.ID)
+	if err != nil || len(deliveries) != 1 || deliveries[0].AgentRun.State != core.AgentRunCompleted || deliveries[0].AgentRun.StartedAt.IsZero() || actions[1].SettledAt.After(deliveries[0].AgentRun.StartedAt) {
+		t.Fatalf("ordinary Message must run after preparation: deliveries=%#v err=%v", deliveries, err)
 	}
 	accepted, err := sandbox.Agent().Message(ctx, "direct-follow", "continue in the retained Thread")
 	if err != nil || !accepted.Created {
@@ -520,7 +527,7 @@ func TestPostgresDirectAdmissionReplayRecoversTaskAttachment(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	input := core.JobAdmission{
-		AdmissionKey: fmt.Sprintf("direct-%d", time.Now().UnixNano()), Goal: "produce a caller-owned result",
+		AdmissionKey:   fmt.Sprintf("direct-%d", time.Now().UnixNano()),
 		SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
 	}
 	job, created, err := admitDirectFixture(t, store, ctx, input)
@@ -528,7 +535,7 @@ func TestPostgresDirectAdmissionReplayRecoversTaskAttachment(t *testing.T) {
 		t.Fatalf("direct admission job=%#v created=%t err=%v", job, created, err)
 	}
 	request := direct.AdmissionRequest{
-		AdmissionKey: input.AdmissionKey, Goal: input.Goal, SandboxProfile: input.SandboxProfile,
+		AdmissionKey: input.AdmissionKey, AgentsMD: input.AgentsMD, SandboxProfile: input.SandboxProfile,
 		ProviderConnection: input.ProviderConnection, Model: input.Model, ReasoningEffort: input.ReasoningEffort,
 	}
 	recovered, created, err := direct.NewAdmissionService(
@@ -573,7 +580,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	key := fmt.Sprintf("message-integration-%d", time.Now().UnixNano())
-	input := codingJobInput(key, "initial input", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/integration")
+	input := codingJobInput(key, "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/integration")
 	blocked := input
 	blocked.AdmissionKey += "-provider-blocked"
 	application := core.Application{Store: store, Tasks: client}
@@ -618,7 +625,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	})
 
 	first, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-retry", Input: "same text"})
-	if err != nil || !first.Created || first.Message.Sequence != 2 || first.Message.FromKind != "human" || first.Message.FromID != "client-retry" || first.Message.ID != core.MessageID(job.ID, "human", "client-retry") {
+	if err != nil || !first.Created || first.Message.Sequence != 1 || first.Message.FromKind != "human" || first.Message.FromID != "client-retry" || first.Message.ID != core.MessageID(job.ID, "human", "client-retry") {
 		t.Fatalf("first message=%#v err=%v", first, err)
 	}
 	if admitted, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "wrong-workflow", Input: "must not cross workflow authority"}); err == nil || admitted.Created || !strings.Contains(err.Error(), "is not codebase-investigation") {
@@ -638,11 +645,11 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 		t.Fatalf("byte-distinct input replay error=%v", err)
 	}
 	distinct, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-distinct", Input: "same text"})
-	if err != nil || !distinct.Created || distinct.Message.ID == first.Message.ID || distinct.Message.Sequence != 3 {
+	if err != nil || !distinct.Created || distinct.Message.ID == first.Message.ID || distinct.Message.Sequence != 2 {
 		t.Fatalf("distinct identical message=%#v err=%v", distinct, err)
 	}
 	crossKind, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "workflow", FromID: distinct.Message.FromID, Input: "same source identity from the workflow"})
-	if err != nil || !crossKind.Created || crossKind.Message.Sequence != 4 || crossKind.Message.ID == distinct.Message.ID || crossKind.Message.ID != core.MessageID(job.ID, "workflow", distinct.Message.FromID) || crossKind.Message.FromKind != "workflow" || crossKind.Message.FromID != distinct.Message.FromID {
+	if err != nil || !crossKind.Created || crossKind.Message.Sequence != 3 || crossKind.Message.ID == distinct.Message.ID || crossKind.Message.ID != core.MessageID(job.ID, "workflow", distinct.Message.FromID) || crossKind.Message.FromKind != "workflow" || crossKind.Message.FromID != distinct.Message.FromID {
 		t.Fatalf("cross-kind source identity=%#v err=%v", crossKind, err)
 	}
 
@@ -675,7 +682,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	}
 	sort.Ints(got)
 	for i, sequence := range got {
-		if sequence != i+5 {
+		if sequence != i+4 {
 			t.Fatalf("concurrent FIFO positions=%v", got)
 		}
 	}
@@ -838,7 +845,7 @@ func TestSandboxProfileVerificationHasOneOwnerAndReleasesAfterCrash(t *testing.T
 	}); err != nil {
 		t.Fatal(err)
 	}
-	input := codingJobInput("verification-fence-"+name, "wait for the exact profile proof", strings.Repeat("a", 40), "dorf/verification-fence")
+	input := codingJobInput("verification-fence-"+name, strings.Repeat("a", 40), "dorf/verification-fence")
 	input.SandboxProfile = name
 	job, created, err := admitCodingFixture(t, store, ctx, input)
 	if err != nil || !created || job.SandboxProfile != name || resumed.OwnershipNonce != first.OwnershipNonce {
@@ -873,7 +880,7 @@ func TestSandboxProfileVerificationTransitionSerializesNewAdmission(t *testing.T
 	if err := transition.QueryRowContext(ctx, `select name from dorf.sandbox_profiles where name=$1 for update`, name).Scan(&locked); err != nil || locked != name {
 		t.Fatalf("lock profile=%q err=%v", locked, err)
 	}
-	input := codingJobInput("verification-serialization-"+name, "serialize against verification", strings.Repeat("a", 40), "dorf/verification-serialization")
+	input := codingJobInput("verification-serialization-"+name, strings.Repeat("a", 40), "dorf/verification-serialization")
 	input.SandboxProfile = name
 	type admissionResult struct {
 		created bool
@@ -952,7 +959,7 @@ func TestSandboxProfilesAreVerifiedDefaultedAndImmutableWhileInUse(t *testing.T)
 		t.Fatal(err)
 	}
 
-	input := codingJobInput("profile-immutability-"+name, "bounded implementation", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/profile-immutability")
+	input := codingJobInput("profile-immutability-"+name, "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/profile-immutability")
 	input.SandboxProfile = name
 	input.BaseBranch = "main"
 	job, created, err := admitCodingFixture(t, store, ctx, input)
@@ -1088,7 +1095,7 @@ func TestUnavailableSandboxProfileFencesNewJobsAndPreservesExactAttention(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := codingJobInput("profile-unavailable-"+name, "bounded implementation", strings.Repeat("a", 40), "dorf/profile-unavailable")
+	input := codingJobInput("profile-unavailable-"+name, strings.Repeat("a", 40), "dorf/profile-unavailable")
 	input.SandboxProfile = name
 	input.BaseBranch = "main"
 	job, created, err := admitCodingFixture(t, store, ctx, input)
@@ -1518,14 +1525,14 @@ func TestEarlyCodingFollowsAdoptAuthoritativeThreadAndSubmitDistinctTurns(t *tes
 	ctx := context.Background()
 	job, created, err := admitCodingFixture(t, store, ctx, codingJobInput(
 		fmt.Sprintf("early-follow-%d", time.Now().UnixNano()),
-		"execute every accepted early follow in FIFO order",
+
 		strings.Repeat("e", 40),
 		"dorf/early-follow",
 	))
 	if err != nil || !created {
 		t.Fatalf("admit Job=%#v created=%t err=%v", job, created, err)
 	}
-	wantInputs := []string{job.Goal, "first early follow", "second early follow"}
+	wantInputs := []string{"initial input", "first early follow", "second early follow"}
 	for i, input := range wantInputs[1:] {
 		if admitted, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{
 			JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman,
@@ -1646,7 +1653,7 @@ func TestEarlyCodingFollowNoThreadPredecessorRules(t *testing.T) {
 			ctx := context.Background()
 			job, created, err := admitCodingFixture(t, store, ctx, codingJobInput(
 				fmt.Sprintf("early-no-thread-%s-%d", strings.ReplaceAll(test.name, " ", "-"), time.Now().UnixNano()),
-				"initial work", strings.Repeat("f", 40), "dorf/early-no-thread",
+				strings.Repeat("f", 40), "dorf/early-no-thread",
 			))
 			if err != nil || !created {
 				t.Fatalf("admit Job created=%t err=%v", created, err)
@@ -1808,7 +1815,7 @@ func prepareTransportIntegrationJob(t *testing.T, store postgres.Store, label st
 	ctx := context.Background()
 	revision := strings.Repeat("a", 40)
 	key := fmt.Sprintf("%s-%d", label, time.Now().UnixNano())
-	admitted, created, err := admitCodingFixture(t, store, ctx, codingJobInput(key, "transport proof", revision, "dorf/"+label))
+	admitted, created, err := admitCodingFixture(t, store, ctx, codingJobInput(key, revision, "dorf/"+label))
 	if err != nil || !created {
 		t.Fatalf("admit=%#v created=%v err=%v", admitted, created, err)
 	}
@@ -1824,7 +1831,7 @@ func TestChangedAndUnchangedRevisionObservationsLinkExactImplementationAgentRuns
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
 	start, changed := strings.Repeat("1", 40), strings.Repeat("2", 40)
-	input := codingJobInput(fmt.Sprintf("revision-evidence-%d", time.Now().UnixNano()), "bounded implementation", start, "dorf/revision-evidence")
+	input := codingJobInput(fmt.Sprintf("revision-evidence-%d", time.Now().UnixNano()), start, "dorf/revision-evidence")
 	admitted, created, err := admitCodingFixture(t, store, ctx, input)
 	if err != nil || !created {
 		t.Fatalf("admit=%#v created=%v err=%v", admitted, created, err)
@@ -1980,7 +1987,7 @@ func TestGlobalAgentMessageSelectionOrdersAcrossRoleAndSandboxLanes(t *testing.T
 	}
 	implementationThread := "thread-" + job.ID
 	implementationTurn := "turn-cross-role-" + job.ID
-	if implementation.AgentRun.Role != coding.InitialAgentRole || implementation.AgentRun.SandboxID != core.MainSandboxName(job.ID) || implementation.AgentRun.ThreadID != "" {
+	if implementation.AgentRun.Role != coding.AgentRole || implementation.AgentRun.SandboxID != core.MainSandboxName(job.ID) || implementation.AgentRun.ThreadID != "" {
 		t.Fatalf("implementation envelope=%#v", implementation.AgentRun)
 	}
 	if err := store.PrepareAgentRun(ctx, implementation.AgentRun.ID, "codex", ""); err != nil {
@@ -2338,7 +2345,7 @@ func actionIntegrationJob(t *testing.T, suffix string) (*sql.DB, postgres.Store,
 	ctx := context.Background()
 	job, created, err := admitCodingFixture(t, store, ctx, codingJobInput(
 		fmt.Sprintf("action-%s-%d", suffix, time.Now().UnixNano()),
-		"prove durable Action custody",
+
 		strings.Repeat("a", 40),
 		"dorf/action-integration",
 	))
@@ -2417,7 +2424,7 @@ func TestJobHandleEnsuresStableDefaultAndNamedSandboxes(t *testing.T) {
 	db, store, job := actionIntegrationJob(t, "handle-sandbox-identity")
 	ctx := context.Background()
 	foreign, created, err := admitCodingFixture(t, store, ctx, codingJobInput(
-		fmt.Sprintf("foreign-sandbox-owner-%d", time.Now().UnixNano()), "own a conflicting Sandbox identity",
+		fmt.Sprintf("foreign-sandbox-owner-%d", time.Now().UnixNano()),
 		strings.Repeat("b", 40), "dorf/foreign-sandbox-owner",
 	))
 	if err != nil || !created {
@@ -2893,7 +2900,7 @@ func prepareReviewIntegrationJob(t *testing.T, store postgres.Store, suffix stri
 	t.Helper()
 	ctx := context.Background()
 	start, revision := strings.Repeat("a", 40), strings.Repeat("b", 40)
-	admitted, created, err := admitCodingFixture(t, store, ctx, codingJobInput(fmt.Sprintf("review-policy-%s-%d", strings.ReplaceAll(suffix, " ", "-"), time.Now().UnixNano()), "bounded implementation", start, "dorf/review-policy"))
+	admitted, created, err := admitCodingFixture(t, store, ctx, codingJobInput(fmt.Sprintf("review-policy-%s-%d", strings.ReplaceAll(suffix, " ", "-"), time.Now().UnixNano()), start, "dorf/review-policy"))
 	if err != nil || !created {
 		t.Fatalf("admit=%#v created=%v err=%v", admitted, created, err)
 	}
@@ -2922,7 +2929,7 @@ func TestRevisionObservationBoundaryIncludesLateSteeringAtomically(t *testing.T)
 	revision := strings.Repeat("7", 40)
 	branch := "dorf/revision-observation-boundary"
 	key := fmt.Sprintf("revision-observation-boundary-%d", time.Now().UnixNano())
-	job, created, err := admitCodingFixture(t, store, ctx, codingJobInput(key, "bounded implementation", start, branch))
+	job, created, err := admitCodingFixture(t, store, ctx, codingJobInput(key, start, branch))
 	if err != nil || !created {
 		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
 	}
@@ -3213,7 +3220,7 @@ func TestJobTaskAttachmentFencesStaleEffectsAndAgentSelection(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	input := codingJobInput("reattach-cas-"+suffix, "preserve one task binding", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/reattach-cas")
+	input := codingJobInput("reattach-cas-"+suffix, "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/reattach-cas")
 	job, created, err := admitCodingFixture(t, store, ctx, input)
 	if err != nil || !created {
 		t.Fatalf("admit created=%v err=%v", created, err)

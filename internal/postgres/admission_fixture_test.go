@@ -34,18 +34,34 @@ func legacyAdmissionFixture(t *testing.T, store postgres.Store, ctx context.Cont
 
 func admitCodingFixture(t *testing.T, store postgres.Store, ctx context.Context, input coding.Admission) (core.Job, bool, error) {
 	return legacyAdmissionFixture(t, store, ctx, func(queue string) (core.Job, bool, error) {
-		return store.AdmitCoding(ctx, input, queue)
+		job, created, err := store.AdmitCoding(ctx, input, queue)
+		if err == nil {
+			_, err = store.AdmitCodingMessage(ctx, fixtureMessage(job.ID))
+		}
+		return job, created, err
 	})
 }
 
 func admitDirectFixture(t *testing.T, store postgres.Store, ctx context.Context, input core.JobAdmission) (core.Job, bool, error) {
 	return legacyAdmissionFixture(t, store, ctx, func(queue string) (core.Job, bool, error) {
-		return store.AdmitDirect(ctx, input, queue)
+		job, created, err := store.AdmitDirect(ctx, input, queue)
+		if err == nil {
+			_, err = store.AdmitDirectMessage(ctx, fixtureMessage(job.ID))
+		}
+		return job, created, err
 	})
 }
 
 func admitInvestigationFixture(t *testing.T, store postgres.Store, ctx context.Context, input investigation.Admission) (core.Job, bool, error) {
 	return legacyAdmissionFixture(t, store, ctx, func(queue string) (core.Job, bool, error) {
-		return store.AdmitInvestigation(ctx, input, queue)
+		job, created, err := store.AdmitInvestigation(ctx, input, queue)
+		if err == nil {
+			_, err = store.AdmitInvestigationMessage(ctx, fixtureMessage(job.ID))
+		}
+		return job, created, err
 	})
+}
+
+func fixtureMessage(jobID string) core.MessageAdmission {
+	return core.MessageAdmission{JobID: jobID, SandboxID: core.MainSandboxName(jobID), FromKind: core.MessageFromHuman, FromID: "fixture-message", Input: "initial input", Intent: core.MessageFollow}
 }

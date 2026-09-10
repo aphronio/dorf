@@ -122,8 +122,8 @@ func TestAdmissionRequiresVerificationHashToMatchCurrentProfileDefinition(t *tes
 		t.Fatalf("mismatched profile=%#v err=%v", profile, err)
 	}
 	_, _, err = admitDirectFixture(t, store, ctx, core.JobAdmission{
-		AdmissionKey: fmt.Sprintf("hash-fence-admission-%d", time.Now().UnixNano()),
-		Goal:         "prove the profile hash fence", SandboxProfile: name, ProviderConnection: "primary",
+		AdmissionKey:   fmt.Sprintf("hash-fence-admission-%d", time.Now().UnixNano()),
+		SandboxProfile: name, ProviderConnection: "primary",
 		Model: "gpt-5.6-sol", ReasoningEffort: "high",
 	})
 	if err == nil || !strings.Contains(err.Error(), core.BaseProfileContract) {

@@ -148,7 +148,7 @@ type Job struct {
 	AdmissionKey            string       `json:"admission_key"`
 	Workflow                WorkflowName `json:"workflow"`
 	WorkflowRevision        string       `json:"workflow_revision"`
-	Goal                    string       `json:"goal"`
+	AgentsMD                string       `json:"agents_md,omitempty"`
 	SandboxProfile          string       `json:"sandbox_profile"`
 	ProviderConnection      string       `json:"provider_connection"`
 	Model                   string       `json:"model"`

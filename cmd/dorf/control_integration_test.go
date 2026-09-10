@@ -56,7 +56,7 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	}
 
 	key := fmt.Sprintf("control-api-replay-%d", time.Now().UnixNano())
-	input := controlapi.AdmitJobRequest{Goal: "prove remote durable replay", AIConnection: "primary", Model: "model-test", Reasoning: "high"}
+	input := controlapi.AdmitJobRequest{AgentsMD: "prove remote durable replay", AIConnection: "primary", Model: "model-test", Reasoning: "high"}
 	// The response is deliberately discarded after the handler commits, matching
 	// a client that cannot know whether its first request succeeded.
 	lost := controlTestRequest(t, first, http.MethodPost, "/v1/jobs", credential, key, input)
@@ -79,7 +79,7 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	var replayed controlapi.DirectJob
 	controlTestJSON(t, replay, http.StatusOK, &replayed)
 	afterReplay, err := store.Job(ctx, committed.ID)
-	if err != nil || replayed.ID != committed.ID || replayed.InitialMessageID == "" || afterReplay.CurrentTaskID != committed.CurrentTaskID {
+	if err != nil || replayed.ID != committed.ID || afterReplay.CurrentTaskID != committed.CurrentTaskID {
 		t.Fatalf("replay Job=%#v durable=%#v err=%v", replayed, afterReplay, err)
 	}
 	var problem controlapi.Problem
@@ -89,7 +89,7 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	early := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/messages", credential, messageKey, messageInput)
 	var accepted controlapi.Message
 	controlTestJSON(t, early, http.StatusCreated, &accepted)
-	if accepted.JobID != committed.ID || accepted.Sequence != 2 || accepted.Delivery.State != "accepted" {
+	if accepted.JobID != committed.ID || accepted.Sequence != 1 || accepted.Delivery.State != "accepted" {
 		t.Fatalf("early Message=%#v", accepted)
 	}
 	replayedMessage := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/messages", credential, messageKey, messageInput)
@@ -106,7 +106,7 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 		t.Fatalf("Message conflict=%#v", problem)
 	}
 
-	initialRun := core.AgentRunID(replayed.InitialMessageID)
+	initialRun := core.AgentRunID(accepted.ID)
 	if err := store.PrepareAgentRun(ctx, initialRun, "codex", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	}
 
 	changed := input
-	changed.Goal = "different input must conflict"
+	changed.AgentsMD = "different input must conflict"
 	conflict := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs", credential, key, changed)
 	controlTestJSON(t, conflict, http.StatusConflict, &problem)
 	if problem.Code != "idempotency_conflict" {
@@ -231,13 +231,13 @@ func TestControlAPIWorkflowAdmissionsProjectAndReplay(t *testing.T) {
 
 	codingKey := fmt.Sprintf("control-coding-%d", time.Now().UnixNano())
 	codingInput := controlapi.AdmitCodingJobRequest{
-		Goal: "  preserve this exact coding goal\n", Repository: "https://github.com/aphronio/dorf.git",
-		Revision: strings.Repeat("a", 40), BaseBranch: "main", Profile: profileName, AIConnection: "primary", Model: "model-test",
+		Repository: "https://github.com/aphronio/dorf.git",
+		Revision:   strings.Repeat("a", 40), BaseBranch: "main", Profile: profileName, AIConnection: "primary", Model: "model-test",
 	}
 	codingResponse := controlTestRequest(t, handler, http.MethodPost, "/v1/workflows/coding/jobs", credential, codingKey, codingInput)
 	var codingJob controlapi.CodingJob
 	controlTestJSON(t, codingResponse, http.StatusCreated, &codingJob)
-	if codingJob.Kind != controlapi.JobKindCoding || codingJob.Goal != codingInput.Goal ||
+	if codingJob.Kind != controlapi.JobKindCoding ||
 		codingJob.Branch != "dorf/"+core.JobID(codingKey) || codingJob.StartingRevision != codingInput.Revision ||
 		codingJob.Revision != codingInput.Revision || codingJob.WorkflowRevision == "" || codingJob.Outcome != nil {
 		t.Fatalf("coding Job=%#v", codingJob)
@@ -273,13 +273,13 @@ func TestControlAPIWorkflowAdmissionsProjectAndReplay(t *testing.T) {
 
 	investigationKey := fmt.Sprintf("control-investigation-%d", time.Now().UnixNano())
 	investigationInput := controlapi.AdmitInvestigationJobRequest{
-		Brief: "  preserve this exact investigation brief\n", Repository: "https://github.com/aphronio/dorf.git",
-		Revision: strings.Repeat("b", 40), Profile: profileName, AIConnection: "primary", Model: "model-test",
+		Repository: "https://github.com/aphronio/dorf.git",
+		Revision:   strings.Repeat("b", 40), Profile: profileName, AIConnection: "primary", Model: "model-test",
 	}
 	investigationResponse := controlTestRequest(t, restarted, http.MethodPost, "/v1/workflows/codebase-investigation/jobs", credential, investigationKey, investigationInput)
 	var investigationJob controlapi.InvestigationJob
 	controlTestJSON(t, investigationResponse, http.StatusCreated, &investigationJob)
-	if investigationJob.Kind != controlapi.JobKindInvestigation || investigationJob.Goal != investigationInput.Brief ||
+	if investigationJob.Kind != controlapi.JobKindInvestigation ||
 		investigationJob.Source.Repository != investigationInput.Repository || investigationJob.Source.Revision != investigationInput.Revision ||
 		investigationJob.Report.Path != "REPORT.md" || investigationJob.Report.SandboxID == "" {
 		t.Fatalf("investigation Job=%#v", investigationJob)
@@ -310,7 +310,7 @@ func TestControlAPIWorkflowAdmissionsProjectAndReplay(t *testing.T) {
 		"message-"+codingJob.ID, controlapi.SendMessageRequest{Text: "continue", Intent: "follow"})
 	var accepted controlapi.Message
 	controlTestJSON(t, message, http.StatusCreated, &accepted)
-	if accepted.JobID != codingJob.ID || accepted.Sequence != 2 {
+	if accepted.JobID != codingJob.ID || accepted.Sequence != 1 {
 		t.Fatalf("workflow Message=%#v", accepted)
 	}
 
@@ -370,9 +370,9 @@ func TestControlAPIJobListKeepsKeysetContinuity(t *testing.T) {
 		t.Helper()
 		_, err := store.DB.ExecContext(ctx, `
 insert into dorf.jobs(
-    id,admission_key,workflow_name,workflow_revision,goal,
+    id,admission_key,workflow_name,workflow_revision,
     sandbox_profile,provider_connection,model,reasoning_effort,admitted_at
-) values($1,$2,$3,$4,'pagination fixture',$5,'primary','model-test','high',$6)
+) values($1,$2,$3,$4,$5,'primary','model-test','high',$6)
 `, fixture.id, "admission-"+fixture.id, fixture.workflow, fixture.revision, profileName, fixture.at)
 		if err != nil {
 			t.Fatalf("insert Job list fixture %s: %v", fixture.id, err)

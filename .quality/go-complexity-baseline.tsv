@@ -10,7 +10,7 @@ cmd/dorf	parseSandboxProfilePatch	29
 cmd/dorf	planRemoteGateway	19
 cmd/dorf	profileCommand	23
 cmd/dorf	providerCommand	20
-cmd/dorf	publicCommonJob	18
+cmd/dorf	publicCommonJob	17
 cmd/dorf	reconcileHostControlClient	19
 cmd/dorf	run	28
 cmd/dorf	selectProviderGatewayBind	22
@@ -26,9 +26,9 @@ internal/codex	(Agent).withServerEndpointController	22
 internal/coding	(ProposalRuntime).Observe	27
 internal/coding	(ReviewAgentOperation).validate	30
 internal/coding	Register	18
-internal/coding	RunJob	18
+internal/coding	RunJob	16
 internal/coding	VerifyReviewRunEvidence	23
-internal/coding	normalizeAdmissionRequest	18
+internal/coding	normalizeAdmissionRequest	17
 internal/coding	runSandboxAction	18
 internal/coding	unchangedAttention	17
 internal/coding	verifyGitRevisionObservation	21
@@ -70,10 +70,10 @@ internal/incus	(*imageClient).installUnifiedVMArchive	20
 internal/incus	(Adapter).ProviderRouteURL	16
 internal/incus	(ConnectionConfig).Validate	29
 internal/incus	(Sandbox).ReconcileOwnedCreate	18
-internal/investigation	LoadSnapshot	24
+internal/investigation	LoadSnapshot	21
 internal/outcome	(Service).recordFenced	31
 internal/pi	parseSession	26
-internal/postgres	(Store).AgentMessage	31
+internal/postgres	(Store).AgentMessage	30
 internal/postgres	(Store).BeginPublication	30
 internal/postgres	(Store).BeginSandboxProfileVerification	16
 internal/postgres	(Store).BindAgentRun	34
@@ -88,7 +88,6 @@ internal/postgres	(Store).RecordSandboxProfileUnavailable	16
 internal/postgres	(Store).RedeemEnrollment	19
 internal/postgres	(Store).RetryFailedJob	23
 internal/postgres	(Store).UpdateSandboxProfile	18
-internal/postgres	admitJob	23
 internal/postgres	admitMessageTx	24
 internal/postgres	applySandboxProfilePatch	26
 internal/postgres	authorizeSandboxActionTx	27

@@ -151,7 +151,7 @@ func TestAdmittedJobRuntimeIgnoresLaterVerificationReceiptState(t *testing.T) {
 	}
 	input := coding.Admission{
 		JobAdmission: core.JobAdmission{
-			AdmissionKey: "runtime-reverify-" + name, Goal: "continue through profile re-verification",
+			AdmissionKey:   "runtime-reverify-" + name,
 			SandboxProfile: name, ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
 		},
 		Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40), Branch: "dorf/runtime-reverify",

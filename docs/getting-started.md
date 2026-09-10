@@ -347,7 +347,7 @@ Save the complete prompt in `goal.txt`, then use the same CLI to admit a direct 
 operations needed for this walkthrough:
 
 ```bash
-dorf run --goal-file goal.txt --ai-connection AI_CONNECTION --reasoning high
+dorf run --input-file message.txt --ai-connection AI_CONNECTION --reasoning high
 dorf job list
 dorf job list --limit 25 --output json
 dorf job inspect JOB_ID
@@ -370,7 +370,7 @@ typed admission command:
 
 ```bash
 dorf workflow run coding \
-  --goal-file goal.txt \
+  --input-file message.txt \
   --repo https://github.com/OWNER/REPOSITORY.git \
   --revision FULL_COMMIT_OID \
   --base main \
@@ -378,7 +378,7 @@ dorf workflow run coding \
   --reasoning high
 
 dorf workflow run codebase-investigation \
-  --brief-file brief.txt \
+  --input-file message.txt \
   --repo https://github.com/OWNER/REPOSITORY.git \
   --revision FULL_COMMIT_OID \
   --ai-connection AI_CONNECTION \
@@ -398,7 +398,7 @@ requests cleanup once it observes a terminal GitHub Outcome, so retrieve any nee
 before that external decision;
 retained Evidence remains readable after cleanup.
 
-`job inspect` reports the Job ID, initial Message ID, and exact Sandbox IDs. For an investigation,
+`run` receipts include the accepted Job and Message. `job inspect` reports the Job ID and exact Sandbox IDs. For an investigation,
 it also prints the exact report retrieval command followed by the cleanup command. Follow may queue
 before current work settles. Steer targets only the exact active Turn and never becomes a Follow.
 `job watch` reconnects from the canonical snapshot, and Ctrl-C stops only the view. Retry is
@@ -454,7 +454,7 @@ precedence. Save the complete prompt in `goal.txt`, then admit it:
 
 ```bash
 dorf run \
-  --goal-file goal.txt \
+  --input-file message.txt \
   --ai-connection AI_CONNECTION \
   --reasoning high
 
@@ -512,7 +512,7 @@ Save the complete goal in `goal.txt`, then admit it with stable authority:
 ```bash
 dorf workflow run coding \
   --key my-change-v1 \
-  --goal-file goal.txt \
+  --input-file message.txt \
   --repo https://github.com/OWNER/REPOSITORY.git \
   --revision FULL_COMMIT_OID \
   --branch dorf/my-change-v1 \

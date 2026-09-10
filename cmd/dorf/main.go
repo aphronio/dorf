@@ -893,7 +893,7 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 		return err
 	}
 	err = presenter.Run(ctx, "Checking image, applying migrations, and waiting for healthy services", func(ctx context.Context) error {
-		_, err := prepareSetupDeployment(ctx, options.LocalImage, false)
+		_, err := prepareSetupDeployment(ctx, options.LocalImage)
 		return err
 	})
 	if err != nil {
@@ -975,7 +975,7 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	if prepared != nil {
 		if err := makeProviderConnectionReady(ctx, prepared.Connection, func(ctx context.Context) error {
 			return presenter.Run(ctx, "Applying agent configuration and waiting for healthy services", func(ctx context.Context) error {
-				_, err := prepareSetupDeployment(ctx, options.LocalImage, true)
+				_, err := prepareSetupDeployment(ctx, options.LocalImage)
 				return err
 			})
 		}, prepared.Gateway.FinalizeConnection, prepared.Gateway.SetDefaultConnection); err != nil {

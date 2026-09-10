@@ -19,8 +19,8 @@ import (
 func atomicAdmissionInput(t *testing.T) core.JobAdmission {
 	t.Helper()
 	return core.JobAdmission{
-		AdmissionKey: fmt.Sprintf("atomic-%s-%d", t.Name(), time.Now().UnixNano()),
-		Goal:         "commit admission and task together", SandboxProfile: "incus",
+		AdmissionKey:       fmt.Sprintf("atomic-%s-%d", t.Name(), time.Now().UnixNano()),
+		SandboxProfile:     "incus",
 		ProviderConnection: "primary", Model: "model-test", ReasoningEffort: "high",
 	}
 }

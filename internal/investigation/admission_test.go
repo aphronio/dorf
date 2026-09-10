@@ -9,7 +9,7 @@ import (
 
 func TestNormalizeAdmissionRejectsForeignIdentity(t *testing.T) {
 	valid := Admission{
-		JobAdmission: core.JobAdmission{AdmissionKey: "job", Goal: "goal"},
+		JobAdmission: core.JobAdmission{AdmissionKey: "job"},
 		Source:       Source{Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40)},
 	}
 	trimmed := valid
@@ -31,7 +31,7 @@ func TestNormalizeAdmissionRejectsForeignIdentity(t *testing.T) {
 
 func TestNormalizeAdmissionRequiresCredentialFreeHTTPSRemote(t *testing.T) {
 	valid := Admission{
-		JobAdmission: core.JobAdmission{AdmissionKey: "job", Goal: "goal"},
+		JobAdmission: core.JobAdmission{AdmissionKey: "job"},
 		Source:       Source{Repository: "  https://example.test/owner/repository.git  ", Revision: strings.Repeat("a", 40)},
 	}
 	normalized, err := NormalizeAdmission(valid)

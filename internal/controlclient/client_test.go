@@ -78,7 +78,7 @@ func TestLoopbackClientCannotLeakBearerToProxyRedirectOrAlternateOrigin(t *testi
 func TestProblemsRedirectsAndOversizedResponsesDoNotLeakCredential(t *testing.T) {
 	const credential = "never-print-this-credential"
 	escapedGoal := strings.Repeat("\x00", 1<<20)
-	escapedJob, err := json.Marshal(controlapi.DirectJob{Job: controlapi.Job{ID: "job-1", Kind: controlapi.JobKindDirect, Goal: escapedGoal}})
+	escapedJob, err := json.Marshal(controlapi.DirectJob{Job: controlapi.Job{ID: "job-1", Kind: controlapi.JobKindDirect, Attention: &controlapi.Attention{Code: "job_attention", Detail: escapedGoal}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,8 +126,8 @@ func TestProblemsRedirectsAndOversizedResponsesDoNotLeakCredential(t *testing.T)
 		t.Fatalf("problem=%#v err=%v", problem, err)
 	}
 	job, err := client.Job(context.Background(), "job-1")
-	if err != nil || job.Common().Goal != escapedGoal {
-		t.Fatalf("escaped Job goal length=%d err=%v", len(job.Common().Goal), err)
+	if err != nil || job.Common().Attention.Detail != escapedGoal {
+		t.Fatalf("escaped Job goal length=%d err=%v", len(job.Common().Model), err)
 	}
 	if _, err := client.Me(context.Background()); err == nil || strings.Contains(err.Error(), credential) {
 		t.Fatalf("oversized response err=%v", err)
@@ -163,12 +163,12 @@ func TestWatchJobReconnectsWithoutOrdinaryRequestTimeout(t *testing.T) {
 			if request.Header.Get("Last-Event-ID") != "" {
 				t.Fatalf("initial Last-Event-ID=%q", request.Header.Get("Last-Event-ID"))
 			}
-			response.Body = io.NopCloser(strings.NewReader(": connected\nretry: 0\nevent: snapshot\nid: snapshot-1\ndata: {\"id\":\"job-1\",\"kind\":\"direct\",\"goal\":\"first\"}\n\n"))
+			response.Body = io.NopCloser(strings.NewReader(": connected\nretry: 0\nevent: snapshot\nid: snapshot-1\ndata: {\"id\":\"job-1\",\"kind\":\"direct\",\"model\":\"first\"}\n\n"))
 		case 2:
 			if request.Header.Get("Last-Event-ID") != "snapshot-1" {
 				t.Fatalf("reconnect Last-Event-ID=%q", request.Header.Get("Last-Event-ID"))
 			}
-			response.Body = io.NopCloser(strings.NewReader("event: snapshot\nid: snapshot-2\ndata: {\"id\":\"job-1\",\"kind\":\"direct\",\"goal\":\"second\"}\n\n"))
+			response.Body = io.NopCloser(strings.NewReader("event: snapshot\nid: snapshot-2\ndata: {\"id\":\"job-1\",\"kind\":\"direct\",\"model\":\"second\"}\n\n"))
 		default:
 			t.Fatalf("unexpected watch reconnect %d", requests)
 		}
@@ -180,7 +180,7 @@ func TestWatchJobReconnectsWithoutOrdinaryRequestTimeout(t *testing.T) {
 	}
 	var goals []string
 	err = client.WatchJob(context.Background(), "job-1", func(job controlapi.JobView) error {
-		goals = append(goals, job.Common().Goal)
+		goals = append(goals, job.Common().Model)
 		if len(goals) == 2 {
 			return stop
 		}

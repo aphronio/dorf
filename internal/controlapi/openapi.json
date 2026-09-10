@@ -724,9 +724,8 @@
       "AdmitDirectJobRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["goal"],
         "properties": {
-          "goal": { "type": "string", "minLength": 1 },
+          "agents_md": { "type": "string", "maxLength": 1048576, "description": "Initial workspace AGENTS.md, installed before the Harness starts" },
           "profile": { "type": "string", "description": "Named verified profile; omitted or empty selects the Deployment default" },
           "ai_connection": { "type": "string", "description": "Named AI connection; omitted or empty selects the Deployment default" },
           "model": { "type": "string", "maxLength": 1024, "description": "Harness model override; omitted or empty selects the resolved AI connection's default. The admitted Job always returns the exact resolved model." },
@@ -736,9 +735,8 @@
       "AdmitCodingJobRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["goal", "repository", "revision", "base_branch"],
+        "required": ["repository", "revision", "base_branch"],
         "properties": {
-          "goal": { "type": "string", "minLength": 1 },
           "repository": { "type": "string", "minLength": 1 },
           "revision": { "$ref": "#/components/schemas/GitCommitOID" },
           "base_branch": { "type": "string", "minLength": 1 },
@@ -752,9 +750,8 @@
       "AdmitInvestigationJobRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["brief", "repository", "revision"],
+        "required": ["repository", "revision"],
         "properties": {
-          "brief": { "type": "string", "minLength": 1 },
           "repository": {
             "type": "string",
             "format": "uri",
@@ -827,15 +824,13 @@
       },
       "JobCommon": {
         "type": "object",
-        "required": ["id", "kind", "goal", "profile", "model", "reasoning", "initial_message_id", "admission", "execution", "attention", "cleanup", "sandboxes"],
+        "required": ["id", "kind", "profile", "model", "reasoning", "admission", "execution", "attention", "cleanup", "sandboxes"],
         "properties": {
           "id": { "type": "string", "minLength": 1 },
           "kind": { "$ref": "#/components/schemas/JobKind" },
-          "goal": { "type": "string" },
           "profile": { "type": "string", "minLength": 1 },
           "model": { "type": "string", "minLength": 1 },
           "reasoning": { "$ref": "#/components/schemas/ReasoningEffort" },
-          "initial_message_id": { "type": "string", "minLength": 1 },
           "admission": { "$ref": "#/components/schemas/Admission" },
           "execution": { "$ref": "#/components/schemas/ExecutionState" },
           "attention": {
@@ -868,7 +863,7 @@
           { "$ref": "#/components/schemas/JobCommon" },
           {
             "type": "object",
-            "required": ["workflow_revision", "repository", "starting_revision", "revision", "branch", "base_branch", "proposal", "outcome"],
+            "required": [ "workflow_revision", "repository", "starting_revision", "revision", "branch", "base_branch", "proposal", "outcome"],
             "properties": {
               "kind": { "const": "coding" },
               "workflow_revision": { "type": "string", "minLength": 1 },
@@ -899,7 +894,7 @@
           { "$ref": "#/components/schemas/JobCommon" },
           {
             "type": "object",
-            "required": ["workflow_revision", "source", "report"],
+            "required": [ "workflow_revision", "source", "report"],
             "properties": {
               "kind": { "const": "codebase-investigation" },
               "workflow_revision": { "type": "string", "minLength": 1 },

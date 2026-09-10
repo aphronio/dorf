@@ -1,8 +1,3 @@
--- name: InsertInitialMessage :exec
-insert into dorf.job_messages(id,job_id,from_kind,from_id,sequence,input)
-values(sqlc.arg(id),sqlc.arg(job_id),'human',sqlc.arg(from_id),1,sqlc.arg(input))
-on conflict(job_id,from_kind,from_id) do nothing;
-
 -- name: GetMessageBySender :one
 select id,job_id,from_kind,from_id,sequence,input,delivery_intent,requested_intent,
        coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at
@@ -114,7 +109,7 @@ select coalesce(
         select min(m.sequence)
         from dorf.job_messages m
         join dorf.agent_runs ar on ar.message_id=m.id
-        where m.job_id=sqlc.arg(job_id) and m.sequence>1
+        where m.job_id=sqlc.arg(job_id)
           and ar.state='pending' and ar.turn_id is null
           and not exists (
               select 1

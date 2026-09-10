@@ -52,7 +52,7 @@ func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (co
 		if err != nil {
 			return coding.Job{}, core.Action{}, core.Action{}, err
 		}
-		latestInput, err := queries.GetLatestAgentRun(ctx, dbsql.GetLatestAgentRunParams{JobID: jobID, Role: coding.InitialAgentRole})
+		latestInput, err := queries.GetLatestAgentRun(ctx, dbsql.GetLatestAgentRunParams{JobID: jobID, Role: coding.AgentRole})
 		if err != nil || latestInput.State != core.AgentRunCompleted {
 			return coding.Job{}, core.Action{}, core.Action{}, fmt.Errorf("publication cannot begin before the latest implementation input is finished and observed")
 		}

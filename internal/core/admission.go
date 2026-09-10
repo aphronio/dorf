@@ -9,7 +9,7 @@ type JobAdmission struct {
 	AdmissionKey       string
 	Workflow           WorkflowName
 	WorkflowRevision   string
-	Goal               string
+	AgentsMD           string
 	SandboxProfile     string
 	ProviderConnection string
 	Model              string

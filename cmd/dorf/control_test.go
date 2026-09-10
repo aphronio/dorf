@@ -162,8 +162,8 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 		CredentialExpiresAt: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC),
 	}}
 	jobs := &remoteCLIJobs{job: controlapi.DirectJob{Job: controlapi.Job{
-		ID: "job-1", Kind: "direct", Goal: "prove remote control", Profile: "default",
-		Model: "gpt-5.6-sol", Reasoning: "high", InitialMessageID: "message-1", Admission: controlapi.Admission{Open: true},
+		ID: "job-1", Kind: "direct", Profile: "default",
+		Model: "gpt-5.6-sol", Reasoning: "high", Admission: controlapi.Admission{Open: true},
 		Execution: controlapi.State{State: "idle"}, Cleanup: controlapi.State{State: "not_requested"},
 		Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1", Name: "main"}},
 	}}}
@@ -209,7 +209,7 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	if err := os.WriteFile(enrollmentFile, []byte("one-time-code\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(goalFile, []byte(jobs.job.Goal), 0o600); err != nil {
+	if err := os.WriteFile(goalFile, []byte("prove remote control"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(messageFile, []byte("continue with exact evidence"), 0o600); err != nil {
@@ -219,7 +219,7 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	commands := [][]string{
 		{"connect", "--name", "laptop", "--enrollment-file", enrollmentFile, deploymentURL},
 		{"auth", "status"},
-		{"run", "--goal-file", goalFile, "--ai-connection", "personal"},
+		{"run", "--input-file", goalFile, "--ai-connection", "personal"},
 		{"job", "list"},
 		{"job", "inspect", jobs.job.ID},
 		{"job", "message", "--input-file", messageFile, jobs.job.ID},
@@ -259,14 +259,14 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	if code != "one-time-code" || name != "laptop" || len(credential) != 43 {
 		t.Fatalf("enrollment code=%q name=%q credential length=%d", code, name, len(credential))
 	}
-	wantAdmission := controlapi.AdmitJobRequest{Goal: jobs.job.Goal, AIConnection: "personal", Reasoning: jobs.job.Reasoning}
+	wantAdmission := controlapi.AdmitJobRequest{AIConnection: "personal", Reasoning: jobs.job.Reasoning}
 	if admission != wantAdmission {
 		t.Fatalf("Job admission=%#v, want %#v", admission, wantAdmission)
 	}
 	if requestKey == "" || len(admissionAttempts) != 2 || admissionAttempts[0] != requestKey || admissionAttempts[1] != requestKey {
 		t.Fatalf("automatic admission attempts=%q, want the same generated identity twice", admissionAttempts)
 	}
-	if len(messageAttempts) != 2 || messageAttempts[0] == "" || messageAttempts[0] != messageAttempts[1] ||
+	if len(messageAttempts) != 3 || messageAttempts[0] == "" || messageAttempts[0] != messageAttempts[1] ||
 		len(retryAttempts) != 2 || retryAttempts[0] == "" || retryAttempts[0] != retryAttempts[1] {
 		t.Fatalf("mutation replay keys message=%q retry=%q", messageAttempts, retryAttempts)
 	}
@@ -327,6 +327,7 @@ func TestRemoteWorkflowCLIUsesExplicitTypedRoutes(t *testing.T) {
 	var codingRequest controlapi.AdmitCodingJobRequest
 	var investigationRequest controlapi.AdmitInvestigationJobRequest
 	var paths, keys []string
+	var messages []string
 	client, err := controlclient.New("https://dorf.example.test", "credential", roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		paths = append(paths, request.URL.Path)
 		keys = append(keys, request.Header.Get("Idempotency-Key"))
@@ -339,7 +340,7 @@ func TestRemoteWorkflowCLIUsesExplicitTypedRoutes(t *testing.T) {
 				return nil, err
 			}
 			_ = json.NewEncoder(response).Encode(controlapi.CodingJob{
-				Job:              controlapi.Job{ID: "coding-job", Kind: controlapi.JobKindCoding, Goal: codingRequest.Goal},
+				Job:              controlapi.Job{ID: "coding-job", Kind: controlapi.JobKindCoding},
 				WorkflowRevision: "coding/v1", Repository: codingRequest.Repository, StartingRevision: codingRequest.Revision,
 				Revision: codingRequest.Revision, Branch: "dorf/coding-job", BaseBranch: codingRequest.BaseBranch,
 			})
@@ -348,11 +349,18 @@ func TestRemoteWorkflowCLIUsesExplicitTypedRoutes(t *testing.T) {
 				return nil, err
 			}
 			_ = json.NewEncoder(response).Encode(controlapi.InvestigationJob{
-				Job:              controlapi.Job{ID: "investigation-job", Kind: controlapi.JobKindInvestigation, Goal: investigationRequest.Brief},
+				Job:              controlapi.Job{ID: "investigation-job", Kind: controlapi.JobKindInvestigation},
 				WorkflowRevision: "codebase-investigation/v1",
 				Source:           controlapi.InvestigationSource{Repository: investigationRequest.Repository, Revision: investigationRequest.Revision},
 				Report:           controlapi.InvestigationReport{SandboxID: "sandbox-investigation", Path: "REPORT.md"},
 			})
+		case "/v1/jobs/coding-job/messages", "/v1/jobs/investigation-job/messages":
+			var message controlapi.SendMessageRequest
+			if err := json.NewDecoder(request.Body).Decode(&message); err != nil {
+				return nil, err
+			}
+			messages = append(messages, message.Text)
+			_ = json.NewEncoder(response).Encode(controlapi.Message{ID: "message-1", JobID: strings.Split(request.URL.Path, "/")[3], Sequence: 1, Intent: message.Intent})
 		default:
 			return nil, errors.New("unexpected workflow route " + request.URL.Path)
 		}
@@ -364,17 +372,17 @@ func TestRemoteWorkflowCLIUsesExplicitTypedRoutes(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	var codingOutput, investigationOutput strings.Builder
 	if err := remoteWorkflowCommand(context.Background(), client, "https://dorf.example.test",
-		[]string{"run", "coding", "--key", "coding-key", "--goal-file", goalFile, "--repo", "https://github.com/aphronio/dorf.git", "--revision", revision, "--base", "main", "--ai-connection", "coding-connection"},
+		[]string{"run", "coding", "--key", "coding-key", "--input-file", goalFile, "--repo", "https://github.com/aphronio/dorf.git", "--revision", revision, "--base", "main", "--ai-connection", "coding-connection"},
 		&codingOutput, &strings.Builder{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := remoteWorkflowCommand(context.Background(), client, "https://dorf.example.test",
-		[]string{"run", "codebase-investigation", "--key", "investigation-key", "--brief-file", briefFile, "--repo", "https://github.com/aphronio/dorf.git", "--revision", revision, "--ai-connection", "investigation-connection", "--output", "json"},
+		[]string{"run", "codebase-investigation", "--key", "investigation-key", "--input-file", briefFile, "--repo", "https://github.com/aphronio/dorf.git", "--revision", revision, "--ai-connection", "investigation-connection", "--output", "json"},
 		&investigationOutput, &strings.Builder{}); err != nil {
 		t.Fatal(err)
 	}
-	if codingRequest.Goal != goal || codingRequest.AIConnection != "coding-connection" || investigationRequest.Brief != brief || investigationRequest.AIConnection != "investigation-connection" || !slices.Equal(paths, []string{"/v1/workflows/coding/jobs", "/v1/workflows/codebase-investigation/jobs"}) ||
-		codingRequest.Model != "" || investigationRequest.Model != "" || !slices.Equal(keys, []string{"coding-key", "investigation-key"}) {
+	if !slices.Equal(messages, []string{goal, brief}) || codingRequest.AIConnection != "coding-connection" || investigationRequest.AIConnection != "investigation-connection" || !slices.Equal(paths, []string{"/v1/workflows/coding/jobs", "/v1/jobs/coding-job/messages", "/v1/workflows/codebase-investigation/jobs", "/v1/jobs/investigation-job/messages"}) ||
+		codingRequest.Model != "" || investigationRequest.Model != "" || !slices.Equal(keys, []string{"coding-key", "coding-key", "investigation-key", "investigation-key"}) {
 		t.Fatalf("coding=%#v investigation=%#v paths=%q keys=%q", codingRequest, investigationRequest, paths, keys)
 	}
 	if !strings.Contains(codingOutput.String(), "repository: https://github.com/aphronio/dorf.git") ||
@@ -412,7 +420,7 @@ func TestPublicJobStatesKeepCleanupTruthSeparateFromExecution(t *testing.T) {
 			view, err := publicCommonJob(core.Job{
 				ID: "job-1", CleanupState: test.cleanup, CleanupAttention: privateMarker,
 			}, controlapi.JobKindDirect, test.execution, inputAttention, test.task,
-				[]core.Sandbox{{ID: "sandbox-1", JobID: "job-1", Name: "default"}}, "message-1")
+				[]core.Sandbox{{ID: "sandbox-1", JobID: "job-1", Name: "default"}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -562,8 +570,8 @@ func TestRemoteMessageHumanOutputQuotesHarnessControlBytes(t *testing.T) {
 
 func TestControlAdmissionRejectsValuesPostgresCannotRetain(t *testing.T) {
 	for _, input := range []controlapi.AdmitJobRequest{
-		{Goal: "contains\x00nul", Model: "model", Reasoning: "high"},
-		{Goal: "valid goal", Model: strings.Repeat("m", maxControlModelBytes+1), Reasoning: "high"},
+		{AgentsMD: "contains\x00nul", Model: "model", Reasoning: "high"},
+		{AgentsMD: "valid instructions", Model: strings.Repeat("m", maxControlModelBytes+1), Reasoning: "high"},
 	} {
 		if _, _, err := (controlAPIJobs{}).AdmitDirect(context.Background(), "request", input); !errors.Is(err, controlapi.ErrInvalidInput) {
 			t.Fatalf("input=%#v error=%v, want invalid input", input, err)

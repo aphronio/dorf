@@ -53,7 +53,7 @@ func (q *Queries) ClearWorkflowAttention(ctx context.Context, arg ClearWorkflowA
 }
 
 const getAdmittedJobForUpdate = `-- name: GetAdmittedJobForUpdate :one
-select id,admission_key,workflow_name,workflow_revision,goal,sandbox_profile,provider_connection,
+select id,admission_key,workflow_name,workflow_revision,agents_md,sandbox_profile,provider_connection,
        model,reasoning_effort
 from dorf.jobs
 where admission_key=$1
@@ -65,7 +65,7 @@ type GetAdmittedJobForUpdateRow struct {
 	AdmissionKey       string
 	WorkflowName       core.WorkflowName
 	WorkflowRevision   string
-	Goal               string
+	AgentsMd           string
 	SandboxProfile     string
 	ProviderConnection string
 	Model              string
@@ -80,7 +80,7 @@ func (q *Queries) GetAdmittedJobForUpdate(ctx context.Context, admissionKey stri
 		&i.AdmissionKey,
 		&i.WorkflowName,
 		&i.WorkflowRevision,
-		&i.Goal,
+		&i.AgentsMd,
 		&i.SandboxProfile,
 		&i.ProviderConnection,
 		&i.Model,
@@ -90,7 +90,7 @@ func (q *Queries) GetAdmittedJobForUpdate(ctx context.Context, admissionKey stri
 }
 
 const getCodingJob = `-- name: GetCodingJob :one
-select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.goal,
+select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        c.repository,c.starting_revision,c.revision,c.branch,
        c.github_repository,c.github_installation_id,c.base_branch,
        j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
@@ -112,7 +112,7 @@ type GetCodingJobRow struct {
 	AdmissionKey            string
 	WorkflowName            core.WorkflowName
 	WorkflowRevision        string
-	Goal                    string
+	AgentsMd                string
 	Repository              string
 	StartingRevision        string
 	Revision                string
@@ -143,7 +143,7 @@ func (q *Queries) GetCodingJob(ctx context.Context, jobID string) (GetCodingJobR
 		&i.AdmissionKey,
 		&i.WorkflowName,
 		&i.WorkflowRevision,
-		&i.Goal,
+		&i.AgentsMd,
 		&i.Repository,
 		&i.StartingRevision,
 		&i.Revision,
@@ -238,7 +238,7 @@ func (q *Queries) GetCurrentJobTaskForUpdate(ctx context.Context, jobID string) 
 }
 
 const getJob = `-- name: GetJob :one
-select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.goal,
+select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(j.workflow_attention,'') as workflow_attention,
@@ -257,7 +257,7 @@ type GetJobRow struct {
 	AdmissionKey            string
 	WorkflowName            core.WorkflowName
 	WorkflowRevision        string
-	Goal                    string
+	AgentsMd                string
 	SandboxProfile          string
 	ProviderConnection      string
 	Model                   string
@@ -281,7 +281,7 @@ func (q *Queries) GetJob(ctx context.Context, jobID string) (GetJobRow, error) {
 		&i.AdmissionKey,
 		&i.WorkflowName,
 		&i.WorkflowRevision,
-		&i.Goal,
+		&i.AgentsMd,
 		&i.SandboxProfile,
 		&i.ProviderConnection,
 		&i.Model,
@@ -329,7 +329,7 @@ func (q *Queries) GetJobAdmissionForUpdate(ctx context.Context, jobID string) (G
 }
 
 const getJobForSandboxActionAuthorization = `-- name: GetJobForSandboxActionAuthorization :one
-select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.goal,
+select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(current_task.task_name,'') as current_task_name,
@@ -350,7 +350,7 @@ type GetJobForSandboxActionAuthorizationRow struct {
 	AdmissionKey            string
 	WorkflowName            core.WorkflowName
 	WorkflowRevision        string
-	Goal                    string
+	AgentsMd                string
 	SandboxProfile          string
 	ProviderConnection      string
 	Model                   string
@@ -375,7 +375,7 @@ func (q *Queries) GetJobForSandboxActionAuthorization(ctx context.Context, jobID
 		&i.AdmissionKey,
 		&i.WorkflowName,
 		&i.WorkflowRevision,
-		&i.Goal,
+		&i.AgentsMd,
 		&i.SandboxProfile,
 		&i.ProviderConnection,
 		&i.Model,
@@ -457,7 +457,7 @@ func (q *Queries) GetRevisionJobForUpdate(ctx context.Context, jobID string) (Ge
 
 const insertAdmittedJob = `-- name: InsertAdmittedJob :execrows
 insert into dorf.jobs(
-    id,admission_key,workflow_name,workflow_revision,goal,
+    id,admission_key,workflow_name,workflow_revision,agents_md,
     sandbox_profile,provider_connection,model,reasoning_effort
 )
 values(
@@ -474,7 +474,7 @@ type InsertAdmittedJobParams struct {
 	AdmissionKey       string
 	WorkflowName       core.WorkflowName
 	WorkflowRevision   string
-	Goal               string
+	AgentsMd           string
 	SandboxProfile     string
 	ProviderConnection string
 	Model              string
@@ -487,7 +487,7 @@ func (q *Queries) InsertAdmittedJob(ctx context.Context, arg InsertAdmittedJobPa
 		arg.AdmissionKey,
 		arg.WorkflowName,
 		arg.WorkflowRevision,
-		arg.Goal,
+		arg.AgentsMd,
 		arg.SandboxProfile,
 		arg.ProviderConnection,
 		arg.Model,

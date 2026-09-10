@@ -126,7 +126,8 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 		if !ok || !strings.Contains(description, "AI connection") {
 			t.Fatalf("%s does not explain model omission: %#v", schema, model)
 		}
-		for _, required := range arrayAt(t, document, "components", "schemas", schema, "required") {
+		requiredFields, _ := objectAt(t, document, "components", "schemas", schema)["required"].([]any)
+		for _, required := range requiredFields {
 			if required == "model" {
 				t.Fatalf("%s still requires model", schema)
 			}

@@ -33,7 +33,7 @@ func resolveInvestigationMessageEnvelope(ctx context.Context, queries *dbsql.Que
 		return admittedAgentRun{}, err
 	}
 	return admittedAgentRun{
-		Role: investigation.InitialAgentRole, Capability: investigation.InitialAgentCapability, InputRevision: source.Revision,
+		Role: investigation.AgentRole, Capability: investigation.AgentCapability, InputRevision: source.Revision,
 		SandboxID: input.SandboxID,
 	}, nil
 }
@@ -46,7 +46,7 @@ func (s Store) CodebaseInvestigationMessages(ctx context.Context, jobID string) 
 	work := make([]investigation.MessageRecord, 0, len(deliveries))
 	for _, delivery := range deliveries {
 		run := delivery.AgentRun
-		if run.Role != investigation.InitialAgentRole {
+		if run.Role != investigation.AgentRole {
 			continue
 		}
 		work = append(work, investigation.MessageRecord{

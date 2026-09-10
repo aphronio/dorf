@@ -22,5 +22,5 @@ func resolveCodingMessageEnvelope(ctx context.Context, queries *dbsql.Queries, j
 	if !ValidRevision(codingInput.Revision) {
 		return admittedAgentRun{}, fmt.Errorf("coding Message requires the locked current Revision")
 	}
-	return admittedAgentRun{Role: coding.InitialAgentRole, InputRevision: codingInput.Revision, SandboxID: input.SandboxID}, nil
+	return admittedAgentRun{Role: coding.AgentRole, InputRevision: codingInput.Revision, SandboxID: input.SandboxID}, nil
 }

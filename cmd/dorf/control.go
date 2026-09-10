@@ -211,7 +211,8 @@ func remoteRun(ctx context.Context, client *controlclient.Client, deploymentURL 
 	set := flag.NewFlagSet("run", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	key := set.String("key", "", "stable request identity for explicit replay")
-	goalFile := set.String("goal-file", "", "path containing the complete goal")
+	inputFile := set.String("input-file", "", "path containing the first Message")
+	agentsFile := set.String("agents-file", "", "path containing initial workspace AGENTS.md")
 	connection := set.String("ai-connection", "", "named AI connection (default: deployment default)")
 	model := set.String("model", "", "Harness model (default: selected AI connection)")
 	effort := set.String("reasoning", "high", "Harness reasoning effort")
@@ -226,7 +227,7 @@ func remoteRun(ctx context.Context, client *controlclient.Client, deploymentURL 
 	if err := validateOutput(*output); err != nil {
 		return err
 	}
-	goal, err := readInput(*goalFile, "run", "goal")
+	input, err := readInput(*inputFile, "run", "Message")
 	if err != nil {
 		return err
 	}
@@ -234,8 +235,15 @@ func remoteRun(ctx context.Context, client *controlclient.Client, deploymentURL 
 	if err != nil {
 		return err
 	}
+	agentsMD := ""
+	if *agentsFile != "" {
+		agentsMD, err = readInput(*agentsFile, "run", "AGENTS.md")
+		if err != nil {
+			return err
+		}
+	}
 	request := controlapi.AdmitJobRequest{
-		Goal: goal, Profile: strings.TrimSpace(*profileName), AIConnection: strings.TrimSpace(*connection), Model: strings.TrimSpace(*model), Reasoning: strings.TrimSpace(*effort),
+		AgentsMD: agentsMD, Profile: strings.TrimSpace(*profileName), AIConnection: strings.TrimSpace(*connection), Model: strings.TrimSpace(*model), Reasoning: strings.TrimSpace(*effort),
 	}
 	job, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Admission may have succeeded.", func() (controlapi.DirectJob, error) {
 		return client.AdmitJob(ctx, requestKey, request)
@@ -243,13 +251,27 @@ func remoteRun(ctx context.Context, client *controlclient.Client, deploymentURL 
 	if err != nil {
 		return err
 	}
+	message, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Message may have been accepted.", func() (controlapi.Message, error) {
+		return client.SendMessage(ctx, job.ID, requestKey, controlapi.SendMessageRequest{Text: input, Intent: "follow"})
+	})
+	if err != nil {
+		return err
+	}
 	if *output == "json" {
-		return writeJSON(stdout, remoteJobReceipt{Deployment: deploymentURL, RequestID: requestKey, Job: job})
+		return writeJSON(stdout, remoteRunReceipt{Deployment: deploymentURL, RequestID: requestKey, Job: job, Message: message})
 	}
 	fmt.Fprintf(stdout, "Job %s accepted by %s\n", job.ID, deploymentURL)
 	renderRemoteJob(stdout, job)
+	renderRemoteMessage(stdout, message)
 	fmt.Fprintf(stdout, "Next: dorf job inspect %s\n", job.ID)
 	return nil
+}
+
+type remoteRunReceipt struct {
+	Deployment string             `json:"deployment"`
+	RequestID  string             `json:"request_id"`
+	Job        controlapi.JobView `json:"job"`
+	Message    controlapi.Message `json:"message"`
 }
 
 func remoteWorkflowCommand(ctx context.Context, client *controlclient.Client, deploymentURL string, args []string, stdout, stderr io.Writer) error {
@@ -270,7 +292,7 @@ func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, dep
 	set := flag.NewFlagSet("workflow run coding", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	key := set.String("key", "", "stable request identity for explicit replay")
-	goalFile := set.String("goal-file", "", "path containing the complete goal")
+	inputFile := set.String("input-file", "", "path containing the first Message")
 	repository := set.String("repo", "", "credential-free GitHub clone URL")
 	revision := set.String("revision", "", "exact starting commit OID")
 	base := set.String("base", "", "immutable GitHub base branch")
@@ -289,7 +311,7 @@ func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, dep
 	if err := validateOutput(*output); err != nil {
 		return err
 	}
-	goal, err := readInput(*goalFile, "workflow run coding", "goal")
+	input, err := readInput(*inputFile, "workflow run coding", "Message")
 	if err != nil {
 		return err
 	}
@@ -298,7 +320,7 @@ func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, dep
 		return err
 	}
 	request := controlapi.AdmitCodingJobRequest{
-		Goal: goal, Repository: *repository, Revision: *revision, BaseBranch: *base, Branch: *branch,
+		Repository: *repository, Revision: *revision, BaseBranch: *base, Branch: *branch,
 		Profile: *profile, AIConnection: *connection, Model: *model, Reasoning: *reasoning,
 	}
 	job, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Admission may have succeeded.", func() (controlapi.CodingJob, error) {
@@ -307,11 +329,18 @@ func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, dep
 	if err != nil {
 		return err
 	}
+	message, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Message may have been accepted.", func() (controlapi.Message, error) {
+		return client.SendMessage(ctx, job.ID, requestKey, controlapi.SendMessageRequest{Text: input, Intent: "follow"})
+	})
+	if err != nil {
+		return err
+	}
 	if *output == "json" {
-		return writeJSON(stdout, remoteJobReceipt{Deployment: deploymentURL, RequestID: requestKey, Job: job})
+		return writeJSON(stdout, remoteRunReceipt{Deployment: deploymentURL, RequestID: requestKey, Job: job, Message: message})
 	}
 	fmt.Fprintf(stdout, "Job %s accepted by %s\n", job.ID, deploymentURL)
 	renderRemoteJob(stdout, job)
+	renderRemoteMessage(stdout, message)
 	fmt.Fprintf(stdout, "Next: dorf job inspect %s\n", job.ID)
 	return nil
 }
@@ -320,7 +349,7 @@ func remoteInvestigationWorkflow(ctx context.Context, client *controlclient.Clie
 	set := flag.NewFlagSet("workflow run codebase-investigation", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	key := set.String("key", "", "stable request identity for explicit replay")
-	briefFile := set.String("brief-file", "", "path containing the complete investigation brief")
+	inputFile := set.String("input-file", "", "path containing the Message")
 	repository := set.String("repo", "", "credential-free HTTPS repository URL")
 	revision := set.String("revision", "", "exact repository commit OID")
 	profile := set.String("profile", "", "named Sandbox profile (default: deployment default)")
@@ -337,7 +366,7 @@ func remoteInvestigationWorkflow(ctx context.Context, client *controlclient.Clie
 	if err := validateOutput(*output); err != nil {
 		return err
 	}
-	brief, err := readInput(*briefFile, "workflow run codebase-investigation", "brief")
+	input, err := readInput(*inputFile, "workflow run codebase-investigation", "Message")
 	if err != nil {
 		return err
 	}
@@ -346,7 +375,7 @@ func remoteInvestigationWorkflow(ctx context.Context, client *controlclient.Clie
 		return err
 	}
 	request := controlapi.AdmitInvestigationJobRequest{
-		Brief: brief, Repository: *repository, Revision: *revision,
+		Repository: *repository, Revision: *revision,
 		Profile: *profile, AIConnection: *connection, Model: *model, Reasoning: *reasoning,
 	}
 	job, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Admission may have succeeded.", func() (controlapi.InvestigationJob, error) {
@@ -355,11 +384,18 @@ func remoteInvestigationWorkflow(ctx context.Context, client *controlclient.Clie
 	if err != nil {
 		return err
 	}
+	message, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Message may have been accepted.", func() (controlapi.Message, error) {
+		return client.SendMessage(ctx, job.ID, requestKey, controlapi.SendMessageRequest{Text: input, Intent: "follow"})
+	})
+	if err != nil {
+		return err
+	}
 	if *output == "json" {
-		return writeJSON(stdout, remoteJobReceipt{Deployment: deploymentURL, RequestID: requestKey, Job: job})
+		return writeJSON(stdout, remoteRunReceipt{Deployment: deploymentURL, RequestID: requestKey, Job: job, Message: message})
 	}
 	fmt.Fprintf(stdout, "Job %s accepted by %s\n", job.ID, deploymentURL)
 	renderRemoteJob(stdout, job)
+	renderRemoteMessage(stdout, message)
 	fmt.Fprintf(stdout, "Next: dorf job inspect %s\n", job.ID)
 	return nil
 }
@@ -674,8 +710,8 @@ type remoteJobReceipt struct {
 
 func renderRemoteJob(output io.Writer, view controlapi.JobView) {
 	job := view.Common()
-	fmt.Fprintf(output, "  goal: %q\n  profile: %s\n  model: %q (%s)\n  initial Message: %s\n  admission: %s\n  execution: %s\n  cleanup: %s\n",
-		job.Goal, job.Profile, job.Model, job.Reasoning, job.InitialMessageID, openClosed(job.Admission.Open), job.Execution.State, job.Cleanup.State)
+	fmt.Fprintf(output, "  profile: %s\n  model: %q (%s)\n  admission: %s\n  execution: %s\n  cleanup: %s\n",
+		job.Profile, job.Model, job.Reasoning, openClosed(job.Admission.Open), job.Execution.State, job.Cleanup.State)
 	if job.Attention != nil {
 		fmt.Fprintf(output, "  attention: %s\n", job.Attention.Detail)
 	}
@@ -916,7 +952,7 @@ func classifyControlJob(workflow core.WorkflowName, revision string) (controlJob
 }
 
 func (a controlAPIJobs) AdmitDirect(ctx context.Context, key string, input controlapi.AdmitJobRequest) (controlapi.DirectJob, bool, error) {
-	admission, err := newControlJobAdmission(key, input.Goal, input.Profile, input.AIConnection, input.Model, input.Reasoning)
+	admission, err := newControlJobAdmission(key, input.AgentsMD, input.Profile, input.AIConnection, input.Model, input.Reasoning)
 	if err != nil {
 		return controlapi.DirectJob{}, false, err
 	}
@@ -936,7 +972,7 @@ func (a controlAPIJobs) AdmitDirect(ctx context.Context, key string, input contr
 
 func (a controlAPIJobs) AdmitCoding(ctx context.Context, key string, input controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, bool, error) {
 	job, created, err := a.codingAdmissions.Admit(ctx, coding.AdmissionRequest{
-		AdmissionKey: key, Goal: input.Goal, SandboxProfile: input.Profile, Model: input.Model,
+		AdmissionKey: key, SandboxProfile: input.Profile, Model: input.Model,
 		ProviderConnection: input.AIConnection, ReasoningEffort: input.Reasoning, Repository: input.Repository, Revision: input.Revision,
 		Branch: input.Branch, BaseBranch: input.BaseBranch,
 	})
@@ -955,7 +991,7 @@ func (a controlAPIJobs) AdmitCoding(ctx context.Context, key string, input contr
 
 func (a controlAPIJobs) AdmitInvestigation(ctx context.Context, key string, input controlapi.AdmitInvestigationJobRequest) (controlapi.InvestigationJob, bool, error) {
 	job, created, err := a.investigationAdmissions.Admit(ctx, investigation.AdmissionRequest{
-		AdmissionKey: key, Brief: input.Brief, SandboxProfile: input.Profile, Model: input.Model,
+		AdmissionKey: key, SandboxProfile: input.Profile, Model: input.Model,
 		ProviderConnection: input.AIConnection, ReasoningEffort: input.Reasoning,
 		Source: investigation.Source{Repository: input.Repository, Revision: input.Revision},
 	})
@@ -976,12 +1012,12 @@ func validControlAdmissionKey(key string) bool {
 	return key != "" && key == strings.TrimSpace(key) && len(key) <= 255 && !strings.ContainsRune(key, 0)
 }
 
-func newControlJobAdmission(key, goal, profile, connection, model, reasoning string) (direct.AdmissionRequest, error) {
+func newControlJobAdmission(key, agentsMD, profile, connection, model, reasoning string) (direct.AdmissionRequest, error) {
 	profile = strings.TrimSpace(profile)
 	connection = strings.TrimSpace(connection)
 	model = strings.TrimSpace(model)
 	reasoning = strings.TrimSpace(reasoning)
-	if !validControlAdmissionKey(key) || invalidControlPrompt(goal, 1<<20) ||
+	if !validControlAdmissionKey(key) || invalidOptionalControlText(agentsMD, 1<<20) ||
 		invalidOptionalControlText(profile, 255) || invalidOptionalControlText(connection, 255) || invalidOptionalControlText(model, maxControlModelBytes) {
 		return direct.AdmissionRequest{}, controlapi.ErrInvalidInput
 	}
@@ -992,7 +1028,7 @@ func newControlJobAdmission(key, goal, profile, connection, model, reasoning str
 		return direct.AdmissionRequest{}, controlapi.ErrInvalidInput
 	}
 	return direct.AdmissionRequest{
-		AdmissionKey: key, Goal: goal, SandboxProfile: profile, ProviderConnection: connection, Model: model, ReasoningEffort: reasoning,
+		AdmissionKey: key, AgentsMD: agentsMD, SandboxProfile: profile, ProviderConnection: connection, Model: model, ReasoningEffort: reasoning,
 	}, nil
 }
 
@@ -1383,11 +1419,7 @@ func (a controlAPIJobs) projectDirect(ctx context.Context, job core.Job) (contro
 		}
 		attention = &controlapi.Attention{Code: code, Detail: "Job execution needs operator attention; inspect the deployment service logs."}
 	}
-	initial, err := initialDeliveryMessage(job.ID, snapshot.Deliveries)
-	if err != nil {
-		return controlapi.DirectJob{}, err
-	}
-	common, err := publicCommonJob(job, controlapi.JobKindDirect, executionState, attention, task.State, snapshot.Sandboxes, initial)
+	common, err := publicCommonJob(job, controlapi.JobKindDirect, executionState, attention, task.State, snapshot.Sandboxes)
 	return controlapi.DirectJob{Job: common}, err
 }
 
@@ -1412,19 +1444,13 @@ func (a controlAPIJobs) projectCoding(ctx context.Context, job core.Job) (contro
 	var attention *controlapi.Attention
 	if snapshot.Outcome != nil {
 		executionState = "complete"
+	} else if projection.CurrentWork.Kind == "" {
+		executionState = "idle"
 	} else if projection.CurrentWork.Kind == coding.WorkAttention {
 		executionState = "stopped"
 		attention = &controlapi.Attention{Code: "job_attention", Detail: "Job execution needs operator attention; inspect the deployment service logs."}
 	}
-	messages := make([]core.Message, 0, len(snapshot.Messages))
-	for _, record := range snapshot.Messages {
-		messages = append(messages, record.Message)
-	}
-	initial, err := initialMessage(job.ID, messages)
-	if err != nil {
-		return controlapi.CodingJob{}, err
-	}
-	common, err := publicCommonJob(job, controlapi.JobKindCoding, executionState, attention, task.State, snapshot.Sandboxes, initial)
+	common, err := publicCommonJob(job, controlapi.JobKindCoding, executionState, attention, task.State, snapshot.Sandboxes)
 	if err != nil {
 		return controlapi.CodingJob{}, err
 	}
@@ -1471,7 +1497,7 @@ func (a controlAPIJobs) projectInvestigation(ctx context.Context, job core.Job) 
 		executionState = "idle"
 	}
 	common, err := publicCommonJob(job, controlapi.JobKindInvestigation, executionState, attention, task.State,
-		[]core.Sandbox{snapshot.MainSandbox}, snapshot.InitialMessageID)
+		[]core.Sandbox{snapshot.MainSandbox})
 	if err != nil {
 		return controlapi.InvestigationJob{}, err
 	}
@@ -1486,28 +1512,8 @@ func (a controlAPIJobs) projectInvestigation(ctx context.Context, job core.Job) 
 	}, nil
 }
 
-func initialDeliveryMessage(jobID string, deliveries []core.Delivery) (string, error) {
-	messages := make([]core.Message, 0, len(deliveries))
-	for _, delivery := range deliveries {
-		if delivery.AgentRun.JobID != jobID || delivery.AgentRun.MessageID != delivery.Message.ID {
-			return "", fmt.Errorf("Job %s has a mismatched Message delivery", jobID)
-		}
-		messages = append(messages, delivery.Message)
-	}
-	return initialMessage(jobID, messages)
-}
-
-func initialMessage(jobID string, messages []core.Message) (string, error) {
-	for _, message := range messages {
-		if message.JobID == jobID && message.ID != "" && message.Sequence == 1 {
-			return message.ID, nil
-		}
-	}
-	return "", fmt.Errorf("Job %s has no initial Message", jobID)
-}
-
-func publicCommonJob(job core.Job, kind, executionState string, attention *controlapi.Attention, taskState absurd.TaskResultState, owned []core.Sandbox, initialMessageID string) (controlapi.Job, error) {
-	if executionState == "" || initialMessageID == "" {
+func publicCommonJob(job core.Job, kind, executionState string, attention *controlapi.Attention, taskState absurd.TaskResultState, owned []core.Sandbox) (controlapi.Job, error) {
+	if executionState == "" {
 		return controlapi.Job{}, fmt.Errorf("Job %s has an incomplete public projection", job.ID)
 	}
 	cleanupState := map[core.CleanupState]string{
@@ -1539,8 +1545,8 @@ func publicCommonJob(job core.Job, kind, executionState string, attention *contr
 		sandboxes = append(sandboxes, controlapi.Sandbox{ID: sandbox.ID, Name: sandbox.Name})
 	}
 	return controlapi.Job{
-		ID: job.ID, Kind: kind, Goal: job.Goal, Profile: job.SandboxProfile,
-		Model: job.Model, Reasoning: job.ReasoningEffort, InitialMessageID: initialMessageID,
+		ID: job.ID, Kind: kind, Profile: job.SandboxProfile,
+		Model: job.Model, Reasoning: job.ReasoningEffort,
 		Admission: controlapi.Admission{Open: job.AdmissionOpen}, Execution: controlapi.State{State: executionState},
 		Attention: attention, Cleanup: controlapi.State{State: cleanupState}, Sandboxes: sandboxes,
 	}, nil

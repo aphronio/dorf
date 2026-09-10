@@ -45,6 +45,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D107: Commit Job task scheduling and attachment together](decisions/D107-commit-job-task-scheduling-and-attachment-together.md) (`current`). Changing admission, task handoffs, cleanup scheduling, or recovery across Absurd and Dorf.
 - [D108: Reuse direct Jobs for retained sessions and exact message control](decisions/D108-direct-session-message-control.md) (`current`). Changing automatic message intent, interruption, or direct Job session continuity.
 - [D109: Export diagnostics through the existing native Turn binding](decisions/D109-exact-turn-execution-diagnostics.md) (`current`). Changing native execution diagnostics, attribution, or exporter custody.
+- [D110: Separate Job setup from Message delivery](decisions/D110-separate-job-setup-from-messages.md) (`current`). Changing Job creation, workspace instructions, or Message admission.
 
 ## Workflows
 
@@ -167,6 +168,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D103: Every ordinary CLI Job operation uses the authenticated control API](decisions/D103-every-ordinary-cli-job-operation-uses-the-authenticated-control-api.md) (`current`). Changing how CLI Job operations reach deployment authority.
 - [D105: Host-issued integration keys use ordinary revocable Clients](decisions/D105-host-issued-integration-keys-use-ordinary-revocable-clients.md) (`current`). Provisioning bearer credentials for unattended integrations.
 - [D108: Reuse direct Jobs for retained sessions and exact message control](decisions/D108-direct-session-message-control.md) (`current`). Changing automatic message intent, interruption, or direct Job session continuity.
+- [D110: Separate Job setup from Message delivery](decisions/D110-separate-job-setup-from-messages.md) (`current`). Changing Job creation, workspace instructions, or Message admission.
 
 ## Deployment and setup
 
@@ -215,6 +217,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D094: Published PostgreSQL migrations are immutable and append-only](decisions/D094-published-postgresql-migrations-are-immutable-and-append-only.md) (`current`). Changing a published PostgreSQL schema or the migration runner.
 - [D107: Commit Job task scheduling and attachment together](decisions/D107-commit-job-task-scheduling-and-attachment-together.md) (`current`). Changing admission, task handoffs, cleanup scheduling, or recovery across Absurd and Dorf.
 - [D108: Reuse direct Jobs for retained sessions and exact message control](decisions/D108-direct-session-message-control.md) (`current`). Changing automatic message intent, interruption, or direct Job session continuity.
+- [D110: Separate Job setup from Message delivery](decisions/D110-separate-job-setup-from-messages.md) (`current`). Changing Job creation, workspace instructions, or Message admission.
 
 ## GitHub integration
 

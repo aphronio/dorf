@@ -33,10 +33,9 @@ const (
 	AbsurdReleaseCommit = "550d3b9e6f9382d96178de6ab8c90c7f8edf2227"
 	AbsurdSchemaURL     = "https://raw.githubusercontent.com/earendil-works/absurd/" + AbsurdReleaseCommit + "/sql/absurd.sql"
 	AbsurdSchemaSHA256  = "d34309370c539f3a51f2b36b69b1f77551f8e4a14480a1c8def8bb8f40fd9aab"
-	initialFromID       = "dorf:initial"
 )
 
-var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql"}
+var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql"}
 
 type Store struct{ DB *sql.DB }
 
@@ -390,7 +389,7 @@ func (s Store) Job(ctx context.Context, id string) (core.Job, error) {
 	}
 	return core.Job{
 		ID: row.ID, AdmissionKey: row.AdmissionKey, Workflow: core.WorkflowName(row.WorkflowName), WorkflowRevision: row.WorkflowRevision,
-		Goal:           row.Goal,
+		AgentsMD:       row.AgentsMd,
 		SandboxProfile: row.SandboxProfile, ProviderConnection: row.ProviderConnection,
 		Model: row.Model, ReasoningEffort: row.ReasoningEffort, AdmissionOpen: row.AdmissionOpen, CleanupState: core.CleanupState(row.CleanupState),
 		CurrentTaskID:     row.CurrentTaskID,
@@ -419,7 +418,7 @@ func (s Store) CodingJob(ctx context.Context, id string) (coding.Job, error) {
 	return coding.Job{
 		Job: core.Job{
 			ID: row.ID, AdmissionKey: row.AdmissionKey, Workflow: core.WorkflowName(row.WorkflowName), WorkflowRevision: row.WorkflowRevision,
-			Goal: row.Goal, SandboxProfile: row.SandboxProfile, ProviderConnection: row.ProviderConnection,
+			AgentsMD: row.AgentsMd, SandboxProfile: row.SandboxProfile, ProviderConnection: row.ProviderConnection,
 			Model: row.Model, ReasoningEffort: row.ReasoningEffort, AdmissionOpen: row.AdmissionOpen, CleanupState: core.CleanupState(row.CleanupState),
 			CurrentTaskID: row.CurrentTaskID, WorkflowAttention: row.WorkflowAttention, WorkflowAttentionSource: row.WorkflowAttentionSource,
 			WorkflowAttentionAt: timeValue(row.WorkflowAttentionAt), CleanupAttention: row.CleanupAttention,
@@ -865,7 +864,7 @@ func revisionCandidateTx(ctx context.Context, tx *sql.Tx, jobID string) (core.Ag
 	if unsettled != 0 {
 		return core.AgentRun{}, false, nil
 	}
-	latestInput, err := queries.GetLatestAgentRun(ctx, dbsql.GetLatestAgentRunParams{JobID: jobID, Role: coding.InitialAgentRole})
+	latestInput, err := queries.GetLatestAgentRun(ctx, dbsql.GetLatestAgentRunParams{JobID: jobID, Role: coding.AgentRole})
 	if errors.Is(err, sql.ErrNoRows) {
 		return core.AgentRun{}, false, nil
 	}
@@ -1109,7 +1108,7 @@ func authorizeSandboxActionTx(ctx context.Context, queries *dbsql.Queries, id, t
 	}
 	return core.SandboxActionAuthorization{
 		Job: core.Job{
-			ID: job.ID, AdmissionKey: job.AdmissionKey, Workflow: job.WorkflowName, WorkflowRevision: job.WorkflowRevision, Goal: job.Goal,
+			ID: job.ID, AdmissionKey: job.AdmissionKey, Workflow: job.WorkflowName, WorkflowRevision: job.WorkflowRevision, AgentsMD: job.AgentsMd,
 			SandboxProfile: job.SandboxProfile, ProviderConnection: job.ProviderConnection, Model: job.Model, ReasoningEffort: job.ReasoningEffort,
 			AdmissionOpen: job.AdmissionOpen, CleanupState: job.CleanupState, CurrentTaskID: job.CurrentTaskID,
 			WorkflowAttention: job.WorkflowAttention, WorkflowAttentionSource: job.WorkflowAttentionSource,
@@ -1151,7 +1150,7 @@ func (s Store) AgentMessage(ctx context.Context, jobID string) (*core.AgentMessa
 	}
 	message := core.Message{
 		ID: row.ID, JobID: row.JobID, FromKind: core.MessageFromKind(row.FromKind), FromID: row.FromID,
-		Sequence: row.Sequence, Input: row.Input, Intent: core.MessageDeliveryIntent(row.DeliveryIntent), TargetTurnID: row.SteerTargetTurnID, AdmittedAt: row.AdmittedAt,
+		Sequence: row.Sequence, Intent: core.MessageDeliveryIntent(row.DeliveryIntent), TargetTurnID: row.SteerTargetTurnID, AdmittedAt: row.AdmittedAt,
 	}
 	runRow, err := queries.GetAgentRunByMessage(ctx, message.ID)
 	if err != nil {
@@ -1159,7 +1158,7 @@ func (s Store) AgentMessage(ctx context.Context, jobID string) (*core.AgentMessa
 	}
 	run := agentRunFromValues(runRow.ID, runRow.JobID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention, runRow.Role, runRow.InputRevision)
 	run.SandboxID = runRow.SandboxID
-	if message.Intent == core.MessageFollow && run.State == core.AgentRunPending && run.ThreadID == "" && message.Sequence > 1 {
+	if message.Intent == core.MessageFollow && run.State == core.AgentRunPending && run.ThreadID == "" {
 		if _, err := queries.BindPendingFollowToPriorThread(ctx, message.ID); err != nil {
 			return nil, err
 		}
@@ -1205,7 +1204,7 @@ func (s Store) ValidateCodingAgentMessage(ctx context.Context, execution core.Ag
 		execution.Message.JobID != execution.Job.ID || execution.AgentRun.JobID != execution.Job.ID ||
 		execution.AgentRun.MessageID != execution.Message.ID || execution.Sandbox.JobID != execution.Job.ID ||
 		execution.AgentRun.SandboxID != execution.Sandbox.ID || execution.Sandbox.ID != core.MainSandboxName(execution.Job.ID) ||
-		execution.AgentRun.Role != coding.InitialAgentRole || execution.AgentRun.Capability != "" {
+		execution.AgentRun.Role != coding.AgentRole || execution.AgentRun.Capability != "" {
 		return fmt.Errorf("Message %s conflicts with the coding execution envelope", execution.Message.ID)
 	}
 	job, err := s.CodingJob(ctx, execution.Job.ID)

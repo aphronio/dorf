@@ -58,6 +58,7 @@ type AttentionError struct{ Reason string }
 func (e *AttentionError) Error() string { return e.Reason }
 
 type readinessView struct {
+	Input      string
 	Assessment coding.ReadinessAssessment
 	Evidence   []core.Evidence
 	Plan       *coding.ReviewPlanRecord
@@ -78,6 +79,12 @@ func (s Service) readiness(ctx context.Context, job coding.Job, intentAt time.Ti
 	messages, reviews, err := s.Store.CodingMessages(ctx, job.ID)
 	if err != nil {
 		return view, err
+	}
+	for _, record := range messages {
+		if record.Message.Sequence == 1 {
+			view.Input = record.Message.Input
+			break
+		}
 	}
 	view.ReviewRuns = reviews
 	messages = coding.PublicationMessages(messages, intentAt)
@@ -201,9 +208,9 @@ func (s Service) proposeFenced(ctx context.Context, jobID, revision string) erro
 	if !readiness.Assessment.Ready || readiness.Assessment.Revision != job.Revision {
 		return s.block(ctx, job, pullAction, "publication lost exact-Revision readiness: "+readiness.Assessment.Reason)
 	}
-	body := Body(job, readiness.Assessment, readiness.Evidence, readiness.Plan, readiness.ReviewRuns)
+	body := Body(job, readiness.Input, readiness.Assessment, readiness.Evidence, readiness.Plan, readiness.ReviewRuns)
 	bodyDigest := BodyDigest(body)
-	title := Title(job.Goal)
+	title := Title(readiness.Input)
 	owner := strings.SplitN(job.GitHubRepository, "/", 2)[0]
 	authority := githubapi.Authority{Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation}
 	pulls, err := s.GitHub.PullRequests(ctx, authority, owner, job.Branch)
@@ -359,13 +366,13 @@ func Title(goal string) string {
 
 func BodyDigest(body string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(body))) }
 
-func Body(job coding.Job, readiness coding.ReadinessAssessment, evidence []core.Evidence, plan *coding.ReviewPlanRecord, runs []coding.ReviewRunView) string {
+func Body(job coding.Job, input string, readiness coding.ReadinessAssessment, evidence []core.Evidence, plan *coding.ReviewPlanRecord, runs []coding.ReviewRunView) string {
 	digests := make(map[string]string, len(evidence))
 	for _, item := range evidence {
 		digests[item.ID] = item.Digest
 	}
 	var lines []string
-	lines = append(lines, "## Goal", "", projectGoal(job.Goal), "", "## Exact proposal", "", "- Base: `"+job.BaseBranch+"`", "- Head: `"+job.Branch+"`", "- Revision: `"+job.Revision+"`", "", "## Selected review", "")
+	lines = append(lines, "## Input", "", projectGoal(input), "", "## Exact proposal", "", "- Base: `"+job.BaseBranch+"`", "- Head: `"+job.Branch+"`", "- Revision: `"+job.Revision+"`", "", "## Selected review", "")
 	runsByRole := make(map[string]coding.ReviewRunView, len(runs))
 	for _, run := range runs {
 		if run.JobID == job.ID && run.InputRevision == job.Revision {
@@ -406,7 +413,7 @@ func projectGoal(goal string) string {
 	if len(goal) <= limit {
 		return goal
 	}
-	return strings.TrimSpace(truncateUTF8(goal, limit)) + "\n\n[Goal projection truncated; inspect the Job for the complete admitted goal.]"
+	return strings.TrimSpace(truncateUTF8(goal, limit)) + "\n\n[Input projection truncated; inspect the Job for the complete admitted goal.]"
 }
 
 func truncateUTF8(value string, limit int) string {

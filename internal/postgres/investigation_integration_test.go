@@ -27,7 +27,7 @@ func TestPostgresCodebaseInvestigationIdentityAndFollowUps(t *testing.T) {
 	input := investigation.Admission{
 		JobAdmission: core.JobAdmission{
 			AdmissionKey: key, Workflow: investigation.Workflow, WorkflowRevision: investigation.WorkflowRevision,
-			Goal: "Find one unnecessary coding-workflow dependency.", SandboxProfile: "incus",
+			SandboxProfile:     "incus",
 			ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
 		},
 		Source: investigation.Source{Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40)},
@@ -49,7 +49,7 @@ func TestPostgresCodebaseInvestigationIdentityAndFollowUps(t *testing.T) {
 	if _, _, err := admitInvestigationFixture(t, store, ctx, changedSource); !errors.Is(err, postgres.ErrAdmissionConflict) || !errors.Is(err, investigation.ErrAdmissionConflict) {
 		t.Fatalf("same admission key changed source identity: %v", err)
 	}
-	changedWorkflow := codingJobInput(key, input.Goal, input.Source.Revision, "dorf/cross-workflow")
+	changedWorkflow := codingJobInput(key, input.Source.Revision, "dorf/cross-workflow")
 	if _, _, err := admitCodingFixture(t, store, ctx, changedWorkflow); err == nil {
 		t.Fatal("same admission key changed workflow identity")
 	}
@@ -208,8 +208,8 @@ func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *test
 	investigation.Register(application, store, resolver)
 	source := investigation.Source{Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("d", 40)}
 	job, created, err := investigation.NewAdmissionService(store, application.Tasks.QueueName(), providerCheck{}).Admit(ctx, investigation.AdmissionRequest{
-		AdmissionKey: "investigation-terminal-" + suffix,
-		Brief:        "Find one concrete simplification.", SandboxProfile: "incus",
+		AdmissionKey:       "investigation-terminal-" + suffix,
+		SandboxProfile:     "incus",
 		ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
 		Source: source,
 	})
@@ -249,13 +249,24 @@ func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *test
 			t.Fatalf("deliveries=%#v want completed count=%d err=%v", deliveries, want, err)
 		}
 	}
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "investigation-setup", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := investigation.LoadSnapshot(ctx, store, job.ID)
+	if err != nil || prepared.Message.MessageID != "" || prepared.Project().Kind != "" {
+		t.Fatalf("prepared Job must wait for a Message: %#v err=%v", prepared, err)
+	}
+	first, err := reportSandbox.Agent().Message(ctx, "request-1", "Find one concrete simplification.")
+	if err != nil || !first.Created || first.Sequence != 1 {
+		t.Fatalf("first Message=%#v err=%v", first, err)
+	}
 	settleNextRun(client, "investigation-terminal", 1)
 	wantEffects := []core.ActionKind{core.ActionSandboxCreate, gitworkspace.ActionRepositoryClone, core.ActionRouteCreate}
 	snapshot, err := investigation.LoadSnapshot(ctx, store, job.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if work := snapshot.Project(); work.Kind != "" || snapshot.InitialMessageID != core.MessageID(job.ID, core.MessageFromHuman, "dorf:initial") || !snapshot.Job.AdmissionOpen || snapshot.Job.CleanupState != core.CleanupPending || snapshot.Job.WorkflowAttention != "" {
+	if work := snapshot.Project(); work.Kind != "" || !snapshot.Job.AdmissionOpen || snapshot.Job.CleanupState != core.CleanupPending || snapshot.Job.WorkflowAttention != "" {
 		t.Fatalf("completed run without REPORT.md was not honestly open-idle: snapshot=%#v work=%#v", snapshot, work)
 	}
 	if _, err := reportSandbox.ReadFile(ctx, investigation.ReportPath); !errors.Is(err, os.ErrNotExist) || err.Error() != `workspace file "REPORT.md": file does not exist` {

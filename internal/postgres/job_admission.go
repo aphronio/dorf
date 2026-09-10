@@ -22,8 +22,8 @@ func normalizeCoreAdmission(input core.JobAdmission) (core.JobAdmission, error) 
 	if (input.Workflow == "") != (input.WorkflowRevision == "") {
 		return core.JobAdmission{}, fmt.Errorf("workflow name and revision must either both be absent or both be present")
 	}
-	if input.AdmissionKey == "" || strings.TrimSpace(input.Goal) == "" || input.SandboxProfile == "" || input.ProviderConnection == "" || input.Model == "" {
-		return core.JobAdmission{}, fmt.Errorf("admission requires key, complete goal, Sandbox profile, AI connection, and model")
+	if input.AdmissionKey == "" || input.SandboxProfile == "" || input.ProviderConnection == "" || input.Model == "" {
+		return core.JobAdmission{}, fmt.Errorf("admission requires key, Sandbox profile, AI connection, model")
 	}
 	if input.ReasoningEffort != "low" && input.ReasoningEffort != "medium" && input.ReasoningEffort != "high" && input.ReasoningEffort != "xhigh" {
 		return core.JobAdmission{}, fmt.Errorf("reasoning effort must be low, medium, high, or xhigh")
@@ -31,9 +31,7 @@ func normalizeCoreAdmission(input core.JobAdmission) (core.JobAdmission, error) 
 	return input, nil
 }
 
-type admittedJobIDs struct{ jobID, messageID, sandboxID string }
-
-func admitJob(ctx context.Context, store Store, coreInput core.JobAdmission, queueName, taskName, taskKey string, recordTypedFacts func(context.Context, *dbsql.Queries, admittedJobIDs) error) (core.Job, bool, error) {
+func admitJob(ctx context.Context, store Store, coreInput core.JobAdmission, queueName, taskName, taskKey string, recordTypedFacts func(context.Context, *dbsql.Queries, string) error) (core.Job, bool, error) {
 	id := core.JobID(coreInput.AdmissionKey)
 	tx, err := store.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -53,7 +51,7 @@ func admitJob(ctx context.Context, store Store, coreInput core.JobAdmission, que
 		}
 		rows, err = queries.InsertAdmittedJob(ctx, dbsql.InsertAdmittedJobParams{
 			ID: id, AdmissionKey: coreInput.AdmissionKey, WorkflowName: coreInput.Workflow, WorkflowRevision: coreInput.WorkflowRevision,
-			Goal: coreInput.Goal, SandboxProfile: coreInput.SandboxProfile, ProviderConnection: coreInput.ProviderConnection,
+			AgentsMd: coreInput.AgentsMD, SandboxProfile: coreInput.SandboxProfile, ProviderConnection: coreInput.ProviderConnection,
 			Model: coreInput.Model, ReasoningEffort: coreInput.ReasoningEffort,
 		})
 		if err != nil {
@@ -66,30 +64,20 @@ func admitJob(ctx context.Context, store Store, coreInput core.JobAdmission, que
 	}
 	storedCore := core.JobAdmission{
 		AdmissionKey: storedRow.AdmissionKey, Workflow: core.WorkflowName(storedRow.WorkflowName), WorkflowRevision: storedRow.WorkflowRevision,
-		Goal: storedRow.Goal, SandboxProfile: storedRow.SandboxProfile, ProviderConnection: storedRow.ProviderConnection,
+		AgentsMD: storedRow.AgentsMd, SandboxProfile: storedRow.SandboxProfile, ProviderConnection: storedRow.ProviderConnection,
 		Model: storedRow.Model, ReasoningEffort: storedRow.ReasoningEffort,
 	}
 	if storedRow.ID != id || storedCore != coreInput {
 		return core.Job{}, false, fmt.Errorf("%w: %q", ErrAdmissionConflict, coreInput.AdmissionKey)
 	}
-	messageID := core.MessageID(id, core.MessageFromHuman, initialFromID)
-	if err := queries.InsertInitialMessage(ctx, dbsql.InsertInitialMessageParams{ID: messageID, JobID: id, FromID: initialFromID, Input: coreInput.Goal}); err != nil {
-		return core.Job{}, false, err
-	}
-	initial, err := queries.GetMessageBySender(ctx, dbsql.GetMessageBySenderParams{JobID: id, FromKind: core.MessageFromHuman, FromID: initialFromID})
-	if err != nil {
-		return core.Job{}, false, err
-	}
-	if initial.ID != messageID || initial.JobID != id || initial.FromKind != core.MessageFromHuman || initial.FromID != initialFromID ||
-		initial.Sequence != 1 || initial.Input != coreInput.Goal || initial.DeliveryIntent != core.MessageFollow || initial.SteerTargetTurnID != "" {
-		return core.Job{}, false, fmt.Errorf("Job %s initial message conflicts with complete admission input", id)
-	}
 	sandboxID := core.MainSandboxName(id)
 	if err := reserveAdmittedSandbox(ctx, queries, id, sandboxID); err != nil {
 		return core.Job{}, false, err
 	}
-	if err := recordTypedFacts(ctx, queries, admittedJobIDs{jobID: id, messageID: initial.ID, sandboxID: sandboxID}); err != nil {
-		return core.Job{}, false, err
+	if recordTypedFacts != nil {
+		if err := recordTypedFacts(ctx, queries, id); err != nil {
+			return core.Job{}, false, err
+		}
 	}
 	if err := scheduleJobTaskTx(ctx, tx, queueName, id, taskName, taskKey, true); err != nil {
 		return core.Job{}, false, err

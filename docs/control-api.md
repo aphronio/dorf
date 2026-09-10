@@ -61,6 +61,12 @@ opaque, and malformed or altered cursors return the published `invalid_cursor` P
 contains only Job kinds understood by this API revision. Investigation admission requires a
 credential-free reachable HTTPS repository and an exact Revision.
 
+Job creation prepares its execution configuration and resources without starting a conversation.
+All input, including the first, uses Message admission. Direct clients may supply workspace
+`AGENTS.md` contents at creation; Dorf installs the file before starting the Harness. After setup
+settles, retries do not overwrite changes the agent makes to that file. The client owns the
+instructions and the Harness interprets them.
+
 Direct and workflow admission may select a named AI connection. Omission uses the deployment
 default, and the admitted Job retains the resolved connection. Model is also optional. Omission
 uses that resolved connection's default, while an explicit model overrides it for this Job. The

@@ -323,3 +323,11 @@ func TestRejectedPublicationReadinessBecomesAttention(t *testing.T) {
 		t.Fatalf("CurrentWork = %#v, want publication readiness attention", got)
 	}
 }
+
+func TestPreparedJobWaitsForAnOrdinaryMessage(t *testing.T) {
+	facts := readyFacts()
+	facts.ReviewPlans = nil
+	if work := projectedWork(t, facts); work.Kind != "" {
+		t.Fatalf("empty Job started work: %#v", work)
+	}
+}

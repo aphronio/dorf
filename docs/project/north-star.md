@@ -90,7 +90,7 @@ Adapters     translate Harnesses, Sandboxes, providers, and external authorities
 
 | Term | Meaning |
 | --- | --- |
-| **Job** | One durable bounded goal, its accepted execution contract, owned resources, and lifecycle; workflow-driven Jobs also pin a workflow version |
+| **Job** | One retained execution context, its accepted configuration, owned resources, Messages, and lifecycle; workflow-driven Jobs also pin a workflow version |
 | **Workflow** | Ordinary versioned policy that composes deterministic operations and bounded agent work for one kind of Job |
 | **Sandbox** | An isolated mutable workstation owned for a Job's lifetime |
 | **Message** | Durable input from a human, agent, or workflow |

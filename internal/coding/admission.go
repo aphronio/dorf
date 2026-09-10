@@ -9,7 +9,7 @@ import (
 	githubapi "github.com/aphronio/dorf/internal/github"
 )
 
-const InitialAgentRole = "implement"
+const AgentRole = "implement"
 
 var exactCommitOID = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 

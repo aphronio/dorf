@@ -1,5 +1,5 @@
 -- name: GetJob :one
-select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.goal,
+select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(j.workflow_attention,'') as workflow_attention,
@@ -33,7 +33,7 @@ order by j.admitted_at desc,j.id desc
 limit sqlc.arg(page_size);
 
 -- name: GetCodingJob :one
-select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.goal,
+select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        c.repository,c.starting_revision,c.revision,c.branch,
        c.github_repository,c.github_installation_id,c.base_branch,
        j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
@@ -82,19 +82,19 @@ where job_id=sqlc.arg(job_id) and revision=sqlc.arg(comparison_base_oid);
 
 -- name: InsertAdmittedJob :execrows
 insert into dorf.jobs(
-    id,admission_key,workflow_name,workflow_revision,goal,
+    id,admission_key,workflow_name,workflow_revision,agents_md,
     sandbox_profile,provider_connection,model,reasoning_effort
 )
 values(
     sqlc.arg(id),sqlc.arg(admission_key),sqlc.arg(workflow_name),sqlc.arg(workflow_revision),
-    sqlc.arg(goal),
+    sqlc.arg(agents_md),
     sqlc.arg(sandbox_profile),sqlc.arg(provider_connection),sqlc.arg(model),
     sqlc.arg(reasoning_effort)
 )
 on conflict(admission_key) do nothing;
 
 -- name: GetAdmittedJobForUpdate :one
-select id,admission_key,workflow_name,workflow_revision,goal,sandbox_profile,provider_connection,
+select id,admission_key,workflow_name,workflow_revision,agents_md,sandbox_profile,provider_connection,
        model,reasoning_effort
 from dorf.jobs
 where admission_key=sqlc.arg(admission_key)
@@ -135,7 +135,7 @@ where id=sqlc.arg(job_id)
 for update;
 
 -- name: GetJobForSandboxActionAuthorization :one
-select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.goal,
+select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(current_task.task_name,'') as current_task_name,

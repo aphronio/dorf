@@ -52,7 +52,7 @@ func (s *admissionServiceStore) AdmitInvestigation(_ context.Context, input Admi
 	if created {
 		s.job = core.Job{
 			ID: core.JobID(input.AdmissionKey), CurrentTaskID: "task-retained", AdmissionKey: input.AdmissionKey,
-			Workflow: input.Workflow, WorkflowRevision: input.WorkflowRevision, Goal: input.Goal,
+			Workflow: input.Workflow, WorkflowRevision: input.WorkflowRevision,
 			SandboxProfile: input.SandboxProfile, ProviderConnection: input.ProviderConnection,
 			Model: input.Model, ReasoningEffort: input.ReasoningEffort, AdmissionOpen: true,
 		}
@@ -62,7 +62,7 @@ func (s *admissionServiceStore) AdmitInvestigation(_ context.Context, input Admi
 		expected := Admission{
 			JobAdmission: core.JobAdmission{
 				AdmissionKey: s.job.AdmissionKey, Workflow: s.job.Workflow, WorkflowRevision: s.job.WorkflowRevision,
-				Goal: s.job.Goal, SandboxProfile: s.job.SandboxProfile, ProviderConnection: s.job.ProviderConnection,
+				SandboxProfile: s.job.SandboxProfile, ProviderConnection: s.job.ProviderConnection,
 				Model: s.job.Model, ReasoningEffort: s.job.ReasoningEffort,
 			},
 			Source: s.source,
@@ -96,8 +96,8 @@ func TestAdmissionServiceReconcilesFirstAdmissionRaceAndExactReplay(t *testing.T
 	provider := &admissionServiceProvider{}
 	service := NewAdmissionService(store, "test-queue", provider)
 	request := AdmissionRequest{
-		AdmissionKey: "investigation-request", Brief: "preserve exact brief",
-		Source: Source{Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40)},
+		AdmissionKey: "investigation-request",
+		Source:       Source{Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40)},
 	}
 
 	createdJob, created, err := service.Admit(context.Background(), request)
@@ -138,7 +138,7 @@ func TestAdmissionServiceReconcilesFirstAdmissionRaceAndExactReplay(t *testing.T
 
 func TestAdmissionServiceValidatesAndRequiresRemoteGitBeforeExternalAuthority(t *testing.T) {
 	valid := AdmissionRequest{
-		AdmissionKey: "request", Brief: "brief", Model: "model",
+		AdmissionKey: "request", Model: "model",
 		Source: Source{Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40)},
 	}
 	tests := map[string]struct {

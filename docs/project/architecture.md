@@ -44,7 +44,7 @@ of fact.
 
 | Fact | Authority |
 | --- | --- |
-| Job identity, bounded goal, accepted execution contract, durable lifecycle, and cleanup request/execution | Dorf-owned PostgreSQL facts |
+| Job identity, accepted execution contract, durable lifecycle, and cleanup request/execution | Dorf-owned PostgreSQL facts |
 | Workflow-specific facts and outcome | Workflow-owned PostgreSQL tables or typed records |
 | Task claims, checkpoints, retry schedule, sleeps, waits, and cancellation | Absurd schema in the same PostgreSQL deployment |
 | Agent transcript, tool items, Thread, Turn, and native history | The selected Harness |
@@ -66,12 +66,15 @@ request from success, failure, an Outcome, inactivity, or a need for human input
 
 ## Execution model
 
-One admission creates one durable execution owner with complete bounded intent and a stable
+One admission creates one durable execution owner with its configuration and a stable
 idempotency identity. A workflow-driven Job also pins its workflow version. Admission records the
-Job, consumer-owned input, initial execution facts, Absurd task, and task attachment in one
+Job, consumer-owned configuration, Sandbox reservation, Absurd task, and task attachment in one
 PostgreSQL transaction. Ordinary task handoffs also commit scheduling and attachment together.
 The consuming adapter supplies task identity; the shared transaction does not interpret workflow
-policy. Absurd's public SQL functions provide this transaction boundary.
+policy. Absurd's public SQL functions provide this transaction boundary. Message text and AgentRuns
+are admitted separately through the same Message operation regardless of sequence position.
+Workspace instructions supplied at creation are installed within Sandbox preparation, before any
+Harness work can start.
 
 A requested cleanup closes admission, cancels the previous task, and schedules and attaches cleanup
 in one transaction under the Job's external-effect fence. A task requesting its own cleanup may
@@ -178,7 +181,7 @@ Action, or Revision. Its validity follows the claim it supports: a coding Revisi
 invalidate Revision-bound evidence, while a captured source or lifecycle observation may remain
 valid.
 
-Inspection projects one situation-first view from Dorf and workflow facts: accepted goal, observed
+Inspection projects one situation-first view from Dorf and workflow facts: accepted messages, observed
 history, current work or attention, outcome, evidence, and cleanup. Raw Absurd attempts, leases,
 checkpoints, and waits remain operator diagnostics through Absurd's tools rather than being copied
 into Dorf's product history.

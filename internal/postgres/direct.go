@@ -21,13 +21,7 @@ func (s Store) AdmitDirect(ctx context.Context, input core.JobAdmission, queueNa
 	if err != nil {
 		return core.Job{}, false, err
 	}
-	job, created, err := admitJob(ctx, s, normalized, queueName, direct.TaskName, direct.TaskKey(core.JobID(normalized.AdmissionKey)), func(ctx context.Context, queries *dbsql.Queries, ids admittedJobIDs) error {
-		_, err := queries.InsertAdmittedAgentRun(ctx, dbsql.InsertAdmittedAgentRunParams{
-			ID: core.AgentRunID(ids.messageID), JobID: ids.jobID, MessageID: ids.messageID,
-			Role: direct.DirectAgentRole, SandboxID: ids.sandboxID,
-		})
-		return err
-	})
+	job, created, err := admitJob(ctx, s, normalized, queueName, direct.TaskName, direct.TaskKey(core.JobID(normalized.AdmissionKey)), nil)
 	if errors.Is(err, ErrAdmissionConflict) {
 		err = fmt.Errorf("%w: %w", direct.ErrAdmissionConflict, err)
 	}

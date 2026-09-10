@@ -22,7 +22,7 @@ var (
 // resolved only for a new Job and retained in its durable admission.
 type AdmissionRequest struct {
 	AdmissionKey       string
-	Goal               string
+	AgentsMD           string
 	SandboxProfile     string
 	ProviderConnection string
 	Model              string
@@ -53,9 +53,7 @@ func NewAdmissionService(store AdmissionStore, queueName string, provider Admiss
 	return AdmissionService{store: store, queueName: queueName, provider: provider}
 }
 
-// Admit bootstraps one direct client Job and reconciles its durable task
-// attachment. Follow, steer, Thread reuse, and AgentRun recovery remain Core
-// Message mechanics after this initial admission.
+// Admit prepares one direct client Job. All input uses Core Message admission.
 func (s AdmissionService) Admit(ctx context.Context, request AdmissionRequest) (core.Job, bool, error) {
 	key, err := admissionKey(request.AdmissionKey)
 	if err != nil {
@@ -139,13 +137,13 @@ func normalizeAdmissionRequest(request AdmissionRequest) (core.JobAdmission, err
 	if request.ReasoningEffort == "" {
 		request.ReasoningEffort = "high"
 	}
-	if invalidAdmissionText(request.Goal, 1<<20, true) || invalidAdmissionText(request.Model, 1024, false) ||
+	if invalidAdmissionText(request.AgentsMD, 1<<20, false) || invalidAdmissionText(request.Model, 1024, false) ||
 		invalidAdmissionText(request.SandboxProfile, 255, false) || invalidAdmissionText(request.ProviderConnection, 255, false) ||
 		(request.ReasoningEffort != "low" && request.ReasoningEffort != "medium" && request.ReasoningEffort != "high" && request.ReasoningEffort != "xhigh") {
 		return core.JobAdmission{}, ErrInvalidAdmission
 	}
 	return core.JobAdmission{
-		AdmissionKey: request.AdmissionKey, Goal: request.Goal, SandboxProfile: request.SandboxProfile,
+		AdmissionKey: request.AdmissionKey, AgentsMD: request.AgentsMD, SandboxProfile: request.SandboxProfile,
 		ProviderConnection: request.ProviderConnection, Model: request.Model, ReasoningEffort: request.ReasoningEffort,
 	}, nil
 }

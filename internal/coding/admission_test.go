@@ -9,7 +9,7 @@ import (
 
 func TestNormalizeAdmissionRejectsForeignIdentityAndMutableRevision(t *testing.T) {
 	valid := Admission{
-		JobAdmission: core.JobAdmission{AdmissionKey: "job", Goal: "goal"},
+		JobAdmission: core.JobAdmission{AdmissionKey: "job"},
 		Repository:   "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40), Branch: "dorf/admission",
 		GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "main",
 	}

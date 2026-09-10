@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	InitialAgentRole       = "investigate"
-	InitialAgentCapability = "repository-read-report"
+	AgentRole       = "investigate"
+	AgentCapability = "repository-read-report"
 )
 
 var (

@@ -17,7 +17,7 @@ func TestDirectAutomaticMessagesAndExactInterruptReconciliation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	job, _, err := admitDirectFixture(t, store, ctx, core.JobAdmission{
-		AdmissionKey: fmt.Sprintf("assistant-%d", time.Now().UnixNano()), Goal: "retain this conversation",
+		AdmissionKey:   fmt.Sprintf("assistant-%d", time.Now().UnixNano()),
 		SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "low",
 	})
 	if err != nil {

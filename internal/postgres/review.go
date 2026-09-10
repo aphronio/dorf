@@ -252,7 +252,7 @@ func (s Store) RecordReviewFeedback(ctx context.Context, runID string, outcome c
 		implementationRunID := core.AgentRunID(expectedMessage.ID)
 		if err := expectOneRows(queries.InsertAdmittedAgentRun(ctx, dbsql.InsertAdmittedAgentRunParams{
 			ID: implementationRunID, JobID: run.JobID, MessageID: expectedMessage.ID,
-			Role: coding.InitialAgentRole, InputRevision: nullableString(run.CurrentRevision),
+			Role: coding.AgentRole, InputRevision: nullableString(run.CurrentRevision),
 			SandboxID: core.MainSandboxName(run.JobID),
 		})); err != nil {
 			return core.Message{}, false, err

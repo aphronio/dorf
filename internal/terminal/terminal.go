@@ -3,6 +3,7 @@ package terminal
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gateway"
@@ -29,7 +30,14 @@ func (e Externals) SandboxCreate(ctx context.Context, job core.Job, sandbox core
 	if sandbox.JobID != job.ID {
 		return fmt.Errorf("Sandbox does not belong to exact Job %s", job.ID)
 	}
-	return e.Sandbox.ReconcileOwnedCreate(ctx, ownershipMetadata(sandbox))
+	owner := ownershipMetadata(sandbox)
+	if err := e.Sandbox.ReconcileOwnedCreate(ctx, owner); err != nil {
+		return err
+	}
+	if job.AgentsMD != "" {
+		return e.Sandbox.PutFile(ctx, owner, filepath.Join(e.Sandbox.Workspace(), "AGENTS.md"), []byte(job.AgentsMD))
+	}
+	return nil
 }
 
 func ownershipMetadata(sandbox core.Sandbox) provider.Ownership {

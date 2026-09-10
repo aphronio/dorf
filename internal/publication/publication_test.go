@@ -172,11 +172,11 @@ func TestGitRepositoryRelationTreatsMergeBaseOperationalFailureAsError(t *testin
 
 func TestBodyIsDeterministicExactRevisionProjection(t *testing.T) {
 	revision := strings.Repeat("a", 40)
-	job := coding.Job{Job: core.Job{ID: "job-1", Goal: "Implement durable publication"}, Revision: revision, Branch: "dorf/head", BaseBranch: "greenfield"}
+	job := coding.Job{Job: core.Job{ID: "job-1"}, Revision: revision, Branch: "dorf/head", BaseBranch: "greenfield"}
 	assessment := coding.ReadinessAssessment{Ready: true, Revision: revision, Reason: "exact revision and selected review settled"}
 	evidence := []core.Evidence{{ID: "e-git", Digest: strings.Repeat("1", 64)}}
-	first := Body(job, assessment, evidence, nil, nil)
-	second := Body(job, assessment, evidence, nil, nil)
+	first := Body(job, "Implement durable publication", assessment, evidence, nil, nil)
+	second := Body(job, "Implement durable publication", assessment, evidence, nil, nil)
 	if first != second || BodyDigest(first) != BodyDigest(second) || len(BodyDigest(first)) != 64 || !strings.Contains(first, revision) {
 		t.Fatalf("non-deterministic or incomplete body:\n%s", first)
 	}
@@ -184,7 +184,7 @@ func TestBodyIsDeterministicExactRevisionProjection(t *testing.T) {
 
 func TestBodyProjectsOnlySelectedReviewEvidence(t *testing.T) {
 	revision := strings.Repeat("a", 40)
-	job := coding.Job{Job: core.Job{ID: "job-review", Goal: "Preserve opaque review feedback"}, Revision: revision, Branch: "dorf/review", BaseBranch: "main"}
+	job := coding.Job{Job: core.Job{ID: "job-review"}, Revision: revision, Branch: "dorf/review", BaseBranch: "main"}
 	role := "general"
 	requestID := coding.ReviewRequestMessageID(job.ID, revision, role)
 	runID := core.AgentRunID(requestID)
@@ -204,7 +204,7 @@ func TestBodyProjectsOnlySelectedReviewEvidence(t *testing.T) {
 	assessment := coding.ReadinessAssessment{Ready: true, Revision: revision, Reason: "review feedback handled"}
 	plan := &coding.ReviewPlanRecord{JobID: job.ID, Revision: revision, Plan: policy.ReviewPlan{Decision: "selected", Roles: []policy.Role{policy.Role(role)}}}
 
-	body := Body(job, assessment, evidence, plan, runs)
+	body := Body(job, "Implement durable publication", assessment, evidence, plan, runs)
 	for _, want := range []string{role, runID, feedbackMessageID, observedID, strings.Repeat("2", 64)} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body is missing %q:\n%s", want, body)
@@ -231,7 +231,8 @@ func TestBodySeesOnlyExactRevisionReviewRuns(t *testing.T) {
 	observedID := core.EvidenceID(currentRunID, "review-observation")
 	plan := &coding.ReviewPlanRecord{JobID: jobID, Revision: currentRevision, Plan: policy.ReviewPlan{Decision: "selected", Roles: []policy.Role{policy.Role(role)}}}
 	body := Body(
-		coding.Job{Job: core.Job{ID: jobID, Goal: "keep publication exact"}, Revision: currentRevision, Branch: "dorf/exact", BaseBranch: "main"},
+		coding.Job{Job: core.Job{ID: jobID}, Revision: currentRevision, Branch: "dorf/exact", BaseBranch: "main"},
+		"keep publication exact",
 		coding.ReadinessAssessment{Ready: true, Revision: currentRevision, Reason: "exact review settled"},
 		[]core.Evidence{{ID: observedID, Digest: strings.Repeat("1", 64)}},
 		plan,

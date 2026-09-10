@@ -20,7 +20,6 @@ var (
 // selected profile and provider authority are resolved only by AdmissionService.
 type AdmissionRequest struct {
 	AdmissionKey       string
-	Brief              string
 	SandboxProfile     string
 	ProviderConnection string
 	Model              string
@@ -135,7 +134,7 @@ func normalizeAdmissionRequest(request AdmissionRequest) (Admission, error) {
 	if request.ReasoningEffort == "" {
 		request.ReasoningEffort = "high"
 	}
-	if invalidAdmissionText(request.Brief, 1<<20, true) || invalidAdmissionText(request.Model, 1024, false) ||
+	if invalidAdmissionText(request.Model, 1024, false) ||
 		invalidAdmissionText(request.SandboxProfile, 255, false) || invalidAdmissionText(request.ProviderConnection, 255, false) ||
 		invalidAdmissionText(request.Source.Repository, 4096, true) ||
 		(request.ReasoningEffort != "low" && request.ReasoningEffort != "medium" && request.ReasoningEffort != "high" && request.ReasoningEffort != "xhigh") {
@@ -143,7 +142,7 @@ func normalizeAdmissionRequest(request AdmissionRequest) (Admission, error) {
 	}
 	admission := Admission{
 		JobAdmission: core.JobAdmission{
-			AdmissionKey: request.AdmissionKey, Goal: request.Brief, SandboxProfile: request.SandboxProfile,
+			AdmissionKey: request.AdmissionKey, SandboxProfile: request.SandboxProfile,
 			ProviderConnection: request.ProviderConnection, Model: request.Model, ReasoningEffort: request.ReasoningEffort,
 		},
 		Source: request.Source,

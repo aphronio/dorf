@@ -22,7 +22,6 @@ var (
 // only by AdmissionService and retained in Admission.
 type AdmissionRequest struct {
 	AdmissionKey       string
-	Goal               string
 	SandboxProfile     string
 	ProviderConnection string
 	Model              string
@@ -174,7 +173,7 @@ func normalizeAdmissionRequest(request AdmissionRequest) (Admission, error) {
 	if request.Branch == "" {
 		request.Branch = "dorf/" + core.JobID(request.AdmissionKey)
 	}
-	if invalidAdmissionText(request.Goal, 1<<20, true) || invalidAdmissionText(request.Model, 1024, false) ||
+	if invalidAdmissionText(request.Model, 1024, false) ||
 		invalidAdmissionText(request.SandboxProfile, 255, false) || invalidAdmissionText(request.ProviderConnection, 255, false) ||
 		invalidAdmissionText(request.Repository, 4096, true) || invalidAdmissionText(request.Revision, 64, true) ||
 		invalidAdmissionText(request.Branch, 1024, true) || invalidAdmissionText(request.BaseBranch, 1024, true) ||
@@ -194,7 +193,7 @@ func normalizeAdmissionRequest(request AdmissionRequest) (Admission, error) {
 	return Admission{
 		JobAdmission: core.JobAdmission{
 			AdmissionKey: request.AdmissionKey, Workflow: Workflow, WorkflowRevision: WorkflowRevision,
-			Goal: request.Goal, SandboxProfile: request.SandboxProfile,
+			SandboxProfile:     request.SandboxProfile,
 			ProviderConnection: request.ProviderConnection, Model: request.Model, ReasoningEffort: request.ReasoningEffort,
 		},
 		Repository: request.Repository, Revision: request.Revision, Branch: request.Branch,
