@@ -102,7 +102,9 @@ terminal target is a no-op. Unbound Messages and unsupported Job or Harness comb
 
 Sandbox files are exact, caller-selected, workspace-relative regular-file reads at Sandbox level.
 The server enforces Job custody and the cleanup fence; the response includes exact bytes, length, and
-digest. There is no remote file write, listing, glob, archive, or directory API. Evidence responses
+digest. A bounded write can atomically replace one regular file in the workspace root. Create-only
+writes preserve an existing file, including an intentionally empty file. The same custody and
+cleanup fence apply. There is no listing, glob, archive, or directory API. Evidence responses
 contain verified immutable metadata, not arbitrary result blobs or internal recovery identities.
 
 Dorf-origin failures use RFC 9457 Problem Details. Stable `code`, `retryable`, and `details` fields
@@ -132,8 +134,8 @@ The API receives its database URL, read-only API state, and an independently der
 through the protected Compose environment. It receives no Incus socket or identity, E2B key,
 GitHub credential, Gateway state, or provider configuration. The worker's narrow reader answers
 only default and named AI-connection observation, GitHub installation discovery, one exact stored
-Job Proposal observation, an exact Job-owned Sandbox file read, and one settled Message result. It
-has no generic proxy, provider selector, credential response, or mutation operation.
+Job Proposal observation, exact Job-owned Sandbox file reads and bounded root-file writes, and one
+settled Message result. It has no generic proxy, provider selector, or credential response.
 
 The Compose manifest encodes startup dependencies, health checks, published ports, profile-gated
 services, and network attachment. The project uses no host networking and mounts no host Docker
@@ -167,6 +169,6 @@ domain and hostname procedure,
 
 Dorf does not yet add multiple saved Deployment contexts, a browser UI, browser login, multi-user
 identity, workload identity, mTLS, MCP, A2A, hand-written SDK families, webhooks, a copied event
-store, writable or listable Sandbox files, public workflow registration, a workflow DSL, or a
+store, listable Sandbox files, public workflow registration, a workflow DSL, or a
 high-availability hosted control-plane topology. A concrete client must earn the next smallest
 surface.

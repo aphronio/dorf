@@ -43,6 +43,10 @@ type SandboxFileReader interface {
 	ReadSandboxFile(context.Context, Job, Sandbox, string) ([]byte, error)
 }
 
+type SandboxFileWriter interface {
+	WriteSandboxFile(context.Context, Job, Sandbox, string, []byte, bool) error
+}
+
 type SandboxRuntimeResolver interface {
 	ResolveSandbox(context.Context, string) (SandboxRuntime, error)
 }

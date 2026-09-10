@@ -74,7 +74,12 @@ The consuming adapter supplies task identity; the shared transaction does not in
 policy. Absurd's public SQL functions provide this transaction boundary. Message text and AgentRuns
 are admitted separately through the same Message operation regardless of sequence position.
 Workspace instructions supplied at creation are installed within Sandbox preparation, before any
-Harness work can start.
+Harness work can start. Clients may also initialize missing files through the bounded workspace
+file API before sending the first Message. Workspace files are the live instruction authority.
+The Codex adapter loads AGENTS.md natively on a new thread, sends a read notice when it changes,
+and injects SOUL.md as native developer context only initially or after its contents change.
+Process-local hashes avoid repeating unchanged context. A lost cache causes rehydration from the
+same files. Message text and durable Core records do not carry instruction snapshots.
 
 A requested cleanup closes admission, cancels the previous task, and schedules and attaches cleanup
 in one transaction under the Job's external-effect fence. A task requesting its own cleanup may

@@ -58,7 +58,7 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 		"/v1/jobs/{job}/evidence":                     {"get"},
 		"/v1/jobs/{job}/abandon":                      {"put"},
 		"/v1/jobs/{job}/cleanup":                      {"put"},
-		"/v1/sandboxes/{sandbox}/files":               {"get"},
+		"/v1/sandboxes/{sandbox}/files":               {"get", "put"},
 	}
 	paths := objectAt(t, document, "paths")
 	if len(paths) != len(wantOperations) {

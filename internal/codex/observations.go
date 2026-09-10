@@ -16,17 +16,18 @@ import (
 // Observations keeps an already-authenticated subscription after a control
 // operation returns. It never submits work or decides a Message's outcome.
 type Observations struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	emit   func(telemetry.Event)
-	mu     sync.Mutex
-	active map[string]bool
-	wg     sync.WaitGroup
+	ctx          context.Context
+	cancel       context.CancelFunc
+	emit         func(telemetry.Event)
+	mu           sync.Mutex
+	active       map[string]bool
+	instructions map[string]instructionHashes
+	wg           sync.WaitGroup
 }
 
 func NewObservations(ctx context.Context, emit func(telemetry.Event)) *Observations {
 	ctx, cancel := context.WithCancel(ctx)
-	return &Observations{ctx: ctx, cancel: cancel, emit: emit, active: make(map[string]bool)}
+	return &Observations{ctx: ctx, cancel: cancel, emit: emit, active: make(map[string]bool), instructions: make(map[string]instructionHashes)}
 }
 
 func (o *Observations) Close() {
@@ -109,6 +110,7 @@ func (p *protocol) observeUntilSettled() {
 }
 
 func (p *protocol) observationGap() {
+	p.forgetWorkspaceInstructions()
 	if p.observations.ctx.Err() == nil {
 		p.emitObservation("codex.observation.disconnected", time.Now(), nil, true)
 	}
@@ -154,6 +156,9 @@ func (p *protocol) observeNotification(message map[string]any) {
 		p.observed.complete = method == "turn/completed"
 	case "item/started", "item/completed":
 		item, _ := params["item"].(map[string]any)
+		if stringValue(item["type"]) == "contextCompaction" {
+			p.forgetWorkspaceInstructions()
+		}
 		fields, failed = itemObservation(item, method)
 		if fields == nil {
 			return
@@ -162,6 +167,15 @@ func (p *protocol) observeNotification(message map[string]any) {
 		fields["token_usage"] = params["tokenUsage"]
 	}
 	p.emitObservation("codex."+method, at, fields, failed)
+}
+
+func (p *protocol) forgetWorkspaceInstructions() {
+	if p.instructionCache == nil || p.observed == nil {
+		return
+	}
+	p.instructionCache.mu.Lock()
+	defer p.instructionCache.mu.Unlock()
+	delete(p.instructionCache.instructions, p.observed.threadID)
 }
 
 func (p *protocol) emitObservation(name string, at time.Time, fields map[string]any, failed bool) {

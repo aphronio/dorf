@@ -284,6 +284,7 @@ type Jobs interface {
 	Retry(context.Context, string, string) (Retry, bool, error)
 	Abandon(context.Context, string) (JobView, error)
 	ReadSandboxFile(context.Context, string, string) ([]byte, error)
+	WriteSandboxFile(context.Context, string, string, []byte, bool) error
 	Evidence(context.Context, string) ([]Evidence, error)
 	RequestCleanup(context.Context, string) (JobView, error)
 }

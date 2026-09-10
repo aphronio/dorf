@@ -582,12 +582,12 @@ func streamWrite(controller *http.ResponseController, write func() error) error 
 }
 
 func (h *handler) fileRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
+	if r.Method != http.MethodGet && r.Method != http.MethodPut {
+		w.Header().Set("Allow", "GET, PUT")
 		h.fail(w, problem("method_not_allowed"))
 		return
 	}
-	if contentTypes := r.Header.Values("Content-Type"); len(contentTypes) != 0 || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
+	if contentTypes := r.Header.Values("Content-Type"); r.Method == http.MethodGet && (len(contentTypes) != 0 || r.ContentLength != 0 || len(r.TransferEncoding) != 0) {
 		h.fail(w, problem("body_not_allowed"))
 		return
 	}
@@ -603,6 +603,10 @@ func (h *handler) fileRoute(w http.ResponseWriter, r *http.Request, _ controlaut
 	}
 	if len(query) != 1 || len(paths) != 1 {
 		h.fail(w, problem("invalid_query"))
+		return
+	}
+	if r.Method == http.MethodPut {
+		h.writeFile(w, r, paths[0])
 		return
 	}
 	contents, err := h.jobs.ReadSandboxFile(r.Context(), r.PathValue("sandbox"), paths[0])

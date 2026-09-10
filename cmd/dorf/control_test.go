@@ -730,3 +730,7 @@ func (j *remoteCLIJobs) Evidence(_ context.Context, jobID string) ([]controlapi.
 	}
 	return []controlapi.Evidence{}, nil
 }
+
+func (j *remoteCLIJobs) WriteSandboxFile(context.Context, string, string, []byte, bool) error {
+	return nil
+}

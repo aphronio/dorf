@@ -510,6 +510,59 @@
       }
     },
     "/v1/sandboxes/{sandbox}/files": {
+      "put": {
+        "operationId": "putSandboxFile",
+        "summary": "Write a root-level Job-owned Sandbox file",
+        "description": "Atomically replaces a regular file in the workspace root, up to 128 KiB. Rejects symlinks and nested paths. If-None-Match: * creates only when absent; an existing regular file is preserved and also returns 204. Cleanup fences apply to the entire write.",
+        "tags": [
+          "Sandboxes"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SandboxID"
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "description": "Clean workspace-relative file path",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "*"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary",
+                "maxLength": 131072
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "File written, or existing file preserved for create-only setup"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
       "get": {
         "operationId": "getSandboxFile",
         "summary": "Read exact bytes from one Job-owned Sandbox",

@@ -128,3 +128,43 @@ func localExec(t *testing.T, after func(Result, error) (Result, error)) ExecFunc
 		return result, err
 	}
 }
+
+func TestWorkspaceFileWritePreservesExistingDefaultsAndRejectsEscape(t *testing.T) {
+	workspace := t.TempDir()
+	runner := localExec(t, nil)
+	ctx := context.Background()
+	put := func(name, content string, absent bool) error {
+		return WriteWorkspaceFileViaExec(ctx, Ownership{}, workspace, name, []byte(content), absent, runner)
+	}
+	for _, step := range []struct {
+		content string
+		absent  bool
+		want    string
+	}{
+		{"first", true, "first"}, {"new default", true, "first"}, {"edited", false, "edited"}, {"", false, ""}, {"default", true, ""},
+	} {
+		if err := put("AGENTS.md", step.content, step.absent); err != nil {
+			t.Fatal(err)
+		}
+		content, err := os.ReadFile(filepath.Join(workspace, "AGENTS.md"))
+		if err != nil || string(content) != step.want {
+			t.Fatalf("file=%q err=%v want=%q", content, err, step.want)
+		}
+	}
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, []byte("private"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(workspace, "SOUL.md")); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"SOUL.md", "../outside", "nested/file", "/tmp/outside"} {
+		if err := put(name, "replacement", false); err == nil {
+			t.Fatalf("accepted %q", name)
+		}
+	}
+	content, err := os.ReadFile(outside)
+	if err != nil || string(content) != "private" {
+		t.Fatalf("outside=%q err=%v", content, err)
+	}
+}

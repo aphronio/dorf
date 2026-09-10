@@ -913,6 +913,7 @@ type controlAPIJobs struct {
 
 type controlReader interface {
 	ReadFile(context.Context, string, string) ([]byte, error)
+	WriteFile(context.Context, string, string, []byte, bool) error
 	ObserveMessage(context.Context, string, string) (core.MessageResult, error)
 	ObservePullRequest(context.Context, string) (githubapi.PullRequest, error)
 	DefaultConnection() (string, error)
@@ -1255,6 +1256,37 @@ func (a controlAPIJobs) ReadSandboxFile(ctx context.Context, sandboxID, relative
 		return nil, err
 	default:
 		return contents, nil
+	}
+}
+
+func (a controlAPIJobs) WriteSandboxFile(ctx context.Context, sandboxID, relativePath string, contents []byte, ifAbsent bool) error {
+	owned, err := a.store.Sandbox(ctx, sandboxID)
+	if errors.Is(err, postgres.ErrNotFound) {
+		return controlapi.ErrSandboxNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := a.supportedJob(ctx, owned.JobID); err != nil {
+		return err
+	}
+	if a.reader == nil {
+		return fmt.Errorf("control reader is not configured")
+	}
+	err = a.reader.WriteFile(ctx, owned.ID, relativePath, contents, ifAbsent)
+	switch {
+	case errors.Is(err, controlreader.ErrUnavailable):
+		return controlapi.ErrFileUnavailable
+	case errors.Is(err, controlreader.ErrInvalidFilePath):
+		return controlapi.ErrInvalidFilePath
+	case errors.Is(err, controlreader.ErrFileNotFound):
+		return controlapi.ErrFileNotFound
+	case errors.Is(err, controlreader.ErrSandboxNotFound):
+		return controlapi.ErrSandboxNotFound
+	case err != nil:
+		return err
+	default:
+		return nil
 	}
 }
 

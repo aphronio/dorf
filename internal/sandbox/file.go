@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -45,6 +46,7 @@ workspace=$1 relative=$2
 root=$(realpath -e -- "$workspace")
 test -d "$root" && test ! -L "$workspace"
 target="$root/$relative"
+if test ! -e "$target" && test ! -L "$target"; then exit 44; fi
 test -f "$target" && test ! -L "$target"
 exec 3< "$target"
 test -f /proc/self/fd/3
@@ -56,6 +58,9 @@ base64 -w0 <&3`
 		return nil, err
 	}
 	if result.ExitCode != 0 {
+		if result.ExitCode == 44 {
+			return nil, fmt.Errorf("%w: %w: %s", ErrFileUnavailable, os.ErrNotExist, relativePath)
+		}
 		detail := strings.TrimSpace(result.Stderr)
 		if detail == "" {
 			detail = fmt.Sprintf("exit %d", result.ExitCode)
@@ -112,6 +117,54 @@ trap - EXIT`
 	}
 	if result.ExitCode != 0 {
 		return fmt.Errorf("put Sandbox file %s: %s", destination, strings.TrimSpace(result.Stderr))
+	}
+	return nil
+}
+
+// MaxWorkspaceFileWriteBytes bounds an individual public workspace write.
+const MaxWorkspaceFileWriteBytes = 128 << 10
+
+// WriteWorkspaceFileViaExec atomically writes a root-level workspace file.
+// Create-only writes preserve existing files, including empty files.
+func WriteWorkspaceFileViaExec(ctx context.Context, owner Ownership, workspace, name string, contents []byte, ifAbsent bool, exec ExecFunc) error {
+	if err := ValidateWorkspaceRelativePath(name); err != nil {
+		return err
+	}
+	if strings.Contains(name, "/") {
+		return ErrInvalidFilePath
+	}
+	if len(contents) > MaxWorkspaceFileWriteBytes {
+		return fmt.Errorf("workspace file exceeds write limit")
+	}
+	if !path.IsAbs(workspace) || path.Clean(workspace) != workspace || workspace == "/" || exec == nil {
+		return fmt.Errorf("invalid workspace file transport")
+	}
+	script := `set -eu
+workspace=$1 name=$2 expected_size=$3 expected_digest=$4 if_absent=$5
+root=$(realpath -e -- "$workspace")
+test -d "$root" && test ! -L "$workspace"
+cd -- "$root"
+if test -e "$name" || test -L "$name"; then
+  test -f "$name" && test ! -L "$name"
+  if test "$if_absent" = true; then exit 0; fi
+fi
+umask 077
+temporary=$(mktemp .dorf-write.XXXXXXXX)
+trap 'rm -f -- "$temporary"' EXIT
+cat > "$temporary"
+test "$(wc -c < "$temporary")" = "$expected_size"
+test "$(sha256sum "$temporary" | cut -d ' ' -f 1)" = "$expected_digest"
+if test "$if_absent" = true; then
+  if ! ln -T -- "$temporary" "$name"; then test -f "$name" && test ! -L "$name"; fi
+else
+  mv -fT -- "$temporary" "$name"
+fi`
+	result, err := exec(ctx, owner, contents, "bash", "-c", script, "dorf-write-workspace-file", workspace, name, strconv.Itoa(len(contents)), fmt.Sprintf("%x", sha256.Sum256(contents)), strconv.FormatBool(ifAbsent))
+	if err != nil {
+		return err
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("%w: workspace file write failed", ErrFileUnavailable)
 	}
 	return nil
 }

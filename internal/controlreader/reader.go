@@ -1,6 +1,5 @@
-// Package controlreader exposes the fixed read-only external observations
-// needed by the control API without granting that API provider credentials or
-// provider mutation capabilities.
+// Package controlreader exposes fixed external observations and bounded workspace
+// file writes without granting the control API provider credentials.
 package controlreader
 
 import (
@@ -34,6 +33,7 @@ const (
 	handlerTimeout      = 18 * time.Second
 
 	HealthPath             = "/v1/health"
+	FileWritePath          = "/v1/files/write"
 	FileReadPath           = "/v1/files/read"
 	MessageObservationPath = "/v1/messages/observe"
 	DefaultConnectionPath  = "/v1/admission/default-connection"
@@ -89,56 +89,42 @@ type Service struct {
 }
 
 func (s Service) ReadFile(ctx context.Context, sandboxID, relativePath string) ([]byte, error) {
+	var contents []byte
+	err := s.withSandboxFile(ctx, sandboxID, relativePath, func(files core.SandboxFileReader, job core.Job, owned core.Sandbox) error {
+		var err error
+		contents, err = files.ReadSandboxFile(ctx, job, owned, relativePath)
+		return err
+	})
+	return contents, err
+}
+
+func (s Service) withSandboxFile(ctx context.Context, sandboxID, relativePath string, call func(core.SandboxFileReader, core.Job, core.Sandbox) error) error {
 	if !validIdentity(sandboxID) {
-		return nil, ErrSandboxNotFound
+		return ErrSandboxNotFound
 	}
 	if err := provider.ValidateWorkspaceRelativePath(relativePath); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidFilePath, err)
+		return fmt.Errorf("%w: %v", ErrInvalidFilePath, err)
 	}
 	if s.Store == nil || s.Runtimes == nil {
-		return nil, fmt.Errorf("control reader file authority is not configured")
+		return fmt.Errorf("control reader file authority is not configured")
 	}
 	owned, err := s.Store.Sandbox(ctx, sandboxID)
 	if errors.Is(err, postgres.ErrNotFound) {
-		return nil, ErrSandboxNotFound
+		return ErrSandboxNotFound
 	}
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if owned.ID != sandboxID || !validIdentity(owned.JobID) || !validIdentity(owned.OwnershipNonce) {
-		return nil, ErrUnavailable
+		return ErrUnavailable
 	}
 
-	var contents []byte
 	err = s.Store.WithJobFence(ctx, owned.JobID, func() error {
-		job, err := s.Store.Job(ctx, owned.JobID)
-		if errors.Is(err, postgres.ErrNotFound) {
-			return ErrUnavailable
-		}
+		files, job, err := s.sandboxFileAuthority(ctx, owned)
 		if err != nil {
 			return err
 		}
-		if job.ID != owned.JobID || job.CleanupState != core.CleanupPending {
-			return ErrUnavailable
-		}
-		current, err := s.Store.Sandbox(ctx, sandboxID)
-		if errors.Is(err, postgres.ErrNotFound) {
-			return ErrUnavailable
-		}
-		if err != nil {
-			return err
-		}
-		if current.ID != sandboxID || current.JobID != job.ID || current.OwnershipNonce != owned.OwnershipNonce {
-			return ErrUnavailable
-		}
-		runtime, err := s.Runtimes.ResolveSandbox(ctx, job.SandboxProfile)
-		if err != nil {
-			return fmt.Errorf("resolve Sandbox profile for file read: %w", err)
-		}
-		if runtime.SandboxProfile != job.SandboxProfile || runtime.Files == nil {
-			return fmt.Errorf("resolved Sandbox runtime has no exact file authority")
-		}
-		contents, err = runtime.Files.ReadSandboxFile(ctx, job, current, relativePath)
+		err = call(files, job, owned)
 		switch {
 		case errors.Is(err, provider.ErrInvalidFilePath):
 			return ErrInvalidFilePath
@@ -148,10 +134,38 @@ func (s Service) ReadFile(ctx context.Context, sandboxID, relativePath string) (
 			return err
 		}
 	})
-	if err != nil {
-		return nil, err
+	return err
+}
+
+func (s Service) sandboxFileAuthority(ctx context.Context, owned core.Sandbox) (core.SandboxFileReader, core.Job, error) {
+	job, err := s.Store.Job(ctx, owned.JobID)
+	if errors.Is(err, postgres.ErrNotFound) {
+		return nil, core.Job{}, ErrUnavailable
 	}
-	return contents, nil
+	if err != nil {
+		return nil, core.Job{}, err
+	}
+	if job.ID != owned.JobID || job.CleanupState != core.CleanupPending {
+		return nil, core.Job{}, ErrUnavailable
+	}
+	current, err := s.Store.Sandbox(ctx, owned.ID)
+	if errors.Is(err, postgres.ErrNotFound) {
+		return nil, core.Job{}, ErrUnavailable
+	}
+	if err != nil {
+		return nil, core.Job{}, err
+	}
+	if current != owned {
+		return nil, core.Job{}, ErrUnavailable
+	}
+	runtime, err := s.Runtimes.ResolveSandbox(ctx, job.SandboxProfile)
+	if err != nil {
+		return nil, core.Job{}, fmt.Errorf("resolve Sandbox profile for file read: %w", err)
+	}
+	if runtime.SandboxProfile != job.SandboxProfile || runtime.Files == nil {
+		return nil, core.Job{}, fmt.Errorf("resolved Sandbox runtime has no exact file authority")
+	}
+	return runtime.Files, job, nil
 }
 
 func (s Service) ObserveMessage(ctx context.Context, jobID, messageID string) (core.MessageResult, error) {
@@ -374,7 +388,8 @@ func NewHandler(token string, service Service) (http.Handler, error) {
 		HealthPath: jsonEndpoint(0, func(context.Context, struct{}) (healthResponse, error) {
 			return healthResponse{Ready: true}, nil
 		}),
-		FileReadPath: fileReadEndpoint(service),
+		FileReadPath:  fileReadEndpoint(service),
+		FileWritePath: fileWriteEndpoint(service),
 		MessageObservationPath: jsonEndpoint(MaxObservationBytes, func(ctx context.Context, input messageObservationRequest) (core.MessageResult, error) {
 			return service.ObserveMessage(ctx, input.JobID, input.MessageID)
 		}),
@@ -483,16 +498,20 @@ func authenticated(r *http.Request, expected [sha256.Size]byte) bool {
 }
 
 func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
-	if r.ContentLength > MaxRequestBytes {
+	limit := MaxRequestBytes
+	if r.URL.Path == FileWritePath {
+		limit = 2 * provider.MaxWorkspaceFileWriteBytes
+	}
+	if r.ContentLength > int64(limit) {
 		writeProblem(w, http.StatusRequestEntityTooLarge, "request_too_large")
 		return false
 	}
-	contents, err := io.ReadAll(io.LimitReader(r.Body, MaxRequestBytes+1))
+	contents, err := io.ReadAll(io.LimitReader(r.Body, int64(limit)+1))
 	if err != nil {
 		writeProblem(w, http.StatusBadRequest, "invalid_request")
 		return false
 	}
-	if len(contents) > MaxRequestBytes {
+	if len(contents) > limit {
 		writeProblem(w, http.StatusRequestEntityTooLarge, "request_too_large")
 		return false
 	}

@@ -673,3 +673,45 @@ func (p *readerTestPullRequests) PullRequest(_ context.Context, authority github
 	p.calls++
 	return p.pull, nil
 }
+
+func (r *readerTestFiles) WriteSandboxFile(_ context.Context, job core.Job, sandbox core.Sandbox, path string, contents []byte, ifAbsent bool) error {
+	r.calls++
+	r.path, r.job, r.sandbox = path, job, sandbox
+	r.contents = append([]byte(nil), contents...)
+	return nil
+}
+
+func TestFileWritesUseAuthenticatedOwnershipAndCleanupFence(t *testing.T) {
+	job := core.Job{ID: "job-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
+	owned := core.Sandbox{ID: "sandbox-1", JobID: job.ID, OwnershipNonce: strings.Repeat("a", 64)}
+	files := &readerTestFiles{}
+	store := &readerTestStore{job: job, sandbox: owned}
+	service := Service{Store: store, Runtimes: readerTestRuntimes{profile: job.SandboxProfile, files: files}}
+	handler, err := NewHandler(strings.Repeat("b", 64), service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient("http://control-reader.test:8756", strings.Repeat("b", 64), &http.Client{Transport: readerHandlerTransport{handler: handler}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := bytes.Repeat([]byte("instructions\n"), 5000)
+	if err := client.WriteFile(context.Background(), owned.ID, "SOUL.md", want, true); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(files.contents, want) || files.job != job || files.sandbox != owned || store.fences != 1 {
+		t.Fatal("write lost exact bytes or ownership fence")
+	}
+	for _, name := range []string{"../escape", "nested/file"} {
+		if err := client.WriteFile(context.Background(), owned.ID, name, nil, false); !errors.Is(err, ErrInvalidFilePath) {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	store.job.CleanupState = core.CleanupRequested
+	if err := client.WriteFile(context.Background(), owned.ID, "SOUL.md", nil, false); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("cleanup write: %v", err)
+	}
+	if files.calls != 1 {
+		t.Fatal("rejected write reached provider")
+	}
+}

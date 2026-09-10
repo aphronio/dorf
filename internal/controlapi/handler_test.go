@@ -664,6 +664,8 @@ type fakeJobs struct {
 	message            controlapi.Message
 	retry              controlapi.Retry
 	file               []byte
+	fileWrites         int
+	fileAbsent         bool
 	filePath           string
 	messageKey         string
 	retryKey           string
@@ -860,5 +862,49 @@ func TestNonExpiringClientWatchStillHasAuthenticationDeadline(t *testing.T) {
 	after := time.Now()
 	if jobs.deadline.Before(before.Add(time.Minute)) || jobs.deadline.After(after.Add(time.Minute)) {
 		t.Fatalf("non-expiring Client watch deadline=%v, want one minute authentication lifetime", jobs.deadline)
+	}
+}
+
+func (j *fakeJobs) WriteSandboxFile(_ context.Context, sandboxID, name string, contents []byte, ifAbsent bool) error {
+	j.fileWrites++
+	j.filePath, j.file, j.fileAbsent = name, contents, ifAbsent
+	return nil
+}
+
+func TestSandboxFileWriteContract(t *testing.T) {
+	credential := "dcr_control-client"
+	jobs := &fakeJobs{}
+	api := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs)
+	put := func(token, contentType, condition, content string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPut, "/v1/sandboxes/sandbox-1/files?path=SOUL.md", strings.NewReader(content))
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Content-Type", contentType)
+		if condition != "" {
+			request.Header.Set("If-None-Match", condition)
+		}
+		response := httptest.NewRecorder()
+		api.Handler.ServeHTTP(response, request)
+		return response
+	}
+	if response := put("wrong", "application/octet-stream", "", "private"); response.Code != 401 {
+		t.Fatalf("unauthorized=%d", response.Code)
+	}
+	requireProblem(t, put(credential, "text/plain", "", "text"), 415, "unsupported_media_type")
+	requireProblem(t, put(credential, "application/octet-stream", "bad", "text"), 400, "invalid_query")
+	requireProblem(t, put(credential, "application/octet-stream", "", strings.Repeat("x", 128<<10+1)), 413, "body_too_large")
+	if jobs.fileWrites != 0 {
+		t.Fatal("invalid request reached file writer")
+	}
+	if response := put(credential, "application/octet-stream", "*", "complete\x00bytes"); response.Code != 204 {
+		t.Fatalf("write=%d %s", response.Code, response.Body.String())
+	}
+	if jobs.filePath != "SOUL.md" || string(jobs.file) != "complete\x00bytes" || !jobs.fileAbsent {
+		t.Fatalf("write=%+v", jobs)
+	}
+	if response := put(credential, "application/octet-stream", "", ""); response.Code != 204 {
+		t.Fatalf("blank write=%d", response.Code)
+	}
+	if len(jobs.file) != 0 || jobs.fileAbsent {
+		t.Fatal("blank replacement was changed")
 	}
 }

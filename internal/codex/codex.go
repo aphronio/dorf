@@ -66,7 +66,9 @@ func (a Agent) RemoveRoute(ctx context.Context, owner provider.Ownership) error 
 
 type TurnOutcome = core.HarnessTurn
 
-type RejectedError struct{ Method string }
+type RejectedError struct {
+	Method string
+}
 
 func (e *RejectedError) Error() string          { return "Codex app-server rejected " + e.Method }
 func (e *RejectedError) DefiniteNoSubmit() bool { return true }
@@ -139,9 +141,14 @@ func (a Agent) ReadStrictReviewTurn(ctx context.Context, owner provider.Ownershi
 func (a Agent) startInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID, input, model, effort, capability string) (string, TurnOutcome, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
+	instructions, err := a.readWorkspaceInstructions(ctx, owner, workspace)
+	if err != nil {
+		return "", TurnOutcome{}, err
+	}
 	var sessionID string
 	var outcome TurnOutcome
-	err := a.withServer(ctx, owner, func(protocol *protocol) error {
+	err = a.withServer(ctx, owner, func(protocol *protocol) error {
+		protocol.instructions, protocol.instructionCache = instructions, a.Observations
 		var err error
 		sessionID, outcome, err = protocol.reconcileInitialTurn(ctx, workspace, agentRunID, input, model, effort, capability)
 		return err
@@ -177,8 +184,13 @@ func (a Agent) ReadTurns(ctx context.Context, owner provider.Ownership, threadID
 func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, agentRunID, input, model, effort string) (core.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
+	instructions, err := a.readWorkspaceInstructions(ctx, owner, workspace)
+	if err != nil {
+		return core.HarnessBinding{}, err
+	}
 	var outcome TurnOutcome
-	err := a.withServer(ctx, owner, func(protocol *protocol) error {
+	err = a.withServer(ctx, owner, func(protocol *protocol) error {
+		protocol.instructions, protocol.instructionCache = instructions, a.Observations
 		var err error
 		outcome, err = protocol.resumeAndStartTurn(ctx, threadID, workspace, agentRunID, input, model, effort, "danger-full-access")
 		return err
@@ -451,6 +463,9 @@ func dialProtocol(ctx context.Context, endpoint, token string, headers http.Head
 }
 
 type protocol struct {
+	instructions        *workspaceInstructions
+	instructionCache    *Observations
+	freshThread         bool
 	connection          *websocket.Conn
 	nextID              int
 	observations        *Observations
@@ -467,7 +482,7 @@ func (p *protocol) configureObservations(ctx context.Context, observations *Obse
 }
 
 func (p *protocol) initialize(ctx context.Context) error {
-	if _, err := p.call(ctx, "initialize", map[string]any{"clientInfo": map[string]any{"name": "dorf", "title": "Dorf", "version": "0.1.0"}}); err != nil {
+	if _, err := p.call(ctx, "initialize", map[string]any{"clientInfo": map[string]any{"name": "dorf", "title": "Dorf", "version": "0.1.0"}, "capabilities": map[string]any{"experimentalApi": true}}); err != nil {
 		return err
 	}
 	return p.send(ctx, map[string]any{"method": "initialized", "params": map[string]any{}})
@@ -523,7 +538,7 @@ func (p *protocol) listStrictReviewThreads(ctx context.Context, workspace string
 }
 
 func (p *protocol) startThread(ctx context.Context, workspace, model, capability string) (string, error) {
-	result, err := p.call(ctx, "thread/start", map[string]any{"cwd": workspace, "model": model, "approvalPolicy": "never", "sandbox": capability})
+	result, err := p.call(ctx, "thread/start", map[string]any{"cwd": workspace, "model": model, "approvalPolicy": "never", "sandbox": capability, "config": map[string]any{"project_doc_max_bytes": maxInstructionFileBytes}})
 	if err != nil {
 		return "", err
 	}
@@ -729,6 +744,7 @@ func (p *protocol) reconcileInitialTurn(ctx context.Context, workspace, agentRun
 		if err != nil {
 			return "", TurnOutcome{}, err
 		}
+		p.freshThread = true
 		turn, err := p.startTurn(ctx, sessionID, workspace, agentRunID, goal, model, effort, capability)
 		return sessionID, turn, err
 	}
@@ -849,6 +865,9 @@ func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRun
 	if capability == "read-only" {
 		policyType = "readOnly"
 	}
+	if err := p.injectWorkspaceInstructions(ctx, sessionID); err != nil {
+		return TurnOutcome{}, err
+	}
 	result, err := p.call(ctx, "turn/start", map[string]any{"threadId": sessionID, "clientUserMessageId": agentRunID, "input": []map[string]string{{"type": "text", "text": goal}}, "cwd": workspace, "model": model, "effort": effort, "approvalPolicy": "never", "sandboxPolicy": map[string]string{"type": policyType}})
 	if err != nil {
 		return TurnOutcome{}, err
@@ -858,6 +877,7 @@ func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRun
 	if id == "" {
 		return TurnOutcome{}, fmt.Errorf("turn/start response is missing result.turn.id")
 	}
+	p.rememberWorkspaceInstructions(sessionID)
 	outcome := TurnOutcome{ID: id, Status: "running"}
 	if p.execution.ID == agentRunID {
 		p.bindObservation(sessionID, id, true)

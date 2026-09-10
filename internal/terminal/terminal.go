@@ -125,3 +125,10 @@ func (e Externals) owner(ctx context.Context, sandboxID string) (provider.Owners
 var (
 	_ core.Externals = Externals{}
 )
+
+func (e Externals) WriteSandboxFile(ctx context.Context, job core.Job, owned core.Sandbox, name string, contents []byte, ifAbsent bool) error {
+	if owned.JobID != job.ID {
+		return fmt.Errorf("Sandbox file write requires the exact Job owner")
+	}
+	return provider.WriteWorkspaceFileViaExec(ctx, ownershipMetadata(owned), e.Sandbox.Workspace(), name, contents, ifAbsent, e.Sandbox.Exec)
+}
