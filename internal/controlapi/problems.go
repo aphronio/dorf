@@ -40,6 +40,7 @@ var problemCatalog = []ProblemDescriptor{
 	describeProblem(405, "method_not_allowed", "Method not allowed", false),
 	describeProblem(406, "not_acceptable", "Accept must be text/event-stream", false),
 	describeProblem(404, "not_found", "Resource not found", false),
+	describeProblem(422, "profile_not_found", "Sandbox profile not found; list available profiles with GET /v1/profiles", false),
 	describeProblem(429, "rate_limited", "Too many enrollment attempts", true),
 	describeProblem(409, "retry_unavailable", "The Job has no eligible failed execution to retry", false),
 	describeProblem(404, "sandbox_not_found", "Sandbox not found", false),

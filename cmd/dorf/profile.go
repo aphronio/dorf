@@ -90,7 +90,7 @@ func profileCommand(ctx context.Context, store postgres.Store, cfg config.Config
 			return err
 		}
 		return writeJSON(stdout, map[string]any{"profile": profile.Name, "default": true})
-	case "show", "list":
+	case "show":
 		return profileReadCommand(ctx, store, args, stdout)
 	default:
 		return fmt.Errorf("unsupported profile command %q", args[0])
@@ -98,28 +98,14 @@ func profileCommand(ctx context.Context, store postgres.Store, cfg config.Config
 }
 
 func profileReadCommand(ctx context.Context, store postgres.Store, args []string, stdout io.Writer) error {
-	if args[0] == "show" {
-		if len(args) != 2 {
-			return fmt.Errorf("profile show requires NAME")
-		}
-		profile, err := store.SandboxProfile(ctx, args[1])
-		if err != nil {
-			return err
-		}
-		return writeJSON(stdout, profileView(profile))
+	if len(args) != 2 {
+		return fmt.Errorf("profile show requires NAME")
 	}
-	if len(args) != 1 {
-		return fmt.Errorf("profile list takes no arguments")
-	}
-	profiles, err := store.SandboxProfiles(ctx)
+	profile, err := store.SandboxProfile(ctx, args[1])
 	if err != nil {
 		return err
 	}
-	views := make([]sandboxProfileView, 0, len(profiles))
-	for _, profile := range profiles {
-		views = append(views, profileView(profile))
-	}
-	return writeJSON(stdout, views)
+	return writeJSON(stdout, profileView(profile))
 }
 
 func installOfficialIncusProfile(ctx context.Context, store postgres.Store, args []string, stdout, stderr io.Writer) error {

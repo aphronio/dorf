@@ -27,7 +27,7 @@ func TestHandlerBoundary(t *testing.T) {
 	jobs := &fakeJobs{job: controlapi.Job{ID: "job-1", Kind: "direct"}}
 	server := controlapi.NewServer(controlapi.Discovery{
 		Product: "dorf", Version: "1.2.3", Capabilities: []string{"direct_jobs"},
-	}, auth, jobs)
+	}, auth, jobs, nil)
 	handler := server.Handler
 
 	do := func(method, target, bearer, idempotencyKey string, body io.Reader) *httptest.ResponseRecorder {
@@ -152,7 +152,7 @@ func TestAdmissionsAcceptExplicitAIConnectionAndOmittedModel(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, test.jobs).Handler
+			handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, test.jobs, nil).Handler
 			request := httptest.NewRequest(http.MethodPost, test.target, strings.NewReader(test.body))
 			request.Header.Set("Authorization", "Bearer "+credential)
 			request.Header.Set("Content-Type", "application/json")
@@ -175,7 +175,7 @@ func TestEnrollmentRedemptionUsesDeploymentWideRateLimit(t *testing.T) {
 		client:    controlauth.Client{Name: "laptop"},
 		redeemErr: controlauth.ErrEnrollmentUnavailable,
 	}
-	handler := controlapi.NewServer(controlapi.Discovery{}, auth, &fakeJobs{}).Handler
+	handler := controlapi.NewServer(controlapi.Discovery{}, auth, &fakeJobs{}, nil).Handler
 	redeem := func(enrollment string) *httptest.ResponseRecorder {
 		t.Helper()
 		body := fmt.Sprintf(`{"enrollment_code":%q,"client_name":"laptop","credential":"dcr_attacker-generated"}`, enrollment)
@@ -214,7 +214,7 @@ func TestJobListUsesStrictBoundedQueryAndExplicitEmptyCollection(t *testing.T) {
 		Jobs:       []controlapi.JobSummary{{ID: "job-2", Kind: controlapi.JobKindDirect, AdmittedAt: admittedAt}},
 		NextCursor: &next,
 	}}
-	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs).Handler
+	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs, nil).Handler
 	do := func(target string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodGet, target, nil)
 		request.Header.Set("Authorization", "Bearer "+credential)
@@ -256,7 +256,7 @@ func TestJobConditionalGetAndDirectInteractionRoutes(t *testing.T) {
 		message: message, messageCreated: true,
 		retry: controlapi.Retry{JobID: "job-1", State: "scheduled"}, retryCreated: true,
 	}
-	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs).Handler
+	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs, nil).Handler
 
 	request := func(method, target string, body io.Reader) *http.Request {
 		req := httptest.NewRequest(method, target, body)
@@ -324,7 +324,7 @@ func TestAbandonIsAuthenticatedIdempotentAndReturnsCanonicalJob(t *testing.T) {
 	credential := "dcr_abandon"
 	job := controlapi.CodingJob{Job: controlapi.Job{ID: "job-coding", Kind: controlapi.JobKindCoding, Model: "ship"}}
 	jobs := &fakeJobs{job: job.Job, view: job}
-	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs).Handler
+	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs, nil).Handler
 	put := func() *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodPut, "/v1/jobs/job-coding/abandon", nil)
 		request.Header.Set("Authorization", "Bearer "+credential)
@@ -355,7 +355,7 @@ func TestConcreteWorkflowJobRepresentationDrivesETag(t *testing.T) {
 		Job: base, WorkflowRevision: "3", Repository: "https://github.com/acme/widget.git", Revision: strings.Repeat("b", 40),
 	}
 	jobs := &fakeJobs{job: base, view: coding}
-	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs).Handler
+	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs, nil).Handler
 	get := func(etag string) *httptest.ResponseRecorder {
 		t.Helper()
 		request := httptest.NewRequest(http.MethodGet, "/v1/jobs/job-coding", nil)
@@ -394,7 +394,7 @@ func TestSandboxFileResponseContract(t *testing.T) {
 	credential := "dcr_control-client"
 	contents := []byte{0x00, 0xff, '\n'}
 	jobs := &fakeJobs{job: controlapi.Job{Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1"}}}, file: contents}
-	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs).Handler
+	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs, nil).Handler
 	get := func(target string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodGet, target, nil)
 		request.Header.Set("Authorization", "Bearer "+credential)
@@ -417,7 +417,7 @@ func TestSandboxFileResponseContract(t *testing.T) {
 func TestJobWatchEmitsChangedSnapshotsAndStopsOnServerShutdown(t *testing.T) {
 	credential := "dcr_control-client"
 	jobs := &fakeJobs{job: controlapi.Job{ID: "job-1", Kind: "direct", Model: "first", Sandboxes: []controlapi.Sandbox{}}}
-	api := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs)
+	api := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs, nil)
 
 	open := func(lastID string) (*streamResponse, context.CancelFunc, <-chan struct{}) {
 		t.Helper()
@@ -484,7 +484,7 @@ func TestJobWatchReauthenticatesNoLaterThanCredentialExpiry(t *testing.T) {
 	credential := "dcr_expiring-client"
 	auth := &fakeAuth{credential: credential, client: controlauth.Client{CredentialExpiresAt: time.Now().Add(100 * time.Millisecond)}}
 	jobs := &fakeJobs{job: controlapi.Job{ID: "job-1", Kind: "direct", Sandboxes: []controlapi.Sandbox{}}}
-	api := controlapi.NewServer(controlapi.Discovery{}, auth, jobs)
+	api := controlapi.NewServer(controlapi.Discovery{}, auth, jobs, nil)
 	request := httptest.NewRequest(http.MethodGet, "/v1/jobs/job-1/watch", nil)
 	request.Header.Set("Authorization", "Bearer "+credential)
 	request.Header.Set("Accept", "text/event-stream")
@@ -519,7 +519,7 @@ func TestJobWatchReturnsAuthenticationProblemWhenCredentialExpiresBeforeStreamin
 	request.Header.Set("Accept", "text/event-stream")
 	response := httptest.NewRecorder()
 
-	controlapi.NewServer(controlapi.Discovery{}, auth, jobs).Handler.ServeHTTP(response, request)
+	controlapi.NewServer(controlapi.Discovery{}, auth, jobs, nil).Handler.ServeHTTP(response, request)
 
 	requireProblem(t, response, http.StatusUnauthorized, "unauthenticated")
 }
@@ -858,7 +858,7 @@ func TestNonExpiringClientWatchStillHasAuthenticationDeadline(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer "+credential)
 	request.Header.Set("Accept", "text/event-stream")
 	before := time.Now()
-	controlapi.NewServer(controlapi.Discovery{}, auth, jobs).Handler.ServeHTTP(httptest.NewRecorder(), request)
+	controlapi.NewServer(controlapi.Discovery{}, auth, jobs, nil).Handler.ServeHTTP(httptest.NewRecorder(), request)
 	after := time.Now()
 	if jobs.deadline.Before(before.Add(time.Minute)) || jobs.deadline.After(after.Add(time.Minute)) {
 		t.Fatalf("non-expiring Client watch deadline=%v, want one minute authentication lifetime", jobs.deadline)
@@ -874,7 +874,7 @@ func (j *fakeJobs) WriteSandboxFile(_ context.Context, sandboxID, name string, c
 func TestSandboxFileWriteContract(t *testing.T) {
 	credential := "dcr_control-client"
 	jobs := &fakeJobs{}
-	api := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs)
+	api := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs, nil)
 	put := func(token, contentType, condition, content string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodPut, "/v1/sandboxes/sandbox-1/files?path=SOUL.md", strings.NewReader(content))
 		request.Header.Set("Authorization", "Bearer "+token)

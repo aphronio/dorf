@@ -20,6 +20,7 @@
   "tags": [
     { "name": "Discovery" },
     { "name": "Authentication" },
+    { "name": "Profiles" },
     { "name": "Jobs" },
     { "name": "Messages" },
     { "name": "Sandboxes" }
@@ -110,6 +111,25 @@
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/Identity" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/profiles": {
+      "get": {
+        "operationId": "listProfiles",
+        "summary": "List Sandbox profiles available for Job selection",
+        "description": "Returns all configured profiles in name order, including unverified profiles. Verification reflects stored proof for the current definition, not a live availability check. Infrastructure configuration and credentials remain private.",
+        "tags": ["Profiles"],
+        "responses": {
+          "200": {
+            "description": "Narrow Sandbox profile summaries",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ProfileList" }
               }
             }
           },
@@ -718,7 +738,7 @@
             "type": "array",
             "items": { "type": "string" },
             "uniqueItems": true,
-            "description": "Supported feature names for this Deployment. Clients must ignore names they do not recognize; openapi identifies this document and job_list identifies paginated Job listing."
+            "description": "Supported feature names for this Deployment. Clients must ignore names they do not recognize; openapi identifies this document, job_list identifies paginated Job listing, and profile_list identifies Sandbox profile discovery."
           },
           "links": { "$ref": "#/components/schemas/DiscoveryLinks" }
         }
@@ -772,6 +792,33 @@
         "properties": {
           "principal": { "$ref": "#/components/schemas/Principal" },
           "client": { "$ref": "#/components/schemas/Client" }
+        }
+      },
+      "ProfileSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "provider", "harness", "default", "verified"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "provider": { "type": "string", "enum": ["incus", "e2b"] },
+          "harness": { "type": "string", "enum": ["codex", "pi"] },
+          "default": { "type": "boolean" },
+          "verified": {
+            "type": "boolean",
+            "description": "Stored verification matches the current profile definition and contract, and its probe and cleanup completed without an error. This is not a live readiness check or a guarantee that Job admission will succeed."
+          }
+        }
+      },
+      "ProfileList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["profiles"],
+        "properties": {
+          "profiles": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/ProfileSummary" },
+            "description": "All configured profiles sorted by name; an empty deployment returns an empty array."
+          }
         }
       },
       "AdmitDirectJobRequest": {

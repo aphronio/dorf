@@ -100,7 +100,7 @@ func (s AdmissionService) admitNew(ctx context.Context, request AdmissionRequest
 	profile, err := profileapp.SelectVerified(ctx, s.store, admission.SandboxProfile)
 	if err != nil {
 		if admission.SandboxProfile != "" {
-			return core.Job{}, false, fmt.Errorf("%w: %v", ErrInvalidAdmission, err)
+			return core.Job{}, false, fmt.Errorf("%w: %w", ErrInvalidAdmission, err)
 		}
 		return core.Job{}, false, err
 	}

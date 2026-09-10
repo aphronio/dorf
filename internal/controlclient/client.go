@@ -207,6 +207,12 @@ func (c *Client) Job(ctx context.Context, id string) (controlapi.JobView, error)
 	return response.JobView, err
 }
 
+func (c *Client) ListProfiles(ctx context.Context) (controlapi.ProfileList, error) {
+	var list controlapi.ProfileList
+	err := c.do(ctx, http.MethodGet, []string{"v1", "profiles"}, nil, true, "", &list)
+	return list, err
+}
+
 // ListJobs retrieves one bounded page of immutable Job references. A zero
 // limit asks the server to apply its default.
 func (c *Client) ListJobs(ctx context.Context, limit int, cursor string) (controlapi.JobList, error) {

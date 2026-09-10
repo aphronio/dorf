@@ -53,6 +53,11 @@ func remoteCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 		return true, connectCommand(ctx, args[1:], os.Stdin, stdout, stderr)
 	case "auth":
 		return true, authCommand(ctx, args[1:], stdout, stderr)
+	case "profile":
+		if len(args) > 1 && args[1] == "list" {
+			return true, remoteProfileList(ctx, args[2:], stdout, stderr)
+		}
+		return false, nil
 	case "job":
 		return true, remoteJobCommand(ctx, args[1:], stdout, stderr)
 	case "sandbox", "run", "workflow":
@@ -861,6 +866,9 @@ func problemCode(err error, code string) bool {
 }
 
 func jobControlError(deploymentURL string, err error) error {
+	if problemCode(err, "profile_not_found") {
+		return fmt.Errorf("Sandbox profile not found; run dorf profile list to choose an available profile: %w", err)
+	}
 	if err == nil || deploymentURL != hostclientconfig.HostOrigin {
 		return err
 	}
@@ -970,6 +978,9 @@ func (a controlAPIJobs) AdmitDirect(ctx context.Context, clientID, key string, i
 	if errors.Is(err, direct.ErrAdmissionConflict) {
 		return controlapi.DirectJob{}, false, controlapi.ErrIdempotencyConflict
 	}
+	if errors.Is(err, postgres.ErrProfileNotFound) {
+		return controlapi.DirectJob{}, false, controlapi.ErrProfileNotFound
+	}
 	if errors.Is(err, direct.ErrInvalidAdmission) {
 		return controlapi.DirectJob{}, false, fmt.Errorf("%w: %v", controlapi.ErrInvalidInput, err)
 	}
@@ -990,6 +1001,9 @@ func (a controlAPIJobs) AdmitCoding(ctx context.Context, clientID, key string, i
 	if errors.Is(err, coding.ErrAdmissionConflict) {
 		return controlapi.CodingJob{}, false, controlapi.ErrIdempotencyConflict
 	}
+	if errors.Is(err, postgres.ErrProfileNotFound) {
+		return controlapi.CodingJob{}, false, controlapi.ErrProfileNotFound
+	}
 	if errors.Is(err, coding.ErrInvalidAdmission) {
 		return controlapi.CodingJob{}, false, fmt.Errorf("%w: %v", controlapi.ErrInvalidInput, err)
 	}
@@ -1009,6 +1023,9 @@ func (a controlAPIJobs) AdmitInvestigation(ctx context.Context, clientID, key st
 	})
 	if errors.Is(err, investigation.ErrAdmissionConflict) {
 		return controlapi.InvestigationJob{}, false, controlapi.ErrIdempotencyConflict
+	}
+	if errors.Is(err, postgres.ErrProfileNotFound) {
+		return controlapi.InvestigationJob{}, false, controlapi.ErrProfileNotFound
 	}
 	if errors.Is(err, investigation.ErrInvalidAdmission) {
 		return controlapi.InvestigationJob{}, false, fmt.Errorf("%w: %v", controlapi.ErrInvalidInput, err)
@@ -1646,8 +1663,8 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 	}
 	server := controlapi.NewServer(controlapi.Discovery{
 		Product: "dorf", Version: version.Version,
-		Capabilities: []string{"direct_jobs", "coding_jobs", "codebase_investigation_jobs", "job_list", "job_watch", "messages", "message_interrupt", "job_retry", "job_abandon", "sandbox_files", "evidence"},
-	}, auth, jobs)
+		Capabilities: []string{"direct_jobs", "coding_jobs", "codebase_investigation_jobs", "job_list", "profile_list", "job_watch", "messages", "message_interrupt", "job_retry", "job_abandon", "sandbox_files", "evidence"},
+	}, auth, jobs, controlAPIProfiles{store: store})
 	serverCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	done := make(chan struct{})

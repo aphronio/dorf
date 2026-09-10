@@ -310,6 +310,9 @@ managed Compose project. A remote client machine needs only the Dorf CLI, the HT
 origin printed by guided setup or supplied by the operator, and one short-lived Enrollment; it does
 not run `dorf setup`.
 
+Remote Clients can discover Sandbox profiles for Job selection; profile administration stays on
+the deployment host.
+
 The Control API service listens on container port `8745`. Guided Cloudflare reaches it over the
 Compose ingress network and prints that origin; custom operator-owned HTTPS ingress reaches the
 published host port `8745`. The Provider Gateway uses the separate model origin prepared by setup,
@@ -342,6 +345,19 @@ For non-interactive enrollment, put only the code in a protected file and pass
 `--enrollment-file PATH`, or use `--enrollment-file -` to read it from standard input. The CLI keeps
 one normalized Deployment URL and its client-generated credential in a dedicated owner-only file;
 there are no named contexts or context switching.
+
+List the deployment's Sandbox profiles before choosing one:
+
+```bash
+dorf profile list
+dorf profile list --output json
+```
+
+The list includes the provider, Harness, default status, and recorded verification status. It does
+not run a live readiness check. Select a verified name with `--profile NAME`, or omit `--profile`
+to use the deployment default. An unknown name returns `profile_not_found`; list again to choose a
+current name. The same listing commands work on the deployment host through its enrolled Client.
+`profile show NAME` remains a deployment-host command for inspecting the full configuration.
 
 Save the complete prompt in `goal.txt`, then use the same CLI to admit a direct Job and perform the
 operations needed for this walkthrough:

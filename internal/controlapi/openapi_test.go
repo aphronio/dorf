@@ -19,7 +19,7 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 		Product: "dorf", Version: "test", Capabilities: []string{controlapi.OpenAPICapability},
 		Links: controlapi.OpenAPIDiscoveryLinks(),
 	}
-	server := controlapi.NewServer(discovery, nil, nil)
+	server := controlapi.NewServer(discovery, nil, nil, nil)
 	publication := httptest.NewRecorder()
 	server.Handler.ServeHTTP(publication, httptest.NewRequest(http.MethodGet, controlapi.OpenAPIPath, nil))
 	if publication.Code != http.StatusOK || publication.Header().Get("Content-Type") != "application/json" || !bytes.Equal(publication.Body.Bytes(), controlapi.OpenAPIDocument()) {
@@ -46,6 +46,7 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 		"/v1/openapi.json":            {"get"},
 		"/v1/auth/enrollments/redeem": {"post"},
 		"/v1/me":                      {"get"},
+		"/v1/profiles":                {"get"},
 		"/v1/jobs":                    {"get", "post"},
 		"/v1/workflows/coding/jobs":   {"post"},
 		"/v1/workflows/codebase-investigation/jobs": {"post"},
@@ -110,6 +111,7 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 	}
 
 	assertRef(t, document, "#/components/schemas/JobList", "paths", "/v1/jobs", "get", "responses", "200", "content", "application/json", "schema", "$ref")
+	assertRef(t, document, "#/components/schemas/ProfileList", "paths", "/v1/profiles", "get", "responses", "200", "content", "application/json", "schema", "$ref")
 	assertRef(t, document, "#/components/schemas/Job", "paths", "/v1/jobs/{job}/abandon", "put", "responses", "200", "content", "application/json", "schema", "$ref")
 	assertRef(t, document, "#/components/schemas/Job", "paths", "/v1/jobs/{job}/watch", "get", "responses", "200", "content", "text/event-stream", "x-dorf-event", "dataSchema", "$ref")
 	assertRef(t, document, "#/components/schemas/Problem", "components", "responses", "Problem", "content", "application/problem+json", "schema", "$ref")

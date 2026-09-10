@@ -170,7 +170,7 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	}}}
 	api := controlapi.NewServer(controlapi.Discovery{
 		Product: "dorf", Version: "test", Capabilities: []string{"direct_jobs"},
-	}, auth, jobs)
+	}, auth, jobs, nil)
 	originalTransport := http.DefaultTransport
 	var admissionAttempts []string
 	var messageAttempts, retryAttempts []string

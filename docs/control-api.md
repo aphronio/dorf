@@ -5,8 +5,9 @@ machine-readable authority is the embedded OpenAPI 3.1 document served by that D
 `GET /v1/openapi.json`; discovery at `GET /v1` links to it and advertises supported capabilities.
 
 This is a projection of Dorf's existing Job custody, not a network serialization of Core. A Job is
-the long-running resource. PostgreSQL rows, Absurd tasks, AgentRuns, Threads, Turns, Actions,
-providers, Harnesses, Profiles, and integration credentials are not public resources.
+the long-running resource. Clients can also discover narrow Sandbox profile summaries for Job
+selection. PostgreSQL rows, Absurd tasks, AgentRuns, Threads, Turns, Actions, providers, Harnesses,
+profile configuration, and integration credentials are not public resources.
 
 ## Client and authentication boundary
 
@@ -53,6 +54,20 @@ Deployment serves that same OpenAPI document at `GET /v1/openapi.json`; discover
 links to it. Use the document served by the Deployment when generating a client or making direct
 HTTP calls. The prose below explains behavior that clients need to handle, but it is not an
 operation or schema inventory.
+
+Authenticated Clients can list all configured Sandbox profiles with `dorf profile list`, including
+`--output json` for automation. Discovery advertises this operation as `profile_list`. The response
+contains each profile's name, Sandbox provider, Harness, default status, and `verified` flag, sorted
+by name. Empty deployments return an empty array. Credentials, artifacts, Gateway URLs, host
+configuration, and verification diagnostics remain private. Profile creation, inspection of full
+configuration, verification, updates, and default selection remain deployment-host operations.
+
+`verified` reports whether stored proof matches the current definition and verification contract,
+with a completed probe and cleanup and no recorded error. Listing performs no live provider or model
+check and does not guarantee admission or execution. A profile may change between listing and Job
+admission; admission remains authoritative. An unknown explicit profile returns the
+`profile_not_found` Problem, and the CLI directs the caller to `dorf profile list`. Exact Job replay
+continues to use the admitted profile without rechecking its current verification eligibility.
 
 Job listing is newest-first keyset traversal of current facts, not a frozen snapshot. `limit`
 defaults to 50 and accepts 1–100. Each item includes `id`, `kind`, `admitted_at`, and creator attribution;

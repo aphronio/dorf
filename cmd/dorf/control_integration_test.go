@@ -449,7 +449,7 @@ values($1,$2,'https://github.com/aphronio/dorf.git',$3)
 		}
 	})
 
-	handler := controlapi.NewServer(controlapi.Discovery{Product: "dorf"}, auth, controlAPIJobs{store: store}).Handler
+	handler := controlapi.NewServer(controlapi.Discovery{Product: "dorf"}, auth, controlAPIJobs{store: store}, controlAPIProfiles{store: store}).Handler
 	unsupported := controlTestRequest(t, handler, http.MethodGet, "/v1/jobs/"+fixtures[4].id, credential, "", nil)
 	var unsupportedProblem controlapi.Problem
 	controlTestJSON(t, unsupported, http.StatusNotFound, &unsupportedProblem)
@@ -612,7 +612,7 @@ func controlTestHandlerWithGitHub(store postgres.Store, tasks *absurd.Client, pr
 			codingAdmissions:        coding.NewAdmissionService(store, queueName, reader, reader),
 			investigationAdmissions: investigation.NewAdmissionService(store, queueName, reader),
 			reader:                  reader, evidence: evidence,
-		}).Handler
+		}, controlAPIProfiles{store: store}).Handler
 }
 
 type controlTestGitHub struct {

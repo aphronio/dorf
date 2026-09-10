@@ -13,6 +13,7 @@ import (
 
 var (
 	ErrInvalidInput         = errors.New("invalid control API input")
+	ErrProfileNotFound      = errors.New("control API Sandbox profile not found")
 	ErrInvalidCursor        = errors.New("invalid control API Job cursor")
 	ErrJobNotFound          = errors.New("control API Job not found")
 	ErrMessageNotFound      = errors.New("control API Message not found")
@@ -50,6 +51,22 @@ type Client struct {
 type Identity struct {
 	Principal Principal `json:"principal"`
 	Client    Client    `json:"client"`
+}
+
+type ProfileSummary struct {
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+	Harness  string `json:"harness"`
+	Default  bool   `json:"default"`
+	Verified bool   `json:"verified"`
+}
+
+type ProfileList struct {
+	Profiles []ProfileSummary `json:"profiles"`
+}
+
+type Profiles interface {
+	List(context.Context) (ProfileList, error)
 }
 
 type RedeemRequest struct {

@@ -14,17 +14,18 @@ without rebuilding it in a new agent framework. Dorf keeps custody of controlled
 including recovery, external effects, retained results, and requested cleanup.
 
 ```text
-Deployment-host CLI       Remote clients       Native workflows
-        |                       |                      |
- loopback HTTP        operator HTTPS ingress   in-process composition
-        |                       |                      |
-        +-----------------------+-----------+----------+
-                                            v
-                                    Dorf deployment
-        durable execution and recovery
-                      |
-                      v
-       Sandbox providers x agent Harnesses
+  Deployment-host CLI         Remote clients          Native workflows
+           |                        |                        |
+     loopback HTTP        operator HTTPS ingress   in-process composition
+           |                        |                        |
+           +------------------------+------------------------+
+                                    |
+                                    v
+                             Dorf deployment
+                      durable execution and recovery
+                                    |
+                                    v
+                   Sandbox providers x agent Harnesses
 ```
 
 Dorf is a stateful, self-hosted control plane, not an agent framework or an embeddable runtime SDK.

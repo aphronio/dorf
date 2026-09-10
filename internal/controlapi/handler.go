@@ -35,6 +35,7 @@ type handler struct {
 	discovery Discovery
 	auth      Auth
 	jobs      Jobs
+	profiles  Profiles
 	mux       *http.ServeMux
 	redeem    redemptionLimiter
 	shutdown  context.Context
@@ -42,12 +43,13 @@ type handler struct {
 
 type authenticatedRoute func(http.ResponseWriter, *http.Request, controlauth.Client)
 
-func newHandlerContext(discovery Discovery, auth Auth, jobs Jobs, shutdown context.Context) http.Handler {
-	h := &handler{discovery: discovery, auth: auth, jobs: jobs, mux: http.NewServeMux(), shutdown: shutdown}
+func newHandlerContext(discovery Discovery, auth Auth, jobs Jobs, profiles Profiles, shutdown context.Context) http.Handler {
+	h := &handler{discovery: discovery, auth: auth, jobs: jobs, profiles: profiles, mux: http.NewServeMux(), shutdown: shutdown}
 	h.mux.HandleFunc("/v1", h.discoveryRoute)
 	h.mux.HandleFunc(OpenAPIPath, h.openAPIRoute)
 	h.mux.HandleFunc("/v1/auth/enrollments/redeem", h.redeemRoute)
 	h.mux.HandleFunc("/v1/me", h.authenticate(h.meRoute))
+	h.mux.HandleFunc("/v1/profiles", h.authenticate(h.profilesRoute))
 	h.mux.HandleFunc("/v1/jobs", h.authenticate(h.jobsRoute))
 	h.mux.HandleFunc("/v1/workflows/coding/jobs", h.authenticate(h.admitCodingRoute))
 	h.mux.HandleFunc("/v1/workflows/codebase-investigation/jobs", h.authenticate(h.admitInvestigationRoute))
@@ -67,13 +69,13 @@ func newHandlerContext(discovery Discovery, auth Auth, jobs Jobs, shutdown conte
 	return h
 }
 
-func NewServer(discovery Discovery, auth Auth, jobs Jobs) *http.Server {
+func NewServer(discovery Discovery, auth Auth, jobs Jobs, profiles Profiles) *http.Server {
 	discovery.Links = OpenAPIDiscoveryLinks()
 	if !slices.Contains(discovery.Capabilities, OpenAPICapability) {
 		discovery.Capabilities = append(discovery.Capabilities, OpenAPICapability)
 	}
 	shutdown, cancel := context.WithCancel(context.Background())
-	server := &http.Server{Handler: newHandlerContext(discovery, auth, jobs, shutdown), ReadHeaderTimeout: 10 * time.Second,
+	server := &http.Server{Handler: newHandlerContext(discovery, auth, jobs, profiles, shutdown), ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: maxHeaderBytes}
 	server.RegisterOnShutdown(cancel)
 	return server
@@ -100,6 +102,18 @@ func (h *handler) openAPIRoute(w http.ResponseWriter, r *http.Request) {
 	if h.exact(w, r, http.MethodGet, false) {
 		h.replyJSON(w, http.StatusOK, OpenAPIDocument())
 	}
+}
+
+func (h *handler) profilesRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
+	if !h.exact(w, r, http.MethodGet, false) {
+		return
+	}
+	profiles, err := h.profiles.List(r.Context())
+	if err != nil {
+		h.serviceError(w, r, err)
+		return
+	}
+	h.reply(w, http.StatusOK, profiles)
 }
 
 func (h *handler) redeemRoute(w http.ResponseWriter, r *http.Request) {
@@ -685,6 +699,10 @@ func (h *handler) serviceError(w http.ResponseWriter, r *http.Request, err error
 		h.fail(w, problem(code))
 		return
 	}
+	if code := admissionProblemCode(err); code != "" {
+		h.fail(w, problem(code))
+		return
+	}
 	var value Problem
 	switch {
 	case errors.Is(err, controlauth.ErrUnauthenticated):
@@ -694,8 +712,6 @@ func (h *handler) serviceError(w http.ResponseWriter, r *http.Request, err error
 		value = problem("enrollment_unavailable")
 	case errors.Is(err, controlauth.ErrClientConflict):
 		value = problem("client_conflict")
-	case errors.Is(err, controlauth.ErrInvalidInput), errors.Is(err, ErrInvalidInput):
-		value = problem("invalid_input")
 	case errors.Is(err, ErrInvalidCursor):
 		value = problem("invalid_cursor")
 	case errors.Is(err, ErrJobNotFound):
@@ -717,13 +733,24 @@ func (h *handler) serviceError(w http.ResponseWriter, r *http.Request, err error
 	case errors.Is(err, ErrEvidenceUnverified):
 		log.Printf("Dorf control API Evidence verification failure: method=%s path=%q error_type=%T", r.Method, r.URL.Path, err)
 		value = problem("evidence_unverified")
-	case errors.Is(err, ErrIdempotencyConflict):
-		value = problem("idempotency_conflict")
 	default:
 		log.Printf("Dorf control API internal failure: method=%s path=%q error_type=%T", r.Method, r.URL.Path, err)
 		value = problem("internal_error")
 	}
 	h.fail(w, value)
+}
+
+func admissionProblemCode(err error) string {
+	switch {
+	case errors.Is(err, ErrProfileNotFound):
+		return "profile_not_found"
+	case errors.Is(err, controlauth.ErrInvalidInput), errors.Is(err, ErrInvalidInput):
+		return "invalid_input"
+	case errors.Is(err, ErrIdempotencyConflict):
+		return "idempotency_conflict"
+	default:
+		return ""
+	}
 }
 
 func messageProblemCode(err error) string {
