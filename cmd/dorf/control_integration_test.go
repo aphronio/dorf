@@ -56,7 +56,7 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	}
 
 	key := fmt.Sprintf("control-api-replay-%d", time.Now().UnixNano())
-	input := controlapi.AdmitJobRequest{AgentsMD: "prove remote durable replay", AIConnection: "primary", Model: "model-test", Reasoning: "high"}
+	input := controlapi.AdmitJobRequest{ClientReference: "agent0:conversation:example", AgentsMD: "prove remote durable replay", AIConnection: "primary", Model: "model-test", Reasoning: "high"}
 	// The response is deliberately discarded after the handler commits, matching
 	// a client that cannot know whether its first request succeeded.
 	lost := controlTestRequest(t, first, http.MethodPost, "/v1/jobs", credential, key, input)
@@ -82,6 +82,54 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	if err != nil || replayed.ID != committed.ID || afterReplay.CurrentTaskID != committed.CurrentTaskID {
 		t.Fatalf("replay Job=%#v durable=%#v err=%v", replayed, afterReplay, err)
 	}
+
+	creator, err := auth.Authenticate(ctx, credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.CreatedByClient == nil || replayed.CreatedByClient.ID != creator.ID || replayed.CreatedByClient.Name != profileName || replayed.ClientReference != input.ClientReference {
+		t.Fatalf("replayed attribution=%+v reference=%q", replayed.CreatedByClient, replayed.ClientReference)
+	}
+	secondCredential, err := controlauth.GenerateCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.IssueKey(ctx, "other-client", secondCredential); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.Revoke(ctx, creator.ID); err != nil {
+		t.Fatal(err)
+	}
+	credential = secondCredential
+	crossClientReplay := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs", credential, key, input)
+	controlTestJSON(t, crossClientReplay, http.StatusOK, &replayed)
+	if replayed.CreatedByClient == nil || replayed.CreatedByClient.ID != creator.ID || replayed.CreatedByClient.Name != profileName {
+		t.Fatalf("replay reassigned revoked creator: %+v", replayed.CreatedByClient)
+	}
+	var listed controlapi.JobList
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs?limit=100", credential, "", nil), http.StatusOK, &listed)
+	found := false
+	for _, item := range listed.Jobs {
+		if item.ID == committed.ID {
+			found = true
+			if item.CreatedByClient == nil || *item.CreatedByClient != *replayed.CreatedByClient || item.ClientReference != input.ClientReference {
+				t.Fatalf("listed attribution=%+v", item)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("attributed Job missing from index")
+	}
+	changedReference := input
+	changedReference.ClientReference = "another-thread"
+	var referenceConflict controlapi.Problem
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs", credential, key, changedReference), http.StatusConflict, &referenceConflict)
+	if referenceConflict.Code != "idempotency_conflict" {
+		t.Fatalf("reference conflict=%+v", referenceConflict)
+	}
+	spoof := map[string]any{"created_by_client": map[string]string{"id": creator.ID, "name": profileName}}
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs", credential, key+"-spoof", spoof), http.StatusBadRequest, &referenceConflict)
+
 	var problem controlapi.Problem
 
 	messageKey := fmt.Sprintf("control-message-%d", time.Now().UnixNano())
@@ -230,14 +278,14 @@ func TestControlAPIWorkflowAdmissionsProjectAndReplay(t *testing.T) {
 	}
 
 	codingKey := fmt.Sprintf("control-coding-%d", time.Now().UnixNano())
-	codingInput := controlapi.AdmitCodingJobRequest{
+	codingInput := controlapi.AdmitCodingJobRequest{ClientReference: "coding-task",
 		Repository: "https://github.com/aphronio/dorf.git",
 		Revision:   strings.Repeat("a", 40), BaseBranch: "main", Profile: profileName, AIConnection: "primary", Model: "model-test",
 	}
 	codingResponse := controlTestRequest(t, handler, http.MethodPost, "/v1/workflows/coding/jobs", credential, codingKey, codingInput)
 	var codingJob controlapi.CodingJob
 	controlTestJSON(t, codingResponse, http.StatusCreated, &codingJob)
-	if codingJob.Kind != controlapi.JobKindCoding ||
+	if codingJob.CreatedByClient == nil || codingJob.CreatedByClient.Name != profileName || codingJob.ClientReference != "coding-task" || codingJob.Kind != controlapi.JobKindCoding ||
 		codingJob.Branch != "dorf/"+core.JobID(codingKey) || codingJob.StartingRevision != codingInput.Revision ||
 		codingJob.Revision != codingInput.Revision || codingJob.WorkflowRevision == "" || codingJob.Outcome != nil {
 		t.Fatalf("coding Job=%#v", codingJob)
@@ -272,14 +320,14 @@ func TestControlAPIWorkflowAdmissionsProjectAndReplay(t *testing.T) {
 	}
 
 	investigationKey := fmt.Sprintf("control-investigation-%d", time.Now().UnixNano())
-	investigationInput := controlapi.AdmitInvestigationJobRequest{
+	investigationInput := controlapi.AdmitInvestigationJobRequest{ClientReference: "investigation-task",
 		Repository: "https://github.com/aphronio/dorf.git",
 		Revision:   strings.Repeat("b", 40), Profile: profileName, AIConnection: "primary", Model: "model-test",
 	}
 	investigationResponse := controlTestRequest(t, restarted, http.MethodPost, "/v1/workflows/codebase-investigation/jobs", credential, investigationKey, investigationInput)
 	var investigationJob controlapi.InvestigationJob
 	controlTestJSON(t, investigationResponse, http.StatusCreated, &investigationJob)
-	if investigationJob.Kind != controlapi.JobKindInvestigation ||
+	if investigationJob.CreatedByClient == nil || investigationJob.CreatedByClient.Name != profileName || investigationJob.ClientReference != "investigation-task" || investigationJob.Kind != controlapi.JobKindInvestigation ||
 		investigationJob.Source.Repository != investigationInput.Repository || investigationJob.Source.Revision != investigationInput.Revision ||
 		investigationJob.Report.Path != "REPORT.md" || investigationJob.Report.SandboxID == "" {
 		t.Fatalf("investigation Job=%#v", investigationJob)

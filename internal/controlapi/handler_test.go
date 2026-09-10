@@ -685,14 +685,14 @@ func (j *fakeJobs) List(_ context.Context, limit int, cursor string) (controlapi
 	return j.list, j.listErr
 }
 
-func (j *fakeJobs) AdmitDirect(_ context.Context, _ string, input controlapi.AdmitJobRequest) (controlapi.DirectJob, bool, error) {
+func (j *fakeJobs) AdmitDirect(_ context.Context, _ string, _ string, input controlapi.AdmitJobRequest) (controlapi.DirectJob, bool, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.gotInput = input
 	return controlapi.DirectJob{Job: j.job}, true, nil
 }
 
-func (j *fakeJobs) AdmitCoding(_ context.Context, _ string, input controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, bool, error) {
+func (j *fakeJobs) AdmitCoding(_ context.Context, _ string, _ string, input controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, bool, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.codingInput = input
@@ -700,7 +700,7 @@ func (j *fakeJobs) AdmitCoding(_ context.Context, _ string, input controlapi.Adm
 	return job, true, nil
 }
 
-func (j *fakeJobs) AdmitInvestigation(_ context.Context, _ string, input controlapi.AdmitInvestigationJobRequest) (controlapi.InvestigationJob, bool, error) {
+func (j *fakeJobs) AdmitInvestigation(_ context.Context, _ string, _ string, input controlapi.AdmitInvestigationJobRequest) (controlapi.InvestigationJob, bool, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.investigationInput = input

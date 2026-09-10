@@ -110,6 +110,14 @@ insert into dorf.agent_runs(id,job_id,message_id,role,state,sandbox_id) values('
 	if err := migrateDorf(ctx, tx); err != nil {
 		t.Fatalf("baseline replay: %v", err)
 	}
+	var creatorID sql.NullString
+	var reference string
+	if err := tx.QueryRowContext(ctx, `select created_by_client_id,client_reference from dorf.jobs where id='job-current'`).Scan(&creatorID, &reference); err != nil || creatorID.Valid || reference != "" {
+		t.Fatalf("legacy attribution was invented: creator=%v reference=%q err=%v", creatorID, reference, err)
+	}
+	if err := migrateDorf(ctx, tx); err != nil {
+		t.Fatalf("attribution migration replay: %v", err)
+	}
 	var retainedInput string
 	if err := tx.QueryRowContext(ctx, `select input from dorf.job_messages where id='message-current'`).Scan(&retainedInput); err != nil || retainedInput != "run direct caller intent" {
 		t.Fatalf("original Message changed during migration: %q err=%v", retainedInput, err)

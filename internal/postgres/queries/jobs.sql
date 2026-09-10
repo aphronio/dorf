@@ -1,5 +1,6 @@
 -- name: GetJob :one
-select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
+select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(creator.name,'') as created_by_client_name,j.client_reference,
+       j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(j.workflow_attention,'') as workflow_attention,
@@ -7,14 +8,17 @@ select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        j.workflow_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
        j.admitted_at,j.cleaned_at
 from dorf.jobs j
+left join dorf.control_clients creator on creator.id=j.created_by_client_id
 left join lateral (
     select task_id from dorf.job_tasks where job_id=j.id order by sequence desc limit 1
 ) current_task on true
 where j.id=sqlc.arg(job_id);
 
 -- name: ListSupportedJobs :many
-select j.id,j.workflow_name,j.workflow_revision,j.admitted_at
+select j.id,j.workflow_name,j.workflow_revision,j.admitted_at,
+       coalesce(j.created_by_client_id,'') as created_by_client_id,coalesce(creator.name,'') as created_by_client_name,j.client_reference
 from dorf.jobs j
+left join dorf.control_clients creator on creator.id=j.created_by_client_id
 where (
         (j.workflow_name='' and j.workflow_revision='') or
         (j.workflow_name=sqlc.arg(coding_workflow)::text and j.workflow_revision=sqlc.arg(coding_revision)::text) or
@@ -33,7 +37,8 @@ order by j.admitted_at desc,j.id desc
 limit sqlc.arg(page_size);
 
 -- name: GetCodingJob :one
-select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
+select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(creator.name,'') as created_by_client_name,j.client_reference,
+       j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        c.repository,c.starting_revision,c.revision,c.branch,
        c.github_repository,c.github_installation_id,c.base_branch,
        j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
@@ -43,6 +48,7 @@ select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        j.workflow_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
        j.admitted_at,j.cleaned_at
 from dorf.jobs j
+left join dorf.control_clients creator on creator.id=j.created_by_client_id
 join dorf.coding_to_proposal_inputs c on c.job_id=j.id
 left join lateral (
     select task_id from dorf.job_tasks where job_id=j.id order by sequence desc limit 1
@@ -82,12 +88,12 @@ where job_id=sqlc.arg(job_id) and revision=sqlc.arg(comparison_base_oid);
 
 -- name: InsertAdmittedJob :execrows
 insert into dorf.jobs(
-    id,admission_key,workflow_name,workflow_revision,agents_md,
+    id,admission_key,workflow_name,workflow_revision,agents_md,created_by_client_id,client_reference,
     sandbox_profile,provider_connection,model,reasoning_effort
 )
 values(
     sqlc.arg(id),sqlc.arg(admission_key),sqlc.arg(workflow_name),sqlc.arg(workflow_revision),
-    sqlc.arg(agents_md),
+    sqlc.arg(agents_md),nullif(sqlc.arg(created_by_client_id)::text,''),sqlc.arg(client_reference),
     sqlc.arg(sandbox_profile),sqlc.arg(provider_connection),sqlc.arg(model),
     sqlc.arg(reasoning_effort)
 )
@@ -95,7 +101,7 @@ on conflict(admission_key) do nothing;
 
 -- name: GetAdmittedJobForUpdate :one
 select id,admission_key,workflow_name,workflow_revision,agents_md,sandbox_profile,provider_connection,
-       model,reasoning_effort
+       model,reasoning_effort,client_reference
 from dorf.jobs
 where admission_key=sqlc.arg(admission_key)
 for update;
@@ -135,7 +141,8 @@ where id=sqlc.arg(job_id)
 for update;
 
 -- name: GetJobForSandboxActionAuthorization :one
-select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
+select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(creator.name,'') as created_by_client_name,j.client_reference,
+       j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(current_task.task_name,'') as current_task_name,
@@ -144,6 +151,7 @@ select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        j.workflow_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
        j.admitted_at,j.cleaned_at
 from dorf.jobs j
+left join dorf.control_clients creator on creator.id=j.created_by_client_id
 left join lateral (
     select task_id,task_name from dorf.job_tasks where job_id=j.id order by sequence desc limit 1
 ) current_task on true

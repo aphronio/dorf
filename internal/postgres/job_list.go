@@ -14,10 +14,13 @@ import (
 // ListedJob is the narrow durable identity needed by the remote Job index.
 // Full Job state remains available through the canonical single-Job read.
 type ListedJob struct {
-	ID               string
-	Workflow         core.WorkflowName
-	WorkflowRevision string
-	AdmittedAt       time.Time
+	CreatedByClientID   string
+	CreatedByClientName string
+	ClientReference     string
+	ID                  string
+	Workflow            core.WorkflowName
+	WorkflowRevision    string
+	AdmittedAt          time.Time
 }
 
 // ListSupportedJobs returns current public Job identities strictly before the
@@ -30,14 +33,14 @@ func (s Store) ListSupportedJobs(ctx context.Context, limit int, cursorAt time.T
 		return nil, fmt.Errorf("Job list cursor requires both admitted time and Job ID")
 	}
 	rows, err := dbsql.New(s.DB).ListSupportedJobs(ctx, dbsql.ListSupportedJobsParams{
-		CodingWorkflow:          string(coding.Workflow),
-		CodingRevision:          coding.WorkflowRevision,
-		InvestigationWorkflow:   string(investigation.Workflow),
-		InvestigationRevision:   investigation.WorkflowRevision,
-		HasCursor:               cursorID != "",
-		CursorAdmittedAt:        cursorAt,
-		CursorID:                cursorID,
-		PageSize:                int32(limit),
+		CodingWorkflow:        string(coding.Workflow),
+		CodingRevision:        coding.WorkflowRevision,
+		InvestigationWorkflow: string(investigation.Workflow),
+		InvestigationRevision: investigation.WorkflowRevision,
+		HasCursor:             cursorID != "",
+		CursorAdmittedAt:      cursorAt,
+		CursorID:              cursorID,
+		PageSize:              int32(limit),
 	})
 	if err != nil {
 		return nil, err
@@ -45,6 +48,7 @@ func (s Store) ListSupportedJobs(ctx context.Context, limit int, cursorAt time.T
 	jobs := make([]ListedJob, 0, len(rows))
 	for _, row := range rows {
 		jobs = append(jobs, ListedJob{
+			CreatedByClientID: row.CreatedByClientID, CreatedByClientName: row.CreatedByClientName, ClientReference: row.ClientReference,
 			ID: row.ID, Workflow: row.WorkflowName, WorkflowRevision: row.WorkflowRevision, AdmittedAt: row.AdmittedAt,
 		})
 	}

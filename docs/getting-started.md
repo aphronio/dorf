@@ -365,6 +365,11 @@ dorf job abandon JOB_ID
 dorf job cleanup JOB_ID
 ```
 
+Use `--client-reference REFERENCE` with `dorf run` or either `dorf workflow run` command to
+attach your thread or task reference. `dorf job list` and `dorf job inspect` show the creating
+Client and reference. An older Job shows an unknown creator. Use that information when choosing
+cleanup targets; attribution does not request cleanup or define a retention policy.
+
 To delegate a documented built-in workflow instead, save its complete input in a file and use its
 typed admission command:
 

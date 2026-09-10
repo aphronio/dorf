@@ -47,6 +47,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D109: Export diagnostics through the existing native Turn binding](decisions/D109-exact-turn-execution-diagnostics.md) (`current`). Changing native execution diagnostics, attribution, or exporter custody.
 - [D110: Separate Job setup from Message delivery](decisions/D110-separate-job-setup-from-messages.md) (`current`). Changing Job creation, workspace instructions, or Message admission.
 - [D111: Workspace files own live Codex instructions](decisions/D111-workspace-files-own-live-codex-instructions.md) (`current`). Changing workspace instruction editing or Codex context loading.
+- [D112: Jobs retain authenticated Client attribution](decisions/D112-jobs-retain-authenticated-client-attribution.md) (`current`). Changing Job attribution, admission replay, or operator cleanup inspection.
 
 ## Workflows
 
@@ -171,6 +172,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D108: Reuse direct Jobs for retained sessions and exact message control](decisions/D108-direct-session-message-control.md) (`current`). Changing automatic message intent, interruption, or direct Job session continuity.
 - [D110: Separate Job setup from Message delivery](decisions/D110-separate-job-setup-from-messages.md) (`current`). Changing Job creation, workspace instructions, or Message admission.
 - [D111: Workspace files own live Codex instructions](decisions/D111-workspace-files-own-live-codex-instructions.md) (`current`). Changing workspace instruction editing or Codex context loading.
+- [D112: Jobs retain authenticated Client attribution](decisions/D112-jobs-retain-authenticated-client-attribution.md) (`current`). Changing Job attribution, admission replay, or operator cleanup inspection.
 
 ## Deployment and setup
 

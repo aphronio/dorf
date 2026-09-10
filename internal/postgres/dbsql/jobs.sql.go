@@ -54,7 +54,7 @@ func (q *Queries) ClearWorkflowAttention(ctx context.Context, arg ClearWorkflowA
 
 const getAdmittedJobForUpdate = `-- name: GetAdmittedJobForUpdate :one
 select id,admission_key,workflow_name,workflow_revision,agents_md,sandbox_profile,provider_connection,
-       model,reasoning_effort
+       model,reasoning_effort,client_reference
 from dorf.jobs
 where admission_key=$1
 for update
@@ -70,6 +70,7 @@ type GetAdmittedJobForUpdateRow struct {
 	ProviderConnection string
 	Model              string
 	ReasoningEffort    string
+	ClientReference    string
 }
 
 func (q *Queries) GetAdmittedJobForUpdate(ctx context.Context, admissionKey string) (GetAdmittedJobForUpdateRow, error) {
@@ -85,12 +86,14 @@ func (q *Queries) GetAdmittedJobForUpdate(ctx context.Context, admissionKey stri
 		&i.ProviderConnection,
 		&i.Model,
 		&i.ReasoningEffort,
+		&i.ClientReference,
 	)
 	return i, err
 }
 
 const getCodingJob = `-- name: GetCodingJob :one
-select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
+select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(creator.name,'') as created_by_client_name,j.client_reference,
+       j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        c.repository,c.starting_revision,c.revision,c.branch,
        c.github_repository,c.github_installation_id,c.base_branch,
        j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
@@ -100,6 +103,7 @@ select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        j.workflow_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
        j.admitted_at,j.cleaned_at
 from dorf.jobs j
+left join dorf.control_clients creator on creator.id=j.created_by_client_id
 join dorf.coding_to_proposal_inputs c on c.job_id=j.id
 left join lateral (
     select task_id from dorf.job_tasks where job_id=j.id order by sequence desc limit 1
@@ -108,6 +112,9 @@ where j.id=$1
 `
 
 type GetCodingJobRow struct {
+	CreatedByClientID       string
+	CreatedByClientName     string
+	ClientReference         string
 	ID                      string
 	AdmissionKey            string
 	WorkflowName            core.WorkflowName
@@ -139,6 +146,9 @@ func (q *Queries) GetCodingJob(ctx context.Context, jobID string) (GetCodingJobR
 	row := q.db.QueryRowContext(ctx, getCodingJob, jobID)
 	var i GetCodingJobRow
 	err := row.Scan(
+		&i.CreatedByClientID,
+		&i.CreatedByClientName,
+		&i.ClientReference,
 		&i.ID,
 		&i.AdmissionKey,
 		&i.WorkflowName,
@@ -238,7 +248,8 @@ func (q *Queries) GetCurrentJobTaskForUpdate(ctx context.Context, jobID string) 
 }
 
 const getJob = `-- name: GetJob :one
-select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
+select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(creator.name,'') as created_by_client_name,j.client_reference,
+       j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(j.workflow_attention,'') as workflow_attention,
@@ -246,6 +257,7 @@ select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        j.workflow_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
        j.admitted_at,j.cleaned_at
 from dorf.jobs j
+left join dorf.control_clients creator on creator.id=j.created_by_client_id
 left join lateral (
     select task_id from dorf.job_tasks where job_id=j.id order by sequence desc limit 1
 ) current_task on true
@@ -253,6 +265,9 @@ where j.id=$1
 `
 
 type GetJobRow struct {
+	CreatedByClientID       string
+	CreatedByClientName     string
+	ClientReference         string
 	ID                      string
 	AdmissionKey            string
 	WorkflowName            core.WorkflowName
@@ -277,6 +292,9 @@ func (q *Queries) GetJob(ctx context.Context, jobID string) (GetJobRow, error) {
 	row := q.db.QueryRowContext(ctx, getJob, jobID)
 	var i GetJobRow
 	err := row.Scan(
+		&i.CreatedByClientID,
+		&i.CreatedByClientName,
+		&i.ClientReference,
 		&i.ID,
 		&i.AdmissionKey,
 		&i.WorkflowName,
@@ -329,7 +347,8 @@ func (q *Queries) GetJobAdmissionForUpdate(ctx context.Context, jobID string) (G
 }
 
 const getJobForSandboxActionAuthorization = `-- name: GetJobForSandboxActionAuthorization :one
-select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
+select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(creator.name,'') as created_by_client_name,j.client_reference,
+       j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(current_task.task_name,'') as current_task_name,
@@ -338,6 +357,7 @@ select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        j.workflow_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
        j.admitted_at,j.cleaned_at
 from dorf.jobs j
+left join dorf.control_clients creator on creator.id=j.created_by_client_id
 left join lateral (
     select task_id,task_name from dorf.job_tasks where job_id=j.id order by sequence desc limit 1
 ) current_task on true
@@ -346,6 +366,9 @@ for update of j
 `
 
 type GetJobForSandboxActionAuthorizationRow struct {
+	CreatedByClientID       string
+	CreatedByClientName     string
+	ClientReference         string
 	ID                      string
 	AdmissionKey            string
 	WorkflowName            core.WorkflowName
@@ -371,6 +394,9 @@ func (q *Queries) GetJobForSandboxActionAuthorization(ctx context.Context, jobID
 	row := q.db.QueryRowContext(ctx, getJobForSandboxActionAuthorization, jobID)
 	var i GetJobForSandboxActionAuthorizationRow
 	err := row.Scan(
+		&i.CreatedByClientID,
+		&i.CreatedByClientName,
+		&i.ClientReference,
 		&i.ID,
 		&i.AdmissionKey,
 		&i.WorkflowName,
@@ -457,14 +483,14 @@ func (q *Queries) GetRevisionJobForUpdate(ctx context.Context, jobID string) (Ge
 
 const insertAdmittedJob = `-- name: InsertAdmittedJob :execrows
 insert into dorf.jobs(
-    id,admission_key,workflow_name,workflow_revision,agents_md,
+    id,admission_key,workflow_name,workflow_revision,agents_md,created_by_client_id,client_reference,
     sandbox_profile,provider_connection,model,reasoning_effort
 )
 values(
     $1,$2,$3,$4,
-    $5,
-    $6,$7,$8,
-    $9
+    $5,nullif($6::text,''),$7,
+    $8,$9,$10,
+    $11
 )
 on conflict(admission_key) do nothing
 `
@@ -475,6 +501,8 @@ type InsertAdmittedJobParams struct {
 	WorkflowName       core.WorkflowName
 	WorkflowRevision   string
 	AgentsMd           string
+	CreatedByClientID  string
+	ClientReference    string
 	SandboxProfile     string
 	ProviderConnection string
 	Model              string
@@ -488,6 +516,8 @@ func (q *Queries) InsertAdmittedJob(ctx context.Context, arg InsertAdmittedJobPa
 		arg.WorkflowName,
 		arg.WorkflowRevision,
 		arg.AgentsMd,
+		arg.CreatedByClientID,
+		arg.ClientReference,
 		arg.SandboxProfile,
 		arg.ProviderConnection,
 		arg.Model,
@@ -699,8 +729,10 @@ func (q *Queries) ListRevisions(ctx context.Context, jobID string) ([]ListRevisi
 }
 
 const listSupportedJobs = `-- name: ListSupportedJobs :many
-select j.id,j.workflow_name,j.workflow_revision,j.admitted_at
+select j.id,j.workflow_name,j.workflow_revision,j.admitted_at,
+       coalesce(j.created_by_client_id,'') as created_by_client_id,coalesce(creator.name,'') as created_by_client_name,j.client_reference
 from dorf.jobs j
+left join dorf.control_clients creator on creator.id=j.created_by_client_id
 where (
         (j.workflow_name='' and j.workflow_revision='') or
         (j.workflow_name=$1::text and j.workflow_revision=$2::text) or
@@ -731,10 +763,13 @@ type ListSupportedJobsParams struct {
 }
 
 type ListSupportedJobsRow struct {
-	ID               string
-	WorkflowName     core.WorkflowName
-	WorkflowRevision string
-	AdmittedAt       time.Time
+	ID                  string
+	WorkflowName        core.WorkflowName
+	WorkflowRevision    string
+	AdmittedAt          time.Time
+	CreatedByClientID   string
+	CreatedByClientName string
+	ClientReference     string
 }
 
 func (q *Queries) ListSupportedJobs(ctx context.Context, arg ListSupportedJobsParams) ([]ListSupportedJobsRow, error) {
@@ -760,6 +795,9 @@ func (q *Queries) ListSupportedJobs(ctx context.Context, arg ListSupportedJobsPa
 			&i.WorkflowName,
 			&i.WorkflowRevision,
 			&i.AdmittedAt,
+			&i.CreatedByClientID,
+			&i.CreatedByClientName,
+			&i.ClientReference,
 		); err != nil {
 			return nil, err
 		}

@@ -55,11 +55,23 @@ HTTP calls. The prose below explains behavior that clients need to handle, but i
 operation or schema inventory.
 
 Job listing is newest-first keyset traversal of current facts, not a frozen snapshot. `limit`
-defaults to 50 and accepts 1–100. Each item is deliberately only `id`, `kind`, and `admitted_at`;
+defaults to 50 and accepts 1–100. Each item includes `id`, `kind`, `admitted_at`, and creator attribution;
 read the Job for mutable execution and cleanup state. Pass `next_cursor` back unchanged. Cursors are
 opaque, and malformed or altered cursors return the published `invalid_cursor` Problem. The index
 contains only Job kinds understood by this API revision. Investigation admission requires a
 credential-free reachable HTTPS repository and an exact Revision.
+
+Job admission records the authenticated Client as `created_by_client`, with its ID and name.
+Inspection, watch, and listing expose that creator even after credential expiry or revocation.
+Older Jobs and internal admissions without a Client return null. Replaying an admission with another
+Client preserves the original creator, including an unknown creator. Attribution does not restrict
+which Jobs another authenticated deployment Client can inspect or clean up.
+
+Callers may supply `client_reference` to correlate a Job with a thread or task. It is an opaque,
+optional string; omission and empty mean no reference. Dorf retains it exactly and includes it in
+admission replay equality, so changing it with the same idempotency key returns a conflict. It
+carries no authority and must not contain credentials. The API derives creator identity from bearer
+authentication and rejects caller-supplied creator fields.
 
 Job creation prepares its execution configuration and resources without starting a conversation.
 All input, including the first, uses Message admission. Direct clients may supply workspace

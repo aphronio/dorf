@@ -210,6 +210,7 @@ type authStatusReceipt struct {
 func remoteRun(ctx context.Context, client *controlclient.Client, deploymentURL string, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("run", flag.ContinueOnError)
 	set.SetOutput(stderr)
+	clientReference := set.String("client-reference", "", "optional caller thread or task reference")
 	key := set.String("key", "", "stable request identity for explicit replay")
 	inputFile := set.String("input-file", "", "path containing the first Message")
 	agentsFile := set.String("agents-file", "", "path containing initial workspace AGENTS.md")
@@ -243,7 +244,8 @@ func remoteRun(ctx context.Context, client *controlclient.Client, deploymentURL 
 		}
 	}
 	request := controlapi.AdmitJobRequest{
-		AgentsMD: agentsMD, Profile: strings.TrimSpace(*profileName), AIConnection: strings.TrimSpace(*connection), Model: strings.TrimSpace(*model), Reasoning: strings.TrimSpace(*effort),
+		ClientReference: *clientReference,
+		AgentsMD:        agentsMD, Profile: strings.TrimSpace(*profileName), AIConnection: strings.TrimSpace(*connection), Model: strings.TrimSpace(*model), Reasoning: strings.TrimSpace(*effort),
 	}
 	job, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Admission may have succeeded.", func() (controlapi.DirectJob, error) {
 		return client.AdmitJob(ctx, requestKey, request)
@@ -291,6 +293,7 @@ func remoteWorkflowCommand(ctx context.Context, client *controlclient.Client, de
 func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, deploymentURL string, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("workflow run coding", flag.ContinueOnError)
 	set.SetOutput(stderr)
+	clientReference := set.String("client-reference", "", "optional caller thread or task reference")
 	key := set.String("key", "", "stable request identity for explicit replay")
 	inputFile := set.String("input-file", "", "path containing the first Message")
 	repository := set.String("repo", "", "credential-free GitHub clone URL")
@@ -320,7 +323,8 @@ func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, dep
 		return err
 	}
 	request := controlapi.AdmitCodingJobRequest{
-		Repository: *repository, Revision: *revision, BaseBranch: *base, Branch: *branch,
+		ClientReference: *clientReference,
+		Repository:      *repository, Revision: *revision, BaseBranch: *base, Branch: *branch,
 		Profile: *profile, AIConnection: *connection, Model: *model, Reasoning: *reasoning,
 	}
 	job, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Admission may have succeeded.", func() (controlapi.CodingJob, error) {
@@ -348,6 +352,7 @@ func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, dep
 func remoteInvestigationWorkflow(ctx context.Context, client *controlclient.Client, deploymentURL string, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("workflow run codebase-investigation", flag.ContinueOnError)
 	set.SetOutput(stderr)
+	clientReference := set.String("client-reference", "", "optional caller thread or task reference")
 	key := set.String("key", "", "stable request identity for explicit replay")
 	inputFile := set.String("input-file", "", "path containing the Message")
 	repository := set.String("repo", "", "credential-free HTTPS repository URL")
@@ -375,7 +380,8 @@ func remoteInvestigationWorkflow(ctx context.Context, client *controlclient.Clie
 		return err
 	}
 	request := controlapi.AdmitInvestigationJobRequest{
-		Repository: *repository, Revision: *revision,
+		ClientReference: *clientReference,
+		Repository:      *repository, Revision: *revision,
 		Profile: *profile, AIConnection: *connection, Model: *model, Reasoning: *reasoning,
 	}
 	job, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Admission may have succeeded.", func() (controlapi.InvestigationJob, error) {
@@ -710,6 +716,7 @@ type remoteJobReceipt struct {
 
 func renderRemoteJob(output io.Writer, view controlapi.JobView) {
 	job := view.Common()
+	renderJobAttribution(output, job.CreatedByClient, job.ClientReference)
 	fmt.Fprintf(output, "  profile: %s\n  model: %q (%s)\n  admission: %s\n  execution: %s\n  cleanup: %s\n",
 		job.Profile, job.Model, job.Reasoning, openClosed(job.Admission.Open), job.Execution.State, job.Cleanup.State)
 	if job.Attention != nil {
@@ -952,11 +959,13 @@ func classifyControlJob(workflow core.WorkflowName, revision string) (controlJob
 	}
 }
 
-func (a controlAPIJobs) AdmitDirect(ctx context.Context, key string, input controlapi.AdmitJobRequest) (controlapi.DirectJob, bool, error) {
+func (a controlAPIJobs) AdmitDirect(ctx context.Context, clientID, key string, input controlapi.AdmitJobRequest) (controlapi.DirectJob, bool, error) {
 	admission, err := newControlJobAdmission(key, input.AgentsMD, input.Profile, input.AIConnection, input.Model, input.Reasoning)
 	if err != nil {
 		return controlapi.DirectJob{}, false, err
 	}
+	admission.CreatedByClientID = clientID
+	admission.ClientReference = input.ClientReference
 	job, created, err := a.directAdmissions.Admit(ctx, admission)
 	if errors.Is(err, direct.ErrAdmissionConflict) {
 		return controlapi.DirectJob{}, false, controlapi.ErrIdempotencyConflict
@@ -971,8 +980,9 @@ func (a controlAPIJobs) AdmitDirect(ctx context.Context, key string, input contr
 	return view, created, err
 }
 
-func (a controlAPIJobs) AdmitCoding(ctx context.Context, key string, input controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, bool, error) {
+func (a controlAPIJobs) AdmitCoding(ctx context.Context, clientID, key string, input controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, bool, error) {
 	job, created, err := a.codingAdmissions.Admit(ctx, coding.AdmissionRequest{
+		CreatedByClientID: clientID, ClientReference: input.ClientReference,
 		AdmissionKey: key, SandboxProfile: input.Profile, Model: input.Model,
 		ProviderConnection: input.AIConnection, ReasoningEffort: input.Reasoning, Repository: input.Repository, Revision: input.Revision,
 		Branch: input.Branch, BaseBranch: input.BaseBranch,
@@ -990,8 +1000,9 @@ func (a controlAPIJobs) AdmitCoding(ctx context.Context, key string, input contr
 	return view, created, err
 }
 
-func (a controlAPIJobs) AdmitInvestigation(ctx context.Context, key string, input controlapi.AdmitInvestigationJobRequest) (controlapi.InvestigationJob, bool, error) {
+func (a controlAPIJobs) AdmitInvestigation(ctx context.Context, clientID, key string, input controlapi.AdmitInvestigationJobRequest) (controlapi.InvestigationJob, bool, error) {
 	job, created, err := a.investigationAdmissions.Admit(ctx, investigation.AdmissionRequest{
+		CreatedByClientID: clientID, ClientReference: input.ClientReference,
 		AdmissionKey: key, SandboxProfile: input.Profile, Model: input.Model,
 		ProviderConnection: input.AIConnection, ReasoningEffort: input.Reasoning,
 		Source: investigation.Source{Repository: input.Repository, Revision: input.Revision},
@@ -1544,6 +1555,13 @@ func (a controlAPIJobs) projectInvestigation(ctx context.Context, job core.Job) 
 	}, nil
 }
 
+func publicJobCreator(id, name string) *controlapi.JobCreator {
+	if id == "" {
+		return nil
+	}
+	return &controlapi.JobCreator{ID: id, Name: name}
+}
+
 func publicCommonJob(job core.Job, kind, executionState string, attention *controlapi.Attention, taskState absurd.TaskResultState, owned []core.Sandbox) (controlapi.Job, error) {
 	if executionState == "" {
 		return controlapi.Job{}, fmt.Errorf("Job %s has an incomplete public projection", job.ID)
@@ -1577,6 +1595,7 @@ func publicCommonJob(job core.Job, kind, executionState string, attention *contr
 		sandboxes = append(sandboxes, controlapi.Sandbox{ID: sandbox.ID, Name: sandbox.Name})
 	}
 	return controlapi.Job{
+		CreatedByClient: publicJobCreator(job.CreatedByClientID, job.CreatedByClientName), ClientReference: job.ClientReference,
 		ID: job.ID, Kind: kind, Profile: job.SandboxProfile,
 		Model: job.Model, Reasoning: job.ReasoningEffort,
 		Admission: controlapi.Admission{Open: job.AdmissionOpen}, Execution: controlapi.State{State: executionState},
@@ -1688,4 +1707,15 @@ func controlListenAddress(address string, allowContainerListen bool) (netip.Addr
 		return parsed, nil
 	}
 	return netip.AddrPort{}, fmt.Errorf("control API listen address must use an exact loopback IP; only --allow-container-listen permits 0.0.0.0 for container port publishing")
+}
+
+func renderJobAttribution(output io.Writer, creator *controlapi.JobCreator, reference string) {
+	if creator == nil {
+		fmt.Fprintln(output, "  created by: unknown")
+	} else {
+		fmt.Fprintf(output, "  created by: %s (%s)\n", creator.Name, creator.ID)
+	}
+	if reference != "" {
+		fmt.Fprintf(output, "  client reference: %q\n", reference)
+	}
 }

@@ -35,7 +35,7 @@ const (
 	AbsurdSchemaSHA256  = "d34309370c539f3a51f2b36b69b1f77551f8e4a14480a1c8def8bb8f40fd9aab"
 )
 
-var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql"}
+var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql"}
 
 type Store struct{ DB *sql.DB }
 
@@ -388,6 +388,7 @@ func (s Store) Job(ctx context.Context, id string) (core.Job, error) {
 		return core.Job{}, err
 	}
 	return core.Job{
+		CreatedByClientID: row.CreatedByClientID, CreatedByClientName: row.CreatedByClientName, ClientReference: row.ClientReference,
 		ID: row.ID, AdmissionKey: row.AdmissionKey, Workflow: core.WorkflowName(row.WorkflowName), WorkflowRevision: row.WorkflowRevision,
 		AgentsMD:       row.AgentsMd,
 		SandboxProfile: row.SandboxProfile, ProviderConnection: row.ProviderConnection,
@@ -417,6 +418,7 @@ func (s Store) CodingJob(ctx context.Context, id string) (coding.Job, error) {
 	}
 	return coding.Job{
 		Job: core.Job{
+			CreatedByClientID: row.CreatedByClientID, CreatedByClientName: row.CreatedByClientName, ClientReference: row.ClientReference,
 			ID: row.ID, AdmissionKey: row.AdmissionKey, Workflow: core.WorkflowName(row.WorkflowName), WorkflowRevision: row.WorkflowRevision,
 			AgentsMD: row.AgentsMd, SandboxProfile: row.SandboxProfile, ProviderConnection: row.ProviderConnection,
 			Model: row.Model, ReasoningEffort: row.ReasoningEffort, AdmissionOpen: row.AdmissionOpen, CleanupState: core.CleanupState(row.CleanupState),
@@ -1108,6 +1110,7 @@ func authorizeSandboxActionTx(ctx context.Context, queries *dbsql.Queries, id, t
 	}
 	return core.SandboxActionAuthorization{
 		Job: core.Job{
+			CreatedByClientID: job.CreatedByClientID, CreatedByClientName: job.CreatedByClientName, ClientReference: job.ClientReference,
 			ID: job.ID, AdmissionKey: job.AdmissionKey, Workflow: job.WorkflowName, WorkflowRevision: job.WorkflowRevision, AgentsMD: job.AgentsMd,
 			SandboxProfile: job.SandboxProfile, ProviderConnection: job.ProviderConnection, Model: job.Model, ReasoningEffort: job.ReasoningEffort,
 			AdmissionOpen: job.AdmissionOpen, CleanupState: job.CleanupState, CurrentTaskID: job.CurrentTaskID,

@@ -778,6 +778,7 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "client_reference": { "type": "string", "maxLength": 255, "description": "Optional opaque caller thread or task reference; retained at admission. Empty means no reference." },
           "agents_md": { "type": "string", "maxLength": 1048576, "description": "Initial workspace AGENTS.md, installed before the Harness starts" },
           "profile": { "type": "string", "description": "Named verified profile; omitted or empty selects the Deployment default" },
           "ai_connection": { "type": "string", "description": "Named AI connection; omitted or empty selects the Deployment default" },
@@ -790,6 +791,7 @@
         "additionalProperties": false,
         "required": ["repository", "revision", "base_branch"],
         "properties": {
+          "client_reference": { "type": "string", "maxLength": 255, "description": "Optional opaque caller thread or task reference; retained at admission. Empty means no reference." },
           "repository": { "type": "string", "minLength": 1 },
           "revision": { "$ref": "#/components/schemas/GitCommitOID" },
           "base_branch": { "type": "string", "minLength": 1 },
@@ -805,6 +807,7 @@
         "additionalProperties": false,
         "required": ["repository", "revision"],
         "properties": {
+          "client_reference": { "type": "string", "maxLength": 255, "description": "Optional opaque caller thread or task reference; retained at admission. Empty means no reference." },
           "repository": {
             "type": "string",
             "format": "uri",
@@ -835,11 +838,22 @@
           }
         }
       },
+      "JobCreator": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 }
+        }
+      },
       "JobSummary": {
         "type": "object",
         "additionalProperties": false,
         "required": ["id", "kind", "admitted_at"],
         "properties": {
+          "client_reference": { "type": "string", "maxLength": 255, "description": "Optional opaque caller thread or task reference; retained at admission. Empty means no reference." },
+          "created_by_client": { "oneOf": [{ "$ref": "#/components/schemas/JobCreator" }, { "type": "null" }], "description": "Authenticated creator of the first admission; null for unattributed Jobs. Revoked Clients remain identifiable." },
           "id": { "type": "string", "minLength": 1 },
           "kind": { "$ref": "#/components/schemas/JobKind" },
           "admitted_at": { "type": "string", "format": "date-time" }
@@ -879,6 +893,8 @@
         "type": "object",
         "required": ["id", "kind", "profile", "model", "reasoning", "admission", "execution", "attention", "cleanup", "sandboxes"],
         "properties": {
+          "client_reference": { "type": "string", "maxLength": 255, "description": "Optional opaque caller thread or task reference; retained at admission. Empty means no reference." },
+          "created_by_client": { "oneOf": [{ "$ref": "#/components/schemas/JobCreator" }, { "type": "null" }], "description": "Authenticated creator of the first admission; null for unattributed Jobs. Revoked Clients remain identifiable." },
           "id": { "type": "string", "minLength": 1 },
           "kind": { "$ref": "#/components/schemas/JobKind" },
           "profile": { "type": "string", "minLength": 1 },

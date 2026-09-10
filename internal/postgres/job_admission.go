@@ -19,6 +19,9 @@ func normalizeCoreAdmission(input core.JobAdmission) (core.JobAdmission, error) 
 	input.ProviderConnection = strings.TrimSpace(input.ProviderConnection)
 	input.Model = strings.TrimSpace(input.Model)
 	input.ReasoningEffort = strings.TrimSpace(input.ReasoningEffort)
+	if !core.ValidClientReference(input.ClientReference) {
+		return core.JobAdmission{}, fmt.Errorf("invalid client reference")
+	}
 	if (input.Workflow == "") != (input.WorkflowRevision == "") {
 		return core.JobAdmission{}, fmt.Errorf("workflow name and revision must either both be absent or both be present")
 	}
@@ -50,6 +53,7 @@ func admitJob(ctx context.Context, store Store, coreInput core.JobAdmission, que
 			return core.Job{}, false, err
 		}
 		rows, err = queries.InsertAdmittedJob(ctx, dbsql.InsertAdmittedJobParams{
+			CreatedByClientID: coreInput.CreatedByClientID, ClientReference: coreInput.ClientReference,
 			ID: id, AdmissionKey: coreInput.AdmissionKey, WorkflowName: coreInput.Workflow, WorkflowRevision: coreInput.WorkflowRevision,
 			AgentsMd: coreInput.AgentsMD, SandboxProfile: coreInput.SandboxProfile, ProviderConnection: coreInput.ProviderConnection,
 			Model: coreInput.Model, ReasoningEffort: coreInput.ReasoningEffort,
@@ -63,11 +67,15 @@ func admitJob(ctx context.Context, store Store, coreInput core.JobAdmission, que
 		return core.Job{}, false, err
 	}
 	storedCore := core.JobAdmission{
-		AdmissionKey: storedRow.AdmissionKey, Workflow: core.WorkflowName(storedRow.WorkflowName), WorkflowRevision: storedRow.WorkflowRevision,
+		ClientReference: storedRow.ClientReference,
+		AdmissionKey:    storedRow.AdmissionKey, Workflow: core.WorkflowName(storedRow.WorkflowName), WorkflowRevision: storedRow.WorkflowRevision,
 		AgentsMD: storedRow.AgentsMd, SandboxProfile: storedRow.SandboxProfile, ProviderConnection: storedRow.ProviderConnection,
 		Model: storedRow.Model, ReasoningEffort: storedRow.ReasoningEffort,
 	}
-	if storedRow.ID != id || storedCore != coreInput {
+	// A replay may come from another Client; only the first admission records its creator.
+	comparison := coreInput
+	comparison.CreatedByClientID = ""
+	if storedRow.ID != id || storedCore != comparison {
 		return core.Job{}, false, fmt.Errorf("%w: %q", ErrAdmissionConflict, coreInput.AdmissionKey)
 	}
 	sandboxID := core.MainSandboxName(id)

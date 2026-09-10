@@ -144,6 +144,9 @@ func (p SandboxProfile) CurrentDefinitionHash() string {
 }
 
 type Job struct {
+	CreatedByClientID       string       `json:"created_by_client_id,omitempty"`
+	CreatedByClientName     string       `json:"created_by_client_name,omitempty"`
+	ClientReference         string       `json:"client_reference,omitempty"`
 	ID                      string       `json:"id"`
 	AdmissionKey            string       `json:"admission_key"`
 	Workflow                WorkflowName `json:"workflow"`

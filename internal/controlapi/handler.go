@@ -171,19 +171,19 @@ func (h *handler) meRoute(w http.ResponseWriter, r *http.Request, client control
 	}
 }
 
-func (h *handler) jobsRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
+func (h *handler) jobsRoute(w http.ResponseWriter, r *http.Request, client controlauth.Client) {
 	switch r.Method {
 	case http.MethodGet:
 		h.jobListRoute(w, r)
 	case http.MethodPost:
-		h.admitDirectRoute(w, r)
+		h.admitDirectRoute(w, r, client)
 	default:
 		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
 		h.fail(w, problem("method_not_allowed"))
 	}
 }
 
-func (h *handler) admitDirectRoute(w http.ResponseWriter, r *http.Request) {
+func (h *handler) admitDirectRoute(w http.ResponseWriter, r *http.Request, client controlauth.Client) {
 	if !h.exact(w, r, http.MethodPost, true) {
 		return
 	}
@@ -195,7 +195,7 @@ func (h *handler) admitDirectRoute(w http.ResponseWriter, r *http.Request) {
 	if !h.decode(w, r, &input) {
 		return
 	}
-	job, created, err := h.jobs.AdmitDirect(r.Context(), key, input)
+	job, created, err := h.jobs.AdmitDirect(r.Context(), client.ID, key, input)
 	if err != nil {
 		h.serviceError(w, r, err)
 		return
@@ -203,7 +203,7 @@ func (h *handler) admitDirectRoute(w http.ResponseWriter, r *http.Request) {
 	h.jobResponseStatus(w, r, job, nil, createdStatus(created))
 }
 
-func (h *handler) admitCodingRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
+func (h *handler) admitCodingRoute(w http.ResponseWriter, r *http.Request, client controlauth.Client) {
 	if !h.exact(w, r, http.MethodPost, true) {
 		return
 	}
@@ -215,7 +215,7 @@ func (h *handler) admitCodingRoute(w http.ResponseWriter, r *http.Request, _ con
 	if !h.decode(w, r, &input) {
 		return
 	}
-	job, created, err := h.jobs.AdmitCoding(r.Context(), key, input)
+	job, created, err := h.jobs.AdmitCoding(r.Context(), client.ID, key, input)
 	if err != nil {
 		h.serviceError(w, r, err)
 		return
@@ -223,7 +223,7 @@ func (h *handler) admitCodingRoute(w http.ResponseWriter, r *http.Request, _ con
 	h.jobResponseStatus(w, r, job, nil, createdStatus(created))
 }
 
-func (h *handler) admitInvestigationRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
+func (h *handler) admitInvestigationRoute(w http.ResponseWriter, r *http.Request, client controlauth.Client) {
 	if !h.exact(w, r, http.MethodPost, true) {
 		return
 	}
@@ -235,7 +235,7 @@ func (h *handler) admitInvestigationRoute(w http.ResponseWriter, r *http.Request
 	if !h.decode(w, r, &input) {
 		return
 	}
-	job, created, err := h.jobs.AdmitInvestigation(r.Context(), key, input)
+	job, created, err := h.jobs.AdmitInvestigation(r.Context(), client.ID, key, input)
 	if err != nil {
 		h.serviceError(w, r, err)
 		return

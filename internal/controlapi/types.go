@@ -59,31 +59,34 @@ type RedeemRequest struct {
 }
 
 type AdmitJobRequest struct {
-	AgentsMD     string `json:"agents_md,omitempty"`
-	Profile      string `json:"profile"`
-	AIConnection string `json:"ai_connection,omitempty"`
-	Model        string `json:"model,omitempty"`
-	Reasoning    string `json:"reasoning,omitempty"`
+	ClientReference string `json:"client_reference,omitempty"`
+	AgentsMD        string `json:"agents_md,omitempty"`
+	Profile         string `json:"profile"`
+	AIConnection    string `json:"ai_connection,omitempty"`
+	Model           string `json:"model,omitempty"`
+	Reasoning       string `json:"reasoning,omitempty"`
 }
 
 type AdmitCodingJobRequest struct {
-	Repository   string `json:"repository"`
-	Revision     string `json:"revision"`
-	BaseBranch   string `json:"base_branch"`
-	Branch       string `json:"branch,omitempty"`
-	Profile      string `json:"profile,omitempty"`
-	AIConnection string `json:"ai_connection,omitempty"`
-	Model        string `json:"model,omitempty"`
-	Reasoning    string `json:"reasoning,omitempty"`
+	ClientReference string `json:"client_reference,omitempty"`
+	Repository      string `json:"repository"`
+	Revision        string `json:"revision"`
+	BaseBranch      string `json:"base_branch"`
+	Branch          string `json:"branch,omitempty"`
+	Profile         string `json:"profile,omitempty"`
+	AIConnection    string `json:"ai_connection,omitempty"`
+	Model           string `json:"model,omitempty"`
+	Reasoning       string `json:"reasoning,omitempty"`
 }
 
 type AdmitInvestigationJobRequest struct {
-	Repository   string `json:"repository"`
-	Revision     string `json:"revision"`
-	Profile      string `json:"profile,omitempty"`
-	AIConnection string `json:"ai_connection,omitempty"`
-	Model        string `json:"model,omitempty"`
-	Reasoning    string `json:"reasoning,omitempty"`
+	ClientReference string `json:"client_reference,omitempty"`
+	Repository      string `json:"repository"`
+	Revision        string `json:"revision"`
+	Profile         string `json:"profile,omitempty"`
+	AIConnection    string `json:"ai_connection,omitempty"`
+	Model           string `json:"model,omitempty"`
+	Reasoning       string `json:"reasoning,omitempty"`
 }
 
 const (
@@ -92,12 +95,19 @@ const (
 	JobKindInvestigation = "codebase-investigation"
 )
 
+type JobCreator struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // JobSummary is the deliberately narrow representation returned by the Job
 // index. Mutable execution and cleanup state belong to canonical Job reads.
 type JobSummary struct {
-	ID         string    `json:"id"`
-	Kind       string    `json:"kind"`
-	AdmittedAt time.Time `json:"admitted_at"`
+	CreatedByClient *JobCreator `json:"created_by_client"`
+	ClientReference string      `json:"client_reference"`
+	ID              string      `json:"id"`
+	Kind            string      `json:"kind"`
+	AdmittedAt      time.Time   `json:"admitted_at"`
 }
 
 type JobList struct {
@@ -108,16 +118,18 @@ type JobList struct {
 // Job contains only the fields common to every supported public Job kind.
 // Canonical reads return one of the concrete JobView implementations below.
 type Job struct {
-	ID        string     `json:"id"`
-	Kind      string     `json:"kind"`
-	Profile   string     `json:"profile"`
-	Model     string     `json:"model"`
-	Reasoning string     `json:"reasoning"`
-	Admission Admission  `json:"admission"`
-	Execution State      `json:"execution"`
-	Attention *Attention `json:"attention"`
-	Cleanup   State      `json:"cleanup"`
-	Sandboxes []Sandbox  `json:"sandboxes"`
+	CreatedByClient *JobCreator `json:"created_by_client"`
+	ClientReference string      `json:"client_reference"`
+	ID              string      `json:"id"`
+	Kind            string      `json:"kind"`
+	Profile         string      `json:"profile"`
+	Model           string      `json:"model"`
+	Reasoning       string      `json:"reasoning"`
+	Admission       Admission   `json:"admission"`
+	Execution       State       `json:"execution"`
+	Attention       *Attention  `json:"attention"`
+	Cleanup         State       `json:"cleanup"`
+	Sandboxes       []Sandbox   `json:"sandboxes"`
 }
 
 // JobView is the closed discriminated union returned by Job inspection and
@@ -274,9 +286,9 @@ type Auth interface {
 // purpose-built public snapshots.
 type Jobs interface {
 	List(context.Context, int, string) (JobList, error)
-	AdmitDirect(context.Context, string, AdmitJobRequest) (DirectJob, bool, error)
-	AdmitCoding(context.Context, string, AdmitCodingJobRequest) (CodingJob, bool, error)
-	AdmitInvestigation(context.Context, string, AdmitInvestigationJobRequest) (InvestigationJob, bool, error)
+	AdmitDirect(context.Context, string, string, AdmitJobRequest) (DirectJob, bool, error)
+	AdmitCoding(context.Context, string, string, AdmitCodingJobRequest) (CodingJob, bool, error)
+	AdmitInvestigation(context.Context, string, string, AdmitInvestigationJobRequest) (InvestigationJob, bool, error)
 	Get(context.Context, string) (JobView, error)
 	SendMessage(context.Context, string, string, SendMessageRequest) (Message, bool, error)
 	GetMessage(context.Context, string, string) (Message, error)

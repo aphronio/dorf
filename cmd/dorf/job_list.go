@@ -56,7 +56,7 @@ func (a controlAPIJobs) List(ctx context.Context, limit int, cursor string) (con
 		if !ok {
 			return controlapi.JobList{}, fmt.Errorf("unsupported retained Job workflow %q revision %q", row.Workflow, row.WorkflowRevision)
 		}
-		jobs = append(jobs, controlapi.JobSummary{ID: row.ID, Kind: string(kind), AdmittedAt: row.AdmittedAt.UTC()})
+		jobs = append(jobs, controlapi.JobSummary{CreatedByClient: publicJobCreator(row.CreatedByClientID, row.CreatedByClientName), ClientReference: row.ClientReference, ID: row.ID, Kind: string(kind), AdmittedAt: row.AdmittedAt.UTC()})
 	}
 	return controlapi.JobList{Jobs: jobs, NextCursor: next}, nil
 }
@@ -139,6 +139,7 @@ func remoteJobList(ctx context.Context, client *controlclient.Client, args []str
 		fmt.Fprintln(stdout, "Jobs")
 		for _, job := range list.Jobs {
 			fmt.Fprintf(stdout, "  %s  %s  %s\n", job.ID, job.Kind, job.AdmittedAt.UTC().Format(time.RFC3339Nano))
+			renderJobAttribution(stdout, job.CreatedByClient, job.ClientReference)
 		}
 	}
 	if list.NextCursor != nil {

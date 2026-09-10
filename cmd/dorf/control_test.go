@@ -162,6 +162,7 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 		CredentialExpiresAt: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC),
 	}}
 	jobs := &remoteCLIJobs{job: controlapi.DirectJob{Job: controlapi.Job{
+		CreatedByClient: &controlapi.JobCreator{ID: "client-1", Name: "laptop"}, ClientReference: "task-42",
 		ID: "job-1", Kind: "direct", Profile: "default",
 		Model: "gpt-5.6-sol", Reasoning: "high", Admission: controlapi.Admission{Open: true},
 		Execution: controlapi.State{State: "idle"}, Cleanup: controlapi.State{State: "not_requested"},
@@ -219,7 +220,7 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	commands := [][]string{
 		{"connect", "--name", "laptop", "--enrollment-file", enrollmentFile, deploymentURL},
 		{"auth", "status"},
-		{"run", "--input-file", goalFile, "--ai-connection", "personal"},
+		{"run", "--input-file", goalFile, "--ai-connection", "personal", "--client-reference", "task-42"},
 		{"job", "list"},
 		{"job", "inspect", jobs.job.ID},
 		{"job", "message", "--input-file", messageFile, jobs.job.ID},
@@ -235,6 +236,11 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 		var stdout, stderr strings.Builder
 		if err := run(context.Background(), command, &stdout, &stderr); err != nil {
 			t.Fatalf("dorf %s: %v\nstderr: %s", strings.Join(command, " "), err, stderr.String())
+		}
+		if command[0] == "job" && (command[1] == "list" || command[1] == "inspect") {
+			if !strings.Contains(stdout.String(), "created by: laptop (client-1)") || !strings.Contains(stdout.String(), `client reference: "task-42"`) {
+				t.Fatalf("missing attribution in %s: %s", command[1], stdout.String())
+			}
 		}
 		output.WriteString(stdout.String())
 		output.WriteString(stderr.String())
@@ -259,7 +265,7 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	if code != "one-time-code" || name != "laptop" || len(credential) != 43 {
 		t.Fatalf("enrollment code=%q name=%q credential length=%d", code, name, len(credential))
 	}
-	wantAdmission := controlapi.AdmitJobRequest{AIConnection: "personal", Reasoning: jobs.job.Reasoning}
+	wantAdmission := controlapi.AdmitJobRequest{ClientReference: "task-42", AIConnection: "personal", Reasoning: jobs.job.Reasoning}
 	if admission != wantAdmission {
 		t.Fatalf("Job admission=%#v, want %#v", admission, wantAdmission)
 	}
@@ -573,7 +579,7 @@ func TestControlAdmissionRejectsValuesPostgresCannotRetain(t *testing.T) {
 		{AgentsMD: "contains\x00nul", Model: "model", Reasoning: "high"},
 		{AgentsMD: "valid instructions", Model: strings.Repeat("m", maxControlModelBytes+1), Reasoning: "high"},
 	} {
-		if _, _, err := (controlAPIJobs{}).AdmitDirect(context.Background(), "request", input); !errors.Is(err, controlapi.ErrInvalidInput) {
+		if _, _, err := (controlAPIJobs{}).AdmitDirect(context.Background(), "", "request", input); !errors.Is(err, controlapi.ErrInvalidInput) {
 			t.Fatalf("input=%#v error=%v, want invalid input", input, err)
 		}
 	}
@@ -645,22 +651,22 @@ func (j *remoteCLIJobs) List(_ context.Context, limit int, cursor string) (contr
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return controlapi.JobList{Jobs: []controlapi.JobSummary{{
-		ID: j.job.ID, Kind: j.job.Kind, AdmittedAt: time.Date(2026, 8, 26, 11, 0, 0, 0, time.UTC),
+		CreatedByClient: j.job.CreatedByClient, ClientReference: j.job.ClientReference, ID: j.job.ID, Kind: j.job.Kind, AdmittedAt: time.Date(2026, 8, 26, 11, 0, 0, 0, time.UTC),
 	}}}, nil
 }
 
-func (j *remoteCLIJobs) AdmitDirect(_ context.Context, key string, input controlapi.AdmitJobRequest) (controlapi.DirectJob, bool, error) {
+func (j *remoteCLIJobs) AdmitDirect(_ context.Context, _ string, key string, input controlapi.AdmitJobRequest) (controlapi.DirectJob, bool, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.key, j.input = key, input
 	return j.job, true, nil
 }
 
-func (j *remoteCLIJobs) AdmitCoding(context.Context, string, controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, bool, error) {
+func (j *remoteCLIJobs) AdmitCoding(context.Context, string, string, controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, bool, error) {
 	return controlapi.CodingJob{}, false, controlapi.ErrInvalidInput
 }
 
-func (j *remoteCLIJobs) AdmitInvestigation(context.Context, string, controlapi.AdmitInvestigationJobRequest) (controlapi.InvestigationJob, bool, error) {
+func (j *remoteCLIJobs) AdmitInvestigation(context.Context, string, string, controlapi.AdmitInvestigationJobRequest) (controlapi.InvestigationJob, bool, error) {
 	return controlapi.InvestigationJob{}, false, controlapi.ErrInvalidInput
 }
 

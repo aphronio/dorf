@@ -1,11 +1,23 @@
 package core
 
-import "context"
+import (
+	"context"
+	"strings"
+	"unicode/utf8"
+)
+
+const MaxClientReferenceLength = 255
+
+func ValidClientReference(value string) bool {
+	return utf8.ValidString(value) && utf8.RuneCountInString(value) <= MaxClientReferenceLength && !strings.ContainsRune(value, 0)
+}
 
 // JobAdmission is the complete Core input shared by workflow and direct-client
 // admission. Workflow packages extend it with their own typed input; a direct
 // client leaves both workflow identity fields empty.
 type JobAdmission struct {
+	CreatedByClientID  string
+	ClientReference    string
 	AdmissionKey       string
 	Workflow           WorkflowName
 	WorkflowRevision   string

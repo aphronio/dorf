@@ -21,6 +21,8 @@ var (
 // AdmissionRequest is the caller-owned direct input. Deployment defaults are
 // resolved only for a new Job and retained in its durable admission.
 type AdmissionRequest struct {
+	CreatedByClientID  string
+	ClientReference    string
 	AdmissionKey       string
 	AgentsMD           string
 	SandboxProfile     string
@@ -55,6 +57,9 @@ func NewAdmissionService(store AdmissionStore, queueName string, provider Admiss
 
 // Admit prepares one direct client Job. All input uses Core Message admission.
 func (s AdmissionService) Admit(ctx context.Context, request AdmissionRequest) (core.Job, bool, error) {
+	if !core.ValidClientReference(request.ClientReference) {
+		return core.Job{}, false, ErrInvalidAdmission
+	}
 	key, err := admissionKey(request.AdmissionKey)
 	if err != nil {
 		return core.Job{}, false, err
@@ -143,6 +148,7 @@ func normalizeAdmissionRequest(request AdmissionRequest) (core.JobAdmission, err
 		return core.JobAdmission{}, ErrInvalidAdmission
 	}
 	return core.JobAdmission{
+		CreatedByClientID: request.CreatedByClientID, ClientReference: request.ClientReference,
 		AdmissionKey: request.AdmissionKey, AgentsMD: request.AgentsMD, SandboxProfile: request.SandboxProfile,
 		ProviderConnection: request.ProviderConnection, Model: request.Model, ReasoningEffort: request.ReasoningEffort,
 	}, nil
