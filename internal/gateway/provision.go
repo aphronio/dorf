@@ -27,10 +27,10 @@ import (
 )
 
 const (
-	BackendVersion          = "7.2.104"
-	backendArchive          = "CLIProxyAPI_7.2.104_linux_amd64.tar.gz"
-	backendArchiveSHA256    = "993babb37b6de831600f0eb31527ca0f938337e1d1f837d5cf846263affa9724"
-	backendExecutableSHA256 = "6355d7424394f22293f9d9c8cb3b9ca0073734dc50e8b740bb2af5cea98aaf64"
+	BackendVersion          = "7.2.157"
+	backendArchive          = "CLIProxyAPI_7.2.157_linux_amd64.tar.gz"
+	backendArchiveSHA256    = "e0df9f570b6e910a14f081425cee2527a503311f617d7727cd428009fab14c77"
+	backendExecutableSHA256 = "a6f2c795479c1ecb80cb3068b87e3739d96a8fa1df57c33cb34317a5d288275a"
 	defaultPort             = 8317
 	openAIModelsURL         = "https://api.openai.com/v1/models"
 )
