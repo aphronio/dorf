@@ -20,6 +20,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	cloudflareapp "github.com/aphronio/dorf/internal/cloudflare"
+	"github.com/aphronio/dorf/internal/codex"
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlapi"
@@ -129,7 +130,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	case "serve":
 		return serveCommand(ctx, store, client, cfg, args[1:], stdout, stderr)
 	case "worker":
-		if err := registerWorkerTasks(store, client, cfg); err != nil {
+		observations, closeObservations := configuredObservations(ctx, stderr)
+		defer closeObservations()
+		if err := registerWorkerTasks(store, client, cfg, observations); err != nil {
 			return err
 		}
 		return worker(ctx, store, client, cfg, args[1:], stdout, stderr)
@@ -160,12 +163,12 @@ func operationKey(kind, value string, source io.Reader) (string, bool, error) {
 	return kind + "-" + hex.EncodeToString(random), true, nil
 }
 
-func registerWorkerTasks(store postgres.Store, client *absurd.Client, cfg config.Config) error {
+func registerWorkerTasks(store postgres.Store, client *absurd.Client, cfg config.Config, observations *codex.Observations) error {
 	barrier, err := proofbarrier.FromEnv()
 	if err != nil {
 		return err
 	}
-	runtimes := profileRuntimeResolver{cfg: cfg, store: store, client: client, barrier: barrier}
+	runtimes := profileRuntimeResolver{cfg: cfg, store: store, client: client, barrier: barrier, observations: observations}
 	core := coreApplication(store, client)
 	core.SandboxRuntimes = runtimes
 	core.CleanupRuntimes = runtimes

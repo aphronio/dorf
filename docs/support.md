@@ -1,5 +1,41 @@
 # Support and diagnostics
 
+## Optional Codex execution logs
+
+Set `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` in the worker process to enable OTLP/HTTP execution logs.
+An empty endpoint disables this observer. `OTEL_EXPORTER_OTLP_LOGS_HEADERS` supplies exporter
+authentication; `OTEL_RESOURCE_ATTRIBUTES` can set `deployment.environment.name`. For the managed
+Compose worker, put these variables in `${XDG_CONFIG_HOME:-$HOME/.config}/dorf/telemetry.env`,
+owned by the deployment operator with mode `0600`, then recreate the worker. This optional file
+survives setup and application updates; do not edit the generated Compose `.env`. Standalone workers
+read their process environment. The official OpenTelemetry exporter owns batching and bounded retries.
+
+Each selected native notification carries the exact Dorf Job, Message, and AgentRun IDs plus
+the native Thread and Turn IDs. The Turn comes from the submission acknowledgement or the existing
+durable binding. This covers Follow turns, including an initial direct Message. Steers do not
+take ownership of another Message's model usage. API response types are unchanged.
+
+The selected events are turn start/settlement, completed user and assistant messages, tool
+start/completion, and token-usage updates. They can contain prompts, tool arguments, and outputs.
+Only events exposed by the native app-server protocol are available; this is not a complete model
+request or a record of every code-mode wrapper. The observer retains the authenticated connection
+after submission so completion and interruption do not depend on another user message.
+
+These logs are best-effort diagnostics. Worker reconciliation can reconnect to a still-active,
+durably bound Turn. A disconnect is reported when observed, but missed tools and usage are not
+replayed from session files or reconstructed from history. A terminal snapshot after reconnect
+records only the exact Turn's status. Export loss does not change Message results or execution.
+`event.id` identifies a repeated diagnostic payload for query deduplication; it is not a durable
+delivery receipt.
+
+Token-usage `last` describes the native latest model response, while `total` is conversation
+cumulative. Do not label `total` as per-Message usage or sum replayed snapshots. These observations
+do not establish complete billing or cost accounting. Configure the receiving backend to join its
+client's Run-to-Message records by `dorf.message_id`; timestamps and prompt text are unnecessary.
+
+This path exports from the Dorf host. It requires no exporter credential, plugin, collector, or
+telemetry configuration inside a Sandbox. It does not enable native internal spans or metrics.
+
 The managed deployment shape is x86_64 Linux with an operator-prepared Docker Engine and Compose
 plugin. The current early release line is proven on the live controller, remote Incus workstation,
 and public Control API path recorded by

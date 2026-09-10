@@ -14,6 +14,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/core"
 	provider "github.com/aphronio/dorf/internal/sandbox"
+	"github.com/aphronio/dorf/internal/telemetry"
 	"github.com/coder/websocket"
 )
 
@@ -28,9 +29,10 @@ const (
 )
 
 type Agent struct {
-	Sandbox provider.Sandbox
-	Port    int
-	Timeout time.Duration
+	Sandbox      provider.Sandbox
+	Port         int
+	Timeout      time.Duration
+	Observations *Observations
 }
 
 const Harness = "codex"
@@ -311,7 +313,8 @@ func (a Agent) withServerEndpointController(ctx context.Context, owner provider.
 	if probe.running && probe.tracked && probe.token != "" {
 		protocol, dialErr := dialProtocol(ctx, endpoint.dial, probe.token, endpoint.headers, endpoint.dialContext)
 		if dialErr == nil {
-			defer protocol.connection.Close(websocket.StatusNormalClosure, "done")
+			protocol.configureObservations(ctx, a.Observations, owner)
+			defer protocol.finish()
 			if authorize != nil {
 				if err := authorize(); err != nil {
 					return err
@@ -349,7 +352,8 @@ func (a Agent) withServerEndpointController(ctx context.Context, owner provider.
 	for {
 		protocol, dialErr := dialProtocol(ctx, endpoint.dial, token, endpoint.headers, endpoint.dialContext)
 		if dialErr == nil {
-			defer protocol.connection.Close(websocket.StatusNormalClosure, "done")
+			protocol.configureObservations(ctx, a.Observations, owner)
+			defer protocol.finish()
 			if authorize != nil {
 				if err := authorize(); err != nil {
 					return err
@@ -447,8 +451,19 @@ func dialProtocol(ctx context.Context, endpoint, token string, headers http.Head
 }
 
 type protocol struct {
-	connection *websocket.Conn
-	nextID     int
+	connection          *websocket.Conn
+	nextID              int
+	observations        *Observations
+	execution           core.AgentRun
+	observed            *observedTurn
+	pendingObservations []map[string]any
+}
+
+func (p *protocol) configureObservations(ctx context.Context, observations *Observations, owner provider.Ownership) {
+	if run, ok := telemetry.Execution(ctx); observations != nil && ok && run.JobID == owner.JobID && run.SandboxID == owner.SandboxID {
+		p.observations = observations
+		p.execution = run
+	}
 }
 
 func (p *protocol) initialize(ctx context.Context) error {
@@ -767,6 +782,9 @@ func (p *protocol) readTurns(ctx context.Context, sessionID string) ([]TurnOutco
 		parsed := parseTurn(turn)
 		if parsed.ID != "" {
 			turns = append(turns, parsed)
+			if !parsed.Terminal() && p.execution.TurnID == parsed.ID {
+				p.bindObservation(sessionID, parsed.ID, false)
+			}
 		}
 	}
 	return turns, nil
@@ -841,6 +859,9 @@ func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRun
 		return TurnOutcome{}, fmt.Errorf("turn/start response is missing result.turn.id")
 	}
 	outcome := TurnOutcome{ID: id, Status: "running"}
+	if p.execution.ID == agentRunID {
+		p.bindObservation(sessionID, id, true)
+	}
 	return outcome, nil
 }
 
@@ -930,6 +951,7 @@ func (p *protocol) receiveRaw(ctx context.Context) (map[string]any, error) {
 	if err := json.Unmarshal(payload, &message); err != nil {
 		return nil, fmt.Errorf("decode Codex app-server message: %w", err)
 	}
+	p.observeNotification(message)
 	return message, nil
 }
 

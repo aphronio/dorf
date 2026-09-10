@@ -301,6 +301,13 @@ implementation is acceptable for a Harness transport. Do not add an ORM, depende
 container, web framework, message bus, migration framework, CLI framework, workflow DSL, or
 observability distribution until a concrete terminal proves explicit code materially worse.
 
+Optional execution diagnostics observe the existing Message-to-AgentRun-to-native-Turn binding at
+the Harness adapter. They never decide execution, delivery, or cleanup. A transient execution
+context carries those existing IDs to the adapter; a long-lived native process is not assigned one
+client Run ID. Native notifications own tool and model diagnostics, and PostgreSQL retains product
+and execution authority. [Support](../support.md#optional-codex-execution-logs) owns selection,
+configuration, and recovery limits.
+
 Every added module must name the real terminal it enables and remain removable behind a narrow
 boundary. Transitive dependency count is a design signal, not a score to optimize at the expense of
 correctness.

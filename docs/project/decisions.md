@@ -44,6 +44,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D104: Technology choices stay replaceable](decisions/D104-technology-choices-stay-replaceable.md) (`current`). Reviewing a technology replacement, migration, or compatibility obligation.
 - [D107: Commit Job task scheduling and attachment together](decisions/D107-commit-job-task-scheduling-and-attachment-together.md) (`current`). Changing admission, task handoffs, cleanup scheduling, or recovery across Absurd and Dorf.
 - [D108: Reuse direct Jobs for retained sessions and exact message control](decisions/D108-direct-session-message-control.md) (`current`). Changing automatic message intent, interruption, or direct Job session continuity.
+- [D109: Export diagnostics through the existing native Turn binding](decisions/D109-exact-turn-execution-diagnostics.md) (`current`). Changing native execution diagnostics, attribution, or exporter custody.
 
 ## Workflows
 
@@ -140,6 +141,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D074: Investigation drafts wait for exact human disposition](decisions/D074-investigation-drafts-wait-for-exact-human-disposition.md) (`partial`). Changing investigation draft revision loops, Harness Thread reuse, or disposition policy.
 - [D090: Open Jobs may have no current workflow operation](decisions/D090-open-jobs-may-have-no-current-workflow-operation.md) (`current`). Changing how an open Job waits when no workflow operation is eligible.
 - [D091: Profile verification gates admission, not admitted runtime](decisions/D091-profile-verification-gates-admission-not-admitted-runtime.md) (`current`). Changing profile verification, concurrent admission, or admitted runtime resolution.
+- [D109: Export diagnostics through the existing native Turn binding](decisions/D109-exact-turn-execution-diagnostics.md) (`current`). Changing native execution diagnostics, attribution, or exporter custody.
 
 ## Model access
 

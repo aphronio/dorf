@@ -71,6 +71,9 @@ services:
       DORF_INCUS_AUTHORITY_DIGEST: "${DORF_INCUS_AUTHORITY_DIGEST}"
       DORF_PROVIDER_GATEWAY_INTERNAL_ORIGIN: "${DORF_PROVIDER_GATEWAY_INTERNAL_ORIGIN:-}"
       E2B_API_KEY: "${E2B_API_KEY:-}"
+    env_file:
+      - path: "${DORF_CONFIG_DIR}/telemetry.env"
+        required: false
     tmpfs:
       - /tmp:rw,nosuid,nodev,mode=1777
     volumes:

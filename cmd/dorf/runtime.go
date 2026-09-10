@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
+	"time"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/blob"
@@ -22,15 +24,36 @@ import (
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/publication"
 	provider "github.com/aphronio/dorf/internal/sandbox"
+	"github.com/aphronio/dorf/internal/telemetry"
 	"github.com/aphronio/dorf/internal/terminal"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
 type profileRuntimeResolver struct {
-	cfg     config.Config
-	store   postgres.Store
-	client  *absurd.Client
-	barrier core.FaultBarrier
+	cfg          config.Config
+	store        postgres.Store
+	client       *absurd.Client
+	barrier      core.FaultBarrier
+	observations *codex.Observations
+}
+
+func configuredObservations(ctx context.Context, stderr io.Writer) (*codex.Observations, func()) {
+	publisher, err := telemetry.FromEnv(ctx)
+	if err != nil {
+		fmt.Fprintln(stderr, "Execution diagnostics could not initialize; work remains enabled.")
+	}
+	if publisher == nil {
+		return nil, func() {}
+	}
+	observations := codex.NewObservations(ctx, publisher.Emit)
+	return observations, func() {
+		observations.Close()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if publisher.Shutdown(shutdownCtx) != nil {
+			fmt.Fprintln(stderr, "Execution diagnostics did not finish exporting before shutdown.")
+		}
+	}
 }
 
 func (r profileRuntimeResolver) ResolveCleanup(ctx context.Context, name string) (core.CleanupRuntime, error) {
@@ -134,7 +157,7 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (r
 	var agent terminal.Harness
 	switch profile.Harness {
 	case codex.Harness:
-		agent = codex.Agent{Sandbox: sandbox, Port: r.cfg.AppServerPort, Timeout: r.cfg.TurnTimeout}
+		agent = codex.Agent{Sandbox: sandbox, Port: r.cfg.AppServerPort, Timeout: r.cfg.TurnTimeout, Observations: r.observations}
 	case piagent.Harness:
 		agent = piagent.Agent{Sandbox: sandbox, Timeout: r.cfg.TurnTimeout}
 	default:
