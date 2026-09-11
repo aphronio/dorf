@@ -438,6 +438,12 @@ returns exact bytes and must happen before cleanup, which closes Message admissi
 The requested file path can be absolute inside the Sandbox, relative to its workspace root, or
 relative to its execution user's home with `~/`. Traversal, symlinks, and directories are rejected.
 
+Human Job and Message output uses `Queued` for accepted work waiting to start, `Working` for active
+execution, and `Needs attention` for failures or required intervention. Job setup reports `Starting`
+or `Connecting`. A direct Job with no outstanding work reports `Idle`. A successful Message result
+or completed workflow reports `Finished`; a steer delivery acknowledgement without a result reports
+`Delivered; awaiting result`. These labels do not report progress within an agent Turn.
+
 Use `--output json` on Job, Message, retry, and Evidence operations and `--output jsonl` on watch for
 stable machine output. The ordinary mutation flow creates retry identity internally and retries the
 exact request once after a retryable transport or HTTP server failure; a human does not need to

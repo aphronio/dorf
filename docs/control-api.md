@@ -113,6 +113,14 @@ then requests cleanup. Cleanup remains separate from execution and Outcome. A se
 internal encoded JSON observation exceeds 16 MiB returns
 the published `message_unavailable` Problem rather than a partial result.
 
+After Sandbox and model access setup, a direct Job reports `awaiting_agent` while a delivery is
+pending or being submitted, and `running` while an agent Turn is active. Active work takes
+precedence over queued follow-ups. Unresolved delivery attention takes precedence over both;
+settled failures do not mask newer work. When no work remains, the latest settled result determines
+whether execution needs attention or is `idle`. A steer acknowledgement without a Turn result does
+not change this status. Direct Job `idle` means no outstanding work, not that the caller's task is
+finished.
+
 The Job snapshot's optional `latest_reply_id` identifies the latest settled reply in its main
 Sandbox. It derives from retained Message and AgentRun facts; queued follow-ups and steer delivery
 acknowledgements do not replace it. The Message inspection path accepts `latest` in place of a

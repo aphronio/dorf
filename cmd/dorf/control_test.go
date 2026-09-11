@@ -420,6 +420,7 @@ func TestPublicJobStatesKeepCleanupTruthSeparateFromExecution(t *testing.T) {
 		wantCode      string
 	}{
 		{name: "healthy cleanup preserves idle", cleanup: core.CleanupScheduled, task: absurd.TaskRunning, execution: "idle", wantExecution: "idle", wantCleanup: "running"},
+		{name: "healthy cleanup stops queued work", cleanup: core.CleanupScheduled, task: absurd.TaskRunning, execution: "awaiting_agent", wantExecution: "stopped", wantCleanup: "running"},
 		{name: "healthy cleanup stops active work", cleanup: core.CleanupScheduled, task: absurd.TaskRunning, execution: "running", wantExecution: "stopped", wantCleanup: "running"},
 		{name: "healthy cleanup preserves attention", cleanup: core.CleanupScheduled, task: absurd.TaskRunning, execution: "stopped", wantExecution: "stopped", wantCleanup: "running", wantCode: "agent_attention"},
 		{name: "failed cleanup", cleanup: core.CleanupScheduled, task: absurd.TaskFailed, execution: "idle", wantExecution: "idle", wantCleanup: "failed", wantCode: "cleanup_failed"},
@@ -754,4 +755,62 @@ func (j *remoteCLIJobs) WriteSandboxFile(context.Context, string, string, []byte
 
 func (f *remoteCLIJobs) ExecSandbox(context.Context, string, provider.Command) (provider.CommandResult, error) {
 	return provider.CommandResult{}, nil
+}
+
+func TestRemoteJobHumanExecutionLabels(t *testing.T) {
+	for _, test := range []struct {
+		state     string
+		attention *controlapi.Attention
+		want      string
+	}{
+		{"provisioning_sandbox", nil, "Starting"},
+		{"connecting_model_access", nil, "Connecting"},
+		{"awaiting_agent", nil, "Queued"},
+		{"running", nil, "Working"},
+		{"idle", nil, "Idle"},
+		{"complete", nil, "Finished"},
+		{"stopped", nil, "Stopped"},
+		{"failed", nil, "Needs attention"},
+		{"running", &controlapi.Attention{Code: "agent_attention"}, "Needs attention"},
+	} {
+		t.Run(test.state+"/"+test.want, func(t *testing.T) {
+			var output strings.Builder
+			job := controlapi.Job{Execution: controlapi.State{State: test.state}, Attention: test.attention}
+			var view controlapi.JobView = controlapi.DirectJob{Job: job}
+			if test.state == "complete" {
+				view = controlapi.CodingJob{Job: job}
+			}
+			renderRemoteJob(&output, view)
+			if !strings.Contains(output.String(), "  execution: "+test.want+"\n") {
+				t.Fatalf("human Job output = %q", output.String())
+			}
+		})
+	}
+}
+
+func TestRemoteMessageHumanDeliveryLabels(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		state     string
+		result    *controlapi.MessageResult
+		attention *controlapi.Attention
+		want      string
+	}{
+		{"accepted", "accepted", nil, nil, "Queued"},
+		{"running", "running", nil, nil, "Working"},
+		{"steer acknowledgement", "completed", nil, nil, "Delivered; awaiting result"},
+		{"successful result", "completed", &controlapi.MessageResult{Outcome: "completed"}, nil, "Finished"},
+		{"failed result", "completed", &controlapi.MessageResult{Outcome: "failed"}, nil, "Needs attention"},
+		{"interrupted result", "completed", &controlapi.MessageResult{Outcome: "interrupted"}, nil, "Needs attention"},
+		{"failed delivery", "failed", nil, nil, "Needs attention"},
+		{"uncertain delivery", "running", nil, &controlapi.Attention{Code: "agent_delivery_attention"}, "Needs attention"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output strings.Builder
+			renderRemoteMessage(&output, controlapi.Message{Delivery: controlapi.State{State: test.state}, Result: test.result, Attention: test.attention})
+			if !strings.Contains(output.String(), "  delivery: "+test.want+"\n") {
+				t.Fatalf("human Message output = %q", output.String())
+			}
+		})
+	}
 }

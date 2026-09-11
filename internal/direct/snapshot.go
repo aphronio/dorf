@@ -84,7 +84,8 @@ type ExecutionState string
 const (
 	ExecutionProvisioningSandbox ExecutionState = "provisioning-sandbox"
 	ExecutionConnectingRoute     ExecutionState = "connecting-route"
-	ExecutionAwaitingAgent       ExecutionState = "awaiting-agent"
+	ExecutionQueued              ExecutionState = "queued"
+	ExecutionWorking             ExecutionState = "working"
 	ExecutionAttention           ExecutionState = "attention"
 	ExecutionIdle                ExecutionState = "idle"
 )
@@ -105,22 +106,55 @@ func (s Snapshot) Project() Projection {
 	if !core.HasSucceededAction(s.Actions, core.ActionRouteCreate, s.MainSandbox.ID) {
 		return Projection{State: ExecutionConnectingRoute}
 	}
+	state := ExecutionIdle
 	for _, delivery := range s.Deliveries {
 		run := delivery.AgentRun
+		switch run.State {
+		case core.AgentRunCompleted, core.AgentRunFailed, core.AgentRunInterrupted:
+			continue
+		}
 		if run.Attention != "" {
 			return Projection{State: ExecutionAttention, Detail: run.Attention}
 		}
 		switch run.State {
-		case core.AgentRunCompleted:
-			if run.TurnOutcome == "completed" {
-				continue
-			}
-			return Projection{State: ExecutionAttention, Detail: "agent completed without a successful Turn outcome"}
-		case core.AgentRunFailed, core.AgentRunInterrupted, core.AgentRunUncertain:
+		case core.AgentRunUncertain:
 			return Projection{State: ExecutionAttention, Detail: "agent delivery ended with state " + string(run.State)}
+		case core.AgentRunActive:
+			state = ExecutionWorking
 		default:
-			return Projection{State: ExecutionAwaitingAgent}
+			if state != ExecutionWorking {
+				state = ExecutionQueued
+			}
 		}
+	}
+	if state != ExecutionIdle {
+		return Projection{State: state}
+	}
+	return latestSettledProjection(s.Deliveries)
+}
+
+func latestSettledProjection(deliveries []core.Delivery) Projection {
+	var latest *core.Delivery
+	for _, delivery := range deliveries {
+		if delivery.Message.Intent == core.MessageSteer && delivery.AgentRun.State == core.AgentRunCompleted && delivery.AgentRun.TurnOutcome == "" {
+			continue
+		}
+		if latest == nil || delivery.Message.Sequence > latest.Message.Sequence {
+			latest = &delivery
+		}
+	}
+	if latest == nil {
+		return Projection{State: ExecutionIdle}
+	}
+	run := latest.AgentRun
+	if run.Attention != "" {
+		return Projection{State: ExecutionAttention, Detail: run.Attention}
+	}
+	if run.State != core.AgentRunCompleted {
+		return Projection{State: ExecutionAttention, Detail: "agent delivery ended with state " + string(run.State)}
+	}
+	if run.TurnOutcome != "completed" {
+		return Projection{State: ExecutionAttention, Detail: "agent completed without a successful Turn outcome"}
 	}
 	return Projection{State: ExecutionIdle}
 }

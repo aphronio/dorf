@@ -704,7 +704,7 @@ func remoteSandboxCommand(ctx context.Context, client *controlclient.Client, arg
 
 func renderRemoteMessage(output io.Writer, message controlapi.Message) {
 	fmt.Fprintf(output, "  sequence: %d\n  intent: %s\n  delivery: %s\n  admitted: %s\n",
-		message.Sequence, message.Intent, message.Delivery.State, message.AdmittedAt.Format(time.RFC3339))
+		message.Sequence, message.Intent, humanMessageState(message), message.AdmittedAt.Format(time.RFC3339))
 	if message.InterruptRequested {
 		fmt.Fprintln(output, "  interrupt: requested")
 	}
@@ -716,6 +716,56 @@ func renderRemoteMessage(output io.Writer, message controlapi.Message) {
 	}
 	if message.Attention != nil {
 		fmt.Fprintf(output, "  attention: %s\n", message.Attention.Detail)
+	}
+}
+
+func humanMessageState(message controlapi.Message) string {
+	if message.Attention != nil {
+		return "Needs attention"
+	}
+	if message.Result != nil {
+		if message.Result.Outcome == "completed" {
+			return "Finished"
+		}
+		return "Needs attention"
+	}
+	switch message.Delivery.State {
+	case "accepted":
+		return "Queued"
+	case "running":
+		return "Working"
+	case "completed":
+		return "Delivered; awaiting result"
+	case "failed":
+		return "Needs attention"
+	default:
+		return message.Delivery.State
+	}
+}
+
+func humanJobState(job controlapi.Job) string {
+	if job.Attention != nil {
+		return "Needs attention"
+	}
+	switch job.Execution.State {
+	case "provisioning_sandbox":
+		return "Starting"
+	case "connecting_model_access":
+		return "Connecting"
+	case "awaiting_agent":
+		return "Queued"
+	case "running":
+		return "Working"
+	case "idle":
+		return "Idle"
+	case "complete":
+		return "Finished"
+	case "stopped":
+		return "Stopped"
+	case "failed":
+		return "Needs attention"
+	default:
+		return job.Execution.State
 	}
 }
 
@@ -741,7 +791,7 @@ func renderRemoteJob(output io.Writer, view controlapi.JobView) {
 	job := view.Common()
 	renderJobAttribution(output, job.CreatedByClient, job.ClientReference)
 	fmt.Fprintf(output, "  profile: %s\n  model: %q (%s)\n  admission: %s\n  execution: %s\n  cleanup: %s\n",
-		job.Profile, job.Model, job.Reasoning, openClosed(job.Admission.Open), job.Execution.State, job.Cleanup.State)
+		job.Profile, job.Model, job.Reasoning, openClosed(job.Admission.Open), humanJobState(job), job.Cleanup.State)
 	if job.Attention != nil {
 		fmt.Fprintf(output, "  attention: %s\n", job.Attention.Detail)
 	}
@@ -1539,7 +1589,8 @@ func (a controlAPIJobs) projectDirect(ctx context.Context, job core.Job) (contro
 	executionState := map[direct.ExecutionState]string{
 		direct.ExecutionProvisioningSandbox: "provisioning_sandbox",
 		direct.ExecutionConnectingRoute:     "connecting_model_access",
-		direct.ExecutionAwaitingAgent:       "awaiting_agent",
+		direct.ExecutionQueued:              "awaiting_agent",
+		direct.ExecutionWorking:             "running",
 		direct.ExecutionAttention:           "stopped",
 		direct.ExecutionIdle:                "idle",
 	}[projection.State]
