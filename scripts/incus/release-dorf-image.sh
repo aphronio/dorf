@@ -50,7 +50,7 @@ dorf_host() {
 wait_for_cleanup() {
   local deadline=$((SECONDS + 600))
   while ((SECONDS < deadline)); do
-    if "$BINARY" job inspect --output json "$JOB_ID" | jq -e '.job.cleanup.state == "complete"' >/dev/null; then
+    if "$BINARY" job inspect --output json "$JOB_ID" | jq -e '.cleanup.state == "complete"' >/dev/null; then
       return
     fi
     sleep 2
@@ -163,7 +163,7 @@ prove_harness() {
   printf '%s\n' "$message" >"$EVIDENCE_DIR/$harness-message.json"
   jq -e '.result.outcome == "completed" and (.result.output | contains("https://www.iana.org/help/example-domains")) and (.result.output | contains("Example Domains"))' <<<"$message" >/dev/null
   inspection="$("$BINARY" job inspect --output json "$JOB_ID")"
-  jq -e --arg source "$SOURCE_COMMIT" '.job.revision == $source and .job.proposal == null' <<<"$inspection" >/dev/null
+  jq -e --arg source "$SOURCE_COMMIT" '.revision == $source and .proposal == null' <<<"$inspection" >/dev/null
   "$BINARY" job evidence --output json "$JOB_ID" >"$EVIDENCE_DIR/$harness-evidence.json"
   jq -e --arg source "$SOURCE_COMMIT" '.evidence | any(.kind == "git-revision" and .revision == $source)' "$EVIDENCE_DIR/$harness-evidence.json" >/dev/null
   "$BINARY" job cleanup "$JOB_ID"
