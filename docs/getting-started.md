@@ -511,11 +511,12 @@ dorf job cleanup JOB_ID
 ```
 
 Repeat `--attach LOCAL_FILE` to send ordered files with the first Message or a later Message. The
-flag also works with both `dorf workflow run` commands. The CLI reads and validates every local
-regular file before it creates a Job or sends a Message. You may omit `--input-file` for a Message
-that has at least one attachment. Dorf sends each file by value, so later local changes do not
-change an accepted Message. Image support depends on the selected Sandbox profile. The
-[Remote Control API](control-api.md#resources) links to the accepted formats and limits.
+flag also works with both `dorf workflow run` commands. The CLI checks local file names,
+regular-file status, and byte limits before creating a Job or sending a Message. The server
+validates image contents and profile support during Message admission. You may omit `--input-file`
+for a Message that has at least one attachment. Dorf sends each file by value, so later local
+changes do not change an accepted Message. The [Remote Control API](control-api.md#resources) links
+to the accepted formats and limits.
 
 The default `--intent auto` steers an active Turn or admits a Follow when none is active. Dorf
 chooses once at admission and preserves that choice on replay. Use `--intent follow` to queue a

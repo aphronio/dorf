@@ -284,7 +284,7 @@ func (h AgentHandle) admitMessage(ctx context.Context, key string, request Messa
 		}
 	}
 	if h.application.Tasks == nil {
-		return receipt, fmt.Errorf("message %s sequence %d was accepted, but its wake hint failed; retry the same send key and text: Absurd is not configured", message.ID, message.Sequence)
+		return receipt, fmt.Errorf("message %s sequence %d was accepted, but its wake hint failed; retry the same send key and complete Message request: Absurd is not configured", message.ID, message.Sequence)
 	}
 	if err := h.application.EmitMessageWake(ctx, message); err != nil {
 		return receipt, err
