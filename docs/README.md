@@ -44,3 +44,4 @@ These research documents remain useful as narrow entry points:
 | --- | --- |
 | Evaluate remote self-managed Sandbox hosts and an outbound connector | [Private provider attachment](research/private-provider-attachment.md) |
 | Review the dated provider-evaluation starting point | [Sandbox and VM watchlist](research/sandbox-vm-watchlist.md) |
+| Evaluate agent-first DX, familiar API vocabulary, and optional hosting | [Agent-first DX and hosted Dorf](research/agents-api-dx-and-hosted-dorf.md) |
