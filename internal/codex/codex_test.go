@@ -446,7 +446,7 @@ func TestProtocolBindsResumeStartAndSteerToExactIdentity(t *testing.T) {
 	t.Run("resume and start", func(t *testing.T) {
 		server, _ := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
 			switch method {
-			case "initialize":
+			case "initialize", "skills/list":
 				return map[string]any{}, false
 			case "thread/resume":
 				requireProtocolParams(t, method, params, map[string]any{"threadId": sessionID})
@@ -515,11 +515,15 @@ func TestProtocolBindsResumeStartAndSteerToExactIdentity(t *testing.T) {
 func TestInitialRecoveryDropsLostEmptyThreadAndAdoptsAcceptedTurn(t *testing.T) {
 	var threadStarts atomic.Int32
 	var turnStarts atomic.Int32
+	var skillReloads atomic.Int32
 	var persisted atomic.Bool
 	var durableSession atomic.Value
 	server, _ := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
 		switch method {
 		case "initialize":
+			return map[string]any{}, false
+		case "skills/list":
+			skillReloads.Add(1)
 			return map[string]any{}, false
 		case "thread/list":
 			if !persisted.Load() {
@@ -568,6 +572,7 @@ func TestInitialRecoveryDropsLostEmptyThreadAndAdoptsAcceptedTurn(t *testing.T) 
 	}
 
 	secondConnection := dialTestProtocol(t, server)
+	secondConnection.refreshSkills = true
 	sessionID, turn, err := secondConnection.reconcileInitialTurn(context.Background(), "/workspace/job", "agent-run-stable", "initial input", "gpt-5.6-sol", "high", "danger-full-access")
 	if err != nil {
 		t.Fatal(err)
@@ -580,6 +585,7 @@ func TestInitialRecoveryDropsLostEmptyThreadAndAdoptsAcceptedTurn(t *testing.T) 
 	}
 
 	thirdConnection := dialTestProtocol(t, server)
+	thirdConnection.refreshSkills = true
 	// The fake app-server implements no clientUserMessageId deduplication. A
 	// deliberately different hint still adopts by isolated thread history.
 	recoveredSession, recoveredTurn, err := thirdConnection.reconcileInitialTurn(context.Background(), "/workspace/job", "different-native-hint", "initial input", "gpt-5.6-sol", "high", "danger-full-access")
@@ -589,8 +595,8 @@ func TestInitialRecoveryDropsLostEmptyThreadAndAdoptsAcceptedTurn(t *testing.T) 
 	if recoveredSession != sessionID || !reflect.DeepEqual(recoveredTurn, TurnOutcome{ID: "turn-native-1", Status: "inProgress"}) {
 		t.Fatalf("recovered binding thread=%s turn=%#v", recoveredSession, recoveredTurn)
 	}
-	if threadStarts.Load() != 2 || turnStarts.Load() != 1 {
-		t.Fatalf("thread starts=%d turn starts=%d", threadStarts.Load(), turnStarts.Load())
+	if threadStarts.Load() != 2 || turnStarts.Load() != 1 || skillReloads.Load() != 1 {
+		t.Fatalf("thread starts=%d turn starts=%d skill reloads=%d", threadStarts.Load(), turnStarts.Load(), skillReloads.Load())
 	}
 }
 
@@ -660,7 +666,7 @@ func TestStrictReviewTrustedSubmissionConvergesOnOneSessionAndTurn(t *testing.T)
 	var turnStarts atomic.Int32
 	server, requests := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
 		switch method {
-		case "initialize":
+		case "initialize", "skills/list":
 			return map[string]any{}, false
 		case "thread/list":
 			if !sessionCreated {
@@ -728,7 +734,7 @@ func TestStrictReviewLostAfterTrustedSubmissionAdoptsPersistedTurnWithoutDuplica
 	var turnStarts atomic.Int32
 	server, requests := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
 		switch method {
-		case "initialize":
+		case "initialize", "skills/list":
 			return map[string]any{}, false
 		case "thread/list":
 			if !turnCreated {
@@ -795,7 +801,7 @@ func TestStrictReviewDirectBindingToleratesDelayedNativeVisibility(t *testing.T)
 	var threadStarts, turnStarts atomic.Int32
 	server, requests := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
 		switch method {
-		case "initialize":
+		case "initialize", "skills/list":
 			return map[string]any{}, false
 		case "thread/list":
 			if !sessionCreated {

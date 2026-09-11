@@ -80,6 +80,12 @@ func (e *resumeBindingError) Error() string {
 }
 func (e *resumeBindingError) DefiniteNoSubmit() bool { return true }
 
+type skillsReloadError struct{ err error }
+
+func (e *skillsReloadError) Error() string          { return "refresh Codex skills: " + e.err.Error() }
+func (e *skillsReloadError) Unwrap() error          { return e.err }
+func (e *skillsReloadError) DefiniteNoSubmit() bool { return true }
+
 type attentionError struct{ reason string }
 
 func (e *attentionError) Error() string         { return e.reason }
@@ -90,8 +96,8 @@ type reviewVisibilityError struct{ reason string }
 func (e *reviewVisibilityError) Error() string                   { return e.reason }
 func (e *reviewVisibilityError) RetryableReviewVisibility() bool { return true }
 
-func (a Agent) StartInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID, input, model, effort string) (core.HarnessBinding, error) {
-	threadID, turn, err := a.startInitialTurn(ctx, owner, workspace, agentRunID, input, model, effort, "danger-full-access")
+func (a Agent) StartInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID, input, model, effort string, refreshSkills bool) (core.HarnessBinding, error) {
+	threadID, turn, err := a.startInitialTurn(ctx, owner, workspace, agentRunID, input, model, effort, "danger-full-access", refreshSkills)
 	return core.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: turn}, err
 }
 
@@ -138,7 +144,7 @@ func (a Agent) ReadStrictReviewTurn(ctx context.Context, owner provider.Ownershi
 	return binding, err
 }
 
-func (a Agent) startInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID, input, model, effort, capability string) (string, TurnOutcome, error) {
+func (a Agent) startInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID, input, model, effort, capability string, refreshSkills bool) (string, TurnOutcome, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	instructions, err := a.readWorkspaceInstructions(ctx, owner, workspace)
@@ -149,6 +155,7 @@ func (a Agent) startInitialTurn(ctx context.Context, owner provider.Ownership, w
 	var outcome TurnOutcome
 	err = a.withServer(ctx, owner, func(protocol *protocol) error {
 		protocol.instructions, protocol.instructionCache = instructions, a.Observations
+		protocol.refreshSkills = refreshSkills
 		var err error
 		sessionID, outcome, err = protocol.reconcileInitialTurn(ctx, workspace, agentRunID, input, model, effort, capability)
 		return err
@@ -181,7 +188,7 @@ func (a Agent) ReadTurns(ctx context.Context, owner provider.Ownership, threadID
 	return core.HarnessHistory{Harness: Harness, ThreadID: threadID, Turns: turns}, err
 }
 
-func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, agentRunID, input, model, effort string) (core.HarnessBinding, error) {
+func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, agentRunID, input, model, effort string, refreshSkills bool) (core.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	instructions, err := a.readWorkspaceInstructions(ctx, owner, workspace)
@@ -191,6 +198,7 @@ func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspac
 	var outcome TurnOutcome
 	err = a.withServer(ctx, owner, func(protocol *protocol) error {
 		protocol.instructions, protocol.instructionCache = instructions, a.Observations
+		protocol.refreshSkills = refreshSkills
 		var err error
 		outcome, err = protocol.resumeAndStartTurn(ctx, threadID, workspace, agentRunID, input, model, effort, "danger-full-access")
 		return err
@@ -463,6 +471,7 @@ func dialProtocol(ctx context.Context, endpoint, token string, headers http.Head
 }
 
 type protocol struct {
+	refreshSkills       bool
 	instructions        *workspaceInstructions
 	instructionCache    *Observations
 	freshThread         bool
@@ -864,6 +873,11 @@ func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRun
 	policyType := "dangerFullAccess"
 	if capability == "read-only" {
 		policyType = "readOnly"
+	}
+	if p.refreshSkills {
+		if _, err := p.call(ctx, "skills/list", map[string]any{"cwds": []string{workspace}, "forceReload": true}); err != nil {
+			return TurnOutcome{}, &skillsReloadError{err: err}
+		}
 	}
 	if err := p.injectWorkspaceInstructions(ctx, sessionID); err != nil {
 		return TurnOutcome{}, err

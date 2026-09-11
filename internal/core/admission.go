@@ -30,12 +30,13 @@ type JobAdmission struct {
 
 // MessageAdmission is one client input admitted to its exact Agent lane.
 type MessageAdmission struct {
-	JobID     string
-	SandboxID string
-	FromKind  MessageFromKind
-	FromID    string
-	Input     string
-	Intent    MessageDeliveryIntent
+	RefreshSkills bool
+	JobID         string
+	SandboxID     string
+	FromKind      MessageFromKind
+	FromID        string
+	Input         string
+	Intent        MessageDeliveryIntent
 }
 
 // MessageAdmissionResult is the immutable durable admission acknowledged by

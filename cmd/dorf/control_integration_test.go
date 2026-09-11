@@ -133,12 +133,23 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	var problem controlapi.Problem
 
 	messageKey := fmt.Sprintf("control-message-%d", time.Now().UnixNano())
-	messageInput := controlapi.SendMessageRequest{Text: "continue before the initial Turn settles", Intent: "follow"}
+	messageInput := controlapi.SendMessageRequest{Text: "continue before the initial Turn settles", RefreshSkills: true}
 	early := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/messages", credential, messageKey, messageInput)
 	var accepted controlapi.Message
 	controlTestJSON(t, early, http.StatusCreated, &accepted)
 	if accepted.JobID != committed.ID || accepted.Sequence != 1 || accepted.Delivery.State != "accepted" {
 		t.Fatalf("early Message=%#v", accepted)
+	}
+	execution, err := store.AgentMessageExecution(ctx, accepted.ID)
+	if err != nil || !execution.Message.RefreshSkills {
+		t.Fatalf("durable refresh=%+v err=%v", execution.Message, err)
+	}
+	restarted = controlTestHandler(store, restartedTasks, provider, controlauth.Service{Store: store}, runtimes, blob.Store{Root: t.TempDir()})
+	changedRefresh := messageInput
+	changedRefresh.RefreshSkills = false
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/messages", credential, messageKey, changedRefresh), http.StatusConflict, &problem)
+	if problem.Code != "idempotency_conflict" {
+		t.Fatalf("changed refresh=%+v", problem)
 	}
 	replayedMessage := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/messages", credential, messageKey, messageInput)
 	var sameMessage controlapi.Message
@@ -161,9 +172,13 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	if err := store.BindAgentRun(ctx, initialRun, "codex", "control-thread", "control-turn", "inProgress"); err != nil {
 		t.Fatal(err)
 	}
-	auto := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/messages", credential, messageKey+"-auto", controlapi.SendMessageRequest{Text: "correct the active answer"})
+	auto := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/messages", credential, messageKey+"-auto", controlapi.SendMessageRequest{Text: "correct the active answer", RefreshSkills: true})
 	var steering controlapi.Message
 	controlTestJSON(t, auto, http.StatusCreated, &steering)
+	ordinary, err := store.AgentMessageExecution(ctx, steering.ID)
+	if err != nil || !ordinary.Message.RefreshSkills || ordinary.RefreshSkills {
+		t.Fatalf("ordinary refresh=%+v err=%v", ordinary.Message, err)
+	}
 	if steering.Intent != "steer" {
 		t.Fatalf("omitted intent did not steer active work: %+v", steering)
 	}
@@ -692,5 +707,51 @@ func controlTestJSON(t *testing.T, response *httptest.ResponseRecorder, status i
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), output); err != nil {
 		t.Fatalf("decode response %q: %v", response.Body.String(), err)
+	}
+}
+
+func TestSkillRefreshRejectsUnsupportedProfileBeforeAdmission(t *testing.T) {
+	ctx := context.Background()
+	store, tasks, name := controlTestStore(t)
+	profile, err := store.SandboxProfile(ctx, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile.Name += "-pi"
+	profile.Harness = "pi"
+	profile, _, err = store.CreateSandboxProfile(ctx, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, verification, err := store.BeginSandboxProfileVerification(ctx, profile.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordSandboxProfileProbe(ctx, verification, "pi-test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordSandboxProfileVerificationCleanup(ctx, verification); err != nil {
+		t.Fatal(err)
+	}
+	job, _, err := store.AdmitDirect(ctx, core.JobAdmission{AdmissionKey: profile.Name, SandboxProfile: profile.Name, ProviderConnection: "primary", Model: "test-model", ReasoningEffort: "high"}, tasks.QueueName())
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "refresh", Input: "continue", Intent: core.MessageAuto, RefreshSkills: true}
+	if _, err := (composedMessageAdmissions{store: store}).AdmitAgentMessage(ctx, input); err != controlapi.ErrSkillRefreshUnavailable {
+		t.Fatalf("Go refresh rejection=%v", err)
+	}
+	api := controlAPIJobs{store: store, tasks: tasks}
+	if _, _, err := api.SendMessage(ctx, job.ID, "refresh", controlapi.SendMessageRequest{Text: "continue", RefreshSkills: true}); err != controlapi.ErrSkillRefreshUnavailable {
+		t.Fatalf("HTTP refresh rejection=%v", err)
+	}
+	messages, err := store.Deliveries(ctx, job.ID)
+	if err != nil || len(messages) != 0 {
+		t.Fatalf("unsupported refresh was retained: messages=%v err=%v", messages, err)
+	}
+	input.RefreshSkills = false
+	admitted, err := (composedMessageAdmissions{store: store}).AdmitAgentMessage(ctx, input)
+	if err != nil || !admitted.Created {
+		t.Fatalf("ordinary Pi message=%+v err=%v", admitted, err)
 	}
 }

@@ -124,6 +124,16 @@ or steer, so replay cannot change either the request or its resolved target. A d
 can have a null result while its Turn is still active; clients wait for the result, not merely
 delivery acknowledgement, before presenting the final answer.
 
+A client that changes installed skills can set `refresh_skills` on its next Message. A Follow
+reloads before starting its fresh Turn. A Steer leaves the active Turn unchanged and retains the
+request for the next fresh Turn, including a Follow that was queued before the Steer arrived.
+Automatic intent uses the same existing delivery selection. Starting or recovering work keeps
+later Follows queued. A failed refresh remains pending; an accepted fresh Turn proves the refresh
+ran. The original request flag stays immutable on replay. Unsupported profiles reject the request
+before admission; currently only Codex supports it. A completed Steer result confirms its target
+Turn's outcome and does not acknowledge a skill refresh. Clients own safe file activation and
+must not treat refresh admission as permission to replace software during active work.
+
 A direct Codex Message can request interruption of its exact native Turn. This idempotent request
 also accepts a steer attached to that Turn; it never targets a successor and does not close Job
 admission or clean up the Sandbox. Dorf stores acceptance before contacting Codex, prioritizes Stop

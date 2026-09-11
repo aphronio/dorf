@@ -38,6 +38,10 @@ func TestObservationsRetainExactTurnAfterSubmissionReturns(t *testing.T) {
 			if json.Unmarshal(data, &request) != nil {
 				return
 			}
+			if request["method"] == "skills/list" {
+				send(map[string]any{"id": request["id"], "result": map[string]any{}})
+				continue
+			}
 			if request["method"] != "turn/start" {
 				continue
 			}

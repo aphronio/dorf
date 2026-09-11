@@ -149,6 +149,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D091: Profile verification gates admission, not admitted runtime](decisions/D091-profile-verification-gates-admission-not-admitted-runtime.md) (`current`). Changing profile verification, concurrent admission, or admitted runtime resolution.
 - [D109: Export diagnostics through the existing native Turn binding](decisions/D109-exact-turn-execution-diagnostics.md) (`current`). Changing native execution diagnostics, attribution, or exporter custody.
 - [D114: Incus guests include an isolated browser](decisions/D114-incus-guests-include-an-isolated-browser.md) (`current`). Changing browser tooling, guest browser persistence, or Incus image proof.
+- [D117: Clients request skill refresh at fresh Turn boundaries](decisions/D117-client-requested-skill-refresh-at-fresh-turn-boundaries.md) (`current`). Changing skill discovery after client-managed Sandbox updates.
 
 ## Model access
 
@@ -180,6 +181,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D113: Clients discover Sandbox profile summaries](decisions/D113-clients-discover-sandbox-profile-summaries.md) (`current`). Changing remote Sandbox profile discovery or Job profile selection errors.
 - [D115: Sandbox file access supports agent home configuration](decisions/D115-sandbox-file-access-supports-agent-home-configuration.md) (`current`). Changing Sandbox file paths, helper installation, or client credential delivery.
 - [D116: Clients bootstrap Sandboxes and observe the latest reply](decisions/D116-client-bootstrap-and-latest-reply-observation.md) (`current`). Changing client Sandbox setup or reply notification integrations.
+- [D117: Clients request skill refresh at fresh Turn boundaries](decisions/D117-client-requested-skill-refresh-at-fresh-turn-boundaries.md) (`current`). Changing skill discovery after client-managed Sandbox updates.
 
 ## Deployment and setup
 
@@ -229,6 +231,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D107: Commit Job task scheduling and attachment together](decisions/D107-commit-job-task-scheduling-and-attachment-together.md) (`current`). Changing admission, task handoffs, cleanup scheduling, or recovery across Absurd and Dorf.
 - [D108: Reuse direct Jobs for retained sessions and exact message control](decisions/D108-direct-session-message-control.md) (`current`). Changing automatic message intent, interruption, or direct Job session continuity.
 - [D110: Separate Job setup from Message delivery](decisions/D110-separate-job-setup-from-messages.md) (`current`). Changing Job creation, workspace instructions, or Message admission.
+- [D117: Clients request skill refresh at fresh Turn boundaries](decisions/D117-client-requested-skill-refresh-at-fresh-turn-boundaries.md) (`current`). Changing skill discovery after client-managed Sandbox updates.
 
 ## GitHub integration
 

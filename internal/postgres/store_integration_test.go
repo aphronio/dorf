@@ -1711,8 +1711,8 @@ func TestSubmittingFollowRemainsDeliveryCandidateUntilReconciled(t *testing.T) {
 	}) {
 		t.Fatalf("prepared Delivery baseline=%#v err=%v", deliveries, err)
 	}
-	later, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "later-follow", Input: "must wait for recovery"})
-	if err != nil || !later.Created {
+	later, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "later-follow", Input: "must wait for recovery", Intent: core.MessageAuto, RefreshSkills: true})
+	if err != nil || !later.Created || later.Message.Intent != core.MessageFollow {
 		t.Fatalf("later Follow=%#v err=%v", later, err)
 	}
 

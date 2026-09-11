@@ -758,6 +758,8 @@ func messageProblemCode(err error) string {
 	switch {
 	case errors.Is(err, ErrSteerUnavailable):
 		return "steer_unavailable"
+	case errors.Is(err, ErrSkillRefreshUnavailable):
+		return "skill_refresh_unavailable"
 	case errors.Is(err, ErrInterruptUnavailable):
 		return "interrupt_unavailable"
 	case errors.Is(err, ErrMessageUnavailable):

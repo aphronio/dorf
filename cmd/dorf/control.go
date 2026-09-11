@@ -546,6 +546,7 @@ func remoteMessageSend(ctx context.Context, cfg clientconfig.Config, client *con
 	set.SetOutput(stderr)
 	key := set.String("key", "", "stable request identity for explicit replay")
 	inputFile := set.String("input-file", "", "path containing the complete Message")
+	refreshSkills := set.Bool("refresh-skills", false, "reload installed skills before the next fresh Turn (Codex)")
 	intent := set.String("intent", "auto", "delivery intent: auto (steer active work, follow when idle), follow, or steer")
 	output := set.String("output", "human", "output format: human or json")
 	if err := set.Parse(args); err != nil {
@@ -568,7 +569,7 @@ func remoteMessageSend(ctx context.Context, cfg clientconfig.Config, client *con
 	if err != nil {
 		return err
 	}
-	request := controlapi.SendMessageRequest{Text: input, Intent: *intent}
+	request := controlapi.SendMessageRequest{Text: input, Intent: *intent, RefreshSkills: *refreshSkills}
 	message, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Message may have been accepted.", func() (controlapi.Message, error) {
 		return client.SendMessage(ctx, set.Arg(0), requestKey, request)
 	})
@@ -1143,6 +1144,9 @@ func (a controlAPIJobs) SendMessage(ctx context.Context, jobID, key string, inpu
 		options = append(options, core.Steer())
 	default:
 		return controlapi.Message{}, false, controlapi.ErrInvalidInput
+	}
+	if input.RefreshSkills {
+		options = append(options, core.RefreshSkills())
 	}
 	handle, err := a.application().OpenJob(ctx, job.ID)
 	if err != nil {

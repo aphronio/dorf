@@ -80,6 +80,11 @@ The Codex adapter loads AGENTS.md natively on a new thread, sends a read notice 
 and injects SOUL.md as native developer context only initially or after its contents change.
 Process-local hashes avoid repeating unchanged context. A lost cache causes rehydration from the
 same files. Message text and durable Core records do not carry instruction snapshots.
+Clients request skill refresh through durable Message input. Existing delivery selection decides
+when a fresh Turn can start. Effective refresh derives from pending requests and accepted native
+Turn bindings in the same Agent lane. The Codex adapter calls `skills/list` with forced reload only
+before that fresh Turn. Reload failure prevents submission; accepted-turn recovery and steering
+do not reload. [Message semantics](../control-api.md#resources) own the client contract.
 
 A requested cleanup closes admission, cancels the previous task, and schedules and attaches cleanup
 in one transaction under the Job's external-effect fence. A task requesting its own cleanup may

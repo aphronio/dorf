@@ -17,6 +17,7 @@ type AgentRunOperation struct {
 	job           core.Job
 	sandbox       core.Sandbox
 	messageIntent core.MessageDeliveryIntent
+	refreshSkills bool
 }
 
 func NewAgentRunOperation(externals Externals, execution core.AgentMessageExecution) (AgentRunOperation, error) {
@@ -24,7 +25,7 @@ func NewAgentRunOperation(externals Externals, execution core.AgentMessageExecut
 		execution.AgentRun.JobID != execution.Job.ID || execution.AgentRun.SandboxID != execution.Sandbox.ID {
 		return AgentRunOperation{}, fmt.Errorf("ordinary Agent operation requires the exact Job-owned Sandbox")
 	}
-	return AgentRunOperation{externals: externals, job: execution.Job, sandbox: execution.Sandbox, messageIntent: execution.Message.Intent}, nil
+	return AgentRunOperation{externals: externals, job: execution.Job, sandbox: execution.Sandbox, messageIntent: execution.Message.Intent, refreshSkills: execution.RefreshSkills}, nil
 }
 
 func (o AgentRunOperation) Harness() string { return o.externals.Agent.Name() }
@@ -48,9 +49,9 @@ func (o AgentRunOperation) Submit(ctx context.Context, run core.AgentRun, input 
 		return core.HarnessBinding{}, err
 	}
 	if run.ThreadID == "" {
-		return o.externals.Agent.StartInitialTurn(ctx, owner, o.externals.Sandbox.Workspace(), run.ID, input, o.job.Model, o.job.ReasoningEffort)
+		return o.externals.Agent.StartInitialTurn(ctx, owner, o.externals.Sandbox.Workspace(), run.ID, input, o.job.Model, o.job.ReasoningEffort, o.refreshSkills)
 	}
-	return o.externals.Agent.StartTurn(ctx, owner, o.externals.Sandbox.Workspace(), run.ThreadID, run.ID, input, o.job.Model, o.job.ReasoningEffort)
+	return o.externals.Agent.StartTurn(ctx, owner, o.externals.Sandbox.Workspace(), run.ThreadID, run.ID, input, o.job.Model, o.job.ReasoningEffort, o.refreshSkills)
 }
 
 func (o AgentRunOperation) Recover(ctx context.Context, run core.AgentRun) (core.HarnessBinding, error) {

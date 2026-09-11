@@ -46,6 +46,7 @@ var problemCatalog = []ProblemDescriptor{
 	describeProblem(502, "sandbox_exec_failed", "Sandbox command outcome is unknown; inspect before retrying", false),
 	describeProblem(409, "sandbox_exec_unavailable", "Sandbox command is unavailable", false),
 	describeProblem(404, "sandbox_not_found", "Sandbox not found", false),
+	describeProblem(409, "skill_refresh_unavailable", "The selected profile does not support skill refresh", false),
 	describeProblem(409, "steer_unavailable", "No exact active delivery can accept a steer", false),
 	describeProblem(401, "unauthenticated", "A valid Client credential is required", false),
 	describeProblem(415, "unsupported_media_type", "Content-Type does not match this operation", false),

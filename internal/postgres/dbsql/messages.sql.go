@@ -13,6 +13,43 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 )
 
+const agentMessageNeedsSkillRefresh = `-- name: AgentMessageNeedsSkillRefresh :one
+with current_message as (
+    select m.id,m.job_id,m.sequence,m.delivery_intent,ar.sandbox_id,ar.role
+    from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id
+    where m.id=$1
+), previous_turn as (
+    select m.sequence,ar.turn_id
+    from current_message current
+    join dorf.job_messages m on m.job_id=current.job_id and m.sequence<current.sequence
+    join dorf.agent_runs ar on ar.message_id=m.id
+    where m.delivery_intent='follow' and ar.turn_id is not null
+      and ar.sandbox_id=current.sandbox_id and ar.role=current.role
+    order by m.sequence desc limit 1
+)
+select exists (
+    select 1
+    from current_message current
+    join dorf.job_messages requested on requested.job_id=current.job_id
+    join dorf.agent_runs request_run on request_run.message_id=requested.id
+    where current.delivery_intent='follow' and requested.refresh_skills
+      and request_run.sandbox_id=current.sandbox_id and request_run.role=current.role
+      and (
+        (requested.delivery_intent='follow' and requested.sequence<=current.sequence
+          and requested.sequence>coalesce((select sequence from previous_turn),0))
+        or (requested.delivery_intent='steer'
+          and requested.steer_target_turn_id=(select turn_id from previous_turn))
+      )
+) as refresh_skills
+`
+
+func (q *Queries) AgentMessageNeedsSkillRefresh(ctx context.Context, messageID string) (bool, error) {
+	row := q.db.QueryRowContext(ctx, agentMessageNeedsSkillRefresh, messageID)
+	var refresh_skills bool
+	err := row.Scan(&refresh_skills)
+	return refresh_skills, err
+}
+
 const countUnsettledInputs = `-- name: CountUnsettledInputs :one
 select count(*)
 from dorf.job_messages m
@@ -157,7 +194,7 @@ func (q *Queries) GetLatestTurnStartRun(ctx context.Context, jobID string) (GetL
 
 const getMessage = `-- name: GetMessage :one
 select id,job_id,from_kind,from_id,sequence,input,delivery_intent,
-       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at
+       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at,refresh_skills
 from dorf.job_messages
 where id=$1
 `
@@ -172,6 +209,7 @@ type GetMessageRow struct {
 	DeliveryIntent    core.MessageDeliveryIntent
 	SteerTargetTurnID string
 	AdmittedAt        time.Time
+	RefreshSkills     bool
 }
 
 func (q *Queries) GetMessage(ctx context.Context, messageID string) (GetMessageRow, error) {
@@ -187,13 +225,14 @@ func (q *Queries) GetMessage(ctx context.Context, messageID string) (GetMessageR
 		&i.DeliveryIntent,
 		&i.SteerTargetTurnID,
 		&i.AdmittedAt,
+		&i.RefreshSkills,
 	)
 	return i, err
 }
 
 const getMessageBySender = `-- name: GetMessageBySender :one
 select id,job_id,from_kind,from_id,sequence,input,delivery_intent,requested_intent,
-       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at
+       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at,refresh_skills
 from dorf.job_messages
 where job_id=$1 and from_kind=$2
   and from_id=$3
@@ -216,6 +255,7 @@ type GetMessageBySenderRow struct {
 	RequestedIntent   string
 	SteerTargetTurnID string
 	AdmittedAt        time.Time
+	RefreshSkills     bool
 }
 
 func (q *Queries) GetMessageBySender(ctx context.Context, arg GetMessageBySenderParams) (GetMessageBySenderRow, error) {
@@ -232,18 +272,19 @@ func (q *Queries) GetMessageBySender(ctx context.Context, arg GetMessageBySender
 		&i.RequestedIntent,
 		&i.SteerTargetTurnID,
 		&i.AdmittedAt,
+		&i.RefreshSkills,
 	)
 	return i, err
 }
 
 const insertMessage = `-- name: InsertMessage :exec
 insert into dorf.job_messages(
-    id,job_id,from_kind,from_id,sequence,input,delivery_intent,steer_target_turn_id,requested_intent
+    id,job_id,from_kind,from_id,sequence,input,delivery_intent,steer_target_turn_id,requested_intent,refresh_skills
 )
 values(
     $1,$2,$3,$4,
     $5,$6,$7,
-    nullif($8::text,''),$9
+    nullif($8::text,''),$9,$10
 )
 `
 
@@ -257,6 +298,7 @@ type InsertMessageParams struct {
 	DeliveryIntent    core.MessageDeliveryIntent
 	SteerTargetTurnID string
 	RequestedIntent   string
+	RefreshSkills     bool
 }
 
 func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) error {
@@ -270,13 +312,14 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) er
 		arg.DeliveryIntent,
 		arg.SteerTargetTurnID,
 		arg.RequestedIntent,
+		arg.RefreshSkills,
 	)
 	return err
 }
 
 const listDeliveries = `-- name: ListDeliveries :many
 select m.id as message_id,m.job_id as message_job_id,m.from_kind,m.from_id,m.sequence,m.input,m.delivery_intent,
-       coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,
+       coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,m.refresh_skills,
        m.admitted_at,
        (ar.id is not null)::boolean as agent_run_present,
        coalesce(ar.id,'') as agent_run_id,coalesce(ar.job_id,'') as agent_run_job_id,
@@ -310,6 +353,7 @@ type ListDeliveriesRow struct {
 	Input              string
 	DeliveryIntent     core.MessageDeliveryIntent
 	SteerTargetTurnID  string
+	RefreshSkills      bool
 	AdmittedAt         time.Time
 	AgentRunPresent    bool
 	AgentRunID         string
@@ -351,6 +395,7 @@ func (q *Queries) ListDeliveries(ctx context.Context, jobID string) ([]ListDeliv
 			&i.Input,
 			&i.DeliveryIntent,
 			&i.SteerTargetTurnID,
+			&i.RefreshSkills,
 			&i.AdmittedAt,
 			&i.AgentRunPresent,
 			&i.AgentRunID,

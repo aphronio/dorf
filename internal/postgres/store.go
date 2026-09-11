@@ -35,7 +35,7 @@ const (
 	AbsurdSchemaSHA256  = "d34309370c539f3a51f2b36b69b1f77551f8e4a14480a1c8def8bb8f40fd9aab"
 )
 
-var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql"}
+var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql"}
 
 type Store struct{ DB *sql.DB }
 
@@ -272,15 +272,17 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 	if err == nil {
 		message := messageFromValues(row.ID, row.JobID, row.FromKind, row.FromID, row.Sequence, row.Input, row.DeliveryIntent, row.SteerTargetTurnID)
 		message.AdmittedAt = row.AdmittedAt
-		if message.Input != input.Input || row.RequestedIntent != string(input.Intent) {
-			return core.Message{}, false, fmt.Errorf("%w: sender %s/%q", core.ErrMessageReplayConflict, input.FromKind, input.FromID)
-		}
+		message.RefreshSkills = row.RefreshSkills
 		run, runErr := queries.GetAgentRunByMessage(ctx, message.ID)
 		if runErr != nil {
 			return core.Message{}, false, fmt.Errorf("load durable AgentRun for Message replay: %w", runErr)
 		}
-		if run.JobID != input.JobID || run.MessageID != message.ID || run.SandboxID != input.SandboxID {
-			return core.Message{}, false, fmt.Errorf("%w: sender %s/%q changed Sandbox delivery", core.ErrMessageReplayConflict, input.FromKind, input.FromID)
+		stored := core.MessageAdmission{
+			JobID: run.JobID, SandboxID: run.SandboxID, FromKind: message.FromKind, FromID: message.FromID,
+			Input: message.Input, Intent: core.MessageDeliveryIntent(row.RequestedIntent), RefreshSkills: message.RefreshSkills,
+		}
+		if stored != input {
+			return core.Message{}, false, fmt.Errorf("%w: sender %s/%q", core.ErrMessageReplayConflict, input.FromKind, input.FromID)
 		}
 		return message, false, nil
 	}
@@ -306,13 +308,14 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 	}
 	var message core.Message
 	message.TargetTurnID = target.turnID
+	message.RefreshSkills = input.RefreshSkills
 	message.Sequence, err = queries.NextMessageSequence(ctx, input.JobID)
 	if err != nil {
 		return core.Message{}, false, err
 	}
 	message.ID = core.MessageID(input.JobID, input.FromKind, input.FromID)
 	message.JobID, message.FromKind, message.FromID, message.Input, message.Intent = input.JobID, input.FromKind, input.FromID, input.Input, target.intent
-	if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{ID: message.ID, JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID, Sequence: message.Sequence, Input: message.Input, DeliveryIntent: message.Intent, RequestedIntent: string(input.Intent), SteerTargetTurnID: message.TargetTurnID}); err != nil {
+	if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{ID: message.ID, JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID, Sequence: message.Sequence, Input: message.Input, DeliveryIntent: message.Intent, RequestedIntent: string(input.Intent), RefreshSkills: input.RefreshSkills, SteerTargetTurnID: message.TargetTurnID}); err != nil {
 		return core.Message{}, false, err
 	}
 	runID := core.AgentRunID(message.ID)
@@ -753,6 +756,7 @@ func (s Store) Deliveries(ctx context.Context, jobID string) ([]core.Delivery, e
 		}
 		message := messageFromValues(r.MessageID, r.MessageJobID, r.FromKind, r.FromID, r.Sequence, r.Input, r.DeliveryIntent, r.SteerTargetTurnID)
 		message.AdmittedAt = r.AdmittedAt
+		message.RefreshSkills = r.RefreshSkills
 		run := agentRunFromValues(r.AgentRunID, r.AgentRunJobID, r.AgentRunMessageID, r.State, r.Harness, r.ThreadID, r.BaselineRecorded, r.BaselineTurnID, r.TurnID, r.TurnOutcome, r.Attention, r.Role, r.InputRevision)
 		run.Capability = r.Capability
 		run.SandboxID = r.SandboxID
@@ -820,6 +824,7 @@ func (s Store) AgentMessageExecution(ctx context.Context, messageID string) (cor
 	}
 	message := messageFromValues(messageRow.ID, messageRow.JobID, messageRow.FromKind, messageRow.FromID, messageRow.Sequence, messageRow.Input, messageRow.DeliveryIntent, messageRow.SteerTargetTurnID)
 	message.AdmittedAt = messageRow.AdmittedAt
+	message.RefreshSkills = messageRow.RefreshSkills
 	runRow, err := queries.GetAgentRunByMessage(ctx, message.ID)
 	if err != nil {
 		return core.AgentMessageExecution{}, fmt.Errorf("Message %s has no atomically admitted AgentRun: %w", message.ID, err)
@@ -842,7 +847,11 @@ func (s Store) AgentMessageExecution(ctx context.Context, messageID string) (cor
 	if run.MessageID != message.ID || run.JobID != job.ID || message.JobID != job.ID || sandbox.JobID != job.ID || run.SandboxID != sandbox.ID {
 		return core.AgentMessageExecution{}, fmt.Errorf("Message %s execution does not match its authoritative Job, AgentRun, and Sandbox", message.ID)
 	}
-	return core.AgentMessageExecution{Job: job, Message: message, AgentRun: run, Sandbox: sandbox}, nil
+	refreshSkills, err := queries.AgentMessageNeedsSkillRefresh(ctx, messageID)
+	if err != nil {
+		return core.AgentMessageExecution{}, err
+	}
+	return core.AgentMessageExecution{Job: job, Message: message, AgentRun: run, Sandbox: sandbox, RefreshSkills: refreshSkills}, nil
 }
 
 func (s Store) InterruptAgentRun(ctx context.Context, runID, reason string) error {
@@ -1153,7 +1162,7 @@ func (s Store) AgentMessage(ctx context.Context, jobID string) (*core.AgentMessa
 	}
 	message := core.Message{
 		ID: row.ID, JobID: row.JobID, FromKind: core.MessageFromKind(row.FromKind), FromID: row.FromID,
-		Sequence: row.Sequence, Intent: core.MessageDeliveryIntent(row.DeliveryIntent), TargetTurnID: row.SteerTargetTurnID, AdmittedAt: row.AdmittedAt,
+		RefreshSkills: row.RefreshSkills, Sequence: row.Sequence, Intent: core.MessageDeliveryIntent(row.DeliveryIntent), TargetTurnID: row.SteerTargetTurnID, AdmittedAt: row.AdmittedAt,
 	}
 	runRow, err := queries.GetAgentRunByMessage(ctx, message.ID)
 	if err != nil {

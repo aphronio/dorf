@@ -48,8 +48,12 @@ type MessageReceipt struct {
 }
 
 type MessageOption struct {
-	intent MessageDeliveryIntent
+	intent        MessageDeliveryIntent
+	refreshSkills bool
 }
+
+// RefreshSkills requests a reload before the next eligible fresh Turn.
+func RefreshSkills() MessageOption { return MessageOption{refreshSkills: true} }
 
 // Steer explicitly prioritizes the Message against active work. Omitting it
 // admits an ordinary FIFO follow.
@@ -219,21 +223,28 @@ func (h AgentHandle) Message(ctx context.Context, key, input string, options ...
 		return MessageReceipt{}, fmt.Errorf("Agent Message text exceeds 1 MiB")
 	}
 	intent := MessageFollow
-	if len(options) > 1 {
-		return MessageReceipt{}, fmt.Errorf("Agent Message accepts at most one delivery option")
-	}
-	if len(options) == 1 {
-		intent = options[0].intent
-		switch intent {
+	refreshSkills := false
+	for _, option := range options {
+		if option.refreshSkills {
+			refreshSkills = true
+			continue
+		}
+		if intent != MessageFollow {
+			return MessageReceipt{}, fmt.Errorf("Agent Message accepts at most one delivery option")
+		}
+		switch option.intent {
 		case MessageSteer, MessageAuto:
+			intent = option.intent
 		default:
 			return MessageReceipt{}, fmt.Errorf("unsupported Agent Message delivery option")
 		}
 	}
-	admitted, err := h.application.AgentMessages.AdmitAgentMessage(ctx, MessageAdmission{
+	request := MessageAdmission{
 		JobID: h.jobID, SandboxID: h.sandboxID, FromKind: MessageFromHuman,
 		FromID: key, Input: input, Intent: intent,
-	})
+		RefreshSkills: refreshSkills,
+	}
+	admitted, err := h.application.AgentMessages.AdmitAgentMessage(ctx, request)
 	message := admitted.Message
 	receipt := MessageReceipt{
 		MessageID: message.ID, JobID: message.JobID, SandboxID: admitted.SandboxID, Sequence: message.Sequence,
@@ -245,8 +256,11 @@ func (h AgentHandle) Message(ctx context.Context, key, input string, options ...
 	}
 	expectedID := MessageID(h.jobID, MessageFromHuman, key)
 	targetValid := message.Intent == MessageFollow && message.TargetTurnID == "" || message.Intent == MessageSteer && message.TargetTurnID != ""
-	if message.ID != expectedID || message.JobID != h.jobID || admitted.SandboxID != h.sandboxID || message.FromKind != MessageFromHuman || message.FromID != key ||
-		message.Input != input || message.Sequence <= 0 || !intent.accepts(message.Intent) || !targetValid {
+	accepted := MessageAdmission{
+		JobID: message.JobID, SandboxID: admitted.SandboxID, FromKind: message.FromKind, FromID: message.FromID,
+		Input: message.Input, Intent: intent, RefreshSkills: message.RefreshSkills,
+	}
+	if accepted != request || message.ID != expectedID || message.Sequence <= 0 || !intent.accepts(message.Intent) || !targetValid {
 		return MessageReceipt{}, fmt.Errorf("Agent Message admission returned a foreign receipt")
 	}
 	if h.application.Tasks == nil {

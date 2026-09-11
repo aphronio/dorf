@@ -205,7 +205,7 @@ func TestStartTurnAppendsExactlyOneNativeTurn(t *testing.T) {
 	runner := &acceptedRPCPromptRunner{before: oneTurn, after: twoTurns, requestID: "run-2"}
 	agent := Agent{Sandbox: testSandbox(runner, testOwner("sandbox"))}
 
-	binding, err := agent.StartTurn(context.Background(), testOwner("sandbox"), "/workspace/job", "dorf-job", "run-2", "second", "gpt-test", "low")
+	binding, err := agent.StartTurn(context.Background(), testOwner("sandbox"), "/workspace/job", "dorf-job", "run-2", "second", "gpt-test", "low", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestStrictReviewRecoveryWithoutNativeTurnAllowsOriginalSubmission(t *testin
 func TestInitialTurnReportsRPCPreflightRejectionAsDefinitelyNotSubmitted(t *testing.T) {
 	agent := Agent{Sandbox: testSandbox(&rejectedRPCPromptRunner{}, testOwner("sandbox"))}
 
-	_, err := agent.StartInitialTurn(context.Background(), testOwner("sandbox"), "/workspace/job", "run-1", "inspect", "gpt-test", "low")
+	_, err := agent.StartInitialTurn(context.Background(), testOwner("sandbox"), "/workspace/job", "run-1", "inspect", "gpt-test", "low", false)
 	if err == nil || !strings.Contains(err.Error(), "prompt rejected") {
 		t.Fatalf("initial Turn error=%v", err)
 	}
@@ -269,5 +269,21 @@ func TestWaitTurnObservesExactNativeTurnUntilTerminal(t *testing.T) {
 	}
 	if runner.reads != 2 || binding.ThreadID != "dorf-job" || binding.Turn.ID != "user0001" || binding.Turn.Status != "completed" || binding.Turn.Output != "done" {
 		t.Fatalf("reads=%d binding=%#v", runner.reads, binding)
+	}
+}
+
+func TestSkillRefreshRejectedBeforeNativeSubmission(t *testing.T) {
+	agent := Agent{}
+	for _, initial := range []bool{true, false} {
+		var err error
+		if initial {
+			_, err = agent.StartInitialTurn(context.Background(), testOwner("sandbox"), "/workspace/job", "run", "input", "model", "high", true)
+		} else {
+			_, err = agent.StartTurn(context.Background(), testOwner("sandbox"), "/workspace/job", "thread", "run", "input", "model", "high", true)
+		}
+		definite, ok := err.(interface{ DefiniteNoSubmit() bool })
+		if !ok || !definite.DefiniteNoSubmit() {
+			t.Fatalf("refresh error=%v", err)
+		}
 	}
 }

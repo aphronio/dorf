@@ -192,15 +192,16 @@ const (
 )
 
 type Message struct {
-	ID           string                `json:"id"`
-	JobID        string                `json:"job_id"`
-	FromKind     MessageFromKind       `json:"from_kind"`
-	FromID       string                `json:"from_id"`
-	Sequence     int64                 `json:"sequence"`
-	Input        string                `json:"input"`
-	Intent       MessageDeliveryIntent `json:"intent"`
-	TargetTurnID string                `json:"target_turn_id,omitempty"`
-	AdmittedAt   time.Time             `json:"admitted_at,omitempty"`
+	RefreshSkills bool                  `json:"refresh_skills,omitempty"`
+	ID            string                `json:"id"`
+	JobID         string                `json:"job_id"`
+	FromKind      MessageFromKind       `json:"from_kind"`
+	FromID        string                `json:"from_id"`
+	Sequence      int64                 `json:"sequence"`
+	Input         string                `json:"input"`
+	Intent        MessageDeliveryIntent `json:"intent"`
+	TargetTurnID  string                `json:"target_turn_id,omitempty"`
+	AdmittedAt    time.Time             `json:"admitted_at,omitempty"`
 }
 
 type MessageDeliveryIntent string
@@ -251,10 +252,11 @@ type Delivery struct {
 // Consumers address work by Message identity; Core reloads the internal
 // AgentRun and exact Job-owned Sandbox before touching the Harness.
 type AgentMessageExecution struct {
-	Job      Job
-	Message  Message
-	AgentRun AgentRun
-	Sandbox  Sandbox
+	RefreshSkills bool
+	Job           Job
+	Message       Message
+	AgentRun      AgentRun
+	Sandbox       Sandbox
 }
 
 // MessageResult is the smallest consumer observation of one admitted Message.

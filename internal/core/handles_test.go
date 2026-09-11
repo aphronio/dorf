@@ -135,12 +135,12 @@ func TestAgentMessageRequiresExplicitSteerOption(t *testing.T) {
 	var got MessageAdmission
 	admit := handleTestAdmissions{admit: func(_ context.Context, input MessageAdmission) (MessageAdmissionResult, error) {
 		got = input
-		return MessageAdmissionResult{Message: Message{ID: MessageID(input.JobID, input.FromKind, input.FromID), JobID: input.JobID, FromKind: input.FromKind, FromID: input.FromID, Sequence: 3, Input: input.Input, Intent: input.Intent, TargetTurnID: "turn-active"}, SandboxID: input.SandboxID, Created: true}, nil
+		return MessageAdmissionResult{Message: Message{ID: MessageID(input.JobID, input.FromKind, input.FromID), JobID: input.JobID, FromKind: input.FromKind, FromID: input.FromID, Sequence: 3, Input: input.Input, Intent: input.Intent, RefreshSkills: input.RefreshSkills, TargetTurnID: "turn-active"}, SandboxID: input.SandboxID, Created: true}, nil
 	}}
 	application := Application{Store: handleTestStore{}, AgentMessages: admit}
 	agent := application.jobHandle("job-1").sandboxHandle("sandbox-a").Agent()
-	receipt, err := agent.Message(context.Background(), "send-steer", "adjust", Steer())
-	if err == nil || got.Intent != MessageSteer || receipt.Intent != MessageSteer || receipt.TargetTurnID != "turn-active" {
+	receipt, err := agent.Message(context.Background(), "send-steer", "adjust", Steer(), RefreshSkills())
+	if err == nil || got.Intent != MessageSteer || !got.RefreshSkills || receipt.Intent != MessageSteer || receipt.TargetTurnID != "turn-active" {
 		t.Fatalf("admission=%#v receipt=%#v err=%v", got, receipt, err)
 	}
 	if _, err := agent.Message(context.Background(), "send-invalid", "adjust", Steer(), Steer()); err == nil {

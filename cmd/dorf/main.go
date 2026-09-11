@@ -192,6 +192,15 @@ func (a composedMessageAdmissions) AdmitAgentMessage(ctx context.Context, input 
 	if err != nil {
 		return core.MessageAdmissionResult{}, err
 	}
+	if input.RefreshSkills {
+		profile, err := a.store.SandboxProfile(ctx, job.SandboxProfile)
+		if err != nil {
+			return core.MessageAdmissionResult{}, err
+		}
+		if profile.Harness != codex.Harness {
+			return core.MessageAdmissionResult{}, controlapi.ErrSkillRefreshUnavailable
+		}
+	}
 	var admitted core.MessageAdmissionResult
 	switch {
 	case job.Workflow == "" && job.WorkflowRevision == "":

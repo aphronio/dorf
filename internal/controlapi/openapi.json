@@ -1171,6 +1171,7 @@
         "additionalProperties": false,
         "required": ["text"],
         "properties": {
+          "refresh_skills": { "type": "boolean", "default": false, "description": "Request an installed-skill reload on a supported profile (currently Codex). A follow refreshes before its fresh Turn. A steer leaves the running Turn unchanged and retains the request for the next fresh Turn. Auto uses its resolved delivery intent. Retained on idempotent replay." },
           "text": { "type": "string", "minLength": 1 },
           "intent": { "type": "string", "enum": ["auto", "follow", "steer"], "default": "auto", "description": "Steer active work or follow when idle, resolved once at admission." }
         }

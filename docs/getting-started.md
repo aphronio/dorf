@@ -508,6 +508,10 @@ distinct Turn even while earlier work is active, or `--intent steer` to require 
 An admitted Steer has priority over queued follows, never falls back to a new Turn, and fails
 honestly if its target becomes terminal before delivery.
 
+After changing installed skills, add `--refresh-skills` to the next Codex Message. The request
+uses the [Message delivery rules](control-api.md#resources) and survives steering until a
+fresh Turn can start.
+
 For a direct Codex Job, `dorf job message interrupt JOB_ID MESSAGE_ID` requests Stop for that
 Message's exact Turn. It also accepts a Steer Message attached to the Turn. Inspect the Message
 until its result reports the observed outcome; `interrupt_requested` records acceptance, not

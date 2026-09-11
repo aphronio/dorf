@@ -67,7 +67,10 @@ func (a Agent) RemoveRoute(ctx context.Context, owner provider.Ownership) error 
 	return nil
 }
 
-func (a Agent) StartInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID string, input, model, effort string) (core.HarnessBinding, error) {
+func (a Agent) StartInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID string, input, model, effort string, refreshSkills bool) (core.HarnessBinding, error) {
+	if refreshSkills {
+		return core.HarnessBinding{}, &submissionRejectedError{reason: "Pi does not support skill refresh"}
+	}
 	threadID := owner.SandboxID
 	if err := a.runTurn(ctx, owner, workspace, threadID, agentRunID, input, model, effort, false); err != nil {
 		return core.HarnessBinding{}, err
@@ -83,7 +86,10 @@ func (a Agent) ReadTurns(ctx context.Context, owner provider.Ownership, threadID
 	return a.readHistory(ctx, owner, threadID, false)
 }
 
-func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, agentRunID string, input, model, effort string) (core.HarnessBinding, error) {
+func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, agentRunID string, input, model, effort string, refreshSkills bool) (core.HarnessBinding, error) {
+	if refreshSkills {
+		return core.HarnessBinding{}, &submissionRejectedError{reason: "Pi does not support skill refresh"}
+	}
 	before, err := a.readHistory(ctx, owner, threadID, false)
 	if err != nil {
 		return core.HarnessBinding{}, err
@@ -216,7 +222,7 @@ func (a Agent) runTurn(ctx context.Context, owner provider.Ownership, workspace,
 		return err
 	}
 	if !response.Success {
-		return &rpcRejectionError{reason: "Pi RPC prompt rejected before submission: " + response.Error}
+		return &submissionRejectedError{reason: "Pi RPC prompt rejected before submission: " + response.Error}
 	}
 	for {
 		after, err := a.readHistory(ctx, owner, threadID, true)
@@ -279,10 +285,10 @@ type rpcResponse struct {
 	Error   string `json:"error"`
 }
 
-type rpcRejectionError struct{ reason string }
+type submissionRejectedError struct{ reason string }
 
-func (e *rpcRejectionError) Error() string        { return e.reason }
-func (*rpcRejectionError) DefiniteNoSubmit() bool { return true }
+func (e *submissionRejectedError) Error() string        { return e.reason }
+func (*submissionRejectedError) DefiniteNoSubmit() bool { return true }
 
 func (a Agent) rpcCommand(ctx context.Context, owner provider.Ownership, requestID, command, message string) (rpcResponse, error) {
 	request, err := json.Marshal(map[string]string{"id": requestID, "type": command, "message": message})
