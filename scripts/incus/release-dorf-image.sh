@@ -162,10 +162,21 @@ prove_harness() {
   done
   printf '%s\n' "$message" >"$EVIDENCE_DIR/$harness-message.json"
   jq -e '.result.outcome == "completed" and (.result.output | contains("https://www.iana.org/help/example-domains")) and (.result.output | contains("Example Domains"))' <<<"$message" >/dev/null
+  deadline=$((SECONDS + 120))
+  while true; do
+    "$BINARY" job evidence --output json "$JOB_ID" >"$EVIDENCE_DIR/$harness-evidence.json"
+    if jq -e --arg source "$SOURCE_COMMIT" '.evidence | any(.kind == "git-revision" and .revision == $source)' "$EVIDENCE_DIR/$harness-evidence.json" >/dev/null; then
+      break
+    fi
+    inspection="$("$BINARY" job inspect --output json "$JOB_ID")"
+    if ((SECONDS >= deadline)) || jq -e '.attention != null' <<<"$inspection" >/dev/null; then
+      echo "Missing unchanged Revision Evidence after the completed $harness Message on Job $JOB_ID." >&2
+      return 1
+    fi
+    sleep 1
+  done
   inspection="$("$BINARY" job inspect --output json "$JOB_ID")"
   jq -e --arg source "$SOURCE_COMMIT" '.revision == $source and .proposal == null' <<<"$inspection" >/dev/null
-  "$BINARY" job evidence --output json "$JOB_ID" >"$EVIDENCE_DIR/$harness-evidence.json"
-  jq -e --arg source "$SOURCE_COMMIT" '.evidence | any(.kind == "git-revision" and .revision == $source)' "$EVIDENCE_DIR/$harness-evidence.json" >/dev/null
   "$BINARY" job cleanup "$JOB_ID"
   wait_for_cleanup
   "$BINARY" job inspect --output json "$JOB_ID" >"$EVIDENCE_DIR/$harness-image-proof.json"
