@@ -38,6 +38,9 @@ func TestPrepareCreatesPinnedBrokerConfigurationWithoutStartingIt(t *testing.T) 
 	if !strings.Contains(string(config), `host: "127.0.0.2"`) || !strings.Contains(string(config), "port: 8317") {
 		t.Fatalf("broker configuration=%q", config)
 	}
+	if !strings.Contains(string(config), "\ntransient-error-cooldown-seconds: -1\n") {
+		t.Fatal("broker configuration must disable transient error cooldowns so native inference retries can reach upstream")
+	}
 	if _, err := os.Stat(filepath.Join(state, "authority.json")); err != nil {
 		t.Fatalf("provider authority was not prepared: %v", err)
 	}
