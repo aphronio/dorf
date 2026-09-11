@@ -17,8 +17,9 @@ const filename = "client.json"
 
 // Config is the complete version-one remote client configuration.
 type Config struct {
-	DeploymentURL string `json:"deployment_url"`
-	Credential    string `json:"credential"`
+	DeploymentURL   string `json:"deployment_url"`
+	Credential      string `json:"credential"`
+	ClientReference string `json:"client_reference,omitempty"`
 }
 
 // Path returns the client configuration path for home. XDG_CONFIG_HOME takes

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"io"
 	"net"
 	"net/http"
@@ -220,11 +221,11 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	commands := [][]string{
 		{"connect", "--name", "laptop", "--enrollment-file", enrollmentFile, deploymentURL},
 		{"auth", "status"},
-		{"run", "--input-file", goalFile, "--ai-connection", "personal", "--client-reference", "task-42"},
+		{"run", "--input-file", goalFile, "--ai-connection", "personal"},
 		{"job", "list"},
 		{"job", "inspect", jobs.job.ID},
 		{"job", "message", "--input-file", messageFile, jobs.job.ID},
-		{"job", "message", "inspect", jobs.job.ID, "message-2"},
+		{"job", "message", "inspect", jobs.job.ID},
 		{"job", "retry", jobs.job.ID},
 		{"job", "evidence", jobs.job.ID},
 		{"sandbox", "file", "get", "sandbox-1", "REPORT.md", "--output", download},
@@ -233,6 +234,16 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	}
 	var output strings.Builder
 	for _, command := range commands {
+		if command[0] == "run" {
+			cfg, path, _, err := loadClientConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.ClientReference = "task-42"
+			if err := clientconfig.Save(path, cfg); err != nil {
+				t.Fatal(err)
+			}
+		}
 		var stdout, stderr strings.Builder
 		if err := run(context.Background(), command, &stdout, &stderr); err != nil {
 			t.Fatalf("dorf %s: %v\nstderr: %s", strings.Join(command, " "), err, stderr.String())
@@ -377,12 +388,12 @@ func TestRemoteWorkflowCLIUsesExplicitTypedRoutes(t *testing.T) {
 	}
 	revision := strings.Repeat("a", 40)
 	var codingOutput, investigationOutput strings.Builder
-	if err := remoteWorkflowCommand(context.Background(), client, "https://dorf.example.test",
+	if err := remoteWorkflowCommand(context.Background(), client, clientconfig.Config{DeploymentURL: "https://dorf.example.test"},
 		[]string{"run", "coding", "--key", "coding-key", "--input-file", goalFile, "--repo", "https://github.com/aphronio/dorf.git", "--revision", revision, "--base", "main", "--ai-connection", "coding-connection"},
 		&codingOutput, &strings.Builder{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := remoteWorkflowCommand(context.Background(), client, "https://dorf.example.test",
+	if err := remoteWorkflowCommand(context.Background(), client, clientconfig.Config{DeploymentURL: "https://dorf.example.test"},
 		[]string{"run", "codebase-investigation", "--key", "investigation-key", "--input-file", briefFile, "--repo", "https://github.com/aphronio/dorf.git", "--revision", revision, "--ai-connection", "investigation-connection", "--output", "json"},
 		&investigationOutput, &strings.Builder{}); err != nil {
 		t.Fatal(err)
@@ -704,7 +715,7 @@ func (j *remoteCLIJobs) SendMessage(_ context.Context, jobID, _ string, input co
 }
 
 func (j *remoteCLIJobs) GetMessage(_ context.Context, jobID, messageID string) (controlapi.Message, error) {
-	if jobID != j.job.ID || messageID != "message-2" {
+	if jobID != j.job.ID || (messageID != "message-2" && messageID != "latest") {
 		return controlapi.Message{}, controlapi.ErrMessageNotFound
 	}
 	return controlapi.Message{ID: messageID, JobID: jobID, Sequence: 2, Intent: "follow", Delivery: controlapi.State{State: "completed"}}, nil
@@ -739,4 +750,8 @@ func (j *remoteCLIJobs) Evidence(_ context.Context, jobID string) ([]controlapi.
 
 func (j *remoteCLIJobs) WriteSandboxFile(context.Context, string, string, []byte, bool) error {
 	return nil
+}
+
+func (f *remoteCLIJobs) ExecSandbox(context.Context, string, provider.Command) (provider.CommandResult, error) {
+	return provider.CommandResult{}, nil
 }

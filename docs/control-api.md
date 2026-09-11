@@ -113,6 +113,11 @@ then requests cleanup. Cleanup remains separate from execution and Outcome. A se
 internal encoded JSON observation exceeds 16 MiB returns
 the published `message_unavailable` Problem rather than a partial result.
 
+The Job snapshot's optional `latest_reply_id` identifies the latest settled reply in its main
+Sandbox. It derives from retained Message and AgentRun facts; queued follow-ups and steer delivery
+acknowledgements do not replace it. The Message inspection path accepts `latest` in place of a
+Message ID and resolves the same reply. A Job with no settled reply returns `message_not_found`.
+
 Message requests default to `auto`: choose steer against the active Turn at admission, otherwise
 admit a follow. The stored request intent distinguishes automatic selection from explicit follow
 or steer, so replay cannot change either the request or its resolved target. A delivered steer
@@ -127,12 +132,25 @@ over pending message delivery, and reconciles the native outcome after an uncert
 terminal target is a no-op. Unbound Messages and unsupported Job or Harness combinations return
 `interrupt_unavailable`. Interruption is available through the `message_interrupt` discovery capability.
 
-Sandbox files are exact, caller-selected, workspace-relative regular-file reads at Sandbox level.
+Sandbox files are exact, caller-selected regular files inside a Job-owned Sandbox. Paths may be
+absolute, relative to the workspace, or start with `~/` for the Sandbox execution user's home.
+Paths never refer to the deployment host. Symlinks and non-canonical paths are rejected.
 The server enforces Job custody and the cleanup fence; the response includes exact bytes, length, and
-digest. A bounded write can atomically replace one regular file in the workspace root. Create-only
+digest. A bounded write can atomically replace one regular file, creating missing parent directories.
+Files use mode 0600 and new directories use mode 0700. Create-only
 writes preserve an existing file, including an intentionally empty file. The same custody and
 cleanup fence apply. There is no listing, glob, archive, or directory API. Evidence responses
 contain verified immutable metadata, not arbitrary result blobs or internal recovery identities.
+
+Sandbox exec runs caller-supplied argv and optional stdin inside the same attested Job-owned
+Sandbox, under the existing authentication and cleanup fence. It supports bounded setup commands
+such as installing a CLI without rebuilding an image. The caller must explicitly invoke a shell
+when shell interpretation is needed. Responses include the exit code, capped stdout and stderr,
+and a truncation flag; nonzero exit codes are command results, not transport failures. The OpenAPI
+document owns input, output, and timeout limits. Exec has no replay identity: after an ambiguous
+transport failure, inspect the effect or repeat only an operation the caller knows is idempotent.
+Clients own installed software and configuration. Exec does not admit a Message or start an
+AgentRun.
 
 Dorf-origin failures use RFC 9457 Problem Details. Stable `code`, `retryable`, and `details` fields
 let automation avoid parsing prose. The same central catalog constructs runtime responses and is
@@ -161,7 +179,7 @@ The API receives its database URL, read-only API state, and an independently der
 through the protected Compose environment. It receives no Incus socket or identity, E2B key,
 GitHub credential, Gateway state, or provider configuration. The worker's narrow reader answers
 only default and named AI-connection observation, GitHub installation discovery, one exact stored
-Job Proposal observation, exact Job-owned Sandbox file reads and bounded root-file writes, and one
+Job Proposal observation, exact Job-owned Sandbox file reads and bounded Sandbox file writes, and one
 settled Message result. It has no generic proxy, provider selector, or credential response.
 
 The Compose manifest encodes startup dependencies, health checks, published ports, profile-gated

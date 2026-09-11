@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -651,6 +652,9 @@ func (a *fakeAuth) Redeem(_ context.Context, code, name, credential string) (con
 }
 
 type fakeJobs struct {
+	execCalls          int
+	execCommand        provider.Command
+	execErr            error
 	mu                 sync.Mutex
 	job                controlapi.Job
 	view               controlapi.JobView
@@ -906,5 +910,45 @@ func TestSandboxFileWriteContract(t *testing.T) {
 	}
 	if len(jobs.file) != 0 || jobs.fileAbsent {
 		t.Fatal("blank replacement was changed")
+	}
+}
+
+func (f *fakeJobs) ExecSandbox(_ context.Context, _ string, command provider.Command) (provider.CommandResult, error) {
+	f.execCalls++
+	f.execCommand = command
+	return provider.CommandResult{ExitCode: 7, Stdout: "out", Stderr: "err"}, f.execErr
+}
+
+func TestSandboxExecReportsExitStatusAndDoesNotReplayUncertainCommands(t *testing.T) {
+	credential := "dcr_control-client"
+	jobs := &fakeJobs{}
+	api := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs, nil)
+	execute := func(token, body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/v1/sandboxes/sandbox-1/exec", strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		api.Handler.ServeHTTP(response, request)
+		return response
+	}
+	if response := execute("wrong", `{"argv":["true"]}`); response.Code != http.StatusUnauthorized || jobs.execCalls != 0 {
+		t.Fatal("unauthenticated command executed")
+	}
+	for _, body := range []string{`{"argv":[]}`, `{"argv":["sleep","1"],"timeout_seconds":121}`, `{"argv":["true"],"host":"elsewhere"}`} {
+		if response := execute(credential, body); response.Code < 400 || jobs.execCalls != 0 {
+			t.Fatal("invalid command executed")
+		}
+	}
+	body := `{"argv":["printf","%s","literal $HOME"],"stdin":"` + strings.Repeat(`\u0000`, provider.MaxCommandBytes-21) + `","timeout_seconds":90}`
+	response := execute(credential, body)
+	var result provider.CommandResult
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || response.Code != http.StatusOK || result.ExitCode != 7 || result.Stdout != "out" || jobs.execCalls != 1 || jobs.execCommand.Argv[2] != "literal $HOME" {
+		t.Fatalf("command result=%+v status=%d err=%v", result, response.Code, err)
+	}
+	jobs.execErr = controlapi.ErrSandboxExecFailed
+	response = execute(credential, `{"argv":["install","something"]}`)
+	var problem controlapi.Problem
+	if err := json.Unmarshal(response.Body.Bytes(), &problem); err != nil || response.Code != http.StatusBadGateway || problem.Retryable || jobs.execCalls != 2 {
+		t.Fatalf("uncertain command was replayed or misreported: %+v calls=%d", problem, jobs.execCalls)
 	}
 }

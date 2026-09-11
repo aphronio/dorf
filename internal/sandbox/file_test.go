@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func TestReadFileViaExecReturnsExactBytesAndRefusesWorkspaceEscape(t *testing.T) {
+func TestReadFileViaExecReturnsExactBytesAndRefusesSymlinks(t *testing.T) {
 	workspace := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workspace, "nested"), 0o700); err != nil {
 		t.Fatal(err)
@@ -59,7 +59,7 @@ func TestReadFileViaExecReturnsExactBytesAndRefusesWorkspaceEscape(t *testing.T)
 	if info, err := os.Lstat(racePath); err != nil || info.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("race replacement did not occur: info=%v err=%v", info, err)
 	}
-	for _, relativePath := range []string{"", ".", "../outside", "/etc/passwd", "nested/../first.txt"} {
+	for _, relativePath := range []string{"", ".", "..", "/", "~", "../outside", "nested/../first.txt"} {
 		if _, err := ReadFileViaExec(context.Background(), Ownership{}, workspace, relativePath, localExec(t, nil)); !errors.Is(err, ErrInvalidFilePath) {
 			t.Fatalf("ReadFileViaExec invalid path %q error=%v", relativePath, err)
 		}
@@ -129,12 +129,12 @@ func localExec(t *testing.T, after func(Result, error) (Result, error)) ExecFunc
 	}
 }
 
-func TestWorkspaceFileWritePreservesExistingDefaultsAndRejectsEscape(t *testing.T) {
+func TestSandboxFileWritePreservesExistingDefaultsAndRejectsSymlinks(t *testing.T) {
 	workspace := t.TempDir()
 	runner := localExec(t, nil)
 	ctx := context.Background()
 	put := func(name, content string, absent bool) error {
-		return WriteWorkspaceFileViaExec(ctx, Ownership{}, workspace, name, []byte(content), absent, runner)
+		return WriteFileViaExec(ctx, Ownership{}, workspace, name, []byte(content), absent, runner)
 	}
 	for _, step := range []struct {
 		content string
@@ -158,7 +158,7 @@ func TestWorkspaceFileWritePreservesExistingDefaultsAndRejectsEscape(t *testing.
 	if err := os.Symlink(outside, filepath.Join(workspace, "SOUL.md")); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"SOUL.md", "../outside", "nested/file", "/tmp/outside"} {
+	for _, name := range []string{"SOUL.md", "../outside", "/tmp/../outside"} {
 		if err := put(name, "replacement", false); err == nil {
 			t.Fatalf("accepted %q", name)
 		}
@@ -166,5 +166,42 @@ func TestWorkspaceFileWritePreservesExistingDefaultsAndRejectsEscape(t *testing.
 	content, err := os.ReadFile(outside)
 	if err != nil || string(content) != "private" {
 		t.Fatalf("outside=%q err=%v", content, err)
+	}
+}
+
+func TestSandboxFilesSupportAbsoluteHomeAndNestedPaths(t *testing.T) {
+	workspace, home := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	ctx, runner := context.Background(), localExec(t, nil)
+	contents := []byte{'a', 0, '\n', 255}
+	for name, target := range map[string]string{
+		"nested/file.bin":                           filepath.Join(workspace, "nested", "file.bin"),
+		"~/.config/agent0/access.json":              filepath.Join(home, ".config", "agent0", "access.json"),
+		filepath.Join(home, "absolute", "file.bin"): filepath.Join(home, "absolute", "file.bin"),
+	} {
+		if err := WriteFileViaExec(ctx, Ownership{}, workspace, name, contents, false, runner); err != nil {
+			t.Fatalf("write %q: %v", name, err)
+		}
+		info, err := os.Stat(target)
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("file %q permissions: %v, %v", target, info, err)
+		}
+		parent, err := os.Stat(filepath.Dir(target))
+		if err != nil || parent.Mode().Perm() != 0o700 {
+			t.Fatalf("parent %q permissions: %v, %v", target, parent, err)
+		}
+		got, err := ReadFileViaExec(ctx, Ownership{}, workspace, name, runner)
+		if err != nil || !bytes.Equal(got, contents) {
+			t.Fatalf("read %q: %v, %v", name, got, err)
+		}
+	}
+	if err := os.Symlink(home, filepath.Join(workspace, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteFileViaExec(ctx, Ownership{}, workspace, "linked/new/file", contents, false, runner); err == nil {
+		t.Fatal("accepted a symlink parent")
+	}
+	if _, err := os.Stat(filepath.Join(home, "new")); !os.IsNotExist(err) {
+		t.Fatalf("rejected write created directories through a symlink: %v", err)
 	}
 }

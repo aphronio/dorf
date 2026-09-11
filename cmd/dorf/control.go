@@ -36,6 +36,7 @@ import (
 	"github.com/aphronio/dorf/internal/investigation"
 	outcomeapp "github.com/aphronio/dorf/internal/outcome"
 	"github.com/aphronio/dorf/internal/postgres"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/version"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
@@ -69,9 +70,9 @@ func remoteCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 		case "sandbox":
 			err = remoteSandboxCommand(ctx, client, args[1:], stdout)
 		case "run":
-			err = remoteRun(ctx, client, cfg.DeploymentURL, args[1:], stdout, stderr)
+			err = remoteRun(ctx, client, cfg, args[1:], stdout, stderr)
 		default:
-			err = remoteWorkflowCommand(ctx, client, cfg.DeploymentURL, args[1:], stdout, stderr)
+			err = remoteWorkflowCommand(ctx, client, cfg, args[1:], stdout, stderr)
 		}
 		return true, jobControlError(cfg.DeploymentURL, err)
 	default:
@@ -212,10 +213,10 @@ type authStatusReceipt struct {
 	CredentialSource string               `json:"credential_source"`
 }
 
-func remoteRun(ctx context.Context, client *controlclient.Client, deploymentURL string, args []string, stdout, stderr io.Writer) error {
+func remoteRun(ctx context.Context, client *controlclient.Client, cfg clientconfig.Config, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("run", flag.ContinueOnError)
 	set.SetOutput(stderr)
-	clientReference := set.String("client-reference", "", "optional caller thread or task reference")
+	clientReference := set.String("client-reference", cfg.ClientReference, "optional caller thread or task reference")
 	key := set.String("key", "", "stable request identity for explicit replay")
 	inputFile := set.String("input-file", "", "path containing the first Message")
 	agentsFile := set.String("agents-file", "", "path containing initial workspace AGENTS.md")
@@ -265,9 +266,9 @@ func remoteRun(ctx context.Context, client *controlclient.Client, deploymentURL 
 		return err
 	}
 	if *output == "json" {
-		return writeJSON(stdout, remoteRunReceipt{Deployment: deploymentURL, RequestID: requestKey, Job: job, Message: message})
+		return writeJSON(stdout, remoteRunReceipt{Deployment: cfg.DeploymentURL, RequestID: requestKey, Job: job, Message: message})
 	}
-	fmt.Fprintf(stdout, "Job %s accepted by %s\n", job.ID, deploymentURL)
+	fmt.Fprintf(stdout, "Job %s accepted by %s\n", job.ID, cfg.DeploymentURL)
 	renderRemoteJob(stdout, job)
 	renderRemoteMessage(stdout, message)
 	fmt.Fprintf(stdout, "Next: dorf job inspect %s\n", job.ID)
@@ -281,24 +282,24 @@ type remoteRunReceipt struct {
 	Message    controlapi.Message `json:"message"`
 }
 
-func remoteWorkflowCommand(ctx context.Context, client *controlclient.Client, deploymentURL string, args []string, stdout, stderr io.Writer) error {
+func remoteWorkflowCommand(ctx context.Context, client *controlclient.Client, cfg clientconfig.Config, args []string, stdout, stderr io.Writer) error {
 	if len(args) < 2 || args[0] != "run" {
 		return fmt.Errorf("workflow requires: run coding or codebase-investigation")
 	}
 	switch args[1] {
 	case "coding":
-		return remoteCodingWorkflow(ctx, client, deploymentURL, args[2:], stdout, stderr)
+		return remoteCodingWorkflow(ctx, client, cfg, args[2:], stdout, stderr)
 	case "codebase-investigation":
-		return remoteInvestigationWorkflow(ctx, client, deploymentURL, args[2:], stdout, stderr)
+		return remoteInvestigationWorkflow(ctx, client, cfg, args[2:], stdout, stderr)
 	default:
 		return fmt.Errorf("unsupported workflow %q", args[1])
 	}
 }
 
-func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, deploymentURL string, args []string, stdout, stderr io.Writer) error {
+func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, cfg clientconfig.Config, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("workflow run coding", flag.ContinueOnError)
 	set.SetOutput(stderr)
-	clientReference := set.String("client-reference", "", "optional caller thread or task reference")
+	clientReference := set.String("client-reference", cfg.ClientReference, "optional caller thread or task reference")
 	key := set.String("key", "", "stable request identity for explicit replay")
 	inputFile := set.String("input-file", "", "path containing the first Message")
 	repository := set.String("repo", "", "credential-free GitHub clone URL")
@@ -345,19 +346,19 @@ func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, dep
 		return err
 	}
 	if *output == "json" {
-		return writeJSON(stdout, remoteRunReceipt{Deployment: deploymentURL, RequestID: requestKey, Job: job, Message: message})
+		return writeJSON(stdout, remoteRunReceipt{Deployment: cfg.DeploymentURL, RequestID: requestKey, Job: job, Message: message})
 	}
-	fmt.Fprintf(stdout, "Job %s accepted by %s\n", job.ID, deploymentURL)
+	fmt.Fprintf(stdout, "Job %s accepted by %s\n", job.ID, cfg.DeploymentURL)
 	renderRemoteJob(stdout, job)
 	renderRemoteMessage(stdout, message)
 	fmt.Fprintf(stdout, "Next: dorf job inspect %s\n", job.ID)
 	return nil
 }
 
-func remoteInvestigationWorkflow(ctx context.Context, client *controlclient.Client, deploymentURL string, args []string, stdout, stderr io.Writer) error {
+func remoteInvestigationWorkflow(ctx context.Context, client *controlclient.Client, cfg clientconfig.Config, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("workflow run codebase-investigation", flag.ContinueOnError)
 	set.SetOutput(stderr)
-	clientReference := set.String("client-reference", "", "optional caller thread or task reference")
+	clientReference := set.String("client-reference", cfg.ClientReference, "optional caller thread or task reference")
 	key := set.String("key", "", "stable request identity for explicit replay")
 	inputFile := set.String("input-file", "", "path containing the Message")
 	repository := set.String("repo", "", "credential-free HTTPS repository URL")
@@ -402,9 +403,9 @@ func remoteInvestigationWorkflow(ctx context.Context, client *controlclient.Clie
 		return err
 	}
 	if *output == "json" {
-		return writeJSON(stdout, remoteRunReceipt{Deployment: deploymentURL, RequestID: requestKey, Job: job, Message: message})
+		return writeJSON(stdout, remoteRunReceipt{Deployment: cfg.DeploymentURL, RequestID: requestKey, Job: job, Message: message})
 	}
-	fmt.Fprintf(stdout, "Job %s accepted by %s\n", job.ID, deploymentURL)
+	fmt.Fprintf(stdout, "Job %s accepted by %s\n", job.ID, cfg.DeploymentURL)
 	renderRemoteJob(stdout, job)
 	renderRemoteMessage(stdout, message)
 	fmt.Fprintf(stdout, "Next: dorf job inspect %s\n", job.ID)
@@ -590,13 +591,17 @@ func remoteMessageInspect(ctx context.Context, client *controlclient.Client, arg
 	if err := set.Parse(args); err != nil {
 		return err
 	}
-	if set.NArg() != 2 {
-		return fmt.Errorf("job message inspect requires one Job ID and Message ID")
+	if set.NArg() < 1 || set.NArg() > 2 {
+		return fmt.Errorf("job message inspect requires one Job ID and an optional Message ID")
 	}
 	if err := validateOutput(*output); err != nil {
 		return err
 	}
-	message, err := client.Message(ctx, set.Arg(0), set.Arg(1))
+	messageID := "latest"
+	if set.NArg() == 2 {
+		messageID = set.Arg(1)
+	}
+	message, err := client.Message(ctx, set.Arg(0), messageID)
 	if err != nil {
 		return err
 	}
@@ -673,7 +678,7 @@ func remoteJobEvidence(ctx context.Context, client *controlclient.Client, args [
 
 func remoteSandboxCommand(ctx context.Context, client *controlclient.Client, args []string, stdout io.Writer) error {
 	if len(args) < 2 || args[0] != "file" || args[1] != "get" {
-		return fmt.Errorf("sandbox requires: file get SANDBOX_ID RELATIVE_PATH --output DESTINATION")
+		return fmt.Errorf("sandbox requires: file get SANDBOX_ID PATH --output DESTINATION")
 	}
 	sandboxID, relativePath, output, err := parseSandboxFileGet(args[2:])
 	if err != nil {
@@ -927,6 +932,7 @@ type controlAPIJobs struct {
 }
 
 type controlReader interface {
+	Exec(context.Context, string, provider.Command) (provider.CommandResult, error)
 	ReadFile(context.Context, string, string) ([]byte, error)
 	WriteFile(context.Context, string, string, []byte, bool) error
 	ObserveMessage(context.Context, string, string) (core.MessageResult, error)
@@ -1082,7 +1088,42 @@ func (a controlAPIJobs) Get(ctx context.Context, jobID string) (controlapi.JobVi
 	if err != nil {
 		return nil, err
 	}
-	return a.project(ctx, job)
+	view, err := a.project(ctx, job)
+	if err != nil {
+		return nil, err
+	}
+	deliveries, err := a.store.Deliveries(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	switch value := view.(type) {
+	case controlapi.DirectJob:
+		value.LatestReplyID = latestReplyID(jobID, deliveries)
+		return value, nil
+	case controlapi.CodingJob:
+		value.LatestReplyID = latestReplyID(jobID, deliveries)
+		return value, nil
+	case controlapi.InvestigationJob:
+		value.LatestReplyID = latestReplyID(jobID, deliveries)
+		return value, nil
+	default:
+		return nil, controlapi.ErrJobNotFound
+	}
+}
+
+func latestReplyID(jobID string, deliveries []core.Delivery) string {
+	var id string
+	var sequence int64
+	for _, delivery := range deliveries {
+		run, message := delivery.AgentRun, delivery.Message
+		if run.SandboxID != core.MainSandboxName(jobID) || message.Sequence <= sequence {
+			continue
+		}
+		if run.State == core.AgentRunCompleted && run.TurnOutcome != "" || run.State == core.AgentRunFailed || run.State == core.AgentRunInterrupted {
+			id, sequence = message.ID, message.Sequence
+		}
+	}
+	return id
 }
 
 func (a controlAPIJobs) SendMessage(ctx context.Context, jobID, key string, input controlapi.SendMessageRequest) (controlapi.Message, bool, error) {
@@ -1128,6 +1169,9 @@ func (a controlAPIJobs) GetMessage(ctx context.Context, jobID, messageID string)
 	if err != nil {
 		return controlapi.Message{}, err
 	}
+	if messageID == "latest" {
+		messageID = latestReplyID(job.ID, deliveries)
+	}
 	index := slices.IndexFunc(deliveries, func(delivery core.Delivery) bool { return delivery.Message.ID == messageID })
 	if index < 0 {
 		return controlapi.Message{}, controlapi.ErrMessageNotFound
@@ -1138,31 +1182,9 @@ func (a controlAPIJobs) GetMessage(ctx context.Context, jobID, messageID string)
 	if err != nil {
 		return controlapi.Message{}, err
 	}
-	result := (*controlapi.MessageResult)(nil)
-	if job.CleanupState == core.CleanupPending {
-		switch run.State {
-		case core.AgentRunCompleted:
-			if run.TurnOutcome == "" {
-				break
-			}
-			if a.reader == nil {
-				return controlapi.Message{}, fmt.Errorf("control reader is not configured")
-			}
-			observed, observeErr := a.reader.ObserveMessage(ctx, job.ID, message.ID)
-			if observeErr != nil {
-				if errors.Is(observeErr, controlreader.ErrUnavailable) || errors.Is(observeErr, controlreader.ErrResponseTooLarge) {
-					return controlapi.Message{}, controlapi.ErrMessageUnavailable
-				}
-				return controlapi.Message{}, observeErr
-			}
-			result = &controlapi.MessageResult{Outcome: observed.Outcome, Output: observed.Output}
-		case core.AgentRunFailed, core.AgentRunInterrupted:
-			outcome := run.TurnOutcome
-			if outcome == "" {
-				outcome = string(run.State)
-			}
-			result = &controlapi.MessageResult{Outcome: outcome}
-		}
+	result, err := a.messageResult(ctx, job.Job, delivery)
+	if err != nil {
+		return controlapi.Message{}, err
 	}
 	attention := (*controlapi.Attention)(nil)
 	if run.Attention != "" || run.State == core.AgentRunUncertain {
@@ -1173,6 +1195,37 @@ func (a controlAPIJobs) GetMessage(ctx context.Context, jobID, messageID string)
 		InterruptRequested: run.InterruptRequested,
 		Delivery:           controlapi.State{State: deliveryState}, Result: result, Attention: attention, AdmittedAt: message.AdmittedAt,
 	}, nil
+}
+
+func (a controlAPIJobs) messageResult(ctx context.Context, job core.Job, delivery core.Delivery) (*controlapi.MessageResult, error) {
+	message, run := delivery.Message, delivery.AgentRun
+	result := (*controlapi.MessageResult)(nil)
+	if job.CleanupState == core.CleanupPending {
+		switch run.State {
+		case core.AgentRunCompleted:
+			if run.TurnOutcome == "" {
+				break
+			}
+			if a.reader == nil {
+				return nil, fmt.Errorf("control reader is not configured")
+			}
+			observed, observeErr := a.reader.ObserveMessage(ctx, job.ID, message.ID)
+			if observeErr != nil {
+				if errors.Is(observeErr, controlreader.ErrUnavailable) || errors.Is(observeErr, controlreader.ErrResponseTooLarge) {
+					return nil, controlapi.ErrMessageUnavailable
+				}
+				return nil, observeErr
+			}
+			result = &controlapi.MessageResult{Outcome: observed.Outcome, Output: observed.Output}
+		case core.AgentRunFailed, core.AgentRunInterrupted:
+			outcome := run.TurnOutcome
+			if outcome == "" {
+				outcome = string(run.State)
+			}
+			result = &controlapi.MessageResult{Outcome: outcome}
+		}
+	}
+	return result, nil
 }
 
 func (a controlAPIJobs) InterruptMessage(ctx context.Context, jobID, messageID string) (controlapi.Message, error) {
@@ -1663,7 +1716,7 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 	}
 	server := controlapi.NewServer(controlapi.Discovery{
 		Product: "dorf", Version: version.Version,
-		Capabilities: []string{"direct_jobs", "coding_jobs", "codebase_investigation_jobs", "job_list", "profile_list", "job_watch", "messages", "message_interrupt", "job_retry", "job_abandon", "sandbox_files", "evidence"},
+		Capabilities: []string{"direct_jobs", "coding_jobs", "codebase_investigation_jobs", "job_list", "profile_list", "job_watch", "messages", "message_interrupt", "job_retry", "job_abandon", "sandbox_files", "sandbox_exec", "latest_reply", "evidence"},
 	}, auth, jobs, controlAPIProfiles{store: store})
 	serverCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -1734,5 +1787,34 @@ func renderJobAttribution(output io.Writer, creator *controlapi.JobCreator, refe
 	}
 	if reference != "" {
 		fmt.Fprintf(output, "  client reference: %q\n", reference)
+	}
+}
+
+func (a controlAPIJobs) ExecSandbox(ctx context.Context, sandboxID string, command provider.Command) (provider.CommandResult, error) {
+	owned, err := a.store.Sandbox(ctx, sandboxID)
+	if errors.Is(err, postgres.ErrNotFound) {
+		return provider.CommandResult{}, controlapi.ErrSandboxNotFound
+	}
+	if err != nil {
+		return provider.CommandResult{}, err
+	}
+	if _, err := a.supportedJob(ctx, owned.JobID); err != nil {
+		return provider.CommandResult{}, err
+	}
+	if a.reader == nil {
+		return provider.CommandResult{}, controlapi.ErrSandboxExecUnavailable
+	}
+	result, err := a.reader.Exec(ctx, sandboxID, command)
+	switch {
+	case errors.Is(err, controlreader.ErrInvalidRequest):
+		return provider.CommandResult{}, controlapi.ErrInvalidInput
+	case errors.Is(err, controlreader.ErrSandboxNotFound):
+		return provider.CommandResult{}, controlapi.ErrSandboxNotFound
+	case errors.Is(err, controlreader.ErrUnavailable):
+		return provider.CommandResult{}, controlapi.ErrSandboxExecUnavailable
+	case err != nil:
+		return provider.CommandResult{}, controlapi.ErrSandboxExecFailed
+	default:
+		return result, nil
 	}
 }

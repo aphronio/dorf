@@ -79,7 +79,7 @@ type PullRequestObservation interface {
 }
 
 // Service owns provider-facing reads. It accepts only durable Dorf identities
-// and one already-validated workspace-relative path.
+// and one already-validated Sandbox file path.
 type Service struct {
 	Store         Store
 	Runtimes      core.SandboxRuntimeResolver
@@ -89,21 +89,24 @@ type Service struct {
 }
 
 func (s Service) ReadFile(ctx context.Context, sandboxID, relativePath string) ([]byte, error) {
+	if err := provider.ValidateFilePath(relativePath); err != nil {
+		return nil, ErrInvalidFilePath
+	}
 	var contents []byte
-	err := s.withSandboxFile(ctx, sandboxID, relativePath, func(files core.SandboxFileReader, job core.Job, owned core.Sandbox) error {
+	err := s.withSandbox(ctx, sandboxID, func(runtime core.SandboxRuntime, job core.Job, owned core.Sandbox) error {
+		if runtime.Files == nil {
+			return ErrUnavailable
+		}
 		var err error
-		contents, err = files.ReadSandboxFile(ctx, job, owned, relativePath)
+		contents, err = runtime.Files.ReadSandboxFile(ctx, job, owned, relativePath)
 		return err
 	})
 	return contents, err
 }
 
-func (s Service) withSandboxFile(ctx context.Context, sandboxID, relativePath string, call func(core.SandboxFileReader, core.Job, core.Sandbox) error) error {
+func (s Service) withSandbox(ctx context.Context, sandboxID string, call func(core.SandboxRuntime, core.Job, core.Sandbox) error) error {
 	if !validIdentity(sandboxID) {
 		return ErrSandboxNotFound
-	}
-	if err := provider.ValidateWorkspaceRelativePath(relativePath); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidFilePath, err)
 	}
 	if s.Store == nil || s.Runtimes == nil {
 		return fmt.Errorf("control reader file authority is not configured")
@@ -120,11 +123,11 @@ func (s Service) withSandboxFile(ctx context.Context, sandboxID, relativePath st
 	}
 
 	err = s.Store.WithJobFence(ctx, owned.JobID, func() error {
-		files, job, err := s.sandboxFileAuthority(ctx, owned)
+		runtime, job, err := s.sandboxAuthority(ctx, owned)
 		if err != nil {
 			return err
 		}
-		err = call(files, job, owned)
+		err = call(runtime, job, owned)
 		switch {
 		case errors.Is(err, provider.ErrInvalidFilePath):
 			return ErrInvalidFilePath
@@ -137,35 +140,35 @@ func (s Service) withSandboxFile(ctx context.Context, sandboxID, relativePath st
 	return err
 }
 
-func (s Service) sandboxFileAuthority(ctx context.Context, owned core.Sandbox) (core.SandboxFileReader, core.Job, error) {
+func (s Service) sandboxAuthority(ctx context.Context, owned core.Sandbox) (core.SandboxRuntime, core.Job, error) {
 	job, err := s.Store.Job(ctx, owned.JobID)
 	if errors.Is(err, postgres.ErrNotFound) {
-		return nil, core.Job{}, ErrUnavailable
+		return core.SandboxRuntime{}, core.Job{}, ErrUnavailable
 	}
 	if err != nil {
-		return nil, core.Job{}, err
+		return core.SandboxRuntime{}, core.Job{}, err
 	}
 	if job.ID != owned.JobID || job.CleanupState != core.CleanupPending {
-		return nil, core.Job{}, ErrUnavailable
+		return core.SandboxRuntime{}, core.Job{}, ErrUnavailable
 	}
 	current, err := s.Store.Sandbox(ctx, owned.ID)
 	if errors.Is(err, postgres.ErrNotFound) {
-		return nil, core.Job{}, ErrUnavailable
+		return core.SandboxRuntime{}, core.Job{}, ErrUnavailable
 	}
 	if err != nil {
-		return nil, core.Job{}, err
+		return core.SandboxRuntime{}, core.Job{}, err
 	}
 	if current != owned {
-		return nil, core.Job{}, ErrUnavailable
+		return core.SandboxRuntime{}, core.Job{}, ErrUnavailable
 	}
 	runtime, err := s.Runtimes.ResolveSandbox(ctx, job.SandboxProfile)
 	if err != nil {
-		return nil, core.Job{}, fmt.Errorf("resolve Sandbox profile for file read: %w", err)
+		return core.SandboxRuntime{}, core.Job{}, fmt.Errorf("resolve Sandbox profile for file read: %w", err)
 	}
-	if runtime.SandboxProfile != job.SandboxProfile || runtime.Files == nil {
-		return nil, core.Job{}, fmt.Errorf("resolved Sandbox runtime has no exact file authority")
+	if runtime.SandboxProfile != job.SandboxProfile {
+		return core.SandboxRuntime{}, core.Job{}, fmt.Errorf("resolved Sandbox runtime has a different profile")
 	}
-	return runtime.Files, job, nil
+	return runtime, job, nil
 }
 
 func (s Service) ObserveMessage(ctx context.Context, jobID, messageID string) (core.MessageResult, error) {
@@ -390,6 +393,7 @@ func NewHandler(token string, service Service) (http.Handler, error) {
 		}),
 		FileReadPath:  fileReadEndpoint(service),
 		FileWritePath: fileWriteEndpoint(service),
+		CommandPath:   commandEndpoint(service),
 		MessageObservationPath: jsonEndpoint(MaxObservationBytes, func(ctx context.Context, input messageObservationRequest) (core.MessageResult, error) {
 			return service.ObserveMessage(ctx, input.JobID, input.MessageID)
 		}),
@@ -420,7 +424,11 @@ func NewHandler(token string, service Service) (http.Handler, error) {
 			writeProblem(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), handlerTimeout)
+		timeout := handlerTimeout
+		if r.URL.Path == CommandPath {
+			timeout = provider.CommandTransportTimeout
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
 		r = r.WithContext(ctx)
 		if r.Method != http.MethodPost {
@@ -499,8 +507,11 @@ func authenticated(r *http.Request, expected [sha256.Size]byte) bool {
 
 func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
 	limit := MaxRequestBytes
+	if r.URL.Path == CommandPath {
+		limit = provider.MaxCommandRequestBytes
+	}
 	if r.URL.Path == FileWritePath {
-		limit = 2 * provider.MaxWorkspaceFileWriteBytes
+		limit = 2 * provider.MaxFileWriteBytes
 	}
 	if r.ContentLength > int64(limit) {
 		writeProblem(w, http.StatusRequestEntityTooLarge, "request_too_large")

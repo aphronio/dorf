@@ -5,7 +5,6 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"net/http"
-	"strings"
 )
 
 type fileWriteRequest struct {
@@ -16,14 +15,14 @@ type fileWriteRequest struct {
 }
 
 func (s Service) WriteFile(ctx context.Context, sandboxID, name string, contents []byte, ifAbsent bool) error {
-	if strings.Contains(name, "/") {
+	if err := provider.ValidateFilePath(name); err != nil {
 		return ErrInvalidFilePath
 	}
-	if len(contents) > provider.MaxWorkspaceFileWriteBytes {
+	if len(contents) > provider.MaxFileWriteBytes {
 		return ErrInvalidRequest
 	}
-	return s.withSandboxFile(ctx, sandboxID, name, func(files core.SandboxFileReader, job core.Job, owned core.Sandbox) error {
-		writer, ok := files.(core.SandboxFileWriter)
+	return s.withSandbox(ctx, sandboxID, func(runtime core.SandboxRuntime, job core.Job, owned core.Sandbox) error {
+		writer, ok := runtime.Files.(core.SandboxFileWriter)
 		if !ok {
 			return ErrUnavailable
 		}

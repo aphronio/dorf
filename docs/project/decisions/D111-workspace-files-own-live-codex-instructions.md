@@ -1,9 +1,9 @@
 # D111: Workspace files own live Codex instructions
 
-- **Applicability:** current
+- **Applicability:** partial
 - **Areas:** core, client-api
 - **Read when:** Changing workspace instruction editing or Codex context loading.
-- **Decision history:** Accepted, 2026-09-10.
+- **Decision history:** Accepted, 2026-09-10. D115 broadens the generic file API beyond workspace-root writes.
 - **Decision:** Keep current instructions in the Job-owned workspace. Add one bounded root-file
   write to the existing authenticated Sandbox file API, including create-only initialization.
   Reuse the existing provider transport, ownership checks, and cleanup fence.

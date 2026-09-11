@@ -229,6 +229,26 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 		t.Fatalf("conflict=%#v", problem)
 	}
 
+	if err := store.InterruptAgentRun(ctx, initialRun, "test turn finished"); err != nil {
+		t.Fatal(err)
+	}
+	var latest controlapi.Message
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID+"/messages/latest", credential, "", nil), http.StatusOK, &latest)
+	if latest.ID != accepted.ID || latest.Result == nil || latest.Result.Outcome != "interrupted" {
+		t.Fatalf("latest reply=%+v", latest)
+	}
+	var withReply controlapi.DirectJob
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID, credential, "", nil), http.StatusOK, &withReply)
+	if withReply.LatestReplyID != latest.ID {
+		t.Fatalf("inspection lost latest reply: %+v", withReply)
+	}
+	var pending controlapi.Message
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/messages", credential, messageKey+"-next", controlapi.SendMessageRequest{Text: "next task", Intent: "follow"}), http.StatusCreated, &pending)
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID+"/messages/latest", credential, "", nil), http.StatusOK, &latest)
+	if latest.ID != accepted.ID {
+		t.Fatal("pending work displaced the latest reply")
+	}
+
 	cleanup := controlTestRequest(t, restarted, http.MethodPut, "/v1/jobs/"+committed.ID+"/cleanup", credential, "", nil)
 	var cleaning controlapi.DirectJob
 	controlTestJSON(t, cleanup, http.StatusOK, &cleaning)

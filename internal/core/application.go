@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"time"
 
 	"github.com/aphronio/dorf/internal/sandbox"
@@ -36,6 +37,7 @@ type CleanupRuntimeResolver interface {
 type SandboxRuntime struct {
 	Execution      Execution
 	Files          SandboxFileReader
+	Commands       SandboxCommandExecutor
 	SandboxProfile string
 }
 
@@ -45,6 +47,10 @@ type SandboxFileReader interface {
 
 type SandboxFileWriter interface {
 	WriteSandboxFile(context.Context, Job, Sandbox, string, []byte, bool) error
+}
+
+type SandboxCommandExecutor interface {
+	ExecSandbox(context.Context, Job, Sandbox, provider.Command) (provider.CommandResult, error)
 }
 
 type SandboxRuntimeResolver interface {

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -18,34 +17,36 @@ var (
 	ErrFileUnavailable = errors.New("Sandbox file is unavailable")
 )
 
-// ValidateWorkspaceRelativePath accepts one exact Linux path beneath a
-// Sandbox workspace. Discovery and directory semantics remain ordinary Exec
-// concerns rather than growing this one-file API.
-func ValidateWorkspaceRelativePath(relativePath string) error {
-	if relativePath == "" || strings.IndexByte(relativePath, 0) >= 0 || path.IsAbs(relativePath) || path.Clean(relativePath) != relativePath || relativePath == "." || relativePath == ".." || strings.HasPrefix(relativePath, "../") {
-		return fmt.Errorf("%w: path must be clean and workspace-relative", ErrInvalidFilePath)
+// ValidateFilePath accepts an exact absolute, home-relative, or workspace-relative
+// Linux file path. All resolution and file access happen inside the owned Sandbox.
+func ValidateFilePath(name string) error {
+	if name == "" || strings.IndexByte(name, 0) >= 0 || path.Clean(name) != name || name == "/" || name == "." || name == "~" || name == ".." || strings.HasPrefix(name, "../") {
+		return fmt.Errorf("%w: path must name a clean Sandbox file", ErrInvalidFilePath)
 	}
 	return nil
 }
 
-// ReadFileViaExec returns exact regular-file bytes while refusing symlinks or
-// any resolved path outside the canonical Sandbox workspace.
+const resolveFilePath = `workspace=$1 name=$2
+case "$name" in
+  /*) target=$name ;;
+  '~/'*) target=~; target="$target/${name#\~/}" ;;
+  *) root=$(realpath -e -- "$workspace"); test -d "$root" && test ! -L "$workspace"; target="$root/$name" ;;
+esac
+`
+
+// ReadFileViaExec returns exact regular-file bytes while refusing symlinks.
 func ReadFileViaExec(ctx context.Context, owner Ownership, workspace, relativePath string, exec ExecFunc) ([]byte, error) {
 	workspace = strings.TrimSpace(workspace)
 	if workspace == "" || !path.IsAbs(workspace) || path.Clean(workspace) != workspace || workspace == "/" {
 		return nil, fmt.Errorf("Sandbox workspace must be a clean absolute path")
 	}
-	if err := ValidateWorkspaceRelativePath(relativePath); err != nil {
+	if err := ValidateFilePath(relativePath); err != nil {
 		return nil, err
 	}
 	if exec == nil {
 		return nil, fmt.Errorf("Sandbox file transport is not configured")
 	}
-	script := `set -eu
-workspace=$1 relative=$2
-root=$(realpath -e -- "$workspace")
-test -d "$root" && test ! -L "$workspace"
-target="$root/$relative"
+	script := "set -eu\n" + resolveFilePath + `
 if test ! -e "$target" && test ! -L "$target"; then exit 44; fi
 test -f "$target" && test ! -L "$target"
 exec 3< "$target"
@@ -65,11 +66,11 @@ base64 -w0 <&3`
 		if detail == "" {
 			detail = fmt.Sprintf("exit %d", result.ExitCode)
 		}
-		return nil, fmt.Errorf("%w: read regular workspace file %q: %s", ErrFileUnavailable, relativePath, detail)
+		return nil, fmt.Errorf("%w: read regular Sandbox file %q: %s", ErrFileUnavailable, relativePath, detail)
 	}
 	contents, err := base64.StdEncoding.Strict().DecodeString(result.Stdout)
 	if err != nil {
-		return nil, fmt.Errorf("decode exact Sandbox workspace file %q: %w", relativePath, err)
+		return nil, fmt.Errorf("decode exact Sandbox file %q: %w", relativePath, err)
 	}
 	return contents, nil
 }
@@ -82,68 +83,43 @@ type ExecFunc func(context.Context, Ownership, []byte, ...string) (Result, error
 // file path. Bytes are written beside the destination, verified, then renamed
 // atomically. Replaying after an indeterminate response is therefore safe.
 func PutFileViaExec(ctx context.Context, owner Ownership, destination string, contents []byte, exec ExecFunc) error {
-	destination = strings.TrimSpace(destination)
-	if destination == "" || !filepath.IsAbs(destination) || filepath.Clean(destination) != destination || destination == string(filepath.Separator) {
-		return fmt.Errorf("Sandbox file destination must be a clean absolute path")
+	if !path.IsAbs(destination) {
+		return fmt.Errorf("Sandbox file destination must be absolute")
+	}
+	return writeFileViaExec(ctx, owner, "", destination, contents, false, exec)
+}
+
+// MaxFileWriteBytes bounds an individual public Sandbox write.
+const MaxFileWriteBytes = 128 << 10
+
+// WriteFileViaExec atomically writes a Sandbox file, creating private parent directories.
+// Create-only writes preserve existing files, including empty files.
+func WriteFileViaExec(ctx context.Context, owner Ownership, workspace, name string, contents []byte, ifAbsent bool, exec ExecFunc) error {
+	if len(contents) > MaxFileWriteBytes {
+		return fmt.Errorf("Sandbox file exceeds write limit")
+	}
+	return writeFileViaExec(ctx, owner, workspace, name, contents, ifAbsent, exec)
+}
+
+func writeFileViaExec(ctx context.Context, owner Ownership, workspace, name string, contents []byte, ifAbsent bool, exec ExecFunc) error {
+	if err := ValidateFilePath(name); err != nil {
+		return err
 	}
 	if exec == nil {
 		return fmt.Errorf("Sandbox file transport is not configured")
 	}
-	digest := fmt.Sprintf("%x", sha256.Sum256(contents))
-	script := `set -eu
-destination=$1 expected_size=$2 expected_digest=$3
-parent=$(dirname -- "$destination")
-mkdir -p -- "$parent"
-if test -f "$destination" && test ! -L "$destination" &&
-   test "$(wc -c < "$destination")" = "$expected_size" &&
-   test "$(sha256sum "$destination" | cut -d ' ' -f 1)" = "$expected_digest"; then
-  exit 0
-fi
-if test -e "$destination" || test -L "$destination"; then
-  test -f "$destination" && test ! -L "$destination"
-fi
-temporary="${destination}.dorf-new.$$"
-trap 'rm -f -- "$temporary"' EXIT
+	if !path.IsAbs(name) && !strings.HasPrefix(name, "~/") && (!path.IsAbs(workspace) || path.Clean(workspace) != workspace || workspace == "/") {
+		return fmt.Errorf("invalid Sandbox workspace")
+	}
+
+	script := "set -eu\n" + resolveFilePath + `
+expected_size=$3 expected_digest=$4 if_absent=$5
+parent=$(dirname -- "$target")
+test "$(realpath -m -- "$parent")" = "$parent"
 umask 077
-cat > "$temporary"
-test "$(wc -c < "$temporary")" = "$expected_size"
-test "$(sha256sum "$temporary" | cut -d ' ' -f 1)" = "$expected_digest"
-chmod 600 "$temporary"
-mv -f -- "$temporary" "$destination"
-trap - EXIT`
-	result, err := exec(ctx, owner, contents, "bash", "-c", script, "dorf-put-file", destination, strconv.Itoa(len(contents)), digest)
-	if err != nil {
-		return err
-	}
-	if result.ExitCode != 0 {
-		return fmt.Errorf("put Sandbox file %s: %s", destination, strings.TrimSpace(result.Stderr))
-	}
-	return nil
-}
-
-// MaxWorkspaceFileWriteBytes bounds an individual public workspace write.
-const MaxWorkspaceFileWriteBytes = 128 << 10
-
-// WriteWorkspaceFileViaExec atomically writes a root-level workspace file.
-// Create-only writes preserve existing files, including empty files.
-func WriteWorkspaceFileViaExec(ctx context.Context, owner Ownership, workspace, name string, contents []byte, ifAbsent bool, exec ExecFunc) error {
-	if err := ValidateWorkspaceRelativePath(name); err != nil {
-		return err
-	}
-	if strings.Contains(name, "/") {
-		return ErrInvalidFilePath
-	}
-	if len(contents) > MaxWorkspaceFileWriteBytes {
-		return fmt.Errorf("workspace file exceeds write limit")
-	}
-	if !path.IsAbs(workspace) || path.Clean(workspace) != workspace || workspace == "/" || exec == nil {
-		return fmt.Errorf("invalid workspace file transport")
-	}
-	script := `set -eu
-workspace=$1 name=$2 expected_size=$3 expected_digest=$4 if_absent=$5
-root=$(realpath -e -- "$workspace")
-test -d "$root" && test ! -L "$workspace"
-cd -- "$root"
+mkdir -p -- "$parent"
+cd -- "$parent"
+name=$(basename -- "$target")
 if test -e "$name" || test -L "$name"; then
   test -f "$name" && test ! -L "$name"
   if test "$if_absent" = true; then exit 0; fi
@@ -159,12 +135,12 @@ if test "$if_absent" = true; then
 else
   mv -fT -- "$temporary" "$name"
 fi`
-	result, err := exec(ctx, owner, contents, "bash", "-c", script, "dorf-write-workspace-file", workspace, name, strconv.Itoa(len(contents)), fmt.Sprintf("%x", sha256.Sum256(contents)), strconv.FormatBool(ifAbsent))
+	result, err := exec(ctx, owner, contents, "bash", "-c", script, "dorf-write-file", workspace, name, strconv.Itoa(len(contents)), fmt.Sprintf("%x", sha256.Sum256(contents)), strconv.FormatBool(ifAbsent))
 	if err != nil {
 		return err
 	}
 	if result.ExitCode != 0 {
-		return fmt.Errorf("%w: workspace file write failed", ErrFileUnavailable)
+		return fmt.Errorf("%w: Sandbox file write failed", ErrFileUnavailable)
 	}
 	return nil
 }

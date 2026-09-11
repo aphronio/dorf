@@ -373,10 +373,11 @@ dorf job message --input-file follow-up.txt JOB_ID
 dorf job message --intent follow --input-file queued.txt JOB_ID
 dorf job message --intent steer --input-file correction.txt JOB_ID
 dorf job message inspect JOB_ID MESSAGE_ID
+dorf job message inspect JOB_ID
 dorf job message interrupt JOB_ID MESSAGE_ID
 dorf job retry JOB_ID
 dorf job evidence JOB_ID
-dorf sandbox file get SANDBOX_ID WORKSPACE_RELATIVE_PATH --output DESTINATION
+dorf sandbox file get SANDBOX_ID PATH --output DESTINATION
 dorf job abandon JOB_ID
 dorf job cleanup JOB_ID
 ```
@@ -385,6 +386,10 @@ Use `--client-reference REFERENCE` with `dorf run` or either `dorf workflow run`
 attach your thread or task reference. `dorf job list` and `dorf job inspect` show the creating
 Client and reference. An older Job shows an unknown creator. Use that information when choosing
 cleanup targets; attribution does not request cleanup or define a retention policy.
+Client configuration may set `client_reference` as the default for new Jobs; an explicit flag
+overrides it. Omitting `MESSAGE_ID` from `dorf job message inspect` reads the latest settled reply
+in the Job's main Sandbox. Pending follow-ups and steer delivery acknowledgements do not replace
+that reply.
 
 To delegate a documented built-in workflow instead, save its complete input in a file and use its
 typed admission command:
@@ -425,9 +430,8 @@ before current work settles. Steer targets only the exact active Turn and never 
 `job watch` reconnects from the canonical snapshot, and Ctrl-C stops only the view. Retry is
 accepted only for eligible failed execution. Evidence is verified metadata. Sandbox file retrieval
 returns exact bytes and must happen before cleanup, which closes Message admission and file reads.
-The requested file path is clean and relative to the Sandbox workspace root. For example, retrieve
-an agent-reported `/workspace/job/result.bin` as `result.bin`; absolute paths, traversal, symlinks,
-directories, and paths outside the workspace are rejected.
+The requested file path can be absolute inside the Sandbox, relative to its workspace root, or
+relative to its execution user's home with `~/`. Traversal, symlinks, and directories are rejected.
 
 Use `--output json` on Job, Message, retry, and Evidence operations and `--output jsonl` on watch for
 stable machine output. The ordinary mutation flow creates retry identity internally and retries the
@@ -494,7 +498,7 @@ Harness Thread, retrieve an exact workspace file, or request cleanup:
 
 ```bash
 dorf job message --key follow-1 --input-file follow-up.txt JOB_ID
-dorf sandbox file get SANDBOX_ID WORKSPACE_RELATIVE_PATH --output DESTINATION
+dorf sandbox file get SANDBOX_ID PATH --output DESTINATION
 dorf job cleanup JOB_ID
 ```
 

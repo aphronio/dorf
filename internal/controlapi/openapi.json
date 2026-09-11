@@ -404,7 +404,8 @@
             }
           },
           "default": { "$ref": "#/components/responses/Problem" }
-        }
+        },
+        "description": " Use latest as the Message selector to inspect the latest settled reply in the main Sandbox."
       }
     },
     "/v1/jobs/{job}/messages/{message}/interrupt": {
@@ -532,8 +533,8 @@
     "/v1/sandboxes/{sandbox}/files": {
       "put": {
         "operationId": "putSandboxFile",
-        "summary": "Write a root-level Job-owned Sandbox file",
-        "description": "Atomically replaces a regular file in the workspace root, up to 128 KiB. Rejects symlinks and nested paths. If-None-Match: * creates only when absent; an existing regular file is preserved and also returns 204. Cleanup fences apply to the entire write.",
+        "summary": "Write a Job-owned Sandbox file",
+        "description": "Atomically replaces one regular file inside the Sandbox, up to 128 KiB, with mode 0600. Creates missing parent directories with mode 0700. Accepts absolute paths, ~/ paths relative to the Sandbox execution user home, and paths relative to the workspace. Rejects symlinks and non-canonical paths. If-None-Match: * creates only when absent; an existing regular file is preserved and also returns 204. Cleanup fences apply to the entire write.",
         "tags": [
           "Sandboxes"
         ],
@@ -545,7 +546,7 @@
             "name": "path",
             "in": "query",
             "required": true,
-            "description": "Clean workspace-relative file path",
+            "description": "Clean absolute, home-relative (~/), or workspace-relative Sandbox file path",
             "schema": {
               "type": "string",
               "minLength": 1
@@ -586,16 +587,21 @@
       "get": {
         "operationId": "getSandboxFile",
         "summary": "Read exact bytes from one Job-owned Sandbox",
-        "description": "Reads one clean workspace-relative regular file while Job cleanup still permits Sandbox reads. The client must verify Content-Digest before using or writing the bytes.",
+        "description": "Reads one regular file inside the Sandbox using an absolute, home-relative (~/), or workspace-relative path while Job cleanup still permits reads. Rejects symlinks and non-canonical paths. The client must verify Content-Digest before using or writing the bytes.",
         "tags": ["Sandboxes"],
         "parameters": [
-          { "$ref": "#/components/parameters/SandboxID" },
+          {
+            "$ref": "#/components/parameters/SandboxID"
+          },
           {
             "name": "path",
             "in": "query",
             "required": true,
-            "description": "Clean workspace-relative file path",
-            "schema": { "type": "string", "minLength": 1 }
+            "description": "Clean absolute, home-relative (~/), or workspace-relative Sandbox file path",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
           }
         ],
         "responses": {
@@ -619,6 +625,54 @@
           },
           "default": { "$ref": "#/components/responses/Problem" }
         }
+      }
+    },
+    "/v1/sandboxes/{sandbox}/exec": {
+      "post": {
+        "operationId": "execSandbox",
+        "summary": "Execute a bounded command inside an owned Sandbox",
+        "description": "Runs argv once with optional text stdin and a bounded deadline. Returns exit code and capped text output. No idempotency key or automatic retry: a transport failure may leave the command outcome unknown. Job ownership and cleanup fences apply.",
+        "parameters": [
+          {
+            "name": "sandbox",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SandboxCommand"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SandboxCommandResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "security": [
+          {
+            "clientBearer": []
+          }
+        ]
       }
     }
   },
@@ -959,6 +1013,10 @@
           "sandboxes": {
             "type": "array",
             "items": { "$ref": "#/components/schemas/Sandbox" }
+          },
+          "latest_reply_id": {
+            "type": "string",
+            "description": "Latest settled reply in the main Sandbox, derived from retained Messages and AgentRuns. Pending follow-ups and steer acknowledgements are excluded."
           }
         }
       },
@@ -1208,6 +1266,63 @@
           "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
           "retryable": { "type": "boolean" },
           "details": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "SandboxCommand": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "argv"
+        ],
+        "properties": {
+          "argv": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 256,
+            "items": {
+              "type": "string"
+            }
+          },
+          "stdin": {
+            "type": "string",
+            "default": ""
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 120,
+            "default": 30,
+            "description": "Execution timeout in seconds; zero or omission uses 30 seconds."
+          }
+        },
+        "description": "Run explicit argv without implicit shell interpretation. Combined argv and stdin must not exceed 64 KiB; arguments must not contain NUL and argv[0] must be nonempty."
+      },
+      "SandboxCommandResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "exit_code",
+          "stdout",
+          "stderr",
+          "truncated"
+        ],
+        "properties": {
+          "exit_code": {
+            "type": "integer",
+            "description": "Process exit code. Nonzero is a command result; 124 indicates the execution timeout expired."
+          },
+          "stdout": {
+            "type": "string",
+            "description": "Standard output capped at 64 KiB."
+          },
+          "stderr": {
+            "type": "string",
+            "description": "Standard error capped at 64 KiB."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "One or both output streams exceeded 64 KiB and were truncated."
+          }
         }
       }
     }

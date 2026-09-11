@@ -571,13 +571,14 @@ type readerTestRuntimes struct {
 	profile   string
 	files     core.SandboxFileReader
 	execution core.Execution
+	commands  core.SandboxCommandExecutor
 }
 
 func (r readerTestRuntimes) ResolveSandbox(_ context.Context, profile string) (core.SandboxRuntime, error) {
 	if profile != r.profile {
 		return core.SandboxRuntime{}, errors.New("foreign profile")
 	}
-	return core.SandboxRuntime{SandboxProfile: profile, Files: r.files, Execution: r.execution}, nil
+	return core.SandboxRuntime{SandboxProfile: profile, Files: r.files, Execution: r.execution, Commands: r.commands}, nil
 }
 
 type readerTestFiles struct {
@@ -696,13 +697,13 @@ func TestFileWritesUseAuthenticatedOwnershipAndCleanupFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := bytes.Repeat([]byte("instructions\n"), 5000)
-	if err := client.WriteFile(context.Background(), owned.ID, "SOUL.md", want, true); err != nil {
+	if err := client.WriteFile(context.Background(), owned.ID, "~/.config/agent0/access.json", want, true); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(files.contents, want) || files.job != job || files.sandbox != owned || store.fences != 1 {
 		t.Fatal("write lost exact bytes or ownership fence")
 	}
-	for _, name := range []string{"../escape", "nested/file"} {
+	for _, name := range []string{"../escape", "nested/../file"} {
 		if err := client.WriteFile(context.Background(), owned.ID, name, nil, false); !errors.Is(err, ErrInvalidFilePath) {
 			t.Fatalf("write %s: %v", name, err)
 		}

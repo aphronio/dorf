@@ -18,7 +18,7 @@ func (h *handler) writeFile(w http.ResponseWriter, r *http.Request, name string)
 		h.fail(w, problem("invalid_query"))
 		return
 	}
-	contents, err := io.ReadAll(http.MaxBytesReader(w, r.Body, sandbox.MaxWorkspaceFileWriteBytes))
+	contents, err := io.ReadAll(http.MaxBytesReader(w, r.Body, sandbox.MaxFileWriteBytes))
 	if err != nil {
 		h.fail(w, problem("body_too_large"))
 		return

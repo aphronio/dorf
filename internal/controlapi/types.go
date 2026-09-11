@@ -9,25 +9,28 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/controlauth"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
 var (
-	ErrInvalidInput         = errors.New("invalid control API input")
-	ErrProfileNotFound      = errors.New("control API Sandbox profile not found")
-	ErrInvalidCursor        = errors.New("invalid control API Job cursor")
-	ErrJobNotFound          = errors.New("control API Job not found")
-	ErrMessageNotFound      = errors.New("control API Message not found")
-	ErrSandboxNotFound      = errors.New("control API Sandbox not found")
-	ErrInvalidFilePath      = errors.New("control API Sandbox file path invalid")
-	ErrFileNotFound         = errors.New("control API Sandbox file not found")
-	ErrFileUnavailable      = errors.New("control API Sandbox file unavailable")
-	ErrMessageUnavailable   = errors.New("control API Message cannot be accepted")
-	ErrSteerUnavailable     = errors.New("control API steer cannot be accepted")
-	ErrInterruptUnavailable = errors.New("control API interrupt cannot be accepted")
-	ErrRetryUnavailable     = errors.New("control API Job retry unavailable")
-	ErrAbandonUnavailable   = errors.New("control API Job abandon unavailable")
-	ErrEvidenceUnverified   = errors.New("control API Evidence could not be verified")
-	ErrIdempotencyConflict  = errors.New("idempotency key is bound to different input")
+	ErrInvalidInput           = errors.New("invalid control API input")
+	ErrProfileNotFound        = errors.New("control API Sandbox profile not found")
+	ErrInvalidCursor          = errors.New("invalid control API Job cursor")
+	ErrJobNotFound            = errors.New("control API Job not found")
+	ErrMessageNotFound        = errors.New("control API Message not found")
+	ErrSandboxExecUnavailable = errors.New("Sandbox command is unavailable")
+	ErrSandboxExecFailed      = errors.New("Sandbox command outcome is unknown")
+	ErrSandboxNotFound        = errors.New("control API Sandbox not found")
+	ErrInvalidFilePath        = errors.New("control API Sandbox file path invalid")
+	ErrFileNotFound           = errors.New("control API Sandbox file not found")
+	ErrFileUnavailable        = errors.New("control API Sandbox file unavailable")
+	ErrMessageUnavailable     = errors.New("control API Message cannot be accepted")
+	ErrSteerUnavailable       = errors.New("control API steer cannot be accepted")
+	ErrInterruptUnavailable   = errors.New("control API interrupt cannot be accepted")
+	ErrRetryUnavailable       = errors.New("control API Job retry unavailable")
+	ErrAbandonUnavailable     = errors.New("control API Job abandon unavailable")
+	ErrEvidenceUnverified     = errors.New("control API Evidence could not be verified")
+	ErrIdempotencyConflict    = errors.New("idempotency key is bound to different input")
 )
 
 type Discovery struct {
@@ -135,6 +138,7 @@ type JobList struct {
 // Job contains only the fields common to every supported public Job kind.
 // Canonical reads return one of the concrete JobView implementations below.
 type Job struct {
+	LatestReplyID   string      `json:"latest_reply_id,omitempty"`
 	CreatedByClient *JobCreator `json:"created_by_client"`
 	ClientReference string      `json:"client_reference"`
 	ID              string      `json:"id"`
@@ -302,6 +306,7 @@ type Auth interface {
 // Implementations compose Core and the fixed workflow seams and return only
 // purpose-built public snapshots.
 type Jobs interface {
+	ExecSandbox(context.Context, string, provider.Command) (provider.CommandResult, error)
 	List(context.Context, int, string) (JobList, error)
 	AdmitDirect(context.Context, string, string, AdmitJobRequest) (DirectJob, bool, error)
 	AdmitCoding(context.Context, string, string, AdmitCodingJobRequest) (CodingJob, bool, error)

@@ -67,14 +67,14 @@ func (h SandboxHandle) Agent() AgentHandle {
 	return AgentHandle{jobID: h.jobID, sandboxID: h.id, application: h.application}
 }
 
-// ReadFile returns the exact bytes of one regular workspace-relative file
+// ReadFile returns the exact bytes of one regular Sandbox file
 // while holding the Job resource fence. Core does not discover, interpret, or
 // retain the file; callers must read what they need before requesting cleanup.
 func (h SandboxHandle) ReadFile(ctx context.Context, relativePath string) ([]byte, error) {
 	if h.application == nil || h.application.Store == nil || h.application.SandboxRuntimes == nil || h.jobID == "" || h.id == "" {
 		return nil, fmt.Errorf("Sandbox handle is not bound to Core file access")
 	}
-	if err := provider.ValidateWorkspaceRelativePath(relativePath); err != nil {
+	if err := provider.ValidateFilePath(relativePath); err != nil {
 		return nil, err
 	}
 	var contents []byte

@@ -46,8 +46,10 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D108: Reuse direct Jobs for retained sessions and exact message control](decisions/D108-direct-session-message-control.md) (`current`). Changing automatic message intent, interruption, or direct Job session continuity.
 - [D109: Export diagnostics through the existing native Turn binding](decisions/D109-exact-turn-execution-diagnostics.md) (`current`). Changing native execution diagnostics, attribution, or exporter custody.
 - [D110: Separate Job setup from Message delivery](decisions/D110-separate-job-setup-from-messages.md) (`current`). Changing Job creation, workspace instructions, or Message admission.
-- [D111: Workspace files own live Codex instructions](decisions/D111-workspace-files-own-live-codex-instructions.md) (`current`). Changing workspace instruction editing or Codex context loading.
+- [D111: Workspace files own live Codex instructions](decisions/D111-workspace-files-own-live-codex-instructions.md) (`partial`). Changing workspace instruction editing or Codex context loading.
 - [D112: Jobs retain authenticated Client attribution](decisions/D112-jobs-retain-authenticated-client-attribution.md) (`current`). Changing Job attribution, admission replay, or operator cleanup inspection.
+- [D115: Sandbox file access supports agent home configuration](decisions/D115-sandbox-file-access-supports-agent-home-configuration.md) (`current`). Changing Sandbox file paths, helper installation, or client credential delivery.
+- [D116: Clients bootstrap Sandboxes and observe the latest reply](decisions/D116-client-bootstrap-and-latest-reply-observation.md) (`current`). Changing client Sandbox setup or reply notification integrations.
 
 ## Workflows
 
@@ -173,9 +175,11 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D105: Host-issued integration keys use ordinary revocable Clients](decisions/D105-host-issued-integration-keys-use-ordinary-revocable-clients.md) (`current`). Provisioning bearer credentials for unattended integrations.
 - [D108: Reuse direct Jobs for retained sessions and exact message control](decisions/D108-direct-session-message-control.md) (`current`). Changing automatic message intent, interruption, or direct Job session continuity.
 - [D110: Separate Job setup from Message delivery](decisions/D110-separate-job-setup-from-messages.md) (`current`). Changing Job creation, workspace instructions, or Message admission.
-- [D111: Workspace files own live Codex instructions](decisions/D111-workspace-files-own-live-codex-instructions.md) (`current`). Changing workspace instruction editing or Codex context loading.
+- [D111: Workspace files own live Codex instructions](decisions/D111-workspace-files-own-live-codex-instructions.md) (`partial`). Changing workspace instruction editing or Codex context loading.
 - [D112: Jobs retain authenticated Client attribution](decisions/D112-jobs-retain-authenticated-client-attribution.md) (`current`). Changing Job attribution, admission replay, or operator cleanup inspection.
 - [D113: Clients discover Sandbox profile summaries](decisions/D113-clients-discover-sandbox-profile-summaries.md) (`current`). Changing remote Sandbox profile discovery or Job profile selection errors.
+- [D115: Sandbox file access supports agent home configuration](decisions/D115-sandbox-file-access-supports-agent-home-configuration.md) (`current`). Changing Sandbox file paths, helper installation, or client credential delivery.
+- [D116: Clients bootstrap Sandboxes and observe the latest reply](decisions/D116-client-bootstrap-and-latest-reply-observation.md) (`current`). Changing client Sandbox setup or reply notification integrations.
 
 ## Deployment and setup
 

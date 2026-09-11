@@ -12,6 +12,7 @@ import (
 	"github.com/aphronio/dorf/internal/controlreader"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/postgres"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -58,7 +59,7 @@ func newWorkerControlReaderWithListen(token string, service controlreader.Servic
 			Handler:           handler,
 			ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout:       10 * time.Second,
-			WriteTimeout:      25 * time.Second,
+			WriteTimeout:      provider.CommandTransportTimeout,
 			IdleTimeout:       60 * time.Second,
 		},
 	}, nil

@@ -62,6 +62,7 @@ func newHandlerContext(discovery Discovery, auth Auth, jobs Jobs, profiles Profi
 	h.mux.HandleFunc("/v1/jobs/{job}/abandon", h.authenticate(h.abandonRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/cleanup", h.authenticate(h.cleanupRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}", h.authenticate(h.jobRoute))
+	h.mux.HandleFunc("/v1/sandboxes/{sandbox}/exec", h.authenticate(h.sandboxExecRoute))
 	h.mux.HandleFunc("/v1/sandboxes/{sandbox}/files", h.authenticate(h.fileRoute))
 	h.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		h.fail(w, problem("not_found"))
@@ -703,41 +704,41 @@ func (h *handler) serviceError(w http.ResponseWriter, r *http.Request, err error
 		h.fail(w, problem(code))
 		return
 	}
-	var value Problem
-	switch {
-	case errors.Is(err, controlauth.ErrUnauthenticated):
+	if errors.Is(err, controlauth.ErrUnauthenticated) {
 		h.authError(w)
 		return
-	case errors.Is(err, controlauth.ErrEnrollmentUnavailable):
-		value = problem("enrollment_unavailable")
-	case errors.Is(err, controlauth.ErrClientConflict):
-		value = problem("client_conflict")
-	case errors.Is(err, ErrInvalidCursor):
-		value = problem("invalid_cursor")
-	case errors.Is(err, ErrJobNotFound):
-		value = problem("job_not_found")
-	case errors.Is(err, ErrMessageNotFound):
-		value = problem("message_not_found")
-	case errors.Is(err, ErrSandboxNotFound):
-		value = problem("sandbox_not_found")
-	case errors.Is(err, ErrInvalidFilePath):
-		value = problem("invalid_file_path")
-	case errors.Is(err, ErrFileNotFound):
-		value = problem("file_not_found")
-	case errors.Is(err, ErrFileUnavailable):
-		value = problem("file_unavailable")
-	case errors.Is(err, ErrRetryUnavailable):
-		value = problem("retry_unavailable")
-	case errors.Is(err, ErrAbandonUnavailable):
-		value = problem("abandon_unavailable")
-	case errors.Is(err, ErrEvidenceUnverified):
-		log.Printf("Dorf control API Evidence verification failure: method=%s path=%q error_type=%T", r.Method, r.URL.Path, err)
-		value = problem("evidence_unverified")
-	default:
-		log.Printf("Dorf control API internal failure: method=%s path=%q error_type=%T", r.Method, r.URL.Path, err)
-		value = problem("internal_error")
 	}
-	h.fail(w, value)
+	if errors.Is(err, ErrEvidenceUnverified) {
+		log.Printf("Dorf control API Evidence verification failure: method=%s path=%q error_type=%T", r.Method, r.URL.Path, err)
+	}
+	for _, entry := range serviceProblems {
+		if errors.Is(err, entry.err) {
+			h.fail(w, problem(entry.code))
+			return
+		}
+	}
+	log.Printf("Dorf control API internal failure: method=%s path=%q error_type=%T", r.Method, r.URL.Path, err)
+	h.fail(w, problem("internal_error"))
+}
+
+var serviceProblems = []struct {
+	err  error
+	code string
+}{
+	{controlauth.ErrEnrollmentUnavailable, "enrollment_unavailable"},
+	{controlauth.ErrClientConflict, "client_conflict"},
+	{ErrInvalidCursor, "invalid_cursor"},
+	{ErrJobNotFound, "job_not_found"},
+	{ErrMessageNotFound, "message_not_found"},
+	{ErrSandboxExecUnavailable, "sandbox_exec_unavailable"},
+	{ErrSandboxExecFailed, "sandbox_exec_failed"},
+	{ErrSandboxNotFound, "sandbox_not_found"},
+	{ErrInvalidFilePath, "invalid_file_path"},
+	{ErrFileNotFound, "file_not_found"},
+	{ErrFileUnavailable, "file_unavailable"},
+	{ErrRetryUnavailable, "retry_unavailable"},
+	{ErrAbandonUnavailable, "abandon_unavailable"},
+	{ErrEvidenceUnverified, "evidence_unverified"},
 }
 
 func admissionProblemCode(err error) string {

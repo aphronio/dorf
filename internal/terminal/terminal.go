@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gateway"
@@ -130,5 +131,31 @@ func (e Externals) WriteSandboxFile(ctx context.Context, job core.Job, owned cor
 	if owned.JobID != job.ID {
 		return fmt.Errorf("Sandbox file write requires the exact Job owner")
 	}
-	return provider.WriteWorkspaceFileViaExec(ctx, ownershipMetadata(owned), e.Sandbox.Workspace(), name, contents, ifAbsent, e.Sandbox.Exec)
+	return provider.WriteFileViaExec(ctx, ownershipMetadata(owned), e.Sandbox.Workspace(), name, contents, ifAbsent, e.Sandbox.Exec)
+}
+
+func (e Externals) ExecSandbox(ctx context.Context, job core.Job, owned core.Sandbox, command provider.Command) (provider.CommandResult, error) {
+	if owned.JobID != job.ID {
+		return provider.CommandResult{}, fmt.Errorf("Sandbox command requires the exact Job owner")
+	}
+	if err := command.Validate(); err != nil {
+		return provider.CommandResult{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, command.Timeout()+2*time.Second)
+	defer cancel()
+	argv := append([]string{"timeout", "--kill-after=1s", fmt.Sprintf("%gs", command.Timeout().Seconds())}, command.Argv...)
+	result, err := e.Sandbox.Exec(ctx, ownershipMetadata(owned), []byte(command.Stdin), argv...)
+	if err != nil {
+		return provider.CommandResult{}, err
+	}
+	output := provider.CommandResult{ExitCode: result.ExitCode, Stdout: result.Stdout, Stderr: result.Stderr}
+	if len(output.Stdout) > provider.MaxCommandOutputBytes {
+		output.Stdout = output.Stdout[:provider.MaxCommandOutputBytes]
+		output.Truncated = true
+	}
+	if len(output.Stderr) > provider.MaxCommandOutputBytes {
+		output.Stderr = output.Stderr[:provider.MaxCommandOutputBytes]
+		output.Truncated = true
+	}
+	return output, nil
 }
