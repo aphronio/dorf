@@ -11,10 +11,10 @@ local, bring-your-own-cloud, or managed profiles without rebuilding the agent sy
 Connection custody does not mean copying raw user secrets into a Sandbox; each profile and adapter
 must define scoped routing or injection.
 
-Dorf owns the control-plane guarantees around the Harness: accepted intent, AgentRun and Sandbox
-custody, external-effect reconciliation, recovery, Evidence, durable attachment of a typed Outcome
-when the consumer defines one, and execution of requested cleanup. A Harness may provide its own
-durable sessions; Dorf does not compete by duplicating them.
+Dorf owns the control-plane guarantees around the Harness: accepted Message text and attachments,
+AgentRun and Sandbox custody, external-effect reconciliation, recovery, Evidence, durable attachment
+of a typed Outcome when the consumer defines one, and execution of requested cleanup. A Harness may
+provide its own durable sessions; Dorf does not compete by duplicating them.
 
 This is the product and experience direction. It is not an API inventory, schema, package plan, or
 issue backlog. Current support belongs in [Support](../support.md), operator steps belong in
@@ -52,9 +52,10 @@ directly and retain that policy itself. Native Dorf workflows and trusted client
 same small ownership boundary, whether through in-process composition or a supported external
 projection. Neither receives a privileged hidden path.
 
-Core provides mechanisms, never workflow or interaction policy. It may admit input, run and recover
-AgentRuns, return the exact bytes of a caller-selected Sandbox file while that Sandbox remains
-available, retain Evidence, and reconcile cleanup after a caller requests it. It does
+Core provides mechanisms, never workflow or interaction policy. It may admit Message input and
+retain its verified attachments, run and recover AgentRuns, return the exact bytes of a
+caller-selected Sandbox file while that Sandbox remains available, retain Evidence, and reconcile
+cleanup after a caller requests it. It does
 not decide that a report is accepted, that a Job is semantically finished, that another Job should be
 started, or that resources should now be released. Those choices belong to a workflow or to a client
 such as a personal assistant, n8n, a UI, CI, or a human-operated CLI. Shipping a native workflow in
@@ -82,7 +83,7 @@ This gives each layer one job:
 ```text
 Client       chooses goals, drives Core directly, or composes Jobs through workflows
 Workflow     owns semantics, policy, evaluation, and Outcome meaning
-Dorf core    owns invariant Follow/Steer delivery, Job-wide run custody, recovery, Evidence, exact Sandbox file reads, and requested cleanup execution
+Dorf core    owns Message input custody, invariant Follow/Steer delivery, Job-wide run custody, recovery, Evidence, exact Sandbox file reads, and requested cleanup execution
 Adapters     translate Harnesses, Sandboxes, providers, and external authorities
 ```
 
@@ -93,7 +94,7 @@ Adapters     translate Harnesses, Sandboxes, providers, and external authorities
 | **Job** | One retained execution context, its accepted configuration, owned resources, Messages, and lifecycle; workflow-driven Jobs also pin a workflow version |
 | **Workflow** | Ordinary versioned policy that composes deterministic operations and bounded agent work for one kind of Job |
 | **Sandbox** | An isolated mutable workstation owned for a Job's lifetime |
-| **Message** | Durable input from a human, agent, or workflow |
+| **Message** | Durable text and optional ordered input attachments from a human, agent, or workflow |
 | **AgentRun** | Core's internal durable recovery fact for one bounded delivery of a Message to an agent |
 | **Harness** | Software hosting an agent, such as Codex app-server |
 | **Thread** | Continuing conversation context owned by a Harness |

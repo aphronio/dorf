@@ -205,7 +205,7 @@ func (h JobHandle) ensureSandbox(ctx context.Context, name string) (SandboxHandl
 // Message admits one durable human Message through the exact bound Sandbox.
 // Its consumer resolves the execution envelope in the supplied transaction; Core owns the
 // caller-retained key, default-follow option semantics, receipt, and wake.
-func (h AgentHandle) Message(ctx context.Context, key, input string, options ...MessageOption) (MessageReceipt, error) {
+func (h AgentHandle) Message(ctx context.Context, key string, input MessageInput, options ...MessageOption) (MessageReceipt, error) {
 	if h.application == nil || h.application.Store == nil || h.jobID == "" || h.sandboxID == "" {
 		return MessageReceipt{}, fmt.Errorf("Agent handle is not bound to a Job Sandbox")
 	}
@@ -213,37 +213,48 @@ func (h AgentHandle) Message(ctx context.Context, key, input string, options ...
 		return MessageReceipt{}, fmt.Errorf("Agent Message execution-envelope resolution is not configured")
 	}
 	key = strings.TrimSpace(key)
-	if key == "" || strings.TrimSpace(input) == "" {
-		return MessageReceipt{}, fmt.Errorf("Agent Message requires a caller-retained send key and complete text")
+	if key == "" {
+		return MessageReceipt{}, fmt.Errorf("Agent Message requires a caller-retained send key and text or attachments")
 	}
 	if len(key) > 256 {
 		return MessageReceipt{}, fmt.Errorf("Agent Message send key must be at most 256 characters")
 	}
-	if len(input) > 1<<20 {
-		return MessageReceipt{}, fmt.Errorf("Agent Message text exceeds 1 MiB")
+	if !ValidMessageInput(input) {
+		return MessageReceipt{}, fmt.Errorf("Agent Message requires valid text or attachments within the accepted limits")
 	}
-	intent := MessageFollow
-	refreshSkills := false
+	intent, refreshSkills, err := resolveMessageOptions(options)
+	if err != nil {
+		return MessageReceipt{}, err
+	}
+	request := MessageAdmission{
+		JobID: h.jobID, SandboxID: h.sandboxID, FromKind: MessageFromHuman,
+		FromID: key, Input: input.Text, Attachments: append([]MessageAttachment(nil), input.Attachments...), Intent: intent,
+		RefreshSkills: refreshSkills,
+	}
+	return h.admitMessage(ctx, key, request)
+}
+
+func resolveMessageOptions(options []MessageOption) (MessageDeliveryIntent, bool, error) {
+	intent, refreshSkills := MessageFollow, false
 	for _, option := range options {
 		if option.refreshSkills {
 			refreshSkills = true
 			continue
 		}
 		if intent != MessageFollow {
-			return MessageReceipt{}, fmt.Errorf("Agent Message accepts at most one delivery option")
+			return "", false, fmt.Errorf("Agent Message accepts at most one delivery option")
 		}
 		switch option.intent {
 		case MessageSteer, MessageAuto:
 			intent = option.intent
 		default:
-			return MessageReceipt{}, fmt.Errorf("unsupported Agent Message delivery option")
+			return "", false, fmt.Errorf("unsupported Agent Message delivery option")
 		}
 	}
-	request := MessageAdmission{
-		JobID: h.jobID, SandboxID: h.sandboxID, FromKind: MessageFromHuman,
-		FromID: key, Input: input, Intent: intent,
-		RefreshSkills: refreshSkills,
-	}
+	return intent, refreshSkills, nil
+}
+
+func (h AgentHandle) admitMessage(ctx context.Context, key string, request MessageAdmission) (MessageReceipt, error) {
 	admitted, err := h.application.AgentMessages.AdmitAgentMessage(ctx, request)
 	message := admitted.Message
 	receipt := MessageReceipt{
@@ -258,10 +269,19 @@ func (h AgentHandle) Message(ctx context.Context, key, input string, options ...
 	targetValid := message.Intent == MessageFollow && message.TargetTurnID == "" || message.Intent == MessageSteer && message.TargetTurnID != ""
 	accepted := MessageAdmission{
 		JobID: message.JobID, SandboxID: admitted.SandboxID, FromKind: message.FromKind, FromID: message.FromID,
-		Input: message.Input, Intent: intent, RefreshSkills: message.RefreshSkills,
+		Input: message.Input, Attachments: message.Attachments, Intent: request.Intent, RefreshSkills: message.RefreshSkills,
 	}
-	if accepted != request || message.ID != expectedID || message.Sequence <= 0 || !intent.accepts(message.Intent) || !targetValid {
+	if !sameMessageAdmission(accepted, request) || message.ID != expectedID || message.Sequence <= 0 || !request.Intent.accepts(message.Intent) || !targetValid {
 		return MessageReceipt{}, fmt.Errorf("Agent Message admission returned a foreign receipt")
+	}
+	if !admitted.Created {
+		job, err := h.application.Store.Job(ctx, h.jobID)
+		if err != nil {
+			return receipt, fmt.Errorf("load Job after Message replay: %w", err)
+		}
+		if job.CleanupState != CleanupPending {
+			return receipt, nil
+		}
 	}
 	if h.application.Tasks == nil {
 		return receipt, fmt.Errorf("message %s sequence %d was accepted, but its wake hint failed; retry the same send key and text: Absurd is not configured", message.ID, message.Sequence)
@@ -270,6 +290,20 @@ func (h AgentHandle) Message(ctx context.Context, key, input string, options ...
 		return receipt, err
 	}
 	return receipt, nil
+}
+
+func sameMessageAdmission(left, right MessageAdmission) bool {
+	if left.RefreshSkills != right.RefreshSkills || left.JobID != right.JobID || left.SandboxID != right.SandboxID ||
+		left.FromKind != right.FromKind || left.FromID != right.FromID || left.Input != right.Input || left.Intent != right.Intent ||
+		len(left.Attachments) != len(right.Attachments) {
+		return false
+	}
+	for index := range left.Attachments {
+		if left.Attachments[index] != right.Attachments[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (h JobHandle) executeSandboxEnsure(ctx context.Context, job Job, owned Sandbox) error {

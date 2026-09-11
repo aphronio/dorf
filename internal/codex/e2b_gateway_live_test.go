@@ -87,7 +87,7 @@ func TestLiveE2BScopedGatewayCompletesCodexTurn(t *testing.T) {
 	}
 	routeCreated = true
 
-	binding, err := agent.StartInitialTurn(ctx, owner, sandbox.Workspace(), "e2b-live-agent-run", "Reply with exactly: dorf-e2b-gateway-proof", "gpt-5.6-sol", "low", false)
+	binding, err := agent.StartInitialTurn(ctx, owner, sandbox.Workspace(), "e2b-live-agent-run", core.HarnessInput{Text: "Reply with exactly: dorf-e2b-gateway-proof"}, "gpt-5.6-sol", "low", false)
 	if err != nil {
 		t.Fatal(err)
 	}

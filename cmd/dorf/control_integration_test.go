@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -31,6 +33,86 @@ import (
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
+
+func TestControlAPIMultipartAttachmentsPersistAndReplayAfterCleanup(t *testing.T) {
+	ctx := context.Background()
+	store, tasks, profileName := controlTestStore(t)
+	provider := controlTestGateway(t)
+	auth := controlauth.Service{Store: store}
+	credential, err := controlauth.GenerateCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.IssueKey(ctx, "attachment-client", credential); err != nil {
+		t.Fatal(err)
+	}
+	runtimes := controlTestRuntimes{profile: profileName}
+	blobRoot := t.TempDir()
+	handler := controlTestHandler(store, tasks, provider, auth, runtimes, blob.Store{Root: blobRoot})
+	jobKey := fmt.Sprintf("attachment-job-%d", time.Now().UnixNano())
+	jobResponse := controlTestRequest(t, handler, http.MethodPost, "/v1/jobs", credential, jobKey, controlapi.AdmitJobRequest{
+		AgentsMD: "attachment integration", AIConnection: "primary", Model: "model-test", Reasoning: "high",
+	})
+	var job controlapi.DirectJob
+	controlTestJSON(t, jobResponse, http.StatusCreated, &job)
+
+	imageBytes := encodeTestPNG(t, 3, 2)
+	fileBytes := []byte("generic attachment bytes")
+	attachments := []controlapi.SendMessageAttachment{
+		{Filename: "diagram-ä.png", Contents: imageBytes},
+		{Filename: "notes.txt", Contents: fileBytes},
+	}
+	messageKey := fmt.Sprintf("attachment-message-%d", time.Now().UnixNano())
+	firstResponse := controlTestMultipartMessage(t, handler, job.ID, credential, messageKey, "", "follow", attachments)
+	var first controlapi.Message
+	controlTestJSON(t, firstResponse, http.StatusCreated, &first)
+	execution, err := store.AgentMessageExecution(ctx, first.ID)
+	if err != nil || execution.Message.Input != "" || len(execution.Message.Attachments) != 2 {
+		t.Fatalf("durable attachment execution=%#v err=%v", execution, err)
+	}
+	imageDigest, fileDigest := sha256.Sum256(imageBytes), sha256.Sum256(fileBytes)
+	wantDigests := []string{fmt.Sprintf("%x", imageDigest), fmt.Sprintf("%x", fileDigest)}
+	wantKinds := []core.MessageAttachmentKind{core.MessageAttachmentImage, core.MessageAttachmentFile}
+	for index, attachment := range execution.Message.Attachments {
+		if attachment.Filename != attachments[index].Filename || attachment.Digest != wantDigests[index] ||
+			attachment.ByteSize != int64(len(attachments[index].Contents)) || attachment.Kind != wantKinds[index] {
+			t.Fatalf("durable attachment %d=%#v", index, attachment)
+		}
+		if err := (blob.Store{Root: blobRoot}).Verify(attachment.Digest, attachment.ByteSize); err != nil {
+			t.Fatalf("verify attachment %d: %v", index, err)
+		}
+	}
+
+	restarted := controlTestHandler(store, tasks, provider, controlauth.Service{Store: store}, runtimes, blob.Store{Root: blobRoot})
+	replayResponse := controlTestMultipartMessage(t, restarted, job.ID, credential, messageKey, "", "follow", attachments)
+	var replayed controlapi.Message
+	controlTestJSON(t, replayResponse, http.StatusOK, &replayed)
+	if replayed.ID != first.ID {
+		t.Fatalf("replayed Message=%#v, want ID %s", replayed, first.ID)
+	}
+	changed := append([]controlapi.SendMessageAttachment(nil), attachments...)
+	changed[0].Contents = encodeTestPNG(t, 4, 2)
+	var conflict controlapi.Problem
+	controlTestJSON(t, controlTestMultipartMessage(t, restarted, job.ID, credential, messageKey, "", "follow", changed), http.StatusConflict, &conflict)
+	if conflict.Code != "idempotency_conflict" {
+		t.Fatalf("changed attachment conflict=%#v", conflict)
+	}
+
+	deliveriesBeforeCleanup, err := store.Deliveries(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RequestCleanup(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	postCleanupResponse := controlTestMultipartMessage(t, restarted, job.ID, credential, messageKey, "", "follow", attachments)
+	var postCleanup controlapi.Message
+	controlTestJSON(t, postCleanupResponse, http.StatusOK, &postCleanup)
+	deliveriesAfterCleanup, err := store.Deliveries(ctx, job.ID)
+	if err != nil || postCleanup.ID != first.ID || len(deliveriesAfterCleanup) != len(deliveriesBeforeCleanup) {
+		t.Fatalf("post-cleanup replay=%#v deliveries=%d/%d err=%v", postCleanup, len(deliveriesAfterCleanup), len(deliveriesBeforeCleanup), err)
+	}
+}
 
 func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	ctx := context.Background()
@@ -640,13 +722,14 @@ func controlTestHandlerWithGitHub(store postgres.Store, tasks *absurd.Client, pr
 		queueName = tasks.QueueName()
 	}
 	reader := controlreader.Service{Store: store, Runtimes: runtimes, Provider: provider, Installations: github}
+	messageImages, _ := runtimes.(messageImageCapability)
 	return controlapi.NewServer(controlapi.Discovery{Product: "dorf"}, auth,
 		controlAPIJobs{
 			store: store, tasks: tasks,
 			directAdmissions:        direct.NewAdmissionService(store, queueName, reader),
 			codingAdmissions:        coding.NewAdmissionService(store, queueName, reader, reader),
 			investigationAdmissions: investigation.NewAdmissionService(store, queueName, reader),
-			reader:                  reader, evidence: evidence,
+			reader:                  reader, blobs: evidence, messageImages: messageImages,
 		}, controlAPIProfiles{store: store}).Handler
 }
 
@@ -673,6 +756,10 @@ func (r controlTestRuntimes) ResolveSandbox(_ context.Context, profile string) (
 	return core.SandboxRuntime{SandboxProfile: r.profile, Files: r}, nil
 }
 
+func (r controlTestRuntimes) SupportsMessageImages(_ context.Context, profile string) (bool, error) {
+	return profile == r.profile, nil
+}
+
 func (r controlTestRuntimes) ReadSandboxFile(context.Context, core.Job, core.Sandbox, string) ([]byte, error) {
 	return append([]byte(nil), r.contents...), nil
 }
@@ -695,6 +782,39 @@ func controlTestRequest(t *testing.T, handler http.Handler, method, path, creden
 	if key != "" {
 		request.Header.Set("Idempotency-Key", key)
 	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+func controlTestMultipartMessage(t *testing.T, handler http.Handler, jobID, credential, key, text, intent string, attachments []controlapi.SendMessageAttachment) *httptest.ResponseRecorder {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("text", text); err != nil {
+		t.Fatal(err)
+	}
+	if intent != "" {
+		if err := writer.WriteField("intent", intent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, attachment := range attachments {
+		part, err := writer.CreateFormFile("attachment", attachment.Filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := part.Write(attachment.Contents); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/jobs/"+jobID+"/messages", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	request.Header.Set("Authorization", "Bearer "+credential)
+	request.Header.Set("Idempotency-Key", key)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response

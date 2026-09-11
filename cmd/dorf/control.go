@@ -19,6 +19,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/clientconfig"
@@ -216,6 +217,7 @@ type authStatusReceipt struct {
 func remoteRun(ctx context.Context, client *controlclient.Client, cfg clientconfig.Config, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("run", flag.ContinueOnError)
 	set.SetOutput(stderr)
+	var attachmentPaths attachmentFlags
 	clientReference := set.String("client-reference", cfg.ClientReference, "optional caller thread or task reference")
 	key := set.String("key", "", "stable request identity for explicit replay")
 	inputFile := set.String("input-file", "", "path containing the first Message")
@@ -225,6 +227,7 @@ func remoteRun(ctx context.Context, client *controlclient.Client, cfg clientconf
 	effort := set.String("reasoning", "high", "Harness reasoning effort")
 	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
 	output := set.String("output", "human", "output format: human or json")
+	set.Var(&attachmentPaths, "attach", "local file to attach to the first Message (repeatable)")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
@@ -234,7 +237,7 @@ func remoteRun(ctx context.Context, client *controlclient.Client, cfg clientconf
 	if err := validateOutput(*output); err != nil {
 		return err
 	}
-	input, err := readInput(*inputFile, "run", "Message")
+	input, err := readMessageInput(*inputFile, "run", attachmentPaths)
 	if err != nil {
 		return err
 	}
@@ -259,8 +262,9 @@ func remoteRun(ctx context.Context, client *controlclient.Client, cfg clientconf
 	if err != nil {
 		return err
 	}
+	input.Intent = "follow"
 	message, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Message may have been accepted.", func() (controlapi.Message, error) {
-		return client.SendMessage(ctx, job.ID, requestKey, controlapi.SendMessageRequest{Text: input, Intent: "follow"})
+		return client.SendMessage(ctx, job.ID, requestKey, input)
 	})
 	if err != nil {
 		return err
@@ -299,6 +303,7 @@ func remoteWorkflowCommand(ctx context.Context, client *controlclient.Client, cf
 func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, cfg clientconfig.Config, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("workflow run coding", flag.ContinueOnError)
 	set.SetOutput(stderr)
+	var attachmentPaths attachmentFlags
 	clientReference := set.String("client-reference", cfg.ClientReference, "optional caller thread or task reference")
 	key := set.String("key", "", "stable request identity for explicit replay")
 	inputFile := set.String("input-file", "", "path containing the first Message")
@@ -311,6 +316,7 @@ func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, cfg
 	model := set.String("model", "", "Harness model (default: selected AI connection)")
 	reasoning := set.String("reasoning", "high", "Harness reasoning effort")
 	output := set.String("output", "human", "output format: human or json")
+	set.Var(&attachmentPaths, "attach", "local file to attach to the first Message (repeatable)")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
@@ -320,7 +326,7 @@ func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, cfg
 	if err := validateOutput(*output); err != nil {
 		return err
 	}
-	input, err := readInput(*inputFile, "workflow run coding", "Message")
+	input, err := readMessageInput(*inputFile, "workflow run coding", attachmentPaths)
 	if err != nil {
 		return err
 	}
@@ -339,8 +345,9 @@ func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, cfg
 	if err != nil {
 		return err
 	}
+	input.Intent = "follow"
 	message, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Message may have been accepted.", func() (controlapi.Message, error) {
-		return client.SendMessage(ctx, job.ID, requestKey, controlapi.SendMessageRequest{Text: input, Intent: "follow"})
+		return client.SendMessage(ctx, job.ID, requestKey, input)
 	})
 	if err != nil {
 		return err
@@ -358,6 +365,7 @@ func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, cfg
 func remoteInvestigationWorkflow(ctx context.Context, client *controlclient.Client, cfg clientconfig.Config, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("workflow run codebase-investigation", flag.ContinueOnError)
 	set.SetOutput(stderr)
+	var attachmentPaths attachmentFlags
 	clientReference := set.String("client-reference", cfg.ClientReference, "optional caller thread or task reference")
 	key := set.String("key", "", "stable request identity for explicit replay")
 	inputFile := set.String("input-file", "", "path containing the Message")
@@ -368,6 +376,7 @@ func remoteInvestigationWorkflow(ctx context.Context, client *controlclient.Clie
 	model := set.String("model", "", "Harness model (default: selected AI connection)")
 	reasoning := set.String("reasoning", "high", "Harness reasoning effort")
 	output := set.String("output", "human", "output format: human or json")
+	set.Var(&attachmentPaths, "attach", "local file to attach to the first Message (repeatable)")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
@@ -377,7 +386,7 @@ func remoteInvestigationWorkflow(ctx context.Context, client *controlclient.Clie
 	if err := validateOutput(*output); err != nil {
 		return err
 	}
-	input, err := readInput(*inputFile, "workflow run codebase-investigation", "Message")
+	input, err := readMessageInput(*inputFile, "workflow run codebase-investigation", attachmentPaths)
 	if err != nil {
 		return err
 	}
@@ -396,8 +405,9 @@ func remoteInvestigationWorkflow(ctx context.Context, client *controlclient.Clie
 	if err != nil {
 		return err
 	}
+	input.Intent = "follow"
 	message, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Message may have been accepted.", func() (controlapi.Message, error) {
-		return client.SendMessage(ctx, job.ID, requestKey, controlapi.SendMessageRequest{Text: input, Intent: "follow"})
+		return client.SendMessage(ctx, job.ID, requestKey, input)
 	})
 	if err != nil {
 		return err
@@ -544,11 +554,13 @@ func remoteJobWatch(ctx context.Context, client *controlclient.Client, args []st
 func remoteMessageSend(ctx context.Context, cfg clientconfig.Config, client *controlclient.Client, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("job message", flag.ContinueOnError)
 	set.SetOutput(stderr)
+	var attachmentPaths attachmentFlags
 	key := set.String("key", "", "stable request identity for explicit replay")
 	inputFile := set.String("input-file", "", "path containing the complete Message")
 	refreshSkills := set.Bool("refresh-skills", false, "reload installed skills before the next fresh Turn (Codex)")
 	intent := set.String("intent", "auto", "delivery intent: auto (steer active work, follow when idle), follow, or steer")
 	output := set.String("output", "human", "output format: human or json")
+	set.Var(&attachmentPaths, "attach", "local file to attach to the Message (repeatable)")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
@@ -561,7 +573,7 @@ func remoteMessageSend(ctx context.Context, cfg clientconfig.Config, client *con
 	if *intent != "auto" && *intent != "follow" && *intent != "steer" {
 		return fmt.Errorf("message intent must be auto, follow, or steer")
 	}
-	input, err := readInput(*inputFile, "job message", "Message")
+	input, err := readMessageInput(*inputFile, "job message", attachmentPaths)
 	if err != nil {
 		return err
 	}
@@ -569,9 +581,9 @@ func remoteMessageSend(ctx context.Context, cfg clientconfig.Config, client *con
 	if err != nil {
 		return err
 	}
-	request := controlapi.SendMessageRequest{Text: input, Intent: *intent, RefreshSkills: *refreshSkills}
+	input.Intent, input.RefreshSkills = *intent, *refreshSkills
 	message, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Message may have been accepted.", func() (controlapi.Message, error) {
-		return client.SendMessage(ctx, set.Arg(0), requestKey, request)
+		return client.SendMessage(ctx, set.Arg(0), requestKey, input)
 	})
 	if err != nil {
 		return err
@@ -929,7 +941,8 @@ type controlAPIJobs struct {
 	codingAdmissions        coding.AdmissionService
 	investigationAdmissions investigation.AdmissionService
 	reader                  controlReader
-	evidence                blob.Store
+	blobs                   blob.Store
+	messageImages           messageImageCapability
 }
 
 type controlReader interface {
@@ -1132,8 +1145,13 @@ func (a controlAPIJobs) SendMessage(ctx context.Context, jobID, key string, inpu
 	if err != nil {
 		return controlapi.Message{}, false, err
 	}
-	if strings.TrimSpace(input.Text) == "" || len(input.Text) > 1<<20 || strings.ContainsRune(input.Text, 0) {
+	if (len(input.Attachments) == 0 && strings.TrimSpace(input.Text) == "") || len(input.Text) > core.MaxMessageInputBytes ||
+		!utf8.ValidString(input.Text) || strings.ContainsRune(input.Text, 0) {
 		return controlapi.Message{}, false, controlapi.ErrInvalidInput
+	}
+	attachments, err := a.retainMessageAttachments(ctx, job.SandboxProfile, input.Attachments)
+	if err != nil {
+		return controlapi.Message{}, false, err
 	}
 	var options []core.MessageOption
 	switch input.Intent {
@@ -1156,7 +1174,7 @@ func (a controlAPIJobs) SendMessage(ctx context.Context, jobID, key string, inpu
 	if err != nil {
 		return controlapi.Message{}, false, err
 	}
-	receipt, err := sandbox.Agent().Message(ctx, key, input.Text, options...)
+	receipt, err := sandbox.Agent().Message(ctx, key, core.MessageInput{Text: input.Text, Attachments: attachments}, options...)
 	if err != nil {
 		return controlapi.Message{}, receipt.Created, controlMessageError(err)
 	}
@@ -1386,7 +1404,7 @@ func (a controlAPIJobs) Evidence(ctx context.Context, jobID string) ([]controlap
 	}
 	result := make([]controlapi.Evidence, 0, len(records))
 	for _, record := range records {
-		if err := a.evidence.Verify(record.Digest, record.ByteSize); err != nil {
+		if err := a.blobs.Verify(record.Digest, record.ByteSize); err != nil {
 			return nil, controlapi.ErrEvidenceUnverified
 		}
 		result = append(result, controlapi.Evidence{
@@ -1548,7 +1566,7 @@ func (a controlAPIJobs) projectCoding(ctx context.Context, job core.Job) (contro
 		}
 		return controlapi.CodingJob{}, err
 	}
-	projection, err := snapshot.Project(a.evidence)
+	projection, err := snapshot.Project(a.blobs)
 	if err != nil {
 		return controlapi.CodingJob{}, err
 	}
@@ -1716,7 +1734,7 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 		directAdmissions:        direct.NewAdmissionService(store, config.QueueName, reader),
 		codingAdmissions:        coding.NewAdmissionService(store, config.QueueName, reader, reader),
 		investigationAdmissions: investigation.NewAdmissionService(store, config.QueueName, reader),
-		reader:                  reader, evidence: blob.Store{Root: cfg.BlobRoot},
+		reader:                  reader, blobs: blob.Store{Root: cfg.BlobRoot}, messageImages: runtimes,
 	}
 	server := controlapi.NewServer(controlapi.Discovery{
 		Product: "dorf", Version: version.Version,

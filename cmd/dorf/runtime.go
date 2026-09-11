@@ -110,7 +110,7 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 				if err != nil {
 					return core.MessageReceipt{}, err
 				}
-				return sandbox.Agent().Message(ctx, fromID, input)
+				return sandbox.Agent().Message(ctx, fromID, core.MessageInput{Text: input})
 			},
 		},
 	}, nil
@@ -140,6 +140,14 @@ type resolvedBaseRuntime struct {
 	Review         coding.ReviewExecution
 	Sandbox        provider.Sandbox
 	Ownership      func(context.Context, string) (provider.Ownership, error)
+}
+
+func (r profileRuntimeResolver) SupportsMessageImages(ctx context.Context, name string) (bool, error) {
+	profile, err := r.store.SandboxProfile(ctx, name)
+	if err != nil {
+		return false, err
+	}
+	return profile.Harness == codex.Harness, nil
 }
 
 // Runtime resolution is downstream of Job admission. The Job's immutable
@@ -173,6 +181,7 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (r
 	}
 	externals := terminal.Externals{
 		Sandbox: sandbox, Gateway: configuredProviderGateway(r.cfg),
+		Blobs: blob.Store{Root: r.cfg.BlobRoot},
 		Agent: agent, Ownership: ownership,
 	}
 	review := coding.ReviewController{Transport: sandbox, Agent: agent, Ownership: ownership}

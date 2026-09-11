@@ -2,6 +2,7 @@ package pi
 
 import (
 	"context"
+	"github.com/aphronio/dorf/internal/core"
 	"strings"
 	"testing"
 	"time"
@@ -205,7 +206,7 @@ func TestStartTurnAppendsExactlyOneNativeTurn(t *testing.T) {
 	runner := &acceptedRPCPromptRunner{before: oneTurn, after: twoTurns, requestID: "run-2"}
 	agent := Agent{Sandbox: testSandbox(runner, testOwner("sandbox"))}
 
-	binding, err := agent.StartTurn(context.Background(), testOwner("sandbox"), "/workspace/job", "dorf-job", "run-2", "second", "gpt-test", "low", false)
+	binding, err := agent.StartTurn(context.Background(), testOwner("sandbox"), "/workspace/job", "dorf-job", "run-2", core.HarnessInput{Text: "second"}, "gpt-test", "low", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +222,7 @@ func TestActiveTurnSteerAcknowledgesExactTarget(t *testing.T) {
 	runner := &acceptedRPCSteerRunner{}
 	agent := Agent{Sandbox: testSandbox(runner, testOwner("sandbox"))}
 
-	accepted, err := agent.SteerTurn(context.Background(), testOwner("sandbox"), "thread", "turn-active", "run-steer", "change direction")
+	accepted, err := agent.SteerTurn(context.Background(), testOwner("sandbox"), "thread", "turn-active", "run-steer", core.HarnessInput{Text: "change direction"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +250,7 @@ func TestStrictReviewRecoveryWithoutNativeTurnAllowsOriginalSubmission(t *testin
 func TestInitialTurnReportsRPCPreflightRejectionAsDefinitelyNotSubmitted(t *testing.T) {
 	agent := Agent{Sandbox: testSandbox(&rejectedRPCPromptRunner{}, testOwner("sandbox"))}
 
-	_, err := agent.StartInitialTurn(context.Background(), testOwner("sandbox"), "/workspace/job", "run-1", "inspect", "gpt-test", "low", false)
+	_, err := agent.StartInitialTurn(context.Background(), testOwner("sandbox"), "/workspace/job", "run-1", core.HarnessInput{Text: "inspect"}, "gpt-test", "low", false)
 	if err == nil || !strings.Contains(err.Error(), "prompt rejected") {
 		t.Fatalf("initial Turn error=%v", err)
 	}
@@ -277,9 +278,9 @@ func TestSkillRefreshRejectedBeforeNativeSubmission(t *testing.T) {
 	for _, initial := range []bool{true, false} {
 		var err error
 		if initial {
-			_, err = agent.StartInitialTurn(context.Background(), testOwner("sandbox"), "/workspace/job", "run", "input", "model", "high", true)
+			_, err = agent.StartInitialTurn(context.Background(), testOwner("sandbox"), "/workspace/job", "run", core.HarnessInput{Text: "input"}, "model", "high", true)
 		} else {
-			_, err = agent.StartTurn(context.Background(), testOwner("sandbox"), "/workspace/job", "thread", "run", "input", "model", "high", true)
+			_, err = agent.StartTurn(context.Background(), testOwner("sandbox"), "/workspace/job", "thread", "run", core.HarnessInput{Text: "input"}, "model", "high", true)
 		}
 		definite, ok := err.(interface{ DefiniteNoSubmit() bool })
 		if !ok || !definite.DefiniteNoSubmit() {

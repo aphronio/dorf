@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -472,7 +473,7 @@ func TestPostgresDirectBootstrapFollowAndExplicitCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := sandbox.Agent().Message(ctx, "direct-message", "prove the direct client execution boundary")
+	first, err := sandbox.Agent().Message(ctx, "direct-message", core.MessageInput{Text: "prove the direct client execution boundary"})
 	if err != nil || !first.Created || first.Sequence != 1 {
 		t.Fatalf("first Message=%#v err=%v", first, err)
 	}
@@ -483,7 +484,7 @@ func TestPostgresDirectBootstrapFollowAndExplicitCleanup(t *testing.T) {
 	if err != nil || len(deliveries) != 1 || deliveries[0].AgentRun.State != core.AgentRunCompleted || deliveries[0].AgentRun.StartedAt.IsZero() || actions[1].SettledAt.After(deliveries[0].AgentRun.StartedAt) {
 		t.Fatalf("ordinary Message must run after preparation: deliveries=%#v err=%v", deliveries, err)
 	}
-	accepted, err := sandbox.Agent().Message(ctx, "direct-follow", "continue in the retained Thread")
+	accepted, err := sandbox.Agent().Message(ctx, "direct-follow", core.MessageInput{Text: "continue in the retained Thread"})
 	if err != nil || !accepted.Created {
 		t.Fatalf("direct Follow=%#v err=%v", accepted, err)
 	}
@@ -632,7 +633,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 		t.Fatalf("investigation admission crossed into coding: admitted=%#v err=%v", admitted, err)
 	}
 	repeated, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-retry", Input: "same text"})
-	if err != nil || repeated.Created || repeated.Message != first.Message {
+	if err != nil || repeated.Created || !reflect.DeepEqual(repeated.Message, first.Message) {
 		t.Fatalf("idempotent message=%#v err=%v", repeated, err)
 	}
 	if admitted, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.NamedSandboxID(job.ID, "other"), FromKind: "human", FromID: "client-retry", Input: "same text"}); !errors.Is(err, core.ErrMessageReplayConflict) || admitted.Created {
@@ -769,7 +770,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	if cleaning.AdmissionOpen {
 		t.Fatal("cleanup did not durably close admission")
 	}
-	if retry, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-retry", Input: "same text"}); err != nil || retry.Created || retry.Message != first.Message {
+	if retry, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-retry", Input: "same text"}); err != nil || retry.Created || !reflect.DeepEqual(retry.Message, first.Message) {
 		t.Fatalf("closed admission did not preserve idempotent retry: %#v %v", retry, err)
 	}
 	if _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "after-cleanup", Input: "late"}); !errors.Is(err, core.ErrMessageAdmissionClosed) {
@@ -1187,7 +1188,7 @@ func TestExplicitSteerTargetsAndAcknowledgesExactActiveTurn(t *testing.T) {
 		t.Fatalf("steer=%#v err=%v", steer, err)
 	}
 	repeated, err := store.AdmitCodingMessage(ctx, steerInput)
-	if err != nil || repeated.Created || repeated.Message != steer.Message {
+	if err != nil || repeated.Created || !reflect.DeepEqual(repeated.Message, steer.Message) {
 		t.Fatalf("idempotent steer=%#v err=%v", repeated, err)
 	}
 	changed := steerInput
@@ -1216,7 +1217,7 @@ func TestExplicitSteerTargetsAndAcknowledgesExactActiveTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	repeated, err = store.AdmitCodingMessage(ctx, steerInput)
-	if err != nil || repeated.Created || repeated.Message != steer.Message {
+	if err != nil || repeated.Created || !reflect.DeepEqual(repeated.Message, steer.Message) {
 		t.Fatalf("terminal-target replay retargeted or reauthorized: Message=%#v err=%v", repeated, err)
 	}
 	next, err := codingDelivery(ctx, store, job.ID)
@@ -2238,7 +2239,7 @@ func TestReviewFeedbackReplaySurvivesClosureButNewFeedbackDoesNot(t *testing.T) 
 		t.Fatal(err)
 	}
 	replayed, created, err := store.RecordReviewFeedback(ctx, runs[0].ID, firstOutcome, firstEvidence)
-	if err != nil || created || replayed != first {
+	if err != nil || created || !reflect.DeepEqual(replayed, first) {
 		t.Fatalf("closed-Job feedback replay=%#v created=%t err=%v", replayed, created, err)
 	}
 	if _, _, err := store.RecordReviewFeedback(ctx, runs[1].ID, secondOutcome, secondEvidence); err == nil || !strings.Contains(err.Error(), "cannot accept new review feedback") {
@@ -2315,7 +2316,7 @@ func prepareReviewFeedbackIntegration(t *testing.T, store postgres.Store, suffix
 		t.Fatal(err)
 	}
 	repeated, created, err := store.RecordReviewFeedback(ctx, reviewerRun.ID, outcome, observed)
-	if err != nil || created || repeated != message {
+	if err != nil || created || !reflect.DeepEqual(repeated, message) {
 		t.Fatalf("idempotent review feedback Message=%#v created=%t err=%v", repeated, created, err)
 	}
 	cleared, err = store.Job(ctx, job.ID)
@@ -2329,7 +2330,7 @@ func prepareReviewFeedbackIntegration(t *testing.T, store postgres.Store, suffix
 		t.Fatalf("review request -> review AgentRun -> feedback Message chain=%#v err=%v", deliveries, err)
 	}
 	delivery, err := codingDelivery(ctx, store, job.ID)
-	if err != nil || delivery == nil || delivery.Message != message || delivery.AgentRun.MessageID != message.ID || delivery.AgentRun.Role != "implement" {
+	if err != nil || delivery == nil || !reflect.DeepEqual(delivery.Message, message) || delivery.AgentRun.MessageID != message.ID || delivery.AgentRun.Role != "implement" {
 		t.Fatalf("review feedback implementation delivery=%#v err=%v", delivery, err)
 	}
 	implementationRun := completeNextIntegrationRun(t, store, job.ID, "thread-"+job.ID, "turn-feedback-"+job.ID)
@@ -2967,7 +2968,7 @@ func TestRevisionObservationBoundaryIncludesLateSteeringAtomically(t *testing.T)
 		t.Fatalf("final Revision observation: %v", err)
 	}
 	retry, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: late.Message.FromKind, FromID: late.Message.FromID, Input: late.Message.Input})
-	if err != nil || retry.Created || retry.Message != late.Message {
+	if err != nil || retry.Created || !reflect.DeepEqual(retry.Message, late.Message) {
 		t.Fatalf("idempotent admitted retry=%#v err=%v", retry, err)
 	}
 }

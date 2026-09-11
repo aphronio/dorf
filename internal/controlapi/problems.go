@@ -16,6 +16,8 @@ type ProblemDescriptor struct {
 
 var problemCatalog = []ProblemDescriptor{
 	describeProblem(409, "abandon_unavailable", "Only an unfinished coding Job can be abandoned", false),
+	describeProblem(422, "attachment_animation_unsupported", "Animated WebP attachments are not supported", false),
+	describeProblem(422, "attachment_image_too_large", "Attachment image exceeds the decoded pixel limit", false),
 	describeProblem(415, "body_not_allowed", "This operation does not accept a body or Content-Type", false),
 	describeProblem(413, "body_too_large", "Request body is too large", false),
 	describeProblem(409, "client_conflict", "Client credential is already registered", false),
@@ -35,6 +37,7 @@ var problemCatalog = []ProblemDescriptor{
 	describeProblem(400, "invalid_last_event_id", "Last-Event-ID must be one exact representation identifier", false),
 	describeProblem(400, "invalid_query", "Query parameters are invalid", false),
 	describeProblem(404, "job_not_found", "Job not found", false),
+	describeProblem(422, "message_image_unsupported", "The selected profile does not support image attachments", false),
 	describeProblem(404, "message_not_found", "Message not found", false),
 	describeProblem(409, "message_unavailable", "Message is unavailable for this operation", false),
 	describeProblem(405, "method_not_allowed", "Method not allowed", false),

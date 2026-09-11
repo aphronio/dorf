@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	provider "github.com/aphronio/dorf/internal/sandbox"
+
+	"github.com/aphronio/dorf/internal/core"
 )
 
 func TestWorkspaceInstructionsFollowFileChangesInOneThread(t *testing.T) {
@@ -81,9 +83,9 @@ func TestWorkspaceInstructionsFollowFileChangesInOneThread(t *testing.T) {
 			runID := fmt.Sprintf("run-%d", i)
 			var err error
 			if i == 0 {
-				_, err = agent.StartInitialTurn(context.Background(), owner, "/workspace/job", runID, input, "model", "high", false)
+				_, err = agent.StartInitialTurn(context.Background(), owner, "/workspace/job", runID, core.HarnessInput{Text: input}, "model", "high", false)
 			} else {
-				_, err = agent.StartTurn(context.Background(), owner, "/workspace/job", "retained-thread", runID, input, "model", "high", false)
+				_, err = agent.StartTurn(context.Background(), owner, "/workspace/job", "retained-thread", runID, core.HarnessInput{Text: input}, "model", "high", false)
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -116,7 +118,7 @@ func TestUnreadableInstructionsPreventNativeSubmission(t *testing.T) {
 	failure := errors.New("transport unavailable")
 	sandbox := &instructionSandbox{readErr: failure}
 	agent := Agent{Sandbox: sandbox}
-	_, err := agent.StartTurn(context.Background(), testOwner("instructions"), "/workspace/job", "thread", "run", "hello", "model", "high", false)
+	_, err := agent.StartTurn(context.Background(), testOwner("instructions"), "/workspace/job", "thread", "run", core.HarnessInput{Text: "hello"}, "model", "high", false)
 	if !errors.Is(err, failure) || sandbox.endpoints != 0 {
 		t.Fatalf("err=%v native connections=%d", err, sandbox.endpoints)
 	}

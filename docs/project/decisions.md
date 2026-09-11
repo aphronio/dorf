@@ -37,7 +37,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D086: One package owns the in-process Core boundary](decisions/D086-one-package-owns-the-in-process-core-boundary.md) (`partial`). Changing the in-process Core package boundary or its workflow-facing capabilities.
 - [D087: Each native workflow owns its complete in-process module](decisions/D087-each-native-workflow-owns-its-complete-in-process-module.md) (`partial`). Changing ownership or composition of a native workflow module.
 - [D088: Core is a small in-process custody contract organized by Job ownership](decisions/D088-core-is-a-small-in-process-custody-contract-organized-by-job-ownership.md) (`partial`). Changing the Core custody contract or its boundary with workflows and clients.
-- [D089: Core reads exact Sandbox files but does not retain generic deliverables](decisions/D089-core-reads-exact-sandbox-files-but-does-not-retain-generic-deliverables.md) (`current`). Changing Sandbox file reads, deliverable retention, or cleanup-time file access.
+- [D089: Core reads exact Sandbox files but does not retain generic deliverables](decisions/D089-core-reads-exact-sandbox-files-but-does-not-retain-generic-deliverables.md) (`partial`). Changing Sandbox file reads, deliverable retention, or cleanup-time file access.
 - [D090: Open Jobs may have no current workflow operation](decisions/D090-open-jobs-may-have-no-current-workflow-operation.md) (`current`). Changing how an open Job waits when no workflow operation is eligible.
 - [D095: The CLI is Dorf's first direct trusted client](decisions/D095-the-cli-is-dorf-s-first-direct-trusted-client.md) (`partial`). Changing direct Job semantics or the CLI's role as a Core client.
 - [D096: Follow and steer are invariant custody; cleanup timing remains consumer policy](decisions/D096-follow-and-steer-are-invariant-custody-cleanup-timing-remains-consumer-policy.md) (`current`). Changing follow, steer, or consumer-controlled cleanup semantics.
@@ -50,6 +50,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D112: Jobs retain authenticated Client attribution](decisions/D112-jobs-retain-authenticated-client-attribution.md) (`current`). Changing Job attribution, admission replay, or operator cleanup inspection.
 - [D115: Sandbox file access supports agent home configuration](decisions/D115-sandbox-file-access-supports-agent-home-configuration.md) (`current`). Changing Sandbox file paths, helper installation, or client credential delivery.
 - [D116: Clients bootstrap Sandboxes and observe the latest reply](decisions/D116-client-bootstrap-and-latest-reply-observation.md) (`current`). Changing client Sandbox setup or reply notification integrations.
+- [D118: Messages retain ordered input attachments and immutable bytes](decisions/D118-messages-retain-ordered-input-attachments-and-immutable-bytes.md) (`current`). Changing Message attachments, input blob custody, native image delivery, or attachment replay.
 
 ## Workflows
 
@@ -124,7 +125,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D067: E2B is the next Sandbox portability proof target](decisions/D067-e2b-is-the-next-sandbox-portability-proof-target.md) (`current`). Changing the E2B adapter, provider-neutral Sandbox contract, or second-provider deployment proof.
 - [D070: Named Sandbox profiles pin exact artifacts and require Dorf verification](decisions/D070-named-sandbox-profiles-pin-exact-artifacts-and-require-dorf-verification.md) (`partial`). Changing named Sandbox profile definitions, selection, verification, or provider artifact custody.
 - [D083: Git and coding behavior are workflow modules, not Core](decisions/D083-git-and-coding-behavior-are-workflow-modules-not-core.md) (`partial`). Changing ownership of Git workspace or coding behavior across Core and workflow modules.
-- [D089: Core reads exact Sandbox files but does not retain generic deliverables](decisions/D089-core-reads-exact-sandbox-files-but-does-not-retain-generic-deliverables.md) (`current`). Changing Sandbox file reads, deliverable retention, or cleanup-time file access.
+- [D089: Core reads exact Sandbox files but does not retain generic deliverables](decisions/D089-core-reads-exact-sandbox-files-but-does-not-retain-generic-deliverables.md) (`partial`). Changing Sandbox file reads, deliverable retention, or cleanup-time file access.
 - [D091: Profile verification gates admission, not admitted runtime](decisions/D091-profile-verification-gates-admission-not-admitted-runtime.md) (`current`). Changing profile verification, concurrent admission, or admitted runtime resolution.
 - [D092: Investigation reports remain Sandbox files](decisions/D092-investigation-reports-remain-sandbox-files.md) (`current`). Changing how investigation reports are produced, accessed, or retained.
 - [D101: Compose owns deployment lifecycle; bootstrap privilege stays explicit](decisions/D101-compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit.md) (`current`). Changing Compose topology, setup-applied lifecycle, bootstrap, or release images.
@@ -150,6 +151,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D109: Export diagnostics through the existing native Turn binding](decisions/D109-exact-turn-execution-diagnostics.md) (`current`). Changing native execution diagnostics, attribution, or exporter custody.
 - [D114: Incus guests include an isolated browser](decisions/D114-incus-guests-include-an-isolated-browser.md) (`current`). Changing browser tooling, guest browser persistence, or Incus image proof.
 - [D117: Clients request skill refresh at fresh Turn boundaries](decisions/D117-client-requested-skill-refresh-at-fresh-turn-boundaries.md) (`current`). Changing skill discovery after client-managed Sandbox updates.
+- [D118: Messages retain ordered input attachments and immutable bytes](decisions/D118-messages-retain-ordered-input-attachments-and-immutable-bytes.md) (`current`). Changing Message attachments, input blob custody, native image delivery, or attachment replay.
 
 ## Model access
 
@@ -224,7 +226,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D061: One fact-derived coding flow replaces the durable program counter](decisions/D061-one-fact-derived-coding-flow-replaces-the-durable-program-counter.md) (`current`). Changing coding-flow sequencing, workflow projections, or durable progress representation.
 - [D076: Core Jobs and workflow inputs have separate durable types](decisions/D076-core-jobs-and-workflow-inputs-have-separate-durable-types.md) (`partial`). Changing Core Job fields or durable workflow-specific input types.
 - [D085: Workflow records live with the workflow that defines them](decisions/D085-workflow-records-live-with-the-workflow-that-defines-them.md) (`partial`). Changing package ownership or persistence of workflow-defined records.
-- [D089: Core reads exact Sandbox files but does not retain generic deliverables](decisions/D089-core-reads-exact-sandbox-files-but-does-not-retain-generic-deliverables.md) (`current`). Changing Sandbox file reads, deliverable retention, or cleanup-time file access.
+- [D089: Core reads exact Sandbox files but does not retain generic deliverables](decisions/D089-core-reads-exact-sandbox-files-but-does-not-retain-generic-deliverables.md) (`partial`). Changing Sandbox file reads, deliverable retention, or cleanup-time file access.
 - [D091: Profile verification gates admission, not admitted runtime](decisions/D091-profile-verification-gates-admission-not-admitted-runtime.md) (`current`). Changing profile verification, concurrent admission, or admitted runtime resolution.
 - [D092: Investigation reports remain Sandbox files](decisions/D092-investigation-reports-remain-sandbox-files.md) (`current`). Changing how investigation reports are produced, accessed, or retained.
 - [D094: Published PostgreSQL migrations are immutable and append-only](decisions/D094-published-postgresql-migrations-are-immutable-and-append-only.md) (`current`). Changing a published PostgreSQL schema or the migration runner.
@@ -232,6 +234,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D108: Reuse direct Jobs for retained sessions and exact message control](decisions/D108-direct-session-message-control.md) (`current`). Changing automatic message intent, interruption, or direct Job session continuity.
 - [D110: Separate Job setup from Message delivery](decisions/D110-separate-job-setup-from-messages.md) (`current`). Changing Job creation, workspace instructions, or Message admission.
 - [D117: Clients request skill refresh at fresh Turn boundaries](decisions/D117-client-requested-skill-refresh-at-fresh-turn-boundaries.md) (`current`). Changing skill discovery after client-managed Sandbox updates.
+- [D118: Messages retain ordered input attachments and immutable bytes](decisions/D118-messages-retain-ordered-input-attachments-and-immutable-bytes.md) (`current`). Changing Message attachments, input blob custody, native image delivery, or attachment replay.
 
 ## GitHub integration
 

@@ -67,12 +67,15 @@ func (a Agent) RemoveRoute(ctx context.Context, owner provider.Ownership) error 
 	return nil
 }
 
-func (a Agent) StartInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID string, input, model, effort string, refreshSkills bool) (core.HarnessBinding, error) {
+func (a Agent) StartInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID string, input core.HarnessInput, model, effort string, refreshSkills bool) (core.HarnessBinding, error) {
+	if len(input.Images) != 0 {
+		return core.HarnessBinding{}, &submissionRejectedError{reason: "Pi does not support image input"}
+	}
 	if refreshSkills {
 		return core.HarnessBinding{}, &submissionRejectedError{reason: "Pi does not support skill refresh"}
 	}
 	threadID := owner.SandboxID
-	if err := a.runTurn(ctx, owner, workspace, threadID, agentRunID, input, model, effort, false); err != nil {
+	if err := a.runTurn(ctx, owner, workspace, threadID, agentRunID, input.Text, model, effort, false); err != nil {
 		return core.HarnessBinding{}, err
 	}
 	return a.latestBinding(ctx, owner, threadID)
@@ -86,7 +89,10 @@ func (a Agent) ReadTurns(ctx context.Context, owner provider.Ownership, threadID
 	return a.readHistory(ctx, owner, threadID, false)
 }
 
-func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, agentRunID string, input, model, effort string, refreshSkills bool) (core.HarnessBinding, error) {
+func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, agentRunID string, input core.HarnessInput, model, effort string, refreshSkills bool) (core.HarnessBinding, error) {
+	if len(input.Images) != 0 {
+		return core.HarnessBinding{}, &submissionRejectedError{reason: "Pi does not support image input"}
+	}
 	if refreshSkills {
 		return core.HarnessBinding{}, &submissionRejectedError{reason: "Pi does not support skill refresh"}
 	}
@@ -94,7 +100,7 @@ func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspac
 	if err != nil {
 		return core.HarnessBinding{}, err
 	}
-	if err := a.runTurn(ctx, owner, workspace, threadID, agentRunID, input, model, effort, false); err != nil {
+	if err := a.runTurn(ctx, owner, workspace, threadID, agentRunID, input.Text, model, effort, false); err != nil {
 		return core.HarnessBinding{}, err
 	}
 	after, err := a.readHistory(ctx, owner, threadID, false)
@@ -107,10 +113,13 @@ func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspac
 	return core.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: after.Turns[len(after.Turns)-1]}, nil
 }
 
-func (a Agent) SteerTurn(ctx context.Context, owner provider.Ownership, _ string, targetTurnID, agentRunID, input string) (string, error) {
+func (a Agent) SteerTurn(ctx context.Context, owner provider.Ownership, _ string, targetTurnID, agentRunID string, input core.HarnessInput) (string, error) {
+	if len(input.Images) != 0 {
+		return "", &submissionRejectedError{reason: "Pi does not support image input"}
+	}
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
-	response, err := a.rpcCommand(ctx, owner, agentRunID, "steer", input)
+	response, err := a.rpcCommand(ctx, owner, agentRunID, "steer", input.Text)
 	if err != nil {
 		return "", err
 	}

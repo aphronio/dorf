@@ -124,6 +124,21 @@ or steer, so replay cannot change either the request or its resolved target. A d
 can have a null result while its Turn is still active; clients wait for the result, not merely
 delivery acknowledgement, before presenting the final answer.
 
+Message admission keeps the existing JSON text request and also accepts multipart input with
+ordered files sent by value. Multipart input carries the same intent and skill-refresh request. It
+includes a text field, which may be empty when the Message has an attachment. Dorf derives each
+attachment's metadata and digest from its bytes; clients do not supply a manifest or a remote URL.
+The exact filenames, bytes, and order join the idempotency contract. An exact replay returns the
+same receipt after completed cleanup without starting new work.
+
+Image admission requires both a valid image and a selected profile with native image support. Other
+accepted bytes become generic file attachments. Dorf rejects an unsupported image before retaining
+the Message or publishing its blob. The [OpenAPI document](../internal/controlapi/openapi.json) owns
+the accepted image formats, limits, and Problem codes. During delivery, Dorf verifies the retained
+bytes and creates working files in the Job-owned Sandbox. The prompt identifies every file path,
+and the Harness also receives images through its native image input. Cleanup removes the working
+files but keeps the Message attachment bytes.
+
 A client that changes installed skills can set `refresh_skills` on its next Message. A Follow
 reloads before starting its fresh Turn. A Steer leaves the active Turn unchanged and retains the
 request for the next fresh Turn, including a Follow that was queued before the Steer arrived.

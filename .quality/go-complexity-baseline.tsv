@@ -39,7 +39,6 @@ internal/controlclient	(*Client).watchJobOnce	32
 internal/controlreader	(Service).ObserveMessage	29
 internal/controlreader	(Service).ObservePullRequest	25
 internal/controlreader	NewClient	21
-internal/core	(AgentHandle).Message	25
 internal/core	(Application).VerifyAttachedTask	19
 internal/core	(ExecutionService).ObserveSettledAgentMessage	21
 internal/core	(ExecutionService).PrepareCleanup	16
@@ -78,14 +77,14 @@ internal/postgres	(Store).CompleteCleanup	24
 internal/postgres	(Store).EnsureSandbox	21
 internal/postgres	(Store).RecordOutcome	27
 internal/postgres	(Store).RecordProposal	20
-internal/postgres	(Store).RecordReviewFeedback	36
+internal/postgres	(Store).RecordReviewFeedback	30
 internal/postgres	(Store).RecordReviewPolicy	18
 internal/postgres	(Store).RecordRevisionObservation	31
 internal/postgres	(Store).RecordSandboxProfileUnavailable	16
 internal/postgres	(Store).RedeemEnrollment	19
 internal/postgres	(Store).RetryFailedJob	23
 internal/postgres	(Store).UpdateSandboxProfile	18
-internal/postgres	admitMessageTx	20
+internal/postgres	admitMessageTx	19
 internal/postgres	applySandboxProfilePatch	26
 internal/postgres	authorizeSandboxActionTx	27
 internal/postgres	migrateDorf	19

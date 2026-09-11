@@ -364,12 +364,14 @@ operations needed for this walkthrough:
 
 ```bash
 dorf run --input-file message.txt --ai-connection AI_CONNECTION --reasoning high
+dorf run --attach diagram.png --attach notes.txt --ai-connection AI_CONNECTION
 dorf job list
 dorf job list --limit 25 --output json
 dorf job inspect JOB_ID
 dorf job watch JOB_ID
 dorf job watch --output jsonl JOB_ID
 dorf job message --input-file follow-up.txt JOB_ID
+dorf job message --attach screenshot.png JOB_ID
 dorf job message --intent follow --input-file queued.txt JOB_ID
 dorf job message --intent steer --input-file correction.txt JOB_ID
 dorf job message inspect JOB_ID MESSAGE_ID
@@ -480,6 +482,8 @@ precedence. Save the complete prompt in `goal.txt`, then admit it:
 ```bash
 dorf run \
   --input-file message.txt \
+  --attach diagram.png \
+  --attach requirements.pdf \
   --ai-connection AI_CONNECTION \
   --reasoning high
 
@@ -498,9 +502,17 @@ Harness Thread, retrieve an exact workspace file, or request cleanup:
 
 ```bash
 dorf job message --key follow-1 --input-file follow-up.txt JOB_ID
+dorf job message --key files-1 --attach screenshot.png --attach notes.txt JOB_ID
 dorf sandbox file get SANDBOX_ID PATH --output DESTINATION
 dorf job cleanup JOB_ID
 ```
+
+Repeat `--attach LOCAL_FILE` to send ordered files with the first Message or a later Message. The
+flag also works with both `dorf workflow run` commands. The CLI reads and validates every local
+regular file before it creates a Job or sends a Message. You may omit `--input-file` for a Message
+that has at least one attachment. Dorf sends each file by value, so later local changes do not
+change an accepted Message. Image support depends on the selected Sandbox profile. The
+[Remote Control API](control-api.md#resources) links to the accepted formats and limits.
 
 The default `--intent auto` steers an active Turn or admits a Follow when none is active. Dorf
 chooses once at admission and preserves that choice on replay. Use `--intent follow` to queue a

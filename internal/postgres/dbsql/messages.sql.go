@@ -8,6 +8,7 @@ package dbsql
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 
 	"github.com/aphronio/dorf/internal/core"
@@ -193,7 +194,7 @@ func (q *Queries) GetLatestTurnStartRun(ctx context.Context, jobID string) (GetL
 }
 
 const getMessage = `-- name: GetMessage :one
-select id,job_id,from_kind,from_id,sequence,input,delivery_intent,
+select id,job_id,from_kind,from_id,sequence,input,attachments,delivery_intent,
        coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at,refresh_skills
 from dorf.job_messages
 where id=$1
@@ -206,6 +207,7 @@ type GetMessageRow struct {
 	FromID            string
 	Sequence          int64
 	Input             string
+	Attachments       json.RawMessage
 	DeliveryIntent    core.MessageDeliveryIntent
 	SteerTargetTurnID string
 	AdmittedAt        time.Time
@@ -222,6 +224,7 @@ func (q *Queries) GetMessage(ctx context.Context, messageID string) (GetMessageR
 		&i.FromID,
 		&i.Sequence,
 		&i.Input,
+		&i.Attachments,
 		&i.DeliveryIntent,
 		&i.SteerTargetTurnID,
 		&i.AdmittedAt,
@@ -231,7 +234,7 @@ func (q *Queries) GetMessage(ctx context.Context, messageID string) (GetMessageR
 }
 
 const getMessageBySender = `-- name: GetMessageBySender :one
-select id,job_id,from_kind,from_id,sequence,input,delivery_intent,requested_intent,
+select id,job_id,from_kind,from_id,sequence,input,attachments,delivery_intent,requested_intent,
        coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at,refresh_skills
 from dorf.job_messages
 where job_id=$1 and from_kind=$2
@@ -251,6 +254,7 @@ type GetMessageBySenderRow struct {
 	FromID            string
 	Sequence          int64
 	Input             string
+	Attachments       json.RawMessage
 	DeliveryIntent    core.MessageDeliveryIntent
 	RequestedIntent   string
 	SteerTargetTurnID string
@@ -268,6 +272,7 @@ func (q *Queries) GetMessageBySender(ctx context.Context, arg GetMessageBySender
 		&i.FromID,
 		&i.Sequence,
 		&i.Input,
+		&i.Attachments,
 		&i.DeliveryIntent,
 		&i.RequestedIntent,
 		&i.SteerTargetTurnID,
@@ -279,12 +284,12 @@ func (q *Queries) GetMessageBySender(ctx context.Context, arg GetMessageBySender
 
 const insertMessage = `-- name: InsertMessage :exec
 insert into dorf.job_messages(
-    id,job_id,from_kind,from_id,sequence,input,delivery_intent,steer_target_turn_id,requested_intent,refresh_skills
+    id,job_id,from_kind,from_id,sequence,input,attachments,delivery_intent,steer_target_turn_id,requested_intent,refresh_skills
 )
 values(
     $1,$2,$3,$4,
-    $5,$6,$7,
-    nullif($8::text,''),$9,$10
+    $5,$6,$7::jsonb,$8,
+    nullif($9::text,''),$10,$11
 )
 `
 
@@ -295,6 +300,7 @@ type InsertMessageParams struct {
 	FromID            string
 	Sequence          int64
 	Input             string
+	Attachments       json.RawMessage
 	DeliveryIntent    core.MessageDeliveryIntent
 	SteerTargetTurnID string
 	RequestedIntent   string
@@ -309,6 +315,7 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) er
 		arg.FromID,
 		arg.Sequence,
 		arg.Input,
+		arg.Attachments,
 		arg.DeliveryIntent,
 		arg.SteerTargetTurnID,
 		arg.RequestedIntent,
@@ -318,7 +325,7 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) er
 }
 
 const listDeliveries = `-- name: ListDeliveries :many
-select m.id as message_id,m.job_id as message_job_id,m.from_kind,m.from_id,m.sequence,m.input,m.delivery_intent,
+select m.id as message_id,m.job_id as message_job_id,m.from_kind,m.from_id,m.sequence,m.input,m.attachments,m.delivery_intent,
        coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,m.refresh_skills,
        m.admitted_at,
        (ar.id is not null)::boolean as agent_run_present,
@@ -351,6 +358,7 @@ type ListDeliveriesRow struct {
 	FromID             string
 	Sequence           int64
 	Input              string
+	Attachments        json.RawMessage
 	DeliveryIntent     core.MessageDeliveryIntent
 	SteerTargetTurnID  string
 	RefreshSkills      bool
@@ -393,6 +401,7 @@ func (q *Queries) ListDeliveries(ctx context.Context, jobID string) ([]ListDeliv
 			&i.FromID,
 			&i.Sequence,
 			&i.Input,
+			&i.Attachments,
 			&i.DeliveryIntent,
 			&i.SteerTargetTurnID,
 			&i.RefreshSkills,

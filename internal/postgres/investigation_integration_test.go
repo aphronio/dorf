@@ -256,7 +256,7 @@ func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *test
 	if err != nil || prepared.Message.MessageID != "" || prepared.Project().Kind != "" {
 		t.Fatalf("prepared Job must wait for a Message: %#v err=%v", prepared, err)
 	}
-	first, err := reportSandbox.Agent().Message(ctx, "request-1", "Find one concrete simplification.")
+	first, err := reportSandbox.Agent().Message(ctx, "request-1", core.MessageInput{Text: "Find one concrete simplification."})
 	if err != nil || !first.Created || first.Sequence != 1 {
 		t.Fatalf("first Message=%#v err=%v", first, err)
 	}
@@ -272,7 +272,7 @@ func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *test
 	if _, err := reportSandbox.ReadFile(ctx, investigation.ReportPath); !errors.Is(err, os.ErrNotExist) || err.Error() != `workspace file "REPORT.md": file does not exist` {
 		t.Fatalf("completed run missing REPORT.md error=%v", err)
 	}
-	firstReceipt, err := reportSandbox.Agent().Message(ctx, "dogfood-first-report", "Write the complete initial report.")
+	firstReceipt, err := reportSandbox.Agent().Message(ctx, "dogfood-first-report", core.MessageInput{Text: "Write the complete initial report."})
 	if err != nil || !firstReceipt.Created || firstReceipt.Sequence != 2 {
 		t.Fatalf("initial-report follow-up receipt=%#v err=%v", firstReceipt, err)
 	}
@@ -323,7 +323,7 @@ func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	receipt, err := sandbox.Agent().Message(ctx, "dogfood-follow-up", "Check whether the recommendation still holds after the recent workflow changes.")
+	receipt, err := sandbox.Agent().Message(ctx, "dogfood-follow-up", core.MessageInput{Text: "Check whether the recommendation still holds after the recent workflow changes."})
 	if err != nil || !receipt.Created || receipt.Sequence != 3 {
 		t.Fatalf("follow-up receipt=%#v err=%v", receipt, err)
 	}

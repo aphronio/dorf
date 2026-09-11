@@ -18,7 +18,8 @@ import (
 	"github.com/coder/websocket"
 )
 
-const maxMessageBytes = 16 << 20
+// Native history can include the inline bytes of a full accepted message.
+const maxMessageBytes = 16<<20 + ((core.MaxMessageAttachments*provider.MaxFileWriteBytes+2)/3)*4
 
 const (
 	serverPIDPath    = "/tmp/dorf/codex-app-server.pid"
@@ -96,7 +97,7 @@ type reviewVisibilityError struct{ reason string }
 func (e *reviewVisibilityError) Error() string                   { return e.reason }
 func (e *reviewVisibilityError) RetryableReviewVisibility() bool { return true }
 
-func (a Agent) StartInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID, input, model, effort string, refreshSkills bool) (core.HarnessBinding, error) {
+func (a Agent) StartInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID string, input core.HarnessInput, model, effort string, refreshSkills bool) (core.HarnessBinding, error) {
 	threadID, turn, err := a.startInitialTurn(ctx, owner, workspace, agentRunID, input, model, effort, "danger-full-access", refreshSkills)
 	return core.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: turn}, err
 }
@@ -144,7 +145,7 @@ func (a Agent) ReadStrictReviewTurn(ctx context.Context, owner provider.Ownershi
 	return binding, err
 }
 
-func (a Agent) startInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID, input, model, effort, capability string, refreshSkills bool) (string, TurnOutcome, error) {
+func (a Agent) startInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID string, input core.HarnessInput, model, effort, capability string, refreshSkills bool) (string, TurnOutcome, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	instructions, err := a.readWorkspaceInstructions(ctx, owner, workspace)
@@ -188,7 +189,7 @@ func (a Agent) ReadTurns(ctx context.Context, owner provider.Ownership, threadID
 	return core.HarnessHistory{Harness: Harness, ThreadID: threadID, Turns: turns}, err
 }
 
-func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, agentRunID, input, model, effort string, refreshSkills bool) (core.HarnessBinding, error) {
+func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, agentRunID string, input core.HarnessInput, model, effort string, refreshSkills bool) (core.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	instructions, err := a.readWorkspaceInstructions(ctx, owner, workspace)
@@ -206,7 +207,7 @@ func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspac
 	return core.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: outcome}, err
 }
 
-func (a Agent) SteerTurn(ctx context.Context, owner provider.Ownership, sessionID, turnID, agentRunID, input string) (string, error) {
+func (a Agent) SteerTurn(ctx context.Context, owner provider.Ownership, sessionID, turnID, agentRunID string, input core.HarnessInput) (string, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	var acceptedTurnID string
@@ -621,7 +622,7 @@ func (p *protocol) reconcileStrictReviewTurn(ctx context.Context, workspace, exp
 			return sessionID, TurnOutcome{}, reviewVisibilityMissing("strict review bound native turn is not yet visible")
 		}
 	}
-	turn, err := p.startTurn(ctx, sessionID, workspace, submissionNonce, input, model, effort, "read-only")
+	turn, err := p.startTurn(ctx, sessionID, workspace, submissionNonce, core.HarnessInput{Text: input}, model, effort, "read-only")
 	if err != nil {
 		return sessionID, TurnOutcome{}, err
 	}
@@ -743,7 +744,7 @@ func stringValue(value any) string {
 	return text
 }
 
-func (p *protocol) reconcileInitialTurn(ctx context.Context, workspace, agentRunID, goal, model, effort, capability string) (string, TurnOutcome, error) {
+func (p *protocol) reconcileInitialTurn(ctx context.Context, workspace, agentRunID string, goal core.HarnessInput, model, effort, capability string) (string, TurnOutcome, error) {
 	sessionID, turns, err := p.inspectInitialTurns(ctx, workspace)
 	if err != nil {
 		return "", TurnOutcome{}, err
@@ -862,14 +863,14 @@ func (p *protocol) resumeThread(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-func (p *protocol) resumeAndStartTurn(ctx context.Context, sessionID, workspace, agentRunID, goal, model, effort, capability string) (TurnOutcome, error) {
+func (p *protocol) resumeAndStartTurn(ctx context.Context, sessionID, workspace, agentRunID string, goal core.HarnessInput, model, effort, capability string) (TurnOutcome, error) {
 	if err := p.resumeThread(ctx, sessionID); err != nil {
 		return TurnOutcome{}, err
 	}
 	return p.startTurn(ctx, sessionID, workspace, agentRunID, goal, model, effort, capability)
 }
 
-func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRunID, goal, model, effort, capability string) (TurnOutcome, error) {
+func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRunID string, goal core.HarnessInput, model, effort, capability string) (TurnOutcome, error) {
 	policyType := "dangerFullAccess"
 	if capability == "read-only" {
 		policyType = "readOnly"
@@ -882,7 +883,7 @@ func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRun
 	if err := p.injectWorkspaceInstructions(ctx, sessionID); err != nil {
 		return TurnOutcome{}, err
 	}
-	result, err := p.call(ctx, "turn/start", map[string]any{"threadId": sessionID, "clientUserMessageId": agentRunID, "input": []map[string]string{{"type": "text", "text": goal}}, "cwd": workspace, "model": model, "effort": effort, "approvalPolicy": "never", "sandboxPolicy": map[string]string{"type": policyType}})
+	result, err := p.call(ctx, "turn/start", map[string]any{"threadId": sessionID, "clientUserMessageId": agentRunID, "input": nativeUserInput(goal), "cwd": workspace, "model": model, "effort": effort, "approvalPolicy": "never", "sandboxPolicy": map[string]string{"type": policyType}})
 	if err != nil {
 		return TurnOutcome{}, err
 	}
@@ -899,11 +900,11 @@ func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRun
 	return outcome, nil
 }
 
-func (p *protocol) steerTurn(ctx context.Context, sessionID, turnID, agentRunID, input string) (string, error) {
+func (p *protocol) steerTurn(ctx context.Context, sessionID, turnID, agentRunID string, input core.HarnessInput) (string, error) {
 	if err := p.resumeThread(ctx, sessionID); err != nil {
 		return "", err
 	}
-	result, err := p.call(ctx, "turn/steer", map[string]any{"threadId": sessionID, "expectedTurnId": turnID, "clientUserMessageId": agentRunID, "input": []map[string]string{{"type": "text", "text": input}}})
+	result, err := p.call(ctx, "turn/steer", map[string]any{"threadId": sessionID, "expectedTurnId": turnID, "clientUserMessageId": agentRunID, "input": nativeUserInput(input)})
 	if err != nil {
 		return "", err
 	}

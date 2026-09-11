@@ -3,6 +3,7 @@ package terminal
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/aphronio/dorf/internal/core"
 	provider "github.com/aphronio/dorf/internal/sandbox"
@@ -18,14 +19,17 @@ type AgentRunOperation struct {
 	sandbox       core.Sandbox
 	messageIntent core.MessageDeliveryIntent
 	refreshSkills bool
+	messageID     string
+	attachments   []core.MessageAttachment
 }
 
 func NewAgentRunOperation(externals Externals, execution core.AgentMessageExecution) (AgentRunOperation, error) {
 	if execution.Job.ID == "" || execution.Sandbox.ID == "" || execution.Sandbox.JobID != execution.Job.ID ||
-		execution.AgentRun.JobID != execution.Job.ID || execution.AgentRun.SandboxID != execution.Sandbox.ID {
-		return AgentRunOperation{}, fmt.Errorf("ordinary Agent operation requires the exact Job-owned Sandbox")
+		execution.AgentRun.JobID != execution.Job.ID || execution.AgentRun.SandboxID != execution.Sandbox.ID || execution.AgentRun.MessageID != execution.Message.ID {
+		return AgentRunOperation{}, fmt.Errorf("ordinary Agent operation requires the exact Message and Job-owned Sandbox")
 	}
-	return AgentRunOperation{externals: externals, job: execution.Job, sandbox: execution.Sandbox, messageIntent: execution.Message.Intent, refreshSkills: execution.RefreshSkills}, nil
+	return AgentRunOperation{externals: externals, job: execution.Job, sandbox: execution.Sandbox, messageIntent: execution.Message.Intent, refreshSkills: execution.RefreshSkills,
+		messageID: execution.Message.ID, attachments: slices.Clone(execution.Message.Attachments)}, nil
 }
 
 func (o AgentRunOperation) Harness() string { return o.externals.Agent.Name() }
@@ -48,10 +52,14 @@ func (o AgentRunOperation) Submit(ctx context.Context, run core.AgentRun, input 
 	if err != nil {
 		return core.HarnessBinding{}, err
 	}
-	if run.ThreadID == "" {
-		return o.externals.Agent.StartInitialTurn(ctx, owner, o.externals.Sandbox.Workspace(), run.ID, input, o.job.Model, o.job.ReasoningEffort, o.refreshSkills)
+	prepared, err := o.externals.messageInput(ctx, owner, o.messageID, input, o.attachments)
+	if err != nil {
+		return core.HarnessBinding{}, err
 	}
-	return o.externals.Agent.StartTurn(ctx, owner, o.externals.Sandbox.Workspace(), run.ThreadID, run.ID, input, o.job.Model, o.job.ReasoningEffort, o.refreshSkills)
+	if run.ThreadID == "" {
+		return o.externals.Agent.StartInitialTurn(ctx, owner, o.externals.Sandbox.Workspace(), run.ID, prepared, o.job.Model, o.job.ReasoningEffort, o.refreshSkills)
+	}
+	return o.externals.Agent.StartTurn(ctx, owner, o.externals.Sandbox.Workspace(), run.ThreadID, run.ID, prepared, o.job.Model, o.job.ReasoningEffort, o.refreshSkills)
 }
 
 func (o AgentRunOperation) Recover(ctx context.Context, run core.AgentRun) (core.HarnessBinding, error) {
@@ -86,8 +94,8 @@ func (o AgentRunOperation) observationContext(ctx context.Context, run core.Agen
 }
 
 func (o AgentRunOperation) owner(ctx context.Context, run core.AgentRun) (provider.Ownership, error) {
-	if run.JobID != o.job.ID || run.SandboxID != o.sandbox.ID {
-		return provider.Ownership{}, fmt.Errorf("AgentRun %s changed its exact Job or Sandbox binding", run.ID)
+	if run.JobID != o.job.ID || run.SandboxID != o.sandbox.ID || run.MessageID != o.messageID {
+		return provider.Ownership{}, fmt.Errorf("AgentRun %s changed its exact Message, Job or Sandbox binding", run.ID)
 	}
 	return o.externals.owner(ctx, o.sandbox.ID)
 }

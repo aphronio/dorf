@@ -259,7 +259,7 @@ func (h *handler) admitInvestigationRoute(w http.ResponseWriter, r *http.Request
 }
 
 func (h *handler) sendMessageRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
-	if !h.exact(w, r, http.MethodPost, true) {
+	if !h.exactMessageRequest(w, r) {
 		return
 	}
 	key, ok := h.idempotencyKey(w, r)
@@ -267,7 +267,7 @@ func (h *handler) sendMessageRoute(w http.ResponseWriter, r *http.Request, _ con
 		return
 	}
 	var input SendMessageRequest
-	if !h.decode(w, r, &input) {
+	if !h.decodeMessage(w, r, &input) {
 		return
 	}
 	message, created, err := h.jobs.SendMessage(r.Context(), r.PathValue("job"), key, input)
@@ -756,6 +756,10 @@ func admissionProblemCode(err error) string {
 
 func messageProblemCode(err error) string {
 	switch {
+	case errors.Is(err, ErrAttachmentAnimationUnsupported):
+		return "attachment_animation_unsupported"
+	case errors.Is(err, ErrAttachmentImageTooLarge):
+		return "attachment_image_too_large"
 	case errors.Is(err, ErrSteerUnavailable):
 		return "steer_unavailable"
 	case errors.Is(err, ErrSkillRefreshUnavailable):
@@ -764,6 +768,8 @@ func messageProblemCode(err error) string {
 		return "interrupt_unavailable"
 	case errors.Is(err, ErrMessageUnavailable):
 		return "message_unavailable"
+	case errors.Is(err, ErrMessageImageUnsupported):
+		return "message_image_unsupported"
 	default:
 		return ""
 	}

@@ -119,7 +119,7 @@ func TestAgentMessageDefaultsFollowAndBindsExactSandbox(t *testing.T) {
 	}}
 	application := Application{Store: handleTestStore{}, AgentMessages: admit}
 	agent := application.jobHandle("job-1").sandboxHandle("sandbox-named").Agent()
-	receipt, err := agent.Message(context.Background(), " send-1 ", "continue")
+	receipt, err := agent.Message(context.Background(), " send-1 ", MessageInput{Text: "continue"})
 	if err == nil || !strings.Contains(err.Error(), "was accepted") {
 		t.Fatalf("wake failure=%v, want accepted-input diagnostic", err)
 	}
@@ -139,12 +139,65 @@ func TestAgentMessageRequiresExplicitSteerOption(t *testing.T) {
 	}}
 	application := Application{Store: handleTestStore{}, AgentMessages: admit}
 	agent := application.jobHandle("job-1").sandboxHandle("sandbox-a").Agent()
-	receipt, err := agent.Message(context.Background(), "send-steer", "adjust", Steer(), RefreshSkills())
+	receipt, err := agent.Message(context.Background(), "send-steer", MessageInput{Text: "adjust"}, Steer(), RefreshSkills())
 	if err == nil || got.Intent != MessageSteer || !got.RefreshSkills || receipt.Intent != MessageSteer || receipt.TargetTurnID != "turn-active" {
 		t.Fatalf("admission=%#v receipt=%#v err=%v", got, receipt, err)
 	}
-	if _, err := agent.Message(context.Background(), "send-invalid", "adjust", Steer(), Steer()); err == nil {
+	if _, err := agent.Message(context.Background(), "send-invalid", MessageInput{Text: "adjust"}, Steer(), Steer()); err == nil {
 		t.Fatal("accepted more than one delivery option")
+	}
+}
+
+func TestAgentMessageAcceptsAttachmentOnlyInputAndCopiesItsOrderedManifest(t *testing.T) {
+	attachments := []MessageAttachment{
+		{Kind: MessageAttachmentFile, Filename: "notes.txt", MediaType: "text/plain; charset=utf-8", Digest: strings.Repeat("a", 64), ByteSize: 5},
+		{Kind: MessageAttachmentImage, Filename: "diagram.png", MediaType: "image/png", Digest: strings.Repeat("b", 64), ByteSize: 9},
+	}
+	var got MessageAdmission
+	admit := handleTestAdmissions{admit: func(_ context.Context, input MessageAdmission) (MessageAdmissionResult, error) {
+		got = input
+		return MessageAdmissionResult{Message: Message{
+			ID: MessageID(input.JobID, input.FromKind, input.FromID), JobID: input.JobID,
+			FromKind: input.FromKind, FromID: input.FromID, Sequence: 1, Input: input.Input,
+			Attachments: append([]MessageAttachment(nil), input.Attachments...), Intent: input.Intent,
+		}, SandboxID: input.SandboxID, Created: true}, nil
+	}}
+	application := Application{Store: handleTestStore{}, AgentMessages: admit}
+	receipt, err := application.jobHandle("job-attachments").sandboxHandle("sandbox-attachments").Agent().Message(
+		context.Background(), "send-attachments", MessageInput{Attachments: attachments},
+	)
+	if err == nil || !strings.Contains(err.Error(), "was accepted") || receipt.MessageID == "" {
+		t.Fatalf("attachment-only receipt=%#v err=%v", receipt, err)
+	}
+	attachments[0].Filename = "changed-after-call.txt"
+	if got.Input != "" || len(got.Attachments) != 2 || got.Attachments[0].Filename != "notes.txt" || got.Attachments[1].Filename != "diagram.png" {
+		t.Fatalf("ordered admission=%#v", got)
+	}
+
+	invalid := MessageInput{Attachments: []MessageAttachment{{
+		Kind: MessageAttachmentFile, Filename: "../escape.txt", MediaType: "text/plain",
+		Digest: strings.Repeat("c", 64), ByteSize: 1,
+	}}}
+	if _, err := application.jobHandle("job-attachments").sandboxHandle("sandbox-attachments").Agent().Message(context.Background(), "invalid", invalid); err == nil {
+		t.Fatal("Agent Message accepted an attachment filename containing a directory")
+	}
+}
+
+func TestAgentMessageReplayAfterCleanupReturnsItsReceiptWithoutAWake(t *testing.T) {
+	admit := handleTestAdmissions{admit: func(_ context.Context, input MessageAdmission) (MessageAdmissionResult, error) {
+		return MessageAdmissionResult{Message: Message{
+			ID: MessageID(input.JobID, input.FromKind, input.FromID), JobID: input.JobID,
+			FromKind: input.FromKind, FromID: input.FromID, Sequence: 4, Input: input.Input, Intent: input.Intent,
+		}, SandboxID: input.SandboxID, Created: false}, nil
+	}}
+	application := Application{
+		Store: handleTestStore{job: Job{ID: "job-cleaned", CleanupState: CleanupComplete}}, AgentMessages: admit,
+	}
+	receipt, err := application.jobHandle("job-cleaned").sandboxHandle("sandbox-cleaned").Agent().Message(
+		context.Background(), "send-replay", MessageInput{Text: "same input"},
+	)
+	if err != nil || receipt.Created || receipt.MessageID != MessageID("job-cleaned", MessageFromHuman, "send-replay") {
+		t.Fatalf("post-cleanup replay receipt=%#v err=%v", receipt, err)
 	}
 }
 
@@ -166,7 +219,7 @@ func TestAgentMessageRejectsForeignReceiptBeforeWake(t *testing.T) {
 				return result, nil
 			}}
 			application := Application{Store: handleTestStore{}, AgentMessages: admissions}
-			receipt, err := application.jobHandle("job-1").sandboxHandle("sandbox-named").Agent().Message(context.Background(), "send-1", "exact")
+			receipt, err := application.jobHandle("job-1").sandboxHandle("sandbox-named").Agent().Message(context.Background(), "send-1", MessageInput{Text: "exact"})
 			if err == nil || receipt.MessageID != "" || !strings.Contains(err.Error(), "foreign receipt") {
 				t.Fatalf("receipt=%#v err=%v", receipt, err)
 			}

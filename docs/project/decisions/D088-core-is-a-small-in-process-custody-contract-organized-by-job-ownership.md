@@ -5,7 +5,7 @@
 - **Read when:** Changing the Core custody contract or its boundary with workflows and clients.
 - **Decision history:** Accepted application-boundary correction; file custody refined by D089 and message
   semantics refined by D096 — 2026-08-25; external projection added by D097 and expanded through
-  D099 — 2026-08-26
+  D099 — 2026-08-26; Message attachment custody refined by D118 — 2026-09-11
 - **Decision:** The [North Star product boundary](../north-star.md#product-boundary) remains the sole
   authority for product ownership, and [Architecture](../architecture.md#execution-model) owns the
   current technical contract. Workflows, workflow modules, and trusted client adapters compose one

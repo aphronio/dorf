@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -290,7 +291,7 @@ func TestJobConditionalGetAndDirectInteractionRoutes(t *testing.T) {
 	requireStatusType(t, sent, http.StatusCreated, "application/json")
 	var accepted controlapi.Message
 	decode(t, sent, &accepted)
-	if accepted.ID != message.ID || accepted.Result == nil || *accepted.Result != *message.Result || jobs.messageKey != "send-2" || jobs.messageInput != (controlapi.SendMessageRequest{Text: "continue", Intent: "follow"}) {
+	if accepted.ID != message.ID || accepted.Result == nil || *accepted.Result != *message.Result || jobs.messageKey != "send-2" || !reflect.DeepEqual(jobs.messageInput, controlapi.SendMessageRequest{Text: "continue", Intent: "follow"}) {
 		t.Fatalf("Message=%#v key/input=%q/%#v, want %#v/send-2", accepted, jobs.messageKey, jobs.messageInput, message)
 	}
 	retryRequest := request(http.MethodPost, "/v1/jobs/job-1/retries", nil)
@@ -675,6 +676,7 @@ type fakeJobs struct {
 	retryKey           string
 	messageInput       controlapi.SendMessageRequest
 	messageCreated     bool
+	messageErr         error
 	retryCreated       bool
 	abandonCalls       int
 	abandonErr         error
@@ -736,7 +738,7 @@ func (j *fakeJobs) SendMessage(_ context.Context, jobID, key string, input contr
 	}
 	j.messageKey = key
 	j.messageInput = input
-	return j.message, j.messageCreated, nil
+	return j.message, j.messageCreated, j.messageErr
 }
 
 func (j *fakeJobs) GetMessage(_ context.Context, jobID, messageID string) (controlapi.Message, error) {
@@ -895,7 +897,7 @@ func TestSandboxFileWriteContract(t *testing.T) {
 	}
 	requireProblem(t, put(credential, "text/plain", "", "text"), 415, "unsupported_media_type")
 	requireProblem(t, put(credential, "application/octet-stream", "bad", "text"), 400, "invalid_query")
-	requireProblem(t, put(credential, "application/octet-stream", "", strings.Repeat("x", 128<<10+1)), 413, "body_too_large")
+	requireProblem(t, put(credential, "application/octet-stream", "", strings.Repeat("x", provider.MaxFileWriteBytes+1)), 413, "body_too_large")
 	if jobs.fileWrites != 0 {
 		t.Fatal("invalid request reached file writer")
 	}

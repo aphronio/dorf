@@ -50,6 +50,7 @@ of fact.
 | Agent transcript, tool items, Thread, Turn, and native history | The selected Harness |
 | Mutable files, running processes, and local tool output | A Job-owned Sandbox |
 | External objects and their mutable state | Their external authority, such as GitHub or another service |
+| Accepted Message attachment manifest and bytes | Ordered PostgreSQL Message data and the content-addressed blob store |
 | Retained observed proof | Evidence linked to the fact it proves; bytes use the same content-addressed blob store |
 
 The same mutable fact must not be mirrored into multiple authorities. Read models may project facts
@@ -71,8 +72,9 @@ idempotency identity. A workflow-driven Job also pins its workflow version. Admi
 Job, consumer-owned configuration, Sandbox reservation, Absurd task, and task attachment in one
 PostgreSQL transaction. Ordinary task handoffs also commit scheduling and attachment together.
 The consuming adapter supplies task identity; the shared transaction does not interpret workflow
-policy. Absurd's public SQL functions provide this transaction boundary. Message text and AgentRuns
-are admitted separately through the same Message operation regardless of sequence position.
+policy. Absurd's public SQL functions provide this transaction boundary. Message text, ordered
+attachment manifests, and AgentRuns are admitted separately through the same Message operation
+regardless of sequence position.
 Workspace instructions supplied at creation are installed within Sandbox preparation, before any
 Harness work can start. Clients may also initialize missing files through the bounded workspace
 file API before sending the first Message. Workspace files are the live instruction authority.
@@ -118,18 +120,26 @@ rather than alternate application contracts.
 ### Messages and AgentRuns
 
 Accepted client input receives immutable Job-local identity and order. A caller-retained per-send
-idempotency key binds its complete admitted delivery request: the exact Sandbox, text, follow or
-steer intent and target, authorized Role, capability and input Revision when used, and the
-authoritative retained Thread. The same key and request return the same Message; changing any bound
-field conflicts; a different key may admit identical text. Sending through the Agent handle defaults
-to follow. While admission remains open, every accepted follow enters the FIFO, including input
-accepted before an earlier Turn settles; delivery reuses the authoritative retained Thread and
-creates a distinct Turn. Steer is a distinct priority mode whose exact active Turn target is captured
-atomically at admission. It may overtake queued follows, never falls back to a new Turn, and fails
-honestly if reconciliation observes that its target became terminal. Wake events make work eligible;
-they do not replace durable delivery facts. A later Message wakes the Job's existing execution task
-rather than attaching a task for that Message. A bounded reload of durable Message facts covers a
-missing wake hint, and an executor restart reclaims the same task attachment.
+idempotency key binds its complete admitted delivery request: the exact Sandbox, text, ordered
+attachment manifest, follow or steer intent and target, authorized Role, capability and input
+Revision when used, and the authoritative retained Thread. The same key and request return the same
+Message. Changing any bound field or attachment order conflicts. A different key may admit identical
+input. Sending through the Agent handle defaults to follow. While admission remains open, every
+accepted follow enters the FIFO, including input accepted before an earlier Turn settles. Delivery
+reuses the authoritative retained Thread and creates a distinct Turn. Steer is a distinct priority
+mode whose exact active Turn target is captured atomically at admission. It may overtake queued
+follows, never falls back to a new Turn, and fails honestly if reconciliation observes that its
+target became terminal. Wake events make work eligible; they do not replace durable delivery facts.
+A later Message wakes the Job's existing execution task rather than attaching a task for that
+Message. A bounded reload of durable Message facts covers a missing wake hint, and an executor
+restart reclaims the same task attachment.
+
+Each accepted attachment has immutable bytes in the content-addressed blob store and an ordered
+Message manifest with its kind, filename, media type, digest, and byte size. The delivery adapter
+independently verifies the blob before it creates a deterministic working file in the Job-owned
+Sandbox. Every image also has a working file path, and an image-capable Harness receives its bytes
+through the native image input. Cleanup deletes the working copies. The retained Message and blobs
+still support exact receipt replay after cleanup, but replay does not start another AgentRun.
 
 An AgentRun is Core's internal durable recovery fact for one bounded delivery of one Message to an
 agent in a named Role and capability envelope. It retains the exact Harness, Thread, Turn,
@@ -173,7 +183,11 @@ Core exposes settled agent work through the Agent application handle; a workflow
 relevant domain results and records natural typed facts. Generic result strings, arbitrary metadata
 bags, and copied external state are not substitutes for domain records.
 
-### Workspace files, Evidence, and inspection
+### Message attachments, workspace files, Evidence, and inspection
+
+Message attachments are accepted user input. Their explicit filenames and bounded bytes earn
+durable Message custody before execution. They do not authorize generic output discovery or
+retention.
 
 `SandboxHandle.ReadFile` returns the exact bytes of one caller-named, clean workspace-relative
 regular file from that exact Job-owned Sandbox. Core checks Job and Sandbox ownership, executes the
@@ -199,9 +213,9 @@ into Dorf's product history.
 ## Durable core and workflow facts
 
 Core retains only execution facts whose authority and recovery meaning survive removal of client or
-workflow policy: durable identity, accepted input order, internal AgentRuns, Sandbox ownership,
-stable external effects, Evidence custody, recovery, caller-requested
-attention, and caller-requested cleanup.
+workflow policy: durable identity, accepted Message text and attachment custody, accepted input
+order, internal AgentRuns, Sandbox ownership, stable external effects, Evidence custody, recovery,
+caller-requested attention, and caller-requested cleanup.
 
 Client- and workflow-specific inputs, results, external authorities, and terminal meaning remain in
 their typed owner. They do not become nullable Core fields, generic payloads, common phases, or

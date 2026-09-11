@@ -361,6 +361,25 @@
           "content": {
             "application/json": {
               "schema": { "$ref": "#/components/schemas/SendMessageRequest" }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["text", "attachment"],
+                "properties": {
+                  "refresh_skills": { "type": "boolean", "default": false },
+                  "text": { "type": "string", "description": "Verbatim Message text. May be empty when attachments are present." },
+                  "intent": { "type": "string", "enum": ["auto", "follow", "steer"], "default": "auto" },
+                  "attachment": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 4,
+                    "items": { "type": "string", "format": "binary" },
+                    "description": "Ordered files sent by value with a filename. Dorf derives media type, kind, byte size, and SHA-256. Each file is limited to 8 MiB. Fully decoded PNG, JPEG, and static WebP inputs become image attachments and are limited to 25,000,000 decoded pixels; all other bytes become file attachments."
+                  }
+                }
+              }
             }
           }
         },
@@ -1172,7 +1191,7 @@
         "required": ["text"],
         "properties": {
           "refresh_skills": { "type": "boolean", "default": false, "description": "Request an installed-skill reload on a supported profile (currently Codex). A follow refreshes before its fresh Turn. A steer leaves the running Turn unchanged and retains the request for the next fresh Turn. Auto uses its resolved delivery intent. Retained on idempotent replay." },
-          "text": { "type": "string", "minLength": 1 },
+          "text": { "type": "string", "description": "Verbatim Message text. JSON requests require nonempty text; multipart requests may use empty text when attachments are present." },
           "intent": { "type": "string", "enum": ["auto", "follow", "steer"], "default": "auto", "description": "Steer active work or follow when idle, resolved once at admission." }
         }
       },

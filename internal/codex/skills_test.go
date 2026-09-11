@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"sync/atomic"
 	"testing"
+
+	"github.com/aphronio/dorf/internal/core"
 )
 
 func TestRequestedNewTurnsReloadSkillsInRetainedThread(t *testing.T) {
@@ -42,7 +44,7 @@ func TestRequestedNewTurnsReloadSkillsInRetainedThread(t *testing.T) {
 
 	first := dialTestProtocol(t, server)
 	first.refreshSkills = true
-	thread, turn, err := first.reconcileInitialTurn(context.Background(), workspace, "initial", "input", "model", "high", "danger-full-access")
+	thread, turn, err := first.reconcileInitialTurn(context.Background(), workspace, "initial", core.HarnessInput{Text: "input"}, "model", "high", "danger-full-access")
 	if err != nil || thread != threadID || turn.ID != "turn-initial" {
 		t.Fatalf("initial thread=%q turn=%#v err=%v", thread, turn, err)
 	}
@@ -56,7 +58,7 @@ func TestRequestedNewTurnsReloadSkillsInRetainedThread(t *testing.T) {
 		runID := fmt.Sprintf("follow-%d", i)
 		follow := dialTestProtocol(t, server)
 		follow.refreshSkills = true
-		turn, err := follow.resumeAndStartTurn(context.Background(), threadID, workspace, runID, "input", "model", "high", "danger-full-access")
+		turn, err := follow.resumeAndStartTurn(context.Background(), threadID, workspace, runID, core.HarnessInput{Text: "input"}, "model", "high", "danger-full-access")
 		if err != nil || turn.ID != "turn-"+runID {
 			t.Fatalf("follow turn=%#v err=%v", turn, err)
 		}
@@ -88,7 +90,7 @@ func TestSkillReloadFailurePreventsSubmission(t *testing.T) {
 			if name == "connection lost" {
 				_ = p.connection.CloseNow()
 			}
-			turn, err := p.startTurn(context.Background(), "thread", "/workspace/job", "run", "input", "model", "high", "danger-full-access")
+			turn, err := p.startTurn(context.Background(), "thread", "/workspace/job", "run", core.HarnessInput{Text: "input"}, "model", "high", "danger-full-access")
 			var definite interface{ DefiniteNoSubmit() bool }
 			if !errors.As(err, &definite) || !definite.DefiniteNoSubmit() || turn.ID != "" {
 				t.Fatalf("turn=%#v err=%T %v", turn, err, err)
@@ -123,7 +125,7 @@ func TestOrdinaryTurnDoesNotReloadSkills(t *testing.T) {
 		}
 	})
 	defer server.Close()
-	turn, err := dialTestProtocol(t, server).resumeAndStartTurn(context.Background(), "thread", "/workspace/job", "run", "input", "model", "high", "danger-full-access")
+	turn, err := dialTestProtocol(t, server).resumeAndStartTurn(context.Background(), "thread", "/workspace/job", "run", core.HarnessInput{Text: "input"}, "model", "high", "danger-full-access")
 	if err != nil || turn.ID != "turn" {
 		t.Fatalf("turn=%+v err=%v", turn, err)
 	}

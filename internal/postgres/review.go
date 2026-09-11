@@ -137,7 +137,7 @@ func createReviewRunTx(ctx context.Context, queries *dbsql.Queries, jobID, revis
 	message.Sequence = sequence
 	if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{
 		ID: message.ID, JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID,
-		Sequence: message.Sequence, Input: message.Input, DeliveryIntent: message.Intent, RequestedIntent: string(message.Intent),
+		Sequence: message.Sequence, Input: message.Input, Attachments: []byte("[]"), DeliveryIntent: message.Intent, RequestedIntent: string(message.Intent),
 	}); err != nil {
 		return "", err
 	}
@@ -245,7 +245,7 @@ func (s Store) RecordReviewFeedback(ctx context.Context, runID string, outcome c
 		}
 		if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{
 			ID: expectedMessage.ID, JobID: expectedMessage.JobID, FromKind: expectedMessage.FromKind, FromID: expectedMessage.FromID,
-			Sequence: expectedMessage.Sequence, Input: expectedMessage.Input, DeliveryIntent: expectedMessage.Intent, RequestedIntent: string(expectedMessage.Intent),
+			Sequence: expectedMessage.Sequence, Input: expectedMessage.Input, Attachments: []byte("[]"), DeliveryIntent: expectedMessage.Intent, RequestedIntent: string(expectedMessage.Intent),
 		}); err != nil {
 			return core.Message{}, false, err
 		}
@@ -263,14 +263,9 @@ func (s Store) RecordReviewFeedback(ctx context.Context, runID string, outcome c
 			return core.Message{}, false, err
 		}
 	}
-	message := messageFromValues(
-		storedMessage.ID, storedMessage.JobID, storedMessage.FromKind, storedMessage.FromID,
-		storedMessage.Sequence, storedMessage.Input, storedMessage.DeliveryIntent, storedMessage.SteerTargetTurnID,
-	)
-	message.AdmittedAt = storedMessage.AdmittedAt
-	if message.ID != expectedMessage.ID || message.JobID != expectedMessage.JobID || message.FromKind != expectedMessage.FromKind ||
-		message.FromID != expectedMessage.FromID || message.Input != expectedMessage.Input || message.Intent != expectedMessage.Intent || message.TargetTurnID != "" {
-		return core.Message{}, false, fmt.Errorf("reviewer AgentRun %s is already bound to different exact feedback", runID)
+	message, err := exactReviewFeedbackMessage(storedMessage, expectedMessage)
+	if err != nil {
+		return core.Message{}, false, err
 	}
 	if _, err := queries.ClearWorkflowAttention(ctx, dbsql.ClearWorkflowAttentionParams{
 		JobID:  run.JobID,
@@ -282,6 +277,19 @@ func (s Store) RecordReviewFeedback(ctx context.Context, runID string, outcome c
 		return core.Message{}, false, err
 	}
 	return message, created, nil
+}
+
+func exactReviewFeedbackMessage(row dbsql.GetMessageBySenderRow, expected core.Message) (core.Message, error) {
+	message, err := messageFromSenderRow(row)
+	if err != nil {
+		return core.Message{}, err
+	}
+	if message.ID != expected.ID || message.JobID != expected.JobID || message.FromKind != expected.FromKind ||
+		message.FromID != expected.FromID || message.Input != expected.Input ||
+		message.Intent != expected.Intent || message.TargetTurnID != "" || message.RefreshSkills || len(message.Attachments) != 0 {
+		return core.Message{}, fmt.Errorf("reviewer AgentRun %s is already bound to different exact feedback", expected.FromID)
+	}
+	return message, nil
 }
 
 var _ coding.Store = Store{}

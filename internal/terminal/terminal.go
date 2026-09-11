@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gateway"
 	provider "github.com/aphronio/dorf/internal/sandbox"
@@ -13,6 +14,7 @@ import (
 
 type Externals struct {
 	Sandbox   provider.Sandbox
+	Blobs     blob.Store
 	Gateway   gateway.Gateway
 	Agent     Harness
 	Ownership func(context.Context, string) (provider.Ownership, error)
@@ -81,11 +83,21 @@ func (e Externals) SteerHistory(ctx context.Context, _ core.Job, sandboxID, thre
 }
 
 func (e Externals) AgentSteer(ctx context.Context, job core.Job, delivery core.Delivery) (string, error) {
+	if delivery.AgentRun.JobID != job.ID || delivery.AgentRun.MessageID != delivery.Message.ID {
+		return "", fmt.Errorf("steer requires the exact Message and Job-owned AgentRun")
+	}
 	owner, err := e.owner(ctx, delivery.AgentRun.SandboxID)
 	if err != nil {
 		return "", err
 	}
-	return e.Agent.SteerTurn(ctx, owner, delivery.AgentRun.ThreadID, delivery.Message.TargetTurnID, delivery.AgentRun.ID, delivery.Message.Input)
+	if owner.JobID != job.ID {
+		return "", fmt.Errorf("steer requires the exact Job-owned Sandbox")
+	}
+	input, err := e.messageInput(ctx, owner, delivery.Message.ID, delivery.Message.Input, delivery.Message.Attachments)
+	if err != nil {
+		return "", err
+	}
+	return e.Agent.SteerTurn(ctx, owner, delivery.AgentRun.ThreadID, delivery.Message.TargetTurnID, delivery.AgentRun.ID, input)
 }
 
 func (e Externals) RouteRevoke(ctx context.Context, job core.Job, sandbox core.Sandbox, route core.Route) error {

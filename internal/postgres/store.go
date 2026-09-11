@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -35,7 +36,7 @@ const (
 	AbsurdSchemaSHA256  = "d34309370c539f3a51f2b36b69b1f77551f8e4a14480a1c8def8bb8f40fd9aab"
 )
 
-var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql"}
+var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql", "009_message_attachments.sql"}
 
 type Store struct{ DB *sql.DB }
 
@@ -234,8 +235,8 @@ func normalizeMessage(input core.MessageAdmission) (core.MessageAdmission, error
 	if input.Intent == "" {
 		input.Intent = core.MessageFollow
 	}
-	if input.JobID == "" || input.SandboxID == "" || input.FromID == "" || strings.TrimSpace(input.Input) == "" {
-		return core.MessageAdmission{}, fmt.Errorf("message admission requires Job ID, exact Sandbox ID, from ID, and complete input")
+	if input.JobID == "" || input.SandboxID == "" || input.FromID == "" {
+		return core.MessageAdmission{}, fmt.Errorf("message admission requires Job ID, exact Sandbox ID, from ID, and text or attachments")
 	}
 	if input.FromKind != core.MessageFromHuman && input.FromKind != core.MessageFromAgent && input.FromKind != core.MessageFromWorkflow {
 		return core.MessageAdmission{}, fmt.Errorf("invalid message from kind")
@@ -246,9 +247,10 @@ func normalizeMessage(input core.MessageAdmission) (core.MessageAdmission, error
 	if input.Intent != core.MessageFollow && input.Intent != core.MessageSteer && input.Intent != core.MessageAuto {
 		return core.MessageAdmission{}, fmt.Errorf("message intent must be auto, follow, or steer")
 	}
-	if len(input.Input) > 1<<20 {
-		return core.MessageAdmission{}, fmt.Errorf("message input exceeds 1 MiB")
+	if !core.ValidMessageInput(core.MessageInput{Text: input.Input, Attachments: input.Attachments}) {
+		return core.MessageAdmission{}, fmt.Errorf("message text or attachments are invalid")
 	}
+	input.Attachments = append([]core.MessageAttachment(nil), input.Attachments...)
 	return input, nil
 }
 
@@ -270,21 +272,7 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 	}
 	row, err := queries.GetMessageBySender(ctx, dbsql.GetMessageBySenderParams{JobID: input.JobID, FromKind: input.FromKind, FromID: input.FromID})
 	if err == nil {
-		message := messageFromValues(row.ID, row.JobID, row.FromKind, row.FromID, row.Sequence, row.Input, row.DeliveryIntent, row.SteerTargetTurnID)
-		message.AdmittedAt = row.AdmittedAt
-		message.RefreshSkills = row.RefreshSkills
-		run, runErr := queries.GetAgentRunByMessage(ctx, message.ID)
-		if runErr != nil {
-			return core.Message{}, false, fmt.Errorf("load durable AgentRun for Message replay: %w", runErr)
-		}
-		stored := core.MessageAdmission{
-			JobID: run.JobID, SandboxID: run.SandboxID, FromKind: message.FromKind, FromID: message.FromID,
-			Input: message.Input, Intent: core.MessageDeliveryIntent(row.RequestedIntent), RefreshSkills: message.RefreshSkills,
-		}
-		if stored != input {
-			return core.Message{}, false, fmt.Errorf("%w: sender %s/%q", core.ErrMessageReplayConflict, input.FromKind, input.FromID)
-		}
-		return message, false, nil
+		return replayMessageAdmission(ctx, queries, row, input)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return core.Message{}, false, err
@@ -314,8 +302,12 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 		return core.Message{}, false, err
 	}
 	message.ID = core.MessageID(input.JobID, input.FromKind, input.FromID)
-	message.JobID, message.FromKind, message.FromID, message.Input, message.Intent = input.JobID, input.FromKind, input.FromID, input.Input, target.intent
-	if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{ID: message.ID, JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID, Sequence: message.Sequence, Input: message.Input, DeliveryIntent: message.Intent, RequestedIntent: string(input.Intent), RefreshSkills: input.RefreshSkills, SteerTargetTurnID: message.TargetTurnID}); err != nil {
+	message.JobID, message.FromKind, message.FromID, message.Input, message.Attachments, message.Intent = input.JobID, input.FromKind, input.FromID, input.Input, input.Attachments, target.intent
+	attachments, err := encodeMessageAttachments(message.Attachments)
+	if err != nil {
+		return core.Message{}, false, err
+	}
+	if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{ID: message.ID, JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID, Sequence: message.Sequence, Input: message.Input, Attachments: attachments, DeliveryIntent: message.Intent, RequestedIntent: string(input.Intent), RefreshSkills: input.RefreshSkills, SteerTargetTurnID: message.TargetTurnID}); err != nil {
 		return core.Message{}, false, err
 	}
 	runID := core.AgentRunID(message.ID)
@@ -334,6 +326,25 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 	}
 	message.AdmittedAt = storedMessage.AdmittedAt
 	return message, true, nil
+}
+
+func replayMessageAdmission(ctx context.Context, queries *dbsql.Queries, row dbsql.GetMessageBySenderRow, input core.MessageAdmission) (core.Message, bool, error) {
+	message, err := messageFromSenderRow(row)
+	if err != nil {
+		return core.Message{}, false, err
+	}
+	run, err := queries.GetAgentRunByMessage(ctx, message.ID)
+	if err != nil {
+		return core.Message{}, false, fmt.Errorf("load durable AgentRun for Message replay: %w", err)
+	}
+	stored := core.MessageAdmission{
+		JobID: run.JobID, SandboxID: run.SandboxID, FromKind: message.FromKind, FromID: message.FromID,
+		Input: message.Input, Attachments: message.Attachments, Intent: core.MessageDeliveryIntent(row.RequestedIntent), RefreshSkills: message.RefreshSkills,
+	}
+	if !sameMessageAdmission(stored, input) {
+		return core.Message{}, false, fmt.Errorf("%w: sender %s/%q", core.ErrMessageReplayConflict, input.FromKind, input.FromID)
+	}
+	return message, false, nil
 }
 
 type messageTarget struct {
@@ -498,6 +509,68 @@ func (s Store) AttachJobTask(ctx context.Context, jobID, expectedCurrentTaskID, 
 
 func messageFromValues(id, jobID string, fromKind core.MessageFromKind, fromID string, sequence int64, input string, intent core.MessageDeliveryIntent, targetTurnID string) core.Message {
 	return core.Message{ID: id, JobID: jobID, FromKind: fromKind, FromID: fromID, Sequence: sequence, Input: input, Intent: intent, TargetTurnID: targetTurnID}
+}
+
+func messageFromStoredValues(id, jobID string, fromKind core.MessageFromKind, fromID string, sequence int64, input string, attachments []byte, intent core.MessageDeliveryIntent, targetTurnID string) (core.Message, error) {
+	message := messageFromValues(id, jobID, fromKind, fromID, sequence, input, intent, targetTurnID)
+	decoded, err := decodeMessageAttachments(attachments)
+	if err != nil {
+		return core.Message{}, fmt.Errorf("Message %s has invalid durable attachments: %w", id, err)
+	}
+	message.Attachments = decoded
+	return message, nil
+}
+
+func messageFromSenderRow(row dbsql.GetMessageBySenderRow) (core.Message, error) {
+	message, err := messageFromStoredValues(
+		row.ID, row.JobID, row.FromKind, row.FromID, row.Sequence, row.Input,
+		row.Attachments, row.DeliveryIntent, row.SteerTargetTurnID,
+	)
+	if err != nil {
+		return core.Message{}, err
+	}
+	message.AdmittedAt = row.AdmittedAt
+	message.RefreshSkills = row.RefreshSkills
+	return message, nil
+}
+
+func encodeMessageAttachments(attachments []core.MessageAttachment) ([]byte, error) {
+	if attachments == nil {
+		attachments = []core.MessageAttachment{}
+	}
+	encoded, err := json.Marshal(attachments)
+	if err != nil {
+		return nil, fmt.Errorf("encode Message attachments: %w", err)
+	}
+	return encoded, nil
+}
+
+func decodeMessageAttachments(encoded []byte) ([]core.MessageAttachment, error) {
+	var attachments []core.MessageAttachment
+	if err := json.Unmarshal(encoded, &attachments); err != nil {
+		return nil, err
+	}
+	if !core.ValidMessageAttachments(attachments) {
+		return nil, fmt.Errorf("invalid attachment manifest")
+	}
+	if len(attachments) == 0 {
+		return nil, nil
+	}
+	return attachments, nil
+}
+
+func sameMessageAdmission(left, right core.MessageAdmission) bool {
+	if left.RefreshSkills != right.RefreshSkills || left.JobID != right.JobID || left.SandboxID != right.SandboxID ||
+		left.FromKind != right.FromKind || left.FromID != right.FromID || left.Input != right.Input || left.Intent != right.Intent ||
+		len(left.Attachments) != len(right.Attachments) {
+		return false
+	}
+	for index := range left.Attachments {
+		if left.Attachments[index] != right.Attachments[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func actionFromValues(id, jobID string, kind core.ActionKind, state core.ActionState, scope string, createdAt time.Time, settledAt sql.NullTime) core.Action {
@@ -754,7 +827,10 @@ func (s Store) Deliveries(ctx context.Context, jobID string) ([]core.Delivery, e
 		if r.AgentRunMessageID != r.MessageID || r.AgentRunJobID != r.MessageJobID {
 			return nil, fmt.Errorf("Message %s (Job %s) has mismatched AgentRun %s (Message %s, Job %s)", r.MessageID, r.MessageJobID, r.AgentRunID, r.AgentRunMessageID, r.AgentRunJobID)
 		}
-		message := messageFromValues(r.MessageID, r.MessageJobID, r.FromKind, r.FromID, r.Sequence, r.Input, r.DeliveryIntent, r.SteerTargetTurnID)
+		message, err := messageFromStoredValues(r.MessageID, r.MessageJobID, r.FromKind, r.FromID, r.Sequence, r.Input, r.Attachments, r.DeliveryIntent, r.SteerTargetTurnID)
+		if err != nil {
+			return nil, err
+		}
 		message.AdmittedAt = r.AdmittedAt
 		message.RefreshSkills = r.RefreshSkills
 		run := agentRunFromValues(r.AgentRunID, r.AgentRunJobID, r.AgentRunMessageID, r.State, r.Harness, r.ThreadID, r.BaselineRecorded, r.BaselineTurnID, r.TurnID, r.TurnOutcome, r.Attention, r.Role, r.InputRevision)
@@ -822,7 +898,10 @@ func (s Store) AgentMessageExecution(ctx context.Context, messageID string) (cor
 	if err != nil {
 		return core.AgentMessageExecution{}, err
 	}
-	message := messageFromValues(messageRow.ID, messageRow.JobID, messageRow.FromKind, messageRow.FromID, messageRow.Sequence, messageRow.Input, messageRow.DeliveryIntent, messageRow.SteerTargetTurnID)
+	message, err := messageFromStoredValues(messageRow.ID, messageRow.JobID, messageRow.FromKind, messageRow.FromID, messageRow.Sequence, messageRow.Input, messageRow.Attachments, messageRow.DeliveryIntent, messageRow.SteerTargetTurnID)
+	if err != nil {
+		return core.AgentMessageExecution{}, err
+	}
 	message.AdmittedAt = messageRow.AdmittedAt
 	message.RefreshSkills = messageRow.RefreshSkills
 	runRow, err := queries.GetAgentRunByMessage(ctx, message.ID)

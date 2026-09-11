@@ -10,6 +10,8 @@ import (
 
 	"github.com/aphronio/dorf/internal/e2b"
 	provider "github.com/aphronio/dorf/internal/sandbox"
+
+	"github.com/aphronio/dorf/internal/core"
 )
 
 func TestLiveE2BAuthenticatedEndpointRecoversCodexThread(t *testing.T) {
@@ -57,7 +59,7 @@ func TestLiveE2BAuthenticatedEndpointRecoversCodexThread(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		turn, err = first.startTurn(ctx, threadID, "/workspace/job", "endpoint-proof-message", "persist this endpoint proof", "gpt-5.6-sol", "low", "danger-full-access")
+		turn, err = first.startTurn(ctx, threadID, "/workspace/job", "endpoint-proof-message", core.HarnessInput{Text: "persist this endpoint proof"}, "gpt-5.6-sol", "low", "danger-full-access")
 		first.connection.CloseNow()
 		return err
 	}); err != nil {

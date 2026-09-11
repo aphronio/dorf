@@ -1,9 +1,10 @@
 # D089: Core reads exact Sandbox files but does not retain generic deliverables
 
-- **Applicability:** current
+- **Applicability:** partial
 - **Areas:** core, sandboxes, persistence
 - **Read when:** Changing Sandbox file reads, deliverable retention, or cleanup-time file access.
-- **Decision history:** Accepted boundary reversal — 2026-08-22
+- **Decision history:** Accepted boundary reversal — 2026-08-22; Message input custody refined by
+  D118 — 2026-09-11
 - **Decision:** Expose one exact `SandboxHandle.ReadFile` operation for a caller-named, clean
   workspace-relative regular file from the exact Job-owned Sandbox. The read preserves arbitrary
   bytes, runs under the Job cleanup fence, and rejects traversal, symlinks, resolved workspace
@@ -18,6 +19,8 @@
 - **Storage:** Remove the generic Artifact domain, PostgreSQL table and queries, Core adapters, and
   `dorf artifact` CLI. The content-addressed blob store remains only for Evidence. No migration
   preserves the pre-release Artifact shape.
+- **Later refinement:** D118 also uses the content-addressed blob store for explicit Message input
+  attachments. It does not restore generic deliverable retention.
 - **Reconciliation:** This supersedes D072, refines D069 and D075's investigation Draft
   representation, and replaces D088's automatic retention design. The distinct Evidence proof
   boundary remains unchanged. D070's mandatory profile contract advances

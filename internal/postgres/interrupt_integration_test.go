@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -45,7 +46,7 @@ func TestDirectAutomaticMessagesAndExactInterruptReconciliation(t *testing.T) {
 	if err != nil || steer.Message.Intent != core.MessageSteer || steer.Message.TargetTurnID != "first-turn" {
 		t.Fatalf("active message=%+v err=%v", steer, err)
 	}
-	if replay, err := store.AdmitDirectMessage(ctx, idleInput); err != nil || replay.Created || replay.Message != idle.Message {
+	if replay, err := store.AdmitDirectMessage(ctx, idleInput); err != nil || replay.Created || !reflect.DeepEqual(replay.Message, idle.Message) {
 		t.Fatalf("idle replay changed after work started: %+v %v", replay, err)
 	}
 	changed := activeInput
@@ -134,7 +135,7 @@ func TestDirectAutomaticMessagesAndExactInterruptReconciliation(t *testing.T) {
 	if err != nil || observed.AgentRun.InterruptRequested {
 		t.Fatalf("old interrupt targeted successor: %+v %v", observed.AgentRun, err)
 	}
-	if replay, err := store.AdmitDirectMessage(ctx, activeInput); err != nil || replay.Created || replay.Message != steer.Message {
+	if replay, err := store.AdmitDirectMessage(ctx, activeInput); err != nil || replay.Created || !reflect.DeepEqual(replay.Message, steer.Message) {
 		t.Fatalf("auto replay retargeted successor: %+v %v", replay, err)
 	}
 	if err := store.RequestMessageInterrupt(ctx, "foreign-job", steer.Message.ID); !errors.Is(err, core.ErrMessageInterruptUnavailable) {

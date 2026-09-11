@@ -90,7 +90,7 @@ func PutFileViaExec(ctx context.Context, owner Ownership, destination string, co
 }
 
 // MaxFileWriteBytes bounds an individual public Sandbox write.
-const MaxFileWriteBytes = 128 << 10
+const MaxFileWriteBytes = 8 << 20
 
 // WriteFileViaExec atomically writes a Sandbox file, creating private parent directories.
 // Create-only writes preserve existing files, including empty files.

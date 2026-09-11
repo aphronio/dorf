@@ -17,6 +17,8 @@ import (
 	incustest "github.com/aphronio/dorf/internal/incus/testkit"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/coder/websocket"
+
+	"github.com/aphronio/dorf/internal/core"
 )
 
 func testSandbox(runner incustest.Runner, owner provider.Ownership) incus.Adapter {
@@ -463,7 +465,7 @@ func TestProtocolBindsResumeStartAndSteerToExactIdentity(t *testing.T) {
 			}
 		})
 		defer server.Close()
-		outcome, err := dialTestProtocol(t, server).resumeAndStartTurn(context.Background(), sessionID, "/workspace/job", messageID, "input", "gpt-5.6-sol", "high", "danger-full-access")
+		outcome, err := dialTestProtocol(t, server).resumeAndStartTurn(context.Background(), sessionID, "/workspace/job", messageID, core.HarnessInput{Text: "input"}, "gpt-5.6-sol", "high", "danger-full-access")
 		if err != nil || outcome.ID != turnID {
 			t.Fatalf("resume and start outcome=%#v err=%v", outcome, err)
 		}
@@ -485,7 +487,7 @@ func TestProtocolBindsResumeStartAndSteerToExactIdentity(t *testing.T) {
 			}
 		})
 		defer server.Close()
-		accepted, err := dialTestProtocol(t, server).steerTurn(context.Background(), sessionID, turnID, messageID, "correction")
+		accepted, err := dialTestProtocol(t, server).steerTurn(context.Background(), sessionID, turnID, messageID, core.HarnessInput{Text: "correction"})
 		if err != nil || accepted != turnID {
 			t.Fatalf("steer accepted=%q err=%v", accepted, err)
 		}
@@ -504,7 +506,7 @@ func TestProtocolBindsResumeStartAndSteerToExactIdentity(t *testing.T) {
 			return nil, true
 		})
 		defer server.Close()
-		_, err := dialTestProtocol(t, server).resumeAndStartTurn(context.Background(), sessionID, "/workspace/job", messageID, "input", "gpt-5.6-sol", "high", "danger-full-access")
+		_, err := dialTestProtocol(t, server).resumeAndStartTurn(context.Background(), sessionID, "/workspace/job", messageID, core.HarnessInput{Text: "input"}, "gpt-5.6-sol", "high", "danger-full-access")
 		var definite interface{ DefiniteNoSubmit() bool }
 		if !errors.As(err, &definite) || !definite.DefiniteNoSubmit() {
 			t.Fatalf("substitute resume error=%T %v", err, err)
@@ -573,7 +575,7 @@ func TestInitialRecoveryDropsLostEmptyThreadAndAdoptsAcceptedTurn(t *testing.T) 
 
 	secondConnection := dialTestProtocol(t, server)
 	secondConnection.refreshSkills = true
-	sessionID, turn, err := secondConnection.reconcileInitialTurn(context.Background(), "/workspace/job", "agent-run-stable", "initial input", "gpt-5.6-sol", "high", "danger-full-access")
+	sessionID, turn, err := secondConnection.reconcileInitialTurn(context.Background(), "/workspace/job", "agent-run-stable", core.HarnessInput{Text: "initial input"}, "gpt-5.6-sol", "high", "danger-full-access")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -588,7 +590,7 @@ func TestInitialRecoveryDropsLostEmptyThreadAndAdoptsAcceptedTurn(t *testing.T) 
 	thirdConnection.refreshSkills = true
 	// The fake app-server implements no clientUserMessageId deduplication. A
 	// deliberately different hint still adopts by isolated thread history.
-	recoveredSession, recoveredTurn, err := thirdConnection.reconcileInitialTurn(context.Background(), "/workspace/job", "different-native-hint", "initial input", "gpt-5.6-sol", "high", "danger-full-access")
+	recoveredSession, recoveredTurn, err := thirdConnection.reconcileInitialTurn(context.Background(), "/workspace/job", "different-native-hint", core.HarnessInput{Text: "initial input"}, "gpt-5.6-sol", "high", "danger-full-access")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -774,7 +776,7 @@ func TestStrictReviewLostAfterTrustedSubmissionAdoptsPersistedTurnWithoutDuplica
 	if err != nil || startedSession != sessionID {
 		t.Fatalf("fresh thread=%s err=%v", startedSession, err)
 	}
-	if _, err := first.startTurn(context.Background(), sessionID, "/workspace/job", nonce, input, "gpt-5.6-sol", "high", "read-only"); err != nil {
+	if _, err := first.startTurn(context.Background(), sessionID, "/workspace/job", nonce, core.HarnessInput{Text: input}, "gpt-5.6-sol", "high", "read-only"); err != nil {
 		t.Fatal(err)
 	}
 	_ = first.connection.CloseNow() // controller response is lost before strict readback/binding

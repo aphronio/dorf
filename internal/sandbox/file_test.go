@@ -109,6 +109,21 @@ func TestPutFileViaExecConvergesAfterLostSuccess(t *testing.T) {
 	}
 }
 
+func TestSandboxFileWriteSupportsAttachmentLimitAndRejectsOversizeBeforeTransport(t *testing.T) {
+	workspace := t.TempDir()
+	contents := bytes.Repeat([]byte{0, 255}, MaxFileWriteBytes/2)
+	if err := WriteFileViaExec(context.Background(), Ownership{}, workspace, "large.bin", contents, false, localExec(t, nil)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(workspace, "large.bin"))
+	if err != nil || !bytes.Equal(got, contents) {
+		t.Fatalf("full-size attachment changed: %v", err)
+	}
+	if err := WriteFileViaExec(context.Background(), Ownership{}, workspace, "large.bin", append(contents, 1), false, nil); err == nil || err.Error() != "Sandbox file exceeds write limit" {
+		t.Fatalf("oversize attachment reached transport: %v", err)
+	}
+}
+
 func localExec(t *testing.T, after func(Result, error) (Result, error)) ExecFunc {
 	t.Helper()
 	return func(ctx context.Context, _ Ownership, input []byte, argv ...string) (Result, error) {

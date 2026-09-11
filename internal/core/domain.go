@@ -191,6 +191,24 @@ const (
 	MessageFromWorkflow MessageFromKind = "workflow"
 )
 
+type MessageAttachmentKind string
+
+const (
+	MessageAttachmentImage MessageAttachmentKind = "image"
+	MessageAttachmentFile  MessageAttachmentKind = "file"
+)
+
+// MessageAttachment is one ordered immutable byte reference owned by a
+// Message. Slice position is its order; the record deliberately has no second
+// ordinal field.
+type MessageAttachment struct {
+	Kind      MessageAttachmentKind `json:"kind"`
+	Filename  string                `json:"filename"`
+	MediaType string                `json:"media_type"`
+	Digest    string                `json:"digest"`
+	ByteSize  int64                 `json:"byte_size"`
+}
+
 type Message struct {
 	RefreshSkills bool                  `json:"refresh_skills,omitempty"`
 	ID            string                `json:"id"`
@@ -199,6 +217,7 @@ type Message struct {
 	FromID        string                `json:"from_id"`
 	Sequence      int64                 `json:"sequence"`
 	Input         string                `json:"input"`
+	Attachments   []MessageAttachment   `json:"attachments,omitempty"`
 	Intent        MessageDeliveryIntent `json:"intent"`
 	TargetTurnID  string                `json:"target_turn_id,omitempty"`
 	AdmittedAt    time.Time             `json:"admitted_at,omitempty"`

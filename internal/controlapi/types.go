@@ -13,25 +13,28 @@ import (
 )
 
 var (
-	ErrInvalidInput            = errors.New("invalid control API input")
-	ErrProfileNotFound         = errors.New("control API Sandbox profile not found")
-	ErrInvalidCursor           = errors.New("invalid control API Job cursor")
-	ErrJobNotFound             = errors.New("control API Job not found")
-	ErrMessageNotFound         = errors.New("control API Message not found")
-	ErrSandboxExecUnavailable  = errors.New("Sandbox command is unavailable")
-	ErrSandboxExecFailed       = errors.New("Sandbox command outcome is unknown")
-	ErrSandboxNotFound         = errors.New("control API Sandbox not found")
-	ErrInvalidFilePath         = errors.New("control API Sandbox file path invalid")
-	ErrFileNotFound            = errors.New("control API Sandbox file not found")
-	ErrFileUnavailable         = errors.New("control API Sandbox file unavailable")
-	ErrMessageUnavailable      = errors.New("control API Message cannot be accepted")
-	ErrSteerUnavailable        = errors.New("control API steer cannot be accepted")
-	ErrSkillRefreshUnavailable = errors.New("control API skill refresh is unsupported for this profile")
-	ErrInterruptUnavailable    = errors.New("control API interrupt cannot be accepted")
-	ErrRetryUnavailable        = errors.New("control API Job retry unavailable")
-	ErrAbandonUnavailable      = errors.New("control API Job abandon unavailable")
-	ErrEvidenceUnverified      = errors.New("control API Evidence could not be verified")
-	ErrIdempotencyConflict     = errors.New("idempotency key is bound to different input")
+	ErrAttachmentAnimationUnsupported = errors.New("animated attachment images are unsupported")
+	ErrAttachmentImageTooLarge        = errors.New("attachment image exceeds the decoded pixel limit")
+	ErrInvalidInput                   = errors.New("invalid control API input")
+	ErrProfileNotFound                = errors.New("control API Sandbox profile not found")
+	ErrInvalidCursor                  = errors.New("invalid control API Job cursor")
+	ErrJobNotFound                    = errors.New("control API Job not found")
+	ErrMessageNotFound                = errors.New("control API Message not found")
+	ErrSandboxExecUnavailable         = errors.New("Sandbox command is unavailable")
+	ErrSandboxExecFailed              = errors.New("Sandbox command outcome is unknown")
+	ErrSandboxNotFound                = errors.New("control API Sandbox not found")
+	ErrInvalidFilePath                = errors.New("control API Sandbox file path invalid")
+	ErrFileNotFound                   = errors.New("control API Sandbox file not found")
+	ErrFileUnavailable                = errors.New("control API Sandbox file unavailable")
+	ErrMessageUnavailable             = errors.New("control API Message cannot be accepted")
+	ErrSteerUnavailable               = errors.New("control API steer cannot be accepted")
+	ErrSkillRefreshUnavailable        = errors.New("control API skill refresh is unsupported for this profile")
+	ErrMessageImageUnsupported        = errors.New("control API image attachments are unsupported for this profile")
+	ErrInterruptUnavailable           = errors.New("control API interrupt cannot be accepted")
+	ErrRetryUnavailable               = errors.New("control API Job retry unavailable")
+	ErrAbandonUnavailable             = errors.New("control API Job abandon unavailable")
+	ErrEvidenceUnverified             = errors.New("control API Evidence could not be verified")
+	ErrIdempotencyConflict            = errors.New("idempotency key is bound to different input")
 )
 
 type Discovery struct {
@@ -237,9 +240,17 @@ type Sandbox struct {
 }
 
 type SendMessageRequest struct {
-	RefreshSkills bool   `json:"refresh_skills,omitempty"`
-	Text          string `json:"text"`
-	Intent        string `json:"intent,omitempty"`
+	RefreshSkills bool                    `json:"refresh_skills,omitempty"`
+	Text          string                  `json:"text"`
+	Intent        string                  `json:"intent,omitempty"`
+	Attachments   []SendMessageAttachment `json:"-"`
+}
+
+// SendMessageAttachment is one caller-supplied filename and byte body. The
+// server derives media type, image kind, digest, and size before Core sees it.
+type SendMessageAttachment struct {
+	Filename string
+	Contents []byte
 }
 
 // Message projects one accepted delivery without exposing its Harness Thread,

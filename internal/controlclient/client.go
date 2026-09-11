@@ -11,16 +11,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/aphronio/dorf/internal/clientconfig"
 	"github.com/aphronio/dorf/internal/controlapi"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/hostclientconfig"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
 // A valid 1 MiB goal can occupy more than 6 MiB after JSON escaping.
@@ -279,8 +284,64 @@ func (c *Client) SendMessage(ctx context.Context, jobID, key string, input contr
 		return controlapi.Message{}, fmt.Errorf("Idempotency-Key is empty")
 	}
 	var response controlapi.Message
-	err := c.do(ctx, http.MethodPost, []string{"v1", "jobs", jobID, "messages"}, input, true, key, &response)
+	if len(input.Attachments) == 0 {
+		err := c.do(ctx, http.MethodPost, []string{"v1", "jobs", jobID, "messages"}, input, true, key, &response)
+		return response, err
+	}
+	body, contentType, err := encodeMessageMultipart(input)
+	if err != nil {
+		return controlapi.Message{}, err
+	}
+	err = c.doBody(ctx, http.MethodPost, []string{"v1", "jobs", jobID, "messages"}, body, contentType, true, key, &response)
 	return response, err
+}
+
+func encodeMessageMultipart(input controlapi.SendMessageRequest) ([]byte, string, error) {
+	if len(input.Attachments) > core.MaxMessageAttachments || len(input.Text) > core.MaxMessageInputBytes {
+		return nil, "", fmt.Errorf("Message exceeds the input limits")
+	}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("text", input.Text); err != nil {
+		return nil, "", fmt.Errorf("encode Message text")
+	}
+	if input.Intent != "" {
+		if err := writer.WriteField("intent", input.Intent); err != nil {
+			return nil, "", fmt.Errorf("encode Message intent")
+		}
+	}
+	if input.RefreshSkills {
+		if err := writer.WriteField("refresh_skills", "true"); err != nil {
+			return nil, "", fmt.Errorf("encode Message skill refresh")
+		}
+	}
+	for _, attachment := range input.Attachments {
+		if err := writeMessageAttachment(writer, attachment); err != nil {
+			return nil, "", err
+		}
+	}
+	if err := writer.Close(); err != nil {
+		return nil, "", fmt.Errorf("encode Message multipart body")
+	}
+	return body.Bytes(), writer.FormDataContentType(), nil
+}
+
+func writeMessageAttachment(writer *multipart.Writer, attachment controlapi.SendMessageAttachment) error {
+	if !utf8.ValidString(attachment.Filename) || strings.TrimSpace(attachment.Filename) == "" || strings.IndexFunc(attachment.Filename, unicode.IsControl) >= 0 ||
+		utf8.RuneCountInString(attachment.Filename) > core.MaxMessageAttachmentFilenameLength {
+		return fmt.Errorf("Message attachment filename is invalid")
+	}
+	if len(attachment.Contents) > provider.MaxFileWriteBytes {
+		return fmt.Errorf("Message attachment exceeds the byte limit")
+	}
+	part, err := writer.CreateFormFile("attachment", attachment.Filename)
+	if err != nil {
+		return fmt.Errorf("encode Message attachment")
+	}
+	if _, err := part.Write(attachment.Contents); err != nil {
+		return fmt.Errorf("encode Message attachment")
+	}
+	return nil
 }
 
 // Message retrieves one durable Message receipt and its current delivery state.
@@ -419,6 +480,18 @@ func (c *Client) do(ctx context.Context, method string, path []string, input any
 	return asServiceError(decodeJSONResponse(response, output))
 }
 
+func (c *Client) doBody(ctx context.Context, method string, path []string, body []byte, contentType string, authenticated bool, key string, output any) error {
+	request, err := c.requestBody(ctx, method, path, bytes.NewReader(body), contentType, authenticated, key)
+	if err != nil {
+		return err
+	}
+	response, err := send(c.http, request)
+	if err != nil {
+		return asServiceError(err)
+	}
+	return asServiceError(decodeJSONResponse(response, output))
+}
+
 func (c *Client) request(ctx context.Context, method string, path []string, input any, authenticated bool, key string) (*http.Request, error) {
 	var body io.Reader
 	if input != nil {
@@ -428,13 +501,21 @@ func (c *Client) request(ctx context.Context, method string, path []string, inpu
 		}
 		body = bytes.NewReader(encoded)
 	}
+	contentType := ""
+	if input != nil {
+		contentType = "application/json"
+	}
+	return c.requestBody(ctx, method, path, body, contentType, authenticated, key)
+}
+
+func (c *Client) requestBody(ctx context.Context, method string, path []string, body io.Reader, contentType string, authenticated bool, key string) (*http.Request, error) {
 	request, err := http.NewRequestWithContext(ctx, method, c.endpoint(path), body)
 	if err != nil {
 		return nil, fmt.Errorf("create Dorf API request")
 	}
 	request.Header.Set("Accept", "application/json, application/problem+json")
-	if input != nil {
-		request.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		request.Header.Set("Content-Type", contentType)
 	}
 	if authenticated {
 		request.Header.Set("Authorization", "Bearer "+c.credential)

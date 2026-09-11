@@ -66,7 +66,7 @@ func TestObservationsRetainExactTurnAfterSubmissionReturns(t *testing.T) {
 			t.Fatal(err)
 		}
 		p := &protocol{connection: conn, observations: observations, execution: core.AgentRun{ID: runID, JobID: "job", MessageID: "message-" + runID}}
-		turn, err := p.startTurn(context.Background(), "thread", "/tmp", runID, "same prompt", "model", "high", "danger-full-access")
+		turn, err := p.startTurn(context.Background(), "thread", "/tmp", runID, core.HarnessInput{Text: "same prompt"}, "model", "high", "danger-full-access")
 		if err != nil {
 			t.Fatal(err)
 		}
