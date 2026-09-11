@@ -13,6 +13,8 @@ readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 readonly OUTPUT_DIR="${OUTPUT_DIR:-$PROJECT_ROOT/dist/incus-image}"
 readonly CANDIDATE_NETWORK="${NETWORK:-incusbr0}"
+readonly PROOF_PROFILE="${PROOF_PROFILE:?Set PROOF_PROFILE to a verified Incus profile on the proof deployment}"
+readonly HOST_COMMAND="${DORF_HOST_COMMAND:-}"
 readonly CANDIDATE_ROOT_DISK_SIZE="${ROOT_DISK_SIZE:-40GiB}"
 readonly SOURCE_COMMIT="${SOURCE_COMMIT:-$(git -C "$PROJECT_ROOT" rev-parse HEAD)}"
 readonly BUILD_ID="$(date -u +%Y%m%d%H%M%S)"
@@ -37,30 +39,30 @@ if [[ -z "${DORF_DATABASE_URL:-}" ]]; then
   exit 2
 fi
 
-drive_job_until() {
-  local job_id="$1"
-  local predicate="$2"
-  local description="$3"
-  local deadline=$((SECONDS + 3600))
-  local inspection=""
+dorf_host() {
+  if [[ -n "$HOST_COMMAND" ]]; then
+    "$HOST_COMMAND" "$@"
+  else
+    "$BINARY" "$@"
+  fi
+}
 
+wait_for_cleanup() {
+  local deadline=$((SECONDS + 600))
   while ((SECONDS < deadline)); do
-    "$BINARY" worker --once >/dev/null
-    inspection="$("$BINARY" inspect --json "$job_id")"
-    if jq -e "$predicate" <<<"$inspection" >/dev/null; then
-      printf '%s\n' "$inspection"
+    if "$BINARY" job inspect --output json "$JOB_ID" | jq -e '.job.cleanup.state == "complete"' >/dev/null; then
       return
     fi
-    sleep 1
+    sleep 2
   done
-  echo "Timed out waiting for $description on Job $job_id." >&2
+  echo "Timed out waiting for cleanup on Job $JOB_ID." >&2
   return 1
 }
 
 cleanup() {
   if [[ -n "$JOB_ID" ]]; then
-    "$BINARY" cleanup "$JOB_ID" >/dev/null 2>&1 || true
-    drive_job_until "$JOB_ID" '.job.cleanup_state == "complete"' "cleanup" >/dev/null 2>&1 || true
+    "$BINARY" job cleanup "$JOB_ID" >/dev/null 2>&1 || true
+    wait_for_cleanup >/dev/null 2>&1 || true
   fi
   if [[ "$EVIDENCE_POLICY" == "remove" ]]; then
     rm -rf -- "$EVIDENCE_DIR"
@@ -116,69 +118,57 @@ if [[ ! "$CANDIDATE_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]; then
 fi
 
 mkdir -p "$EVIDENCE_DIR"
+base_profile="$(dorf_host profile show "$PROOF_PROFILE")"
+jq -e '.provider == "incus" and .verified == true' <<<"$base_profile" >/dev/null
+proof_project="$(jq -er .incus_project <<<"$base_profile")"
+incus image copy "local:$CANDIDATE_FINGERPRINT" local: --target-project "$proof_project"
 
 prove_harness() {
   local harness="$1"
-  local profile_name="release-$harness"
+  local profile_name="release-$harness-$BUILD_ID"
   local goal_file="$PROOF_ROOT/$harness-goal.txt"
-  local admission inspection
-  if "$BINARY" profile show "$profile_name" >/dev/null 2>&1; then
-    "$BINARY" profile update "$profile_name" \
-      --sandbox-provider incus --image "$CANDIDATE_ALIAS" --network "$CANDIDATE_NETWORK" \
-      --disk-size "$CANDIDATE_ROOT_DISK_SIZE" --harness "$harness"
-  else
-    "$BINARY" profile create "$profile_name" \
-      --sandbox-provider incus --image "$CANDIDATE_ALIAS" --network "$CANDIDATE_NETWORK" \
-      --disk-size "$CANDIDATE_ROOT_DISK_SIZE" --harness "$harness"
-  fi
-  "$BINARY" profile verify "$profile_name"
-  "$BINARY" doctor --ai-connection "$AI_CONNECTION" --profile "$profile_name"
+  local admission message_id message inspection deadline
+  dorf_host profile create "$profile_name" \
+    --sandbox-provider incus --image "$CANDIDATE_FINGERPRINT" --harness "$harness" \
+    --project "$proof_project" \
+    --storage-pool "$(jq -er .incus_storage_pool <<<"$base_profile")" \
+    --network "$(jq -er .incus_network <<<"$base_profile")" \
+    --disk-size "$(jq -er .incus_disk_size <<<"$base_profile")" \
+    --gateway-url "$(jq -er .incus_gateway_url <<<"$base_profile")"
+  dorf_host profile verify "$profile_name"
   printf '%s\n' \
-    'Inspect the cloned repository without modifying it. Report the exact Git Revision, Debian release, and installed Codex, Pi, Git, Go, Python, Node, and uv versions. Keep the response concise.' \
+    'Inspect the cloned repository without modifying it. Report the exact Git Revision, Debian release, and installed Codex, Pi, Git, Go, Python, Node, and uv versions.' \
+    'Then use the installed browser-use CLI with its existing isolated browser. Read /root/.codex/skills/browser-use/SKILL.md. Navigate to https://example.com and click Learn more using browser-use. Report the resulting URL and title. Do not install or configure any browser tools. Do not modify repository files or make commits.' \
     >"$goal_file"
-  admission="$($BINARY admit \
+  admission="$("$BINARY" workflow run coding \
     --key "image-proof:$harness:$BUILD_ID:$CANDIDATE_FINGERPRINT" \
-    --goal-file "$goal_file" \
+    --input-file "$goal_file" \
     --repo https://github.com/aphronio/dorf.git \
     --revision "$SOURCE_COMMIT" \
     --branch "dorf/image-proof-$harness-$BUILD_ID" \
     --base "${BASE_BRANCH:-main}" \
     --ai-connection "$AI_CONNECTION" \
     --profile "$profile_name" \
-    --model gpt-6-astra \
-    --reasoning low)"
-  JOB_ID="$(jq -er .job_id <<<"$admission")"
-  inspection="$(drive_job_until "$JOB_ID" '.observed_facts.agent_runs | any(.message_id != null and .turn_outcome != null)' "$harness turn")"
-  jq -e --arg harness "$harness" '.observed_facts.agent_runs | map(select(.harness == $harness and (.thread_id | length > 0) and .turn_outcome == "completed" and (.turn_id | length > 0))) | length == 1' <<<"$inspection" >/dev/null
-  jq -e --arg source "$SOURCE_COMMIT" '
-    (.observed_facts.messages | map(select(.sequence == 1)) | .[0].id) as $message_id |
-    (.observed_facts.agent_runs | map(select(.message_id == $message_id)) | .[0].id) as $agent_run_id |
-    .job.revision == $source and
-    (.observed_facts.revisions | length == 1) and
-    (.observed_facts.revisions[0].oid == $source and .observed_facts.revisions[0].generation == 0) and
-    (.observed_facts.evidence | any(
-      .kind == "git-revision" and
-      .agent_run_id == $agent_run_id and
-      .revision == $source and
-      (.started_at | length > 0) and
-      (.finished_at | length > 0)
-    )) and
-    ([.observed_facts.agent_runs[] | select(.role != "implement")] | length == 0) and
-    .proposal == null
-  ' <<<"$inspection" >/dev/null
-
-  "$BINARY" cleanup "$JOB_ID"
-  inspection="$(drive_job_until "$JOB_ID" '.job.cleanup_state == "complete"' "$harness cleanup")"
-  jq -e '.job.cleanup_state == "complete"' <<<"$inspection" >/dev/null
-  jq -n \
-    --arg harness "$harness" \
-    --arg image "$CANDIDATE_ALIAS" \
-    --arg fingerprint "$CANDIDATE_FINGERPRINT" \
-    --arg source "$SOURCE_COMMIT" \
-    --arg provider "$AI_CONNECTION" \
-    --arg job "$JOB_ID" \
-    '{schema_version:4,harness:$harness,image:{alias:$image,fingerprint:$fingerprint},source_commit:$source,provider_connection:$provider,job_id:$job,proof_scope:"one real no-change implementation AgentRun",observed:{implementation_agent_run:"completed",revision_history:"one initial Revision at generation 0",git_revision_evidence:"exact unchanged source Revision owned by the AgentRun",repository_commit_action:"absent; the AgentRun owns commits",workflow_result:"Message handled without a committed change; derived from Evidence",review:"not run or claimed",publication:"not run or claimed"},execution:"Go durable Core",cleanup_state:"complete"}' \
-    >"$EVIDENCE_DIR/$harness-image-proof.json"
+    --model "${PROOF_MODEL:-gpt-5.6-sol}" --reasoning low --output json)"
+  JOB_ID="$(jq -er .job.id <<<"$admission")"
+  message_id="$(jq -er .message.id <<<"$admission")"
+  deadline=$((SECONDS + 3600))
+  while ((SECONDS < deadline)); do
+    message="$("$BINARY" job message inspect --output json "$JOB_ID" "$message_id")"
+    if jq -e '.result != null or .attention != null' <<<"$message" >/dev/null; then
+      break
+    fi
+    sleep 2
+  done
+  printf '%s\n' "$message" >"$EVIDENCE_DIR/$harness-message.json"
+  jq -e '.result.outcome == "completed" and (.result.output | contains("https://www.iana.org/help/example-domains")) and (.result.output | contains("Example Domains"))' <<<"$message" >/dev/null
+  inspection="$("$BINARY" job inspect --output json "$JOB_ID")"
+  jq -e --arg source "$SOURCE_COMMIT" '.job.revision == $source and .job.proposal == null' <<<"$inspection" >/dev/null
+  "$BINARY" job evidence --output json "$JOB_ID" >"$EVIDENCE_DIR/$harness-evidence.json"
+  jq -e --arg source "$SOURCE_COMMIT" '.evidence | any(.kind == "git-revision" and .revision == $source)' "$EVIDENCE_DIR/$harness-evidence.json" >/dev/null
+  "$BINARY" job cleanup "$JOB_ID"
+  wait_for_cleanup
+  "$BINARY" job inspect --output json "$JOB_ID" >"$EVIDENCE_DIR/$harness-image-proof.json"
   JOB_ID=""
 }
 

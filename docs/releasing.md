@@ -49,7 +49,18 @@ release, verifies the signed immutable release and every uploaded asset, and onl
 to `latest`. A failed verification leaves the prior latest release unchanged.
 
 The hosted workflow accepts only a reused, already proven Incus image pin. When the pin advances,
-publication remains local: set `AI_CONNECTION`, ensure the configured GitHub integration covers the
-source repository, and run `scripts/release.sh --publish` so the authority performs the real Codex
-and Pi image proof before publication. Provider credentials do not move to hosted Actions. Do not
+publication remains local: set `AI_CONNECTION` and `PROOF_PROFILE` to a ready connection and verified
+Incus profile, ensure the configured GitHub integration covers the source repository, and run
+`scripts/release.sh --publish`. The local CLI must be connected to that deployment's Control API.
+The local Incus endpoint must be the profile's endpoint; the authority copies the candidate into
+the profile's project and creates separate temporary proof profiles. When the deployment host is
+remote, set `DORF_HOST_COMMAND` to an executable wrapper that forwards its arguments to `dorf` on
+that host. Profile creation and verification use this wrapper; Job operations use the connected
+local CLI and the deployment's running worker. `PROOF_MODEL` optionally overrides the proof model.
+
+The authority requires real Codex and Pi no-change coding turns, unchanged Revision Evidence,
+browser navigation through the preinstalled CLI, and completed Sandbox cleanup before publication.
+Browser packages and Chromium live in the Incus-specific recipe; the shared E2B guest recipe is
+unchanged. Image metadata records the browser package, Python, Playwright, and Chromium versions.
+Provider credentials do not move to hosted Actions. Do not
 bypass the repository command for either path.

@@ -48,6 +48,14 @@ prepare missing host prerequisites; follow the
 for the exact administrator-helper or manual handoff.
 
 E2B requires an exact qualified template and a stable deployment-owned HTTPS Provider Gateway route.
+The official Incus image includes pinned `browser-use` and headless Chromium, with the browser-use
+skill installed for Codex. The same CLI is available to Pi. Each Sandbox boots its own fresh browser
+profile and exposes CDP only at `127.0.0.1:9222` inside the VM. Browser state survives subsequent
+Messages in that Sandbox. Local browser recordings are enabled; `browser-use recordings disable`
+turns them off for that Sandbox. Cleanup removes the browser profile and recordings with the VM.
+This capability does not use the operator's desktop browser or a browser cloud service. Existing
+E2B templates do not gain it when the Incus image changes.
+
 Guided setup routes the model hostname through the same named Cloudflare Tunnel as the separate
 Control API hostname; any operator-owned route satisfying the exact HTTPS `/v1` Gateway contract is
 also valid. The [deployment-host procedure](getting-started.md#1-install-the-application-initialize-a-deployment-host)

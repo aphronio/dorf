@@ -116,9 +116,9 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D056: Jobs own Sandbox lifetimes and Sandboxes identify Provider Routes](decisions/D056-jobs-own-sandbox-lifetimes-and-sandboxes-identify-provider-routes.md) (`current`). Changing Sandbox ownership, Provider Route identity, or Job cleanup custody.
 - [D057: Ordinary external Actions target one exact Sandbox](decisions/D057-ordinary-external-actions-target-one-exact-sandbox.md) (`current`). Changing the scope or reconciliation of ordinary Sandbox-related external Actions.
 - [D058: Action success is the external lifecycle authority](decisions/D058-action-success-is-the-external-lifecycle-authority.md) (`current`). Changing how Sandbox or Provider Route lifecycle state is represented and recovered.
-- [D064: Debian 13 is the shared supported-toolchain Sandbox baseline](decisions/D064-debian-13-is-the-shared-supported-toolchain-sandbox-baseline.md) (`current`). Changing the supported Sandbox guest baseline, shared toolchain contents, or image construction integrity.
+- [D064: Debian 13 is the shared supported-toolchain Sandbox baseline](decisions/D064-debian-13-is-the-shared-supported-toolchain-sandbox-baseline.md) (`partial`). Changing the supported Sandbox guest baseline, shared toolchain contents, or image construction integrity.
 - [D065: Pi is the second Harness and reuses Dorf's scoped Provider Gateway](decisions/D065-pi-is-the-second-harness-and-reuses-dorf-s-scoped-provider-gateway.md) (`current`). Changing Pi integration, native session recovery, or scoped Provider Gateway custody.
-- [D066: One credential-free image carries both verified Harnesses](decisions/D066-one-credential-free-image-carries-both-verified-harnesses.md) (`current`). Changing combined Harness image packaging, promotion proof, or credential-free artifact contents.
+- [D066: One credential-free image carries both verified Harnesses](decisions/D066-one-credential-free-image-carries-both-verified-harnesses.md) (`partial`). Changing combined Harness image packaging, promotion proof, or credential-free artifact contents.
 - [D067: E2B is the next Sandbox portability proof target](decisions/D067-e2b-is-the-next-sandbox-portability-proof-target.md) (`current`). Changing the E2B adapter, provider-neutral Sandbox contract, or second-provider deployment proof.
 - [D070: Named Sandbox profiles pin exact artifacts and require Dorf verification](decisions/D070-named-sandbox-profiles-pin-exact-artifacts-and-require-dorf-verification.md) (`partial`). Changing named Sandbox profile definitions, selection, verification, or provider artifact custody.
 - [D083: Git and coding behavior are workflow modules, not Core](decisions/D083-git-and-coding-behavior-are-workflow-modules-not-core.md) (`partial`). Changing ownership of Git workspace or coding behavior across Core and workflow modules.
@@ -127,6 +127,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D092: Investigation reports remain Sandbox files](decisions/D092-investigation-reports-remain-sandbox-files.md) (`current`). Changing how investigation reports are produced, accessed, or retained.
 - [D101: Compose owns deployment lifecycle; bootstrap privilege stays explicit](decisions/D101-compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit.md) (`current`). Changing Compose topology, setup-applied lifecycle, bootstrap, or release images.
 - [D106: Remove unused workflow capability declarations](decisions/D106-remove-unused-workflow-capability-declarations.md) (`current`). Adding optional provider requirements or workflow runtime metadata.
+- [D114: Incus guests include an isolated browser](decisions/D114-incus-guests-include-an-isolated-browser.md) (`current`). Changing browser tooling, guest browser persistence, or Incus image proof.
 
 ## Harnesses
 
@@ -136,15 +137,16 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D050: Implementation AgentRuns own commits](decisions/D050-implementation-agentruns-own-commits.md) (`current`). Changing commit ownership or Revision handoff for implementation AgentRuns.
 - [D052: Feedback is a Message to the implementation AgentRun path](decisions/D052-feedback-is-a-message-to-the-implementation-agentrun-path.md) (`current`). Changing how human, check, workflow, or reviewer feedback reaches AgentRuns.
 - [D055: AgentRun owns its harness execution binding](decisions/D055-agentrun-owns-its-harness-execution-binding.md) (`partial`). Changing AgentRun ownership of Message delivery, Harness threads, turns, or execution recovery.
-- [D064: Debian 13 is the shared supported-toolchain Sandbox baseline](decisions/D064-debian-13-is-the-shared-supported-toolchain-sandbox-baseline.md) (`current`). Changing the supported Sandbox guest baseline, shared toolchain contents, or image construction integrity.
+- [D064: Debian 13 is the shared supported-toolchain Sandbox baseline](decisions/D064-debian-13-is-the-shared-supported-toolchain-sandbox-baseline.md) (`partial`). Changing the supported Sandbox guest baseline, shared toolchain contents, or image construction integrity.
 - [D065: Pi is the second Harness and reuses Dorf's scoped Provider Gateway](decisions/D065-pi-is-the-second-harness-and-reuses-dorf-s-scoped-provider-gateway.md) (`current`). Changing Pi integration, native session recovery, or scoped Provider Gateway custody.
-- [D066: One credential-free image carries both verified Harnesses](decisions/D066-one-credential-free-image-carries-both-verified-harnesses.md) (`current`). Changing combined Harness image packaging, promotion proof, or credential-free artifact contents.
+- [D066: One credential-free image carries both verified Harnesses](decisions/D066-one-credential-free-image-carries-both-verified-harnesses.md) (`partial`). Changing combined Harness image packaging, promotion proof, or credential-free artifact contents.
 - [D067: E2B is the next Sandbox portability proof target](decisions/D067-e2b-is-the-next-sandbox-portability-proof-target.md) (`current`). Changing the E2B adapter, provider-neutral Sandbox contract, or second-provider deployment proof.
 - [D070: Named Sandbox profiles pin exact artifacts and require Dorf verification](decisions/D070-named-sandbox-profiles-pin-exact-artifacts-and-require-dorf-verification.md) (`partial`). Changing named Sandbox profile definitions, selection, verification, or provider artifact custody.
 - [D074: Investigation drafts wait for exact human disposition](decisions/D074-investigation-drafts-wait-for-exact-human-disposition.md) (`partial`). Changing investigation draft revision loops, Harness Thread reuse, or disposition policy.
 - [D090: Open Jobs may have no current workflow operation](decisions/D090-open-jobs-may-have-no-current-workflow-operation.md) (`current`). Changing how an open Job waits when no workflow operation is eligible.
 - [D091: Profile verification gates admission, not admitted runtime](decisions/D091-profile-verification-gates-admission-not-admitted-runtime.md) (`current`). Changing profile verification, concurrent admission, or admitted runtime resolution.
 - [D109: Export diagnostics through the existing native Turn binding](decisions/D109-exact-turn-execution-diagnostics.md) (`current`). Changing native execution diagnostics, attribution, or exporter custody.
+- [D114: Incus guests include an isolated browser](decisions/D114-incus-guests-include-an-isolated-browser.md) (`current`). Changing browser tooling, guest browser persistence, or Incus image proof.
 
 ## Model access
 
@@ -240,10 +242,11 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D032: One durable Buzz instance is the main personal deployment](decisions/D032-one-durable-buzz-instance-is-the-main-personal-deployment.md) (`current`). Changing the durable Buzz deployment, upgrade process, backup posture, or environment strategy.
 - [D038: Official Sandbox images are immutable GitHub Release assets](decisions/D038-official-sandbox-images-are-immutable-github-release-assets.md) (`partial`). Changing how official Sandbox images are built, promoted, verified, or distributed.
 - [D040: Rename the product and complete namespace to Dorf](decisions/D040-rename-the-product-and-complete-namespace-to-dorf.md) (`partial`). Changing the Dorf name, command, namespace, configuration paths, or artifact identity.
-- [D064: Debian 13 is the shared supported-toolchain Sandbox baseline](decisions/D064-debian-13-is-the-shared-supported-toolchain-sandbox-baseline.md) (`current`). Changing the supported Sandbox guest baseline, shared toolchain contents, or image construction integrity.
-- [D066: One credential-free image carries both verified Harnesses](decisions/D066-one-credential-free-image-carries-both-verified-harnesses.md) (`current`). Changing combined Harness image packaging, promotion proof, or credential-free artifact contents.
+- [D064: Debian 13 is the shared supported-toolchain Sandbox baseline](decisions/D064-debian-13-is-the-shared-supported-toolchain-sandbox-baseline.md) (`partial`). Changing the supported Sandbox guest baseline, shared toolchain contents, or image construction integrity.
+- [D066: One credential-free image carries both verified Harnesses](decisions/D066-one-credential-free-image-carries-both-verified-harnesses.md) (`partial`). Changing combined Harness image packaging, promotion proof, or credential-free artifact contents.
 - [D094: Published PostgreSQL migrations are immutable and append-only](decisions/D094-published-postgresql-migrations-are-immutable-and-append-only.md) (`current`). Changing a published PostgreSQL schema or the migration runner.
 - [D101: Compose owns deployment lifecycle; bootstrap privilege stays explicit](decisions/D101-compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit.md) (`current`). Changing Compose topology, setup-applied lifecycle, bootstrap, or release images.
+- [D114: Incus guests include an isolated browser](decisions/D114-incus-guests-include-an-isolated-browser.md) (`current`). Changing browser tooling, guest browser persistence, or Incus image proof.
 
 ## Historical decisions
 

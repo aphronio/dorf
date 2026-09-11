@@ -45,6 +45,9 @@ incus exec "$BUILD_VM" -- env \
   "DORF_BASE_FINGERPRINT=$BASE_FINGERPRINT" \
   /tmp/provision-dorf-guest.sh
 incus exec "$BUILD_VM" -- rm -f /tmp/provision-dorf-guest.sh
+incus file push "$SCRIPT_DIR/provision-browser.sh" "$BUILD_VM/tmp/provision-browser.sh"
+incus exec "$BUILD_VM" -- bash /tmp/provision-browser.sh
+incus exec "$BUILD_VM" -- rm -f /tmp/provision-browser.sh
 
 CODEX_VERSION="$(incus exec "$BUILD_VM" -- jq -r .harnesses.codex.version /usr/local/share/dorf/image.json)"
 PI_VERSION="$(incus exec "$BUILD_VM" -- jq -r .harnesses.pi.version /usr/local/share/dorf/image.json)"

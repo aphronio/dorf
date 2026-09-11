@@ -6,6 +6,7 @@ readonly PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 readonly DESCRIPTOR="$PROJECT_ROOT/internal/release/official_image.json"
 readonly INPUTS=(
   scripts/incus/build-dorf-image.sh
+  scripts/incus/provision-browser.sh
   scripts/sandbox/provision-dorf-guest.sh
 )
 

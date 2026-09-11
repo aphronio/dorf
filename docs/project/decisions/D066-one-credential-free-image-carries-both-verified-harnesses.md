@@ -1,9 +1,9 @@
 # D066: One credential-free image carries both verified Harnesses
 
-- **Applicability:** current
+- **Applicability:** partial
 - **Areas:** release, harnesses, sandboxes
 - **Read when:** Changing combined Harness image packaging, promotion proof, or credential-free artifact contents.
-- **Decision history:** Accepted and proven by the immutable v0.2.0 release — 2026-08-14
+- **Decision history:** Accepted and proven by the immutable v0.2.0 release — 2026-08-14; browser contents and current API proof refined by D114 — 2026-09-11
 - **Decision:** Publish one Debian 13 Incus image containing exact Codex and Pi npm packages over the
   shared workstation baseline. `DORF_HARNESS` selects one runtime adapter; it does not select another
   image. The image contains no Harness authentication, Provider Route key, session, or configuration.
