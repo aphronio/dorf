@@ -1,9 +1,10 @@
 # D103: Every ordinary CLI Job operation uses the authenticated control API
 
-- **Applicability:** current
+- **Applicability:** partial
 - **Areas:** client-api, interaction, deployment
 - **Read when:** Changing how CLI Job operations reach deployment authority.
-- **Decision history:** Accepted implementation direction — 2026-08-27
+- **Decision history:** Accepted implementation direction — 2026-08-27; Message attachment blob
+  custody refined by D118 — 2026-09-11
 - **Decision:** The deployment-host CLI and remote CLI use the same authenticated control API for
   Job admission, listing, inspection, watch, Messages, retry, Evidence, exact Sandbox file reads,
   coding abandonment, and cleanup. Host administration remains local. The CLI does not reopen
@@ -32,6 +33,9 @@
   snapshot watch. Do not replace the deleted local history renderer with an event API. Delete local
   source admission, storage, restoration, and tests. Do not add host roles, source upload, API blob
   writes, or a private route.
+- **Later refinement:** D118 permits bounded blob writes during authenticated Message attachment
+  admission. Ordinary CLI operations still use the Control API, and generic source upload remains
+  outside this contract.
 - **API failure:** A stopped or unhealthy control API is deployment-service work. Job commands fail
   with setup, doctor, and Compose repair guidance. They never use direct storage as a break-glass
   mutation path.

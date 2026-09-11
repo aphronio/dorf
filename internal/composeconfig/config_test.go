@@ -145,7 +145,7 @@ func TestMaterializeReportsOnlyGeneratedStateChangesAndLoadImageUsesEnv(t *testi
 	if err != nil || !changed {
 		t.Fatalf("first materialize changed=%t err=%v", changed, err)
 	}
-	for _, path := range []string{directory, spec.ConfigDir, spec.DataDir, spec.StateDir} {
+	for _, path := range []string{directory, spec.ConfigDir, spec.DataDir, spec.StateDir, filepath.Join(spec.StateDir, "blobs")} {
 		info, err := os.Lstat(path)
 		if err != nil || !owned(info, spec.UID, spec.GID, 0o700|os.ModeDir) {
 			t.Errorf("protected directory %s mode=%v err=%v", path, infoMode(info), err)
@@ -333,6 +333,35 @@ func TestStaticComposeManifestKeepsThePublicTopologyAndCapabilityBoundary(t *tes
 		if strings.Contains(string(contents), forbidden) {
 			t.Errorf("base manifest contains forbidden authority %q", forbidden)
 		}
+	}
+}
+
+func TestControlAPICanWriteOnlyItsSharedBlobDirectory(t *testing.T) {
+	document := readYAMLMap(t, filepath.Join("..", "..", SourceBaseComposeFile))
+	api := serviceMap(t, yamlMap(t, document, "services"), "control-api")
+	if api["read_only"] != true {
+		t.Fatal("Control API root filesystem must remain read-only")
+	}
+	want := map[string]bool{
+		"/var/lib/dorf/.local/state/dorf":       true,
+		"/var/lib/dorf/.local/state/dorf/blobs": false,
+	}
+	volumes, ok := api["volumes"].([]any)
+	if !ok || len(volumes) != len(want) {
+		t.Fatalf("Control API requires protected state and a writable shared blob directory: %v", api["volumes"])
+	}
+	for _, value := range volumes {
+		volume := value.(map[string]any)
+		target, _ := volume["target"].(string)
+		readOnly, found := want[target]
+		if !found || (volume["read_only"] == true) != readOnly {
+			t.Fatalf("unexpected Control API storage authority: %v", volume)
+		}
+		source := "${DORF_STATE_DIR}" + strings.TrimPrefix(target, "/var/lib/dorf/.local/state/dorf")
+		if volume["source"] != source {
+			t.Fatalf("Control API storage must share worker state: %v", volume)
+		}
+		delete(want, target)
 	}
 }
 

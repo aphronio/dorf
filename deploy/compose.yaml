@@ -140,6 +140,11 @@ services:
         read_only: true
         bind:
           create_host_path: false
+      - type: bind
+        source: "${DORF_STATE_DIR}/blobs"
+        target: /var/lib/dorf/.local/state/dorf/blobs
+        bind:
+          create_host_path: false
     depends_on:
       migrate:
         condition: service_completed_successfully

@@ -201,7 +201,10 @@ Sandbox       -> HTTPS model origin -> Provider Gateway
 ```
 
 The API receives its database URL, read-only API state, and an independently derived reader token
-through the protected Compose environment. It receives no Incus socket or identity, E2B key,
+through the protected Compose environment. The shared `state/blobs` subdirectory has a separate
+writable bind mount so Message admission can retain attachments. Setup creates and attests that
+directory before Compose starts; the rest of API state remains read-only. It receives no Incus
+socket or identity, E2B key,
 GitHub credential, Gateway state, or provider configuration. The worker's narrow reader answers
 only default and named AI-connection observation, GitHub installation discovery, one exact stored
 Job Proposal observation, exact Job-owned Sandbox file reads and bounded Sandbox file writes, and one

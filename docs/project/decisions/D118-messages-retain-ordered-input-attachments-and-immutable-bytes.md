@@ -14,6 +14,9 @@
   Harness through its native image input. Sandbox cleanup removes these working copies but leaves
   the durable Message and blobs available for exact receipt replay. A replay after cleanup does not
   create or wake work.
+- **Deployment:** The Control API and worker share the existing blob directory. Compose grants
+  the API write access only to the `state/blobs` subdirectory while retaining its read-only root
+  filesystem and read-only parent state mount. Setup prepares that bind source before startup.
 - **Admission boundary:** Clients send files by value and do not supply hashes, sizes, ordinals, or
   URLs. The HTTP boundary bounds and validates the bytes before Core sees them. It rejects an image
   when the selected profile lacks native image support. Generic files remain available through the
@@ -24,8 +27,10 @@
   slice adds no upload resource, attachment task, or garbage-collection lifecycle. A rejected
   admission may leave an unreferenced content-addressed blob after publication and before the SQL
   transaction. Request authentication and byte limits bound that tradeoff.
-- **Refines:** D088's Message custody contract and D089's statement that only Evidence uses the blob
-  store. It preserves D096's follow and steer semantics, D107's task attachment rules, and D110's
+- **Refines:** D088's Message custody contract, D089's statement that only Evidence uses the blob
+  store, and D103's exclusion of API blob writes. Message attachment admission earns that bounded
+  write authority; it adds no source-upload or generic blob API. It preserves D096's follow and
+  steer semantics, D107's task attachment rules, and D110's
   separation of Job setup from Message delivery.
 - **Proof:** PostgreSQL coverage preserves exact ordered manifests across reload, replay, and
   completed cleanup. Control API coverage sends attachment-only multipart input and detects changed
