@@ -798,7 +798,7 @@ func (g Gateway) writeBrokerConfig(bind string, allowRemote bool) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	lines := []string{fmt.Sprintf("host: %q", bind), fmt.Sprintf("port: %d", defaultPort), fmt.Sprintf("auth-dir: %q", filepath.Join(g.StatePath, "auth")), "force-model-prefix: true", "api-keys:", fmt.Sprintf("  - %q", auth.GuardKey)}
+	lines := []string{fmt.Sprintf("host: %q", bind), fmt.Sprintf("port: %d", defaultPort), fmt.Sprintf("auth-dir: %q", filepath.Join(g.StatePath, "auth")), "force-model-prefix: true", "transient-error-cooldown-seconds: -1", "api-keys:", fmt.Sprintf("  - %q", auth.GuardKey)}
 	for _, route := range routes {
 		lines = append(lines, fmt.Sprintf("  - %q", route.APIKey))
 	}

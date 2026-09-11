@@ -53,6 +53,11 @@ not start the broker, repair ingress, infer a private route, or create an Infere
 
 ## Security and recovery
 
+Codex owns bounded inference retries and retains completed tool results during recovery. The
+Gateway keeps a connection eligible after transient upstream failures so those retries can reach
+upstream within the same native Turn. Authentication and quota failures retain their
+Gateway cooldowns.
+
 - Upstream authentication and Gateway management state stay in protected host storage.
 - Dorf attests the broker executable and its launch inputs. The running broker owns its mutable
   active configuration.
