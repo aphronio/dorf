@@ -120,6 +120,9 @@ no-runtime-inference rule. A remote Incus Profile requires the stable HTTPS Gate
 in this procedure. There is no migration or adoption path for an earlier Profile shape; create and
 verify a current Profile.
 
+New Dorf Incus VMs receive 4 vCPUs and 8 GiB RAM. Dorf does not resize existing VMs when it
+reconnects to them. Guided setup provisions a 40 GiB root disk.
+
 ### Prepare a remote Incus workstation
 
 Use this path when the Dorf deployment host cannot run KVM and an owner-controlled x86_64 Linux

@@ -83,10 +83,13 @@ func (s Sandbox) ReconcileOwnedCreate(ctx context.Context, metadata OwnershipMet
 
 	instance, err := client.Instance(ctx, metadata.SandboxID)
 	if errors.Is(err, ErrNotFound) {
+		config := ownershipConfig(metadata)
+		config["limits.cpu"] = "4"
+		config["limits.memory"] = "8GiB"
 		err = client.CreateInstance(ctx, CreateInstanceRequest{
 			Name: metadata.SandboxID, Image: s.Config.Image, Network: s.Config.Network,
 			StoragePool: s.connection().StoragePool, DiskSize: s.Config.DiskSize,
-			Config: ownershipConfig(metadata),
+			Config: config,
 		})
 		if err != nil {
 			if missingImage(err) {
