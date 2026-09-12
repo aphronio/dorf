@@ -113,6 +113,14 @@ then requests cleanup. Cleanup remains separate from execution and Outcome. A se
 internal encoded JSON observation exceeds 16 MiB returns
 the published `message_unavailable` Problem rather than a partial result.
 
+After Sandbox and model access setup, a direct Job reports `awaiting_agent` while a delivery is
+pending or being submitted, and `running` while an agent Turn is active. Active work takes
+precedence over queued follow-ups. Unresolved delivery attention takes precedence over both;
+settled failures do not mask newer work. When no work remains, the latest settled result determines
+whether execution needs attention or is `idle`. A steer acknowledgement without a Turn result does
+not change this status. Direct Job `idle` means no outstanding work, not that the caller's task is
+finished.
+
 The Job snapshot's optional `latest_reply_id` identifies the latest settled reply in its main
 Sandbox. It derives from retained Message and AgentRun facts; queued follow-ups and steer delivery
 acknowledgements do not replace it. The Message inspection path accepts `latest` in place of a
@@ -201,7 +209,10 @@ Sandbox       -> HTTPS model origin -> Provider Gateway
 ```
 
 The API receives its database URL, read-only API state, and an independently derived reader token
-through the protected Compose environment. It receives no Incus socket or identity, E2B key,
+through the protected Compose environment. The shared `state/blobs` subdirectory has a separate
+writable bind mount so Message admission can retain attachments. Setup creates and attests that
+directory before Compose starts; the rest of API state remains read-only. It receives no Incus
+socket or identity, E2B key,
 GitHub credential, Gateway state, or provider configuration. The worker's narrow reader answers
 only default and named AI-connection observation, GitHub installation discovery, one exact stored
 Job Proposal observation, exact Job-owned Sandbox file reads and bounded Sandbox file writes, and one

@@ -120,6 +120,9 @@ no-runtime-inference rule. A remote Incus Profile requires the stable HTTPS Gate
 in this procedure. There is no migration or adoption path for an earlier Profile shape; create and
 verify a current Profile.
 
+New Dorf Incus VMs receive 4 vCPUs and 8 GiB RAM. Dorf does not resize existing VMs when it
+reconnects to them. Guided setup provisions a 40 GiB root disk.
+
 ### Prepare a remote Incus workstation
 
 Use this path when the Dorf deployment host cannot run KVM and an owner-controlled x86_64 Linux
@@ -435,6 +438,12 @@ returns exact bytes and must happen before cleanup, which closes Message admissi
 The requested file path can be absolute inside the Sandbox, relative to its workspace root, or
 relative to its execution user's home with `~/`. Traversal, symlinks, and directories are rejected.
 
+Human Job and Message output uses `Queued` for accepted work waiting to start, `Working` for active
+execution, and `Needs attention` for failures or required intervention. Job setup reports `Starting`
+or `Connecting`. A direct Job with no outstanding work reports `Idle`. A successful Message result
+or completed workflow reports `Finished`; a steer delivery acknowledgement without a result reports
+`Delivered; awaiting result`. These labels do not report progress within an agent Turn.
+
 Use `--output json` on Job, Message, retry, and Evidence operations and `--output jsonl` on watch for
 stable machine output. The ordinary mutation flow creates retry identity internally and retries the
 exact request once after a retryable transport or HTTP server failure; a human does not need to
@@ -508,11 +517,12 @@ dorf job cleanup JOB_ID
 ```
 
 Repeat `--attach LOCAL_FILE` to send ordered files with the first Message or a later Message. The
-flag also works with both `dorf workflow run` commands. The CLI reads and validates every local
-regular file before it creates a Job or sends a Message. You may omit `--input-file` for a Message
-that has at least one attachment. Dorf sends each file by value, so later local changes do not
-change an accepted Message. Image support depends on the selected Sandbox profile. The
-[Remote Control API](control-api.md#resources) links to the accepted formats and limits.
+flag also works with both `dorf workflow run` commands. The CLI checks local file names,
+regular-file status, and byte limits before creating a Job or sending a Message. The server
+validates image contents and profile support during Message admission. You may omit `--input-file`
+for a Message that has at least one attachment. Dorf sends each file by value, so later local
+changes do not change an accepted Message. The [Remote Control API](control-api.md#resources) links
+to the accepted formats and limits.
 
 The default `--intent auto` steers an active Turn or admits a Follow when none is active. Dorf
 chooses once at admission and preserves that choice on replay. Use `--intent follow` to queue a

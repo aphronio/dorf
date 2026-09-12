@@ -230,6 +230,9 @@ func TestOwnedSandboxCreationUsesRecordedIdentityAndCredentialFreeBoundary(t *te
 	if len(client.creates) != 1 || client.creates[0].Config["user.dorf.ownership_nonce"] != owner.OwnershipNonce || client.creates[0].StoragePool != DefaultStoragePool {
 		t.Fatalf("creates=%#v", client.creates)
 	}
+	if config := client.creates[0].Config; config["limits.cpu"] != "4" || config["limits.memory"] != "8GiB" {
+		t.Fatalf("Sandbox resource limits: cpu=%q memory=%q", config["limits.cpu"], config["limits.memory"])
+	}
 	credentialChecks := 0
 	for _, call := range client.execCalls {
 		if strings.Contains(strings.Join(call, " "), "auth.json") {

@@ -247,13 +247,34 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 		t.Fatalf("Message conflict=%#v", problem)
 	}
 
+	for _, kind := range []core.ActionKind{core.ActionSandboxCreate, core.ActionRouteCreate} {
+		action, err := store.GetOrCreateSandboxAction(ctx, core.MainSandboxName(committed.ID), kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.RecordSandboxActionSuccess(ctx, action.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertExecution := func(want string) {
+		t.Helper()
+		var inspected controlapi.DirectJob
+		controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID, credential, "", nil), http.StatusOK, &inspected)
+		if inspected.Execution.State != want || inspected.Attention != nil {
+			t.Fatalf("execution=%+v attention=%+v, want %s without attention", inspected.Execution, inspected.Attention, want)
+		}
+	}
+	assertExecution("awaiting_agent")
+
 	initialRun := core.AgentRunID(accepted.ID)
 	if err := store.PrepareAgentRun(ctx, initialRun, "codex", ""); err != nil {
 		t.Fatal(err)
 	}
+	assertExecution("awaiting_agent")
 	if err := store.BindAgentRun(ctx, initialRun, "codex", "control-thread", "control-turn", "inProgress"); err != nil {
 		t.Fatal(err)
 	}
+	assertExecution("running")
 	auto := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/messages", credential, messageKey+"-auto", controlapi.SendMessageRequest{Text: "correct the active answer", RefreshSkills: true})
 	var steering controlapi.Message
 	controlTestJSON(t, auto, http.StatusCreated, &steering)
@@ -275,6 +296,7 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	if steering.Result != nil {
 		t.Fatalf("delivered steer fabricated a terminal reply: %+v", steering)
 	}
+	assertExecution("running")
 	interruptPath := "/v1/jobs/" + committed.ID + "/messages/" + steering.ID + "/interrupt"
 	for range 2 {
 		stop := controlTestRequest(t, restarted, http.MethodPut, interruptPath, credential, "", nil)
