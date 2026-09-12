@@ -101,6 +101,16 @@ one installation; a missing installation resumes the operator handoff at its reu
 repository access and least permission scope are verified by the runtime operation that needs them.
 [Getting started](getting-started.md) contains the setup procedure.
 
+The optional here.now custom Incus artifact installs a Codex-discovered, publish-only skill with a
+redacting wrapper; it is absent from the official/default artifact and from E2B. Its presence proves
+only reproducible tool installation. It does not authenticate a user, authorize publication, prove
+the two required HTTPS egress destinations, or turn publication into a Dorf Action. A trusted
+coordinator must explicitly authorize each task and provision its protected credential into only the
+selected Sandbox through the existing exact file-write boundary. General workers must receive
+neither that file nor a here.now environment variable. A named publisher key is still account-wide;
+its name does not make it a workspace- or publish-scoped credential. [D119](project/decisions/D119-here-now-publishing-is-an-opt-in-profile-artifact-capability.md)
+owns the complete security and durability boundary.
+
 For any Client, start with `dorf auth status`. If `dorf connect` fails during discovery, the
 failure belongs to DNS, TLS, ingress, or the control API on host port `8745`. An `unauthenticated`
 response means the saved Client credential is invalid, expired, or revoked. Rerun `dorf setup` for

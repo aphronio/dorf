@@ -241,6 +241,21 @@ Use `profile create` to adopt an exact existing provider artifact, `profile inst
 official Incus release, `profile update` for an existing definition, and `profile verify` when only
 verification must be rerun. Those precise commands remain the automation and custom-artifact path.
 
+The repository's `scripts/incus/build-here-now-image.sh` can derive a custom artifact from an exact
+existing Incus image fingerprint and add the safety-constrained here.now publishing skill. It
+requires a non-default `IMAGE_ALIAS` and refuses to replace the official `dorf` alias. This is an
+opt-in construction path, not an official image or a default capability. Adopt the resulting
+exact fingerprint with the existing `profile create` command and select that Codex Profile only for
+authorized publishing work. [D119](project/decisions/D119-here-now-publishing-is-an-opt-in-profile-artifact-capability.md)
+owns its pin, supported surface, and credential boundary. Base Profile verification does not prove
+vendor egress or publication; do not infer that support from a `base-1` receipt.
+
+```bash
+BASE_FINGERPRINT=EXACT_64_CHARACTER_FINGERPRINT \
+IMAGE_ALIAS=dorf-here-now \
+scripts/incus/build-here-now-image.sh
+```
+
 The Provider Gateway joins the static Compose project when an AI connection is configured. Setup
 publishes that profile into the protected `.env`, reapplies the project, and continues to verify and
 finalize the retained candidate in the same run. It can verify an existing Sandbox-reachable route

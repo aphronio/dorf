@@ -131,6 +131,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D101: Compose owns deployment lifecycle; bootstrap privilege stays explicit](decisions/D101-compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit.md) (`current`). Changing Compose topology, setup-applied lifecycle, bootstrap, or release images.
 - [D106: Remove unused workflow capability declarations](decisions/D106-remove-unused-workflow-capability-declarations.md) (`current`). Adding optional provider requirements or workflow runtime metadata.
 - [D114: Incus guests include an isolated browser](decisions/D114-incus-guests-include-an-isolated-browser.md) (`current`). Changing browser tooling, guest browser persistence, or Incus image proof.
+- [D119: here.now publishing is an opt-in Profile-artifact capability](decisions/D119-here-now-publishing-is-an-opt-in-profile-artifact-capability.md) (`current`). Changing here.now skill provisioning, publish credentials, output redaction, or optional Sandbox artifact contents.
 
 ## Harnesses
 
@@ -152,6 +153,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D114: Incus guests include an isolated browser](decisions/D114-incus-guests-include-an-isolated-browser.md) (`current`). Changing browser tooling, guest browser persistence, or Incus image proof.
 - [D117: Clients request skill refresh at fresh Turn boundaries](decisions/D117-client-requested-skill-refresh-at-fresh-turn-boundaries.md) (`current`). Changing skill discovery after client-managed Sandbox updates.
 - [D118: Messages retain ordered input attachments and immutable bytes](decisions/D118-messages-retain-ordered-input-attachments-and-immutable-bytes.md) (`current`). Changing Message attachments, input blob custody, native image delivery, or attachment replay.
+- [D119: here.now publishing is an opt-in Profile-artifact capability](decisions/D119-here-now-publishing-is-an-opt-in-profile-artifact-capability.md) (`current`). Changing here.now skill provisioning, publish credentials, output redaction, or optional Sandbox artifact contents.
 
 ## Model access
 
@@ -206,6 +208,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D102: One guided Dorf domain publishes two distinct public origins](decisions/D102-one-guided-dorf-domain-publishes-two-distinct-public-origins.md) (`current`). Changing guided Cloudflare ingress or either public Dorf origin.
 - [D103: Every ordinary CLI Job operation uses the authenticated control API](decisions/D103-every-ordinary-cli-job-operation-uses-the-authenticated-control-api.md) (`partial`). Changing how CLI Job operations reach deployment authority.
 - [D105: Host-issued integration keys use ordinary revocable Clients](decisions/D105-host-issued-integration-keys-use-ordinary-revocable-clients.md) (`current`). Provisioning bearer credentials for unattended integrations.
+- [D119: here.now publishing is an opt-in Profile-artifact capability](decisions/D119-here-now-publishing-is-an-opt-in-profile-artifact-capability.md) (`current`). Changing here.now skill provisioning, publish credentials, output redaction, or optional Sandbox artifact contents.
 
 ## Persistence
 
