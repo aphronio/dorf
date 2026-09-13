@@ -118,3 +118,9 @@ func TestReviewEvidenceObservesAgentRunAndExactCheckoutTreeWithoutCopyingFeedbac
 		t.Fatalf("review observation = %#v, want %#v", observation, want)
 	}
 }
+
+func (s *reviewAttentionStore) WithJobFence(_ context.Context, _ string, operation func() error) error {
+	return operation()
+}
+func (s *reviewAttentionStore) BeginSandboxActivity(context.Context, string) error  { return nil }
+func (s *reviewAttentionStore) FinishSandboxActivity(context.Context, string) error { return nil }

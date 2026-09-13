@@ -20,7 +20,14 @@ func (e reviewBoundaryError) Error() string         { return string(e) }
 func (e reviewBoundaryError) AttentionNeeded() bool { return true }
 
 func (s Service) PlanReview(ctx context.Context, job Job) error {
-	facts, err := s.GitWorkspace.ChangeFacts(ctx, job.Job, job.StartingRevision, job.Revision)
+	var facts policy.ChangeFacts
+	err := s.store.WithJobFence(ctx, job.ID, func() error {
+		return core.WithSandboxActivity(ctx, s.store, job.ID, func() error {
+			var err error
+			facts, err = s.GitWorkspace.ChangeFacts(ctx, job.Job, job.StartingRevision, job.Revision)
+			return err
+		})
+	})
 	if err != nil {
 		return s.setWorkflowAttention(ctx, job.ID, ReviewPolicyAttentionSource(job.Revision), fmt.Errorf("deterministic ChangeFacts failed: %w", err))
 	}
@@ -39,7 +46,14 @@ func (s Service) recordReviewPolicy(ctx context.Context, record ReviewPlanRecord
 }
 
 func (s Service) RecordReviewResult(ctx context.Context, job Job, messageID string) error {
-	result, err := s.ObserveSettledAgentMessage(ctx, job.ID, messageID)
+	var result core.MessageResult
+	err := s.store.WithJobFence(ctx, job.ID, func() error {
+		return core.WithSandboxActivity(ctx, s.store, job.ID, func() error {
+			var err error
+			result, err = s.ObserveSettledAgentMessage(ctx, job.ID, messageID)
+			return err
+		})
+	})
 	if err != nil {
 		return err
 	}
@@ -92,7 +106,14 @@ func (s Service) recordReviewFeedback(ctx context.Context, runID string, outcome
 }
 
 func (s Service) verifyReviewCheckout(ctx context.Context, job Job, run ReviewRunView) (ReviewCheckoutObservation, error) {
-	checkout, err := s.review.VerifyReviewCheckout(ctx, job, run)
+	var checkout ReviewCheckoutObservation
+	err := s.store.WithJobFence(ctx, job.ID, func() error {
+		return core.WithSandboxActivity(ctx, s.store, job.ID, func() error {
+			var err error
+			checkout, err = s.review.VerifyReviewCheckout(ctx, job, run)
+			return err
+		})
+	})
 	if err != nil {
 		reason := "review checkout verification failed: " + err.Error()
 		return ReviewCheckoutObservation{}, reviewBoundaryError(reason)

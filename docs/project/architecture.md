@@ -69,10 +69,17 @@ Idle power management reconciles the admitted Job policy through an optional pro
 It runs under the Job effect fence and checks durable deliveries before pausing any owned Sandbox.
 Message admission may race with a provider pause; native delivery waits for the same fence and
 resumes the Sandbox before execution. Retries derive eligibility again rather than replaying a
-stale pause request. The provider owns power state and native snapshot storage; Dorf stores only
-the admitted policy, not a second snapshot or power-state ledger. The consumer runtimes request
-idle reconciliation at their wait boundaries. Control-reader access requests it after releasing
-the read fence, so observation cannot deadlock by nesting the same fence.
+stale pause request. The provider owns power state and native snapshot storage. Dorf retains the
+admitted policy and one Job activity timestamp. Managed Sandbox access clears that timestamp
+before the external operation and records the database clock on completion, including failures,
+before releasing the fence. Request cancellation does not release the fence while the callback
+is still finishing. If a process dies before recording completion, the next eligible idle check
+starts a fresh grace period. This does not track detached processes left inside a Sandbox.
+
+The consumer runtimes request idle reconciliation at their existing wait boundaries. Empty work
+polls leave the timestamp unchanged. Control-reader access requests reconciliation after releasing
+the read fence. Passive Sandbox status does not record activity. The grace duration and client
+semantics are described in the [Remote Control API](../control-api.md).
 
 ## Execution model
 

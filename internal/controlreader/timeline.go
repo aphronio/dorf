@@ -57,7 +57,10 @@ func (s Service) ReadTimeline(ctx context.Context, jobID, turnID string) (core.H
 			return core.ErrTimelineUnavailable
 		}
 		idleRuntime = runtime.Execution
-		result, err = runtime.Timeline.ReadTimeline(ctx, job, owned, threadID, turnID)
+		err = core.WithSandboxActivity(ctx, s.Store, job.ID, func() error {
+			result, err = runtime.Timeline.ReadTimeline(ctx, job, owned, threadID, turnID)
+			return err
+		})
 		if err != nil {
 			return errors.Join(core.ErrTimelineUnavailable, err)
 		}

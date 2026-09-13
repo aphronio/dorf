@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -48,10 +49,8 @@ func (s ExecutionService) ReconcileIdleSandboxes(ctx context.Context, jobID stri
 		if job.KeepRunning || !job.AdmissionOpen || job.CleanupState != CleanupPending {
 			return nil
 		}
-		// Use a bounded existence query, not the conversation's growing history.
-		// Include queued and uncertain work; wakes alone are not authority.
-		pending, err := s.store.HasPendingAgentRuns(ctx, jobID)
-		if err != nil || pending {
+		idle, err := s.store.SandboxIdleFor(ctx, jobID, time.Minute)
+		if err != nil || !idle {
 			return err
 		}
 		sandboxes, err := s.store.Sandboxes(ctx, jobID)
@@ -68,4 +67,23 @@ func (s ExecutionService) ReconcileIdleSandboxes(ctx context.Context, jobID stri
 		}
 		return nil
 	})
+}
+
+// SandboxActivityStore records access under the caller's Job effect fence.
+// A missing finish timestamp starts a fresh grace period after process recovery.
+type SandboxActivityStore interface {
+	BeginSandboxActivity(context.Context, string) error
+	FinishSandboxActivity(context.Context, string) error
+}
+
+func WithSandboxActivity(ctx context.Context, store SandboxActivityStore, jobID string, operation func() error) (err error) {
+	if err := store.BeginSandboxActivity(ctx, jobID); err != nil {
+		return err
+	}
+	defer func() {
+		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		err = errors.Join(err, store.FinishSandboxActivity(finishCtx, jobID))
+	}()
+	return operation()
 }

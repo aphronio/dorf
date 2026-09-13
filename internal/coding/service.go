@@ -22,6 +22,8 @@ const (
 )
 
 type Store interface {
+	core.SandboxActivityStore
+	WithJobFence(context.Context, string, func() error) error
 	Job(context.Context, string) (core.Job, error)
 	NextWakeSequence(context.Context, string) (int64, error)
 	CodingJob(context.Context, string) (Job, error)
@@ -87,7 +89,14 @@ func (s Service) ObserveRevision(ctx context.Context, job Job, messageID string)
 	if producer.Message.ID == "" || producer.Message.JobID != job.ID || producer.InputRevision != job.Revision || producer.ProducerID == "" || producer.Outcome != "completed" || !producer.StartsTurn {
 		return fmt.Errorf("Revision observation has no exact completed implementation Message %s", messageID)
 	}
-	observation, err := s.GitWorkspace.ObserveRevision(ctx, job.Job, job.Branch, job.Revision)
+	var observation gitworkspace.Observation
+	err = s.store.WithJobFence(ctx, job.ID, func() error {
+		return core.WithSandboxActivity(ctx, s.store, job.ID, func() error {
+			var err error
+			observation, err = s.GitWorkspace.ObserveRevision(ctx, job.Job, job.Branch, job.Revision)
+			return err
+		})
+	})
 	if err != nil {
 		if attentionNeeded(err) {
 			return s.setWorkflowAttention(ctx, job.ID, messageID, err)

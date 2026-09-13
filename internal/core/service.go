@@ -4,13 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
 type ExecutionStore interface {
-	HasPendingAgentRuns(context.Context, string) (bool, error)
+	SandboxActivityStore
+	SandboxIdleFor(context.Context, string, time.Duration) (bool, error)
 	Job(context.Context, string) (Job, error)
 	JobTasks(context.Context, string) ([]JobTask, error)
 	Sandboxes(context.Context, string) ([]Sandbox, error)
@@ -200,38 +202,40 @@ func (s ExecutionService) ReconcileJobAgent(ctx context.Context, jobID string) (
 		if input == "" {
 			return fmt.Errorf("Message %s resolved empty agent input", messageID)
 		}
-		delivery := Delivery{Message: authoritative.Message, AgentRun: authoritative.AgentRun}
-		run := authoritative.AgentRun
-		operation, err := s.agents.ResolveAgentRunOperation(ctx, authoritative)
-		if err != nil {
-			return err
-		}
-		if run.hasPendingInterrupt() {
-			return s.interruptAgentMessage(ctx, run, operation)
-		}
-		switch run.State {
-		case AgentRunCompleted, AgentRunActive:
-			_, err := s.executeAgentRun(ctx, delivery, operation, "")
-			return err
-		case AgentRunFailed, AgentRunInterrupted:
-			return nil
-		}
-		if err := s.deliver(ctx, authoritative.Job, delivery, operation, input); err != nil {
-			return err
-		}
-		settled, err := s.store.AgentMessageExecution(ctx, messageID)
-		if err != nil {
-			return err
-		}
-		if settled.AgentRun.State == AgentRunCompleted {
-			settledOperation, resolveErr := s.agents.ResolveAgentRunOperation(ctx, settled)
-			if resolveErr != nil {
-				return resolveErr
+		return WithSandboxActivity(ctx, s.store, jobID, func() error {
+			delivery := Delivery{Message: authoritative.Message, AgentRun: authoritative.AgentRun}
+			run := authoritative.AgentRun
+			operation, err := s.agents.ResolveAgentRunOperation(ctx, authoritative)
+			if err != nil {
+				return err
 			}
-			_, err := s.executeAgentRun(ctx, Delivery{Message: settled.Message, AgentRun: settled.AgentRun}, settledOperation, "")
-			return err
-		}
-		return nil
+			if run.hasPendingInterrupt() {
+				return s.interruptAgentMessage(ctx, run, operation)
+			}
+			switch run.State {
+			case AgentRunCompleted, AgentRunActive:
+				_, err := s.executeAgentRun(ctx, delivery, operation, "")
+				return err
+			case AgentRunFailed, AgentRunInterrupted:
+				return nil
+			}
+			if err := s.deliver(ctx, authoritative.Job, delivery, operation, input); err != nil {
+				return err
+			}
+			settled, err := s.store.AgentMessageExecution(ctx, messageID)
+			if err != nil {
+				return err
+			}
+			if settled.AgentRun.State == AgentRunCompleted {
+				settledOperation, resolveErr := s.agents.ResolveAgentRunOperation(ctx, settled)
+				if resolveErr != nil {
+					return resolveErr
+				}
+				_, err := s.executeAgentRun(ctx, Delivery{Message: settled.Message, AgentRun: settled.AgentRun}, settledOperation, "")
+				return err
+			}
+			return nil
+		})
 	})
 	return progress, err
 }
@@ -709,7 +713,7 @@ func (s ExecutionService) executeSandboxAction(ctx context.Context, jobID, actio
 		if authoritative.State == ActionSucceeded {
 			return nil
 		}
-		err = effect(ctx, authorized)
+		err = WithSandboxActivity(ctx, s.store, jobID, func() error { return effect(ctx, authorized) })
 		if err != nil {
 			if attentionNeeded(err) {
 				if claimErr := s.requireClaim(ctx); claimErr != nil {

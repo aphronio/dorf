@@ -56,6 +56,7 @@ var (
 // Store is the durable custody needed to prove one read belongs to one Job.
 // The provider-facing process receives no alternate resource or profile input.
 type Store interface {
+	core.SandboxActivityStore
 	Job(context.Context, string) (core.Job, error)
 	CodingJob(context.Context, string) (coding.Job, error)
 	Proposal(context.Context, string) (*coding.Proposal, error)
@@ -138,7 +139,11 @@ func (s Service) accessSandbox(ctx context.Context, sandboxID string, reconcileI
 			return err
 		}
 		idleRuntime = runtime.Execution
-		err = call(runtime, job, owned)
+		if reconcileIdle {
+			err = core.WithSandboxActivity(ctx, s.Store, job.ID, func() error { return call(runtime, job, owned) })
+		} else {
+			err = call(runtime, job, owned)
+		}
 		switch {
 		case errors.Is(err, provider.ErrInvalidFilePath):
 			return ErrInvalidFilePath
@@ -218,7 +223,10 @@ func (s Service) ObserveMessage(ctx context.Context, jobID, messageID string) (c
 			return fmt.Errorf("resolved Sandbox runtime has no exact Message observation authority")
 		}
 		idleRuntime = runtime.Execution
-		result, err = runtime.Execution.ObserveSettledAgentMessage(ctx, job.ID, messageID)
+		err = core.WithSandboxActivity(ctx, s.Store, job.ID, func() error {
+			result, err = runtime.Execution.ObserveSettledAgentMessage(ctx, job.ID, messageID)
+			return err
+		})
 		if err != nil {
 			return err
 		}

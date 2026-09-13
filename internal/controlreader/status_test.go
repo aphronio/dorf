@@ -38,11 +38,11 @@ func TestStatusUsesCustodyWithoutIdleReconciliation(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := client.ReadSandboxStatus(context.Background(), owned.ID)
-	if err != nil || result.State != "paused" || result.Provider != "e2b" || status.calls != 1 || execution.calls != 0 {
+	if err != nil || result.State != "paused" || result.Provider != "e2b" || status.calls != 1 || execution.calls != 0 || store.activityStarts != 0 || store.activityFinishes != 0 {
 		t.Fatalf("status=%+v err=%v idle=%d", result, err, execution.calls)
 	}
 	store.job.CleanupState = core.CleanupRequested
-	if _, err := client.ReadSandboxStatus(context.Background(), owned.ID); !errors.Is(err, ErrUnavailable) || status.calls != 1 || execution.calls != 0 {
+	if _, err := client.ReadSandboxStatus(context.Background(), owned.ID); !errors.Is(err, ErrUnavailable) || status.calls != 1 || execution.calls != 0 || store.activityStarts != 0 || store.activityFinishes != 0 {
 		t.Fatalf("cleanup observation=%v", err)
 	}
 	store.job.CleanupState = core.CleanupPending

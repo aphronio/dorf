@@ -33,7 +33,7 @@ func TestFileReadReconcilesIdleAfterFenceWithoutLosingResult(t *testing.T) {
 	execution := &idleReaderExecution{store: store}
 	service := Service{Store: store, Runtimes: readerTestRuntimes{profile: job.SandboxProfile, files: &readerTestFiles{contents: []byte("retained result")}, execution: execution}}
 	result, err := service.ReadFile(context.Background(), owned.ID, "result.txt")
-	if err != nil || string(result) != "retained result" || execution.calls != 1 {
+	if err != nil || string(result) != "retained result" || execution.calls != 1 || store.activityStarts != 1 || store.activityFinishes != 1 {
 		t.Fatalf("read=%q error=%v idle calls=%d", result, err, execution.calls)
 	}
 }

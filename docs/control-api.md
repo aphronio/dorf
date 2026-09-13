@@ -78,11 +78,16 @@ contains only Job kinds understood by this API revision. Investigation admission
 credential-free reachable HTTPS repository and an exact Revision.
 
 Job admission defaults `keep_running` to false for direct, coding, and investigation Jobs.
-E2B Sandboxes pause when no AgentRun remains pending, active, or uncertain; providers without the
-memory-pause capability retain their existing lifecycle. Set `keep_running: true` at admission to
+E2B Sandboxes become eligible for pause after one minute without native activity, when no AgentRun
+remains pending, active, or uncertain. The existing durable polling loop performs the pause, usually
+within the following 30 seconds. Providers without the memory-pause capability retain their existing lifecycle. Set `keep_running: true` at admission to
 keep background services running between turns. The value is immutable, included in Job inspection,
 and part of admission replay equality. It does not close admission or imply cleanup. Native history,
-file, and command access can wake a paused Sandbox; after access, Dorf reconciles idle policy again.
+file, and command access can wake a paused Sandbox. These operations hold the Job fence through
+completion and start a fresh idle minute even when they fail. Native timeline and reply reads also
+count as activity. Passive Sandbox status and database-only Job polling do not wake the Sandbox or
+extend the grace period. A process started inside the Sandbox does not keep it awake after the
+Dorf-managed command returns. Use `keep_running` for background services.
 Provider deadlines still apply, including with the override enabled.
 
 Job admission records the authenticated Client as `created_by_client`, with its ID and name.

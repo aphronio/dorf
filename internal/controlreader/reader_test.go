@@ -507,6 +507,8 @@ func TestClientRequiresExactProblemResponse(t *testing.T) {
 }
 
 type readerTestStore struct {
+	activityStarts     int
+	activityFinishes   int
 	job                core.Job
 	codingJob          coding.Job
 	proposal           *coding.Proposal
@@ -716,4 +718,19 @@ func TestFileWritesUseAuthenticatedOwnershipAndCleanupFence(t *testing.T) {
 	if files.calls != 1 {
 		t.Fatal("rejected write reached provider")
 	}
+}
+
+func (s *readerTestStore) BeginSandboxActivity(_ context.Context, jobID string) error {
+	if !s.inFence || jobID != s.job.ID && jobID != s.execution.Job.ID {
+		panic("activity outside exact Job fence")
+	}
+	s.activityStarts++
+	return nil
+}
+func (s *readerTestStore) FinishSandboxActivity(ctx context.Context, jobID string) error {
+	if !s.inFence || jobID != s.job.ID && jobID != s.execution.Job.ID || ctx.Err() != nil {
+		panic("activity completion lost fence or cancellation protection")
+	}
+	s.activityFinishes++
+	return nil
 }

@@ -66,6 +66,7 @@ type SandboxRuntimeResolver interface {
 // ApplicationStore is the durable Core custody required by the application boundary.
 // PostgreSQL is the current implementation, not part of the consumer contract.
 type ApplicationStore interface {
+	SandboxActivityStore
 	Job(context.Context, string) (Job, error)
 	Sandbox(context.Context, string) (Sandbox, error)
 	EnsureSandbox(context.Context, string, string) (Sandbox, error)

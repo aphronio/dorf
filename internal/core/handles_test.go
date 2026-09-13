@@ -290,3 +290,6 @@ func (handleTestStore) ScheduleCleanup(context.Context, string, string, string) 
 func (handleTestStore) ScheduleJobTask(context.Context, string, string, string, string) error {
 	return nil
 }
+
+func (s handleTestStore) BeginSandboxActivity(context.Context, string) error  { return nil }
+func (s handleTestStore) FinishSandboxActivity(context.Context, string) error { return nil }

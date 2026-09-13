@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 type idleStore struct {
@@ -20,15 +21,15 @@ func (s *idleStore) Job(context.Context, string) (Job, error) {
 	}
 	return s.job, nil
 }
-func (s *idleStore) HasPendingAgentRuns(context.Context, string) (bool, error) {
+func (s *idleStore) SandboxIdleFor(context.Context, string, time.Duration) (bool, error) {
 	for _, delivery := range s.deliveries {
 		switch delivery.AgentRun.State {
 		case AgentRunCompleted, AgentRunFailed, AgentRunInterrupted:
 		default:
-			return true, nil
+			return false, nil
 		}
 	}
-	return false, nil
+	return true, nil
 }
 func (s *idleStore) Sandboxes(context.Context, string) ([]Sandbox, error) {
 	return []Sandbox{{ID: "sandbox", JobID: s.job.ID}}, nil

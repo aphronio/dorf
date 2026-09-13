@@ -104,8 +104,10 @@ func (h SandboxHandle) ReadFile(ctx context.Context, relativePath string) ([]byt
 		if runtime.SandboxProfile != job.SandboxProfile || runtime.Files == nil {
 			return fmt.Errorf("Sandbox runtime does not provide file access for Job profile %q", job.SandboxProfile)
 		}
-		contents, err = runtime.Files.ReadSandboxFile(ctx, job, owned, relativePath)
-		return err
+		return WithSandboxActivity(ctx, h.application.Store, job.ID, func() error {
+			contents, err = runtime.Files.ReadSandboxFile(ctx, job, owned, relativePath)
+			return err
+		})
 	})
 	return contents, err
 }

@@ -1,9 +1,9 @@
 # D120: Default idle pause with an admitted keep-running override
 
-- **Applicability:** current
+- **Applicability:** partial
 - **Areas:** core, sandboxes, client-api
 - **Read when:** Changing Sandbox idle policy, E2B retention, or admission defaults.
-- **Decision history:** Accepted — 2026-09-13
+- **Decision history:** Accepted — 2026-09-13; idle grace and activity custody revised by D122
 - **Decision:** Direct, coding, and investigation clients default to pausing idle Sandboxes on
   providers with a proved memory-pause capability. An immutable `keep_running` Job input disables
   that policy. E2B is the first implementation; other providers retain their existing behavior.

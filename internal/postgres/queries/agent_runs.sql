@@ -169,10 +169,3 @@ where requested.job_id=sqlc.arg(job_id) and requested.message_id=sqlc.arg(messag
 -- name: RequestAgentRunInterrupt :execrows
 update dorf.agent_runs set interrupt_requested=true
 where id=sqlc.arg(run_id) and state in ('active','uncertain') and turn_id is not null;
-
--- name: HasPendingAgentRuns :one
-select exists (
-    select 1 from dorf.agent_runs
-    where job_id=sqlc.arg(job_id)
-      and state not in ('completed','failed','interrupted')
-);
