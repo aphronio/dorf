@@ -820,6 +820,7 @@ func parseTurn(turn map[string]any) TurnOutcome {
 	id, _ := turn["id"].(string)
 	status, _ := turn["status"].(string)
 	outcome := TurnOutcome{ID: id, Status: status}
+	var replies []string
 	items, _ := turn["items"].([]any)
 	for _, value := range items {
 		item, ok := value.(map[string]any)
@@ -832,23 +833,30 @@ func parseTurn(turn map[string]any) TurnOutcome {
 			}
 			continue
 		}
-		if item["type"] != "agentMessage" {
+		if item["type"] != "agentMessage" || (item["phase"] != nil && item["phase"] != "final_answer") {
 			continue
 		}
-		if text, ok := item["text"].(string); ok && text != "" {
-			outcome.Output = text
-			continue
-		}
-		if contents, ok := item["content"].([]any); ok {
-			for _, raw := range contents {
-				content, _ := raw.(map[string]any)
-				if text, ok := content["text"].(string); ok && text != "" {
-					outcome.Output = text
-				}
-			}
+		if text := agentMessageText(item); text != "" {
+			replies = append(replies, text)
 		}
 	}
+	outcome.Output = strings.Join(replies, "\n\n")
 	return outcome
+}
+
+func agentMessageText(item map[string]any) string {
+	if text, ok := item["text"].(string); ok && text != "" {
+		return text
+	}
+	var text strings.Builder
+	contents, _ := item["content"].([]any)
+	for _, raw := range contents {
+		content, _ := raw.(map[string]any)
+		if fragment, ok := content["text"].(string); ok {
+			text.WriteString(fragment)
+		}
+	}
+	return text.String()
 }
 
 func (p *protocol) resumeThread(ctx context.Context, sessionID string) error {

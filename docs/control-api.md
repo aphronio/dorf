@@ -148,6 +148,13 @@ A failed Sandbox creation caused by a recognized VM or instance limit reports
 or the limit increased before retry. Unknown execution failures retain generic attention. Public
 Job attention does not expose provider error text, and cleanup failure takes precedence.
 
+A completed Codex Message result preserves final answers from its bound native Turn in order.
+Multiple final answers are separated by blank lines in `output`; explicit commentary remains in
+the native timeline. A steer can produce another final answer within the same Turn, so clients
+receive the complete final text rather than only the last answer. Messages whose phase is absent
+or null retain their text because the Harness has not classified them. Text fragments within one
+message are concatenated without added separators.
+
 The Job snapshot's optional `latest_reply_id` identifies the latest settled reply in its main
 Sandbox. It derives from retained Message and AgentRun facts; queued follow-ups and steer delivery
 acknowledgements do not replace it. The Message inspection path accepts `latest` in place of a

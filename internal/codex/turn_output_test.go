@@ -38,6 +38,9 @@ func TestParseTurnFinalMessageText(t *testing.T) {
 	for _, test := range []struct {
 		name, items, output string
 	}{
+		{"null and absent phases", `[{"type":"agentMessage","text":"Earlier."},{"type":"agentMessage","phase":"final_answer","text":"Final."},{"type":"agentMessage","phase":null,"text":"Later."}]`, "Earlier.\n\nFinal.\n\nLater."},
+		{"unknown phase", `[{"type":"agentMessage","phase":"future_internal","text":"Hidden."},{"type":"agentMessage","phase":"final_answer","text":"Visible."}]`, "Visible."},
+		{"single answer preserves whitespace", `[{"type":"agentMessage","phase":"final_answer","text":"  Exact.\n"}]`, "  Exact.\n"},
 		{"trailing commentary", `[{"type":"agentMessage","phase":"final_answer","text":"Finished."},{"type":"agentMessage","phase":"commentary","text":"Internal progress."}]`, "Finished."},
 		{"commentary only", `[{"type":"agentMessage","phase":"commentary","text":"Still working."}]`, ""},
 		{"content blocks", `[{"type":"agentMessage","phase":"final_answer","content":[{"type":"text","text":"Hello "},{"type":"text","text":"world."}]}]`, "Hello world."},
