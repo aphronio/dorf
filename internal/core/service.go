@@ -10,6 +10,7 @@ import (
 )
 
 type ExecutionStore interface {
+	HasPendingAgentRuns(context.Context, string) (bool, error)
 	Job(context.Context, string) (Job, error)
 	JobTasks(context.Context, string) ([]JobTask, error)
 	Sandboxes(context.Context, string) ([]Sandbox, error)

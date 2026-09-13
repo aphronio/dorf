@@ -220,6 +220,7 @@ func remoteRun(ctx context.Context, client *controlclient.Client, cfg clientconf
 	clientReference := set.String("client-reference", cfg.ClientReference, "optional caller thread or task reference")
 	key := set.String("key", "", "stable request identity for explicit replay")
 	inputFile := set.String("input-file", "", "path containing the first Message")
+	keepRunning := set.Bool("keep-running", false, "keep the Sandbox running between turns")
 	agentsFile := set.String("agents-file", "", "path containing initial workspace AGENTS.md")
 	connection := set.String("ai-connection", "", "named AI connection (default: deployment default)")
 	model := set.String("model", "", "Harness model (default: selected AI connection)")
@@ -252,8 +253,8 @@ func remoteRun(ctx context.Context, client *controlclient.Client, cfg clientconf
 		}
 	}
 	request := controlapi.AdmitJobRequest{
-		ClientReference: *clientReference,
-		AgentsMD:        agentsMD, Profile: strings.TrimSpace(*profileName), AIConnection: strings.TrimSpace(*connection), Model: strings.TrimSpace(*model), Reasoning: strings.TrimSpace(*effort),
+		KeepRunning: *keepRunning, ClientReference: *clientReference,
+		AgentsMD: agentsMD, Profile: strings.TrimSpace(*profileName), AIConnection: strings.TrimSpace(*connection), Model: strings.TrimSpace(*model), Reasoning: strings.TrimSpace(*effort),
 	}
 	job, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Admission may have succeeded.", func() (controlapi.DirectJob, error) {
 		return client.AdmitJob(ctx, requestKey, request)
@@ -301,6 +302,7 @@ func remoteWorkflowCommand(ctx context.Context, client *controlclient.Client, cf
 
 func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, cfg clientconfig.Config, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("workflow run coding", flag.ContinueOnError)
+	keepRunning := set.Bool("keep-running", false, "keep the Sandbox running between turns")
 	set.SetOutput(stderr)
 	var attachmentPaths attachmentFlags
 	clientReference := set.String("client-reference", cfg.ClientReference, "optional caller thread or task reference")
@@ -334,6 +336,7 @@ func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, cfg
 		return err
 	}
 	request := controlapi.AdmitCodingJobRequest{
+		KeepRunning:     *keepRunning,
 		ClientReference: *clientReference,
 		Repository:      *repository, Revision: *revision, BaseBranch: *base, Branch: *branch,
 		Profile: *profile, AIConnection: *connection, Model: *model, Reasoning: *reasoning,
@@ -363,6 +366,7 @@ func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, cfg
 
 func remoteInvestigationWorkflow(ctx context.Context, client *controlclient.Client, cfg clientconfig.Config, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("workflow run codebase-investigation", flag.ContinueOnError)
+	keepRunning := set.Bool("keep-running", false, "keep the Sandbox running between turns")
 	set.SetOutput(stderr)
 	var attachmentPaths attachmentFlags
 	clientReference := set.String("client-reference", cfg.ClientReference, "optional caller thread or task reference")
@@ -394,6 +398,7 @@ func remoteInvestigationWorkflow(ctx context.Context, client *controlclient.Clie
 		return err
 	}
 	request := controlapi.AdmitInvestigationJobRequest{
+		KeepRunning:     *keepRunning,
 		ClientReference: *clientReference,
 		Repository:      *repository, Revision: *revision,
 		Profile: *profile, AIConnection: *connection, Model: *model, Reasoning: *reasoning,
@@ -1043,6 +1048,7 @@ func (a controlAPIJobs) AdmitDirect(ctx context.Context, clientID, key string, i
 	}
 	admission.CreatedByClientID = clientID
 	admission.ClientReference = input.ClientReference
+	admission.KeepRunning = input.KeepRunning
 	job, created, err := a.directAdmissions.Admit(ctx, admission)
 	if errors.Is(err, direct.ErrAdmissionConflict) {
 		return controlapi.DirectJob{}, false, controlapi.ErrIdempotencyConflict
@@ -1062,7 +1068,7 @@ func (a controlAPIJobs) AdmitDirect(ctx context.Context, clientID, key string, i
 
 func (a controlAPIJobs) AdmitCoding(ctx context.Context, clientID, key string, input controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, bool, error) {
 	job, created, err := a.codingAdmissions.Admit(ctx, coding.AdmissionRequest{
-		CreatedByClientID: clientID, ClientReference: input.ClientReference,
+		KeepRunning: input.KeepRunning, CreatedByClientID: clientID, ClientReference: input.ClientReference,
 		AdmissionKey: key, SandboxProfile: input.Profile, Model: input.Model,
 		ProviderConnection: input.AIConnection, ReasoningEffort: input.Reasoning, Repository: input.Repository, Revision: input.Revision,
 		Branch: input.Branch, BaseBranch: input.BaseBranch,
@@ -1085,7 +1091,7 @@ func (a controlAPIJobs) AdmitCoding(ctx context.Context, clientID, key string, i
 
 func (a controlAPIJobs) AdmitInvestigation(ctx context.Context, clientID, key string, input controlapi.AdmitInvestigationJobRequest) (controlapi.InvestigationJob, bool, error) {
 	job, created, err := a.investigationAdmissions.Admit(ctx, investigation.AdmissionRequest{
-		CreatedByClientID: clientID, ClientReference: input.ClientReference,
+		KeepRunning: input.KeepRunning, CreatedByClientID: clientID, ClientReference: input.ClientReference,
 		AdmissionKey: key, SandboxProfile: input.Profile, Model: input.Model,
 		ProviderConnection: input.AIConnection, ReasoningEffort: input.Reasoning,
 		Source: investigation.Source{Repository: input.Repository, Revision: input.Revision},
@@ -1739,7 +1745,7 @@ func publicCommonJob(job core.Job, kind, executionState string, attention *contr
 	return controlapi.Job{
 		CreatedByClient: publicJobCreator(job.CreatedByClientID, job.CreatedByClientName), ClientReference: job.ClientReference,
 		ID: job.ID, Kind: kind, Profile: job.SandboxProfile,
-		Model: job.Model, Reasoning: job.ReasoningEffort,
+		KeepRunning: job.KeepRunning, Model: job.Model, Reasoning: job.ReasoningEffort,
 		Admission: controlapi.Admission{Open: job.AdmissionOpen}, Execution: controlapi.State{State: executionState},
 		Attention: attention, Cleanup: controlapi.State{State: cleanupState}, Sandboxes: sandboxes,
 	}, nil

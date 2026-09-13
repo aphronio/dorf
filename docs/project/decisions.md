@@ -51,7 +51,8 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D115: Sandbox file access supports agent home configuration](decisions/D115-sandbox-file-access-supports-agent-home-configuration.md) (`current`). Changing Sandbox file paths, helper installation, or client credential delivery.
 - [D116: Clients bootstrap Sandboxes and observe the latest reply](decisions/D116-client-bootstrap-and-latest-reply-observation.md) (`current`). Changing client Sandbox setup or reply notification integrations.
 - [D118: Messages retain ordered input attachments and immutable bytes](decisions/D118-messages-retain-ordered-input-attachments-and-immutable-bytes.md) (`current`). Changing Message attachments, input blob custody, native image delivery, or attachment replay.
-- [D120: Messages retain application developer instructions](decisions/D120-messages-retain-application-developer-instructions.md) (`current`). Changing application instruction custody or Harness prompt authority.
+- [D120: Default idle pause with an admitted keep-running override](decisions/D120-default-idle-pause-with-an-admitted-keep-running-override.md) (`current`). Changing Sandbox idle policy, E2B retention, or admission defaults.
+- [D121: Messages retain application developer instructions](decisions/D121-messages-retain-application-developer-instructions.md) (`current`). Changing application instruction custody or Harness prompt authority.
 
 ## Workflows
 
@@ -133,6 +134,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D101: Compose owns deployment lifecycle; bootstrap privilege stays explicit](decisions/D101-compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit.md) (`current`). Changing Compose topology, setup-applied lifecycle, bootstrap, or release images.
 - [D106: Remove unused workflow capability declarations](decisions/D106-remove-unused-workflow-capability-declarations.md) (`current`). Adding optional provider requirements or workflow runtime metadata.
 - [D114: Incus guests include an isolated browser](decisions/D114-incus-guests-include-an-isolated-browser.md) (`current`). Changing browser tooling, guest browser persistence, or Incus image proof.
+- [D120: Default idle pause with an admitted keep-running override](decisions/D120-default-idle-pause-with-an-admitted-keep-running-override.md) (`current`). Changing Sandbox idle policy, E2B retention, or admission defaults.
 
 ## Harnesses
 
@@ -188,7 +190,8 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D116: Clients bootstrap Sandboxes and observe the latest reply](decisions/D116-client-bootstrap-and-latest-reply-observation.md) (`current`). Changing client Sandbox setup or reply notification integrations.
 - [D117: Clients request skill refresh at fresh Turn boundaries](decisions/D117-client-requested-skill-refresh-at-fresh-turn-boundaries.md) (`current`). Changing skill discovery after client-managed Sandbox updates.
 - [D119: Native timeline reads preserve Harness history](decisions/D119-native-timeline-reads-preserve-harness-history.md) (`current`). Changing native conversation reads, public native references, or transcript custody.
-- [D120: Messages retain application developer instructions](decisions/D120-messages-retain-application-developer-instructions.md) (`current`). Changing application instruction custody or Harness prompt authority.
+- [D120: Default idle pause with an admitted keep-running override](decisions/D120-default-idle-pause-with-an-admitted-keep-running-override.md) (`current`). Changing Sandbox idle policy, E2B retention, or admission defaults.
+- [D121: Messages retain application developer instructions](decisions/D121-messages-retain-application-developer-instructions.md) (`current`). Changing application instruction custody or Harness prompt authority.
 
 ## Deployment and setup
 

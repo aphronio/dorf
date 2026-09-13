@@ -35,6 +35,8 @@ func (s Service) ReadTimeline(ctx context.Context, jobID, turnID string) (core.H
 		return core.HarnessTimeline{}, core.ErrTimelineUnavailable
 	}
 	var result core.HarnessTimeline
+	var idleRuntime core.Execution
+	defer func() { core.ReconcileIdle(ctx, idleRuntime, jobID) }()
 	err := s.Store.WithJobFence(ctx, jobID, func() error {
 		job, err := s.Store.Job(ctx, jobID)
 		if errors.Is(err, postgres.ErrNotFound) {
@@ -54,6 +56,7 @@ func (s Service) ReadTimeline(ctx context.Context, jobID, turnID string) (core.H
 		if err != nil || runtime.Timeline == nil {
 			return core.ErrTimelineUnavailable
 		}
+		idleRuntime = runtime.Execution
 		result, err = runtime.Timeline.ReadTimeline(ctx, job, owned, threadID, turnID)
 		if err != nil {
 			return errors.Join(core.ErrTimelineUnavailable, err)

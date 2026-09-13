@@ -19,6 +19,7 @@ var (
 // AdmissionRequest is the caller-owned investigation input. The deployment's
 // selected profile and provider authority are resolved only by AdmissionService.
 type AdmissionRequest struct {
+	KeepRunning        bool
 	CreatedByClientID  string
 	ClientReference    string
 	AdmissionKey       string
@@ -147,7 +148,7 @@ func normalizeAdmissionRequest(request AdmissionRequest) (Admission, error) {
 	}
 	admission := Admission{
 		JobAdmission: core.JobAdmission{
-			CreatedByClientID: request.CreatedByClientID, ClientReference: request.ClientReference,
+			KeepRunning: request.KeepRunning, CreatedByClientID: request.CreatedByClientID, ClientReference: request.ClientReference,
 			AdmissionKey: request.AdmissionKey, SandboxProfile: request.SandboxProfile,
 			ProviderConnection: request.ProviderConnection, Model: request.Model, ReasoningEffort: request.ReasoningEffort,
 		},

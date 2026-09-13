@@ -141,6 +141,7 @@ func (c Client) Create(ctx context.Context, request CreateRequest) (Sandbox, err
 		TemplateID:          request.Template,
 		Timeout:             int64(request.Timeout / time.Second),
 		Secure:              true,
+		AutoPause:           true,
 		Metadata:            request.Owner.metadata(),
 		AllowInternetAccess: request.AllowInternet,
 	}

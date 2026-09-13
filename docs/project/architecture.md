@@ -65,6 +65,15 @@ and reconciles resources against their external authorities before declaring the
 after a workflow, composed module, or client has requested resource release. Core never infers that
 request from success, failure, an Outcome, inactivity, or a need for human input.
 
+Idle power management reconciles the admitted Job policy through an optional provider capability.
+It runs under the Job effect fence and checks durable deliveries before pausing any owned Sandbox.
+Message admission may race with a provider pause; native delivery waits for the same fence and
+resumes the Sandbox before execution. Retries derive eligibility again rather than replaying a
+stale pause request. The provider owns power state and native snapshot storage; Dorf stores only
+the admitted policy, not a second snapshot or power-state ledger. The consumer runtimes request
+idle reconciliation at their wait boundaries. Control-reader access requests it after releasing
+the read fence, so observation cannot deadlock by nesting the same fence.
+
 ## Execution model
 
 One admission creates one durable execution owner with its configuration and a stable
@@ -83,9 +92,11 @@ and injects SOUL.md as native user context only initially or after its contents 
 Workspace refresh notices also carry user authority. A fixed developer notice revokes any legacy
 workspace-derived developer instructions before refreshed user content, without embedding file
 contents or altering the application instruction snapshot.
-Process-local hashes avoid repeating unchanged context. A lost cache causes rehydration from the
-same files. Separately, Messages retain an optional immutable application developer instruction
-snapshot. The Codex adapter injects its complete replacement at developer authority before a fresh
+Process-local hashes avoid repeating unchanged context. The worker's native observer owns these
+hashes independently of diagnostic export. It remembers supplied instructions only after native
+acceptance and exact Turn observation binding. Compaction, lost observation, or uncertain submission
+invalidates that knowledge. A lost cache causes rehydration from the same files. Separately, Messages
+retain an optional immutable application developer instruction snapshot. The Codex adapter injects its complete replacement at developer authority before a fresh
 Turn, preserving built-in model instructions. Recovery of an accepted Turn and steering do not
 apply snapshots. Client-owned application policy remains outside Dorf Core.
 Clients request skill refresh through durable Message input. Existing delivery selection decides

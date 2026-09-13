@@ -417,14 +417,14 @@ func TestControlAPIWorkflowAdmissionsProjectAndReplay(t *testing.T) {
 	}
 
 	codingKey := fmt.Sprintf("control-coding-%d", time.Now().UnixNano())
-	codingInput := controlapi.AdmitCodingJobRequest{ClientReference: "coding-task",
+	codingInput := controlapi.AdmitCodingJobRequest{KeepRunning: true, ClientReference: "coding-task",
 		Repository: "https://github.com/aphronio/dorf.git",
 		Revision:   strings.Repeat("a", 40), BaseBranch: "main", Profile: profileName, AIConnection: "primary", Model: "model-test",
 	}
 	codingResponse := controlTestRequest(t, handler, http.MethodPost, "/v1/workflows/coding/jobs", credential, codingKey, codingInput)
 	var codingJob controlapi.CodingJob
 	controlTestJSON(t, codingResponse, http.StatusCreated, &codingJob)
-	if codingJob.CreatedByClient == nil || codingJob.CreatedByClient.Name != profileName || codingJob.ClientReference != "coding-task" || codingJob.Kind != controlapi.JobKindCoding ||
+	if !codingJob.KeepRunning || codingJob.CreatedByClient == nil || codingJob.CreatedByClient.Name != profileName || codingJob.ClientReference != "coding-task" || codingJob.Kind != controlapi.JobKindCoding ||
 		codingJob.Branch != "dorf/"+core.JobID(codingKey) || codingJob.StartingRevision != codingInput.Revision ||
 		codingJob.Revision != codingInput.Revision || codingJob.WorkflowRevision == "" || codingJob.Outcome != nil {
 		t.Fatalf("coding Job=%#v", codingJob)

@@ -1,4 +1,4 @@
-# D120: Messages retain application developer instructions
+# D121: Messages retain application developer instructions
 
 - **Applicability:** current
 - **Areas:** core, client-api

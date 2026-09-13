@@ -83,6 +83,7 @@ type RedeemRequest struct {
 }
 
 type AdmitJobRequest struct {
+	KeepRunning     bool   `json:"keep_running,omitempty"`
 	ClientReference string `json:"client_reference,omitempty"`
 	AgentsMD        string `json:"agents_md,omitempty"`
 	Profile         string `json:"profile"`
@@ -92,6 +93,7 @@ type AdmitJobRequest struct {
 }
 
 type AdmitCodingJobRequest struct {
+	KeepRunning     bool   `json:"keep_running,omitempty"`
 	ClientReference string `json:"client_reference,omitempty"`
 	Repository      string `json:"repository"`
 	Revision        string `json:"revision"`
@@ -104,6 +106,7 @@ type AdmitCodingJobRequest struct {
 }
 
 type AdmitInvestigationJobRequest struct {
+	KeepRunning     bool   `json:"keep_running,omitempty"`
 	ClientReference string `json:"client_reference,omitempty"`
 	Repository      string `json:"repository"`
 	Revision        string `json:"revision"`
@@ -142,6 +145,7 @@ type JobList struct {
 // Job contains only the fields common to every supported public Job kind.
 // Canonical reads return one of the concrete JobView implementations below.
 type Job struct {
+	KeepRunning     bool        `json:"keep_running"`
 	LatestReplyID   string      `json:"latest_reply_id,omitempty"`
 	CreatedByClient *JobCreator `json:"created_by_client"`
 	ClientReference string      `json:"client_reference"`
