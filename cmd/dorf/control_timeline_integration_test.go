@@ -22,6 +22,7 @@ type timelineControlRuntime struct {
 	expectedSandbox core.Sandbox
 	block           chan struct{}
 	entered         chan struct{}
+	sourceRun       string
 }
 
 func (r *timelineControlRuntime) ResolveSandbox(_ context.Context, profile string) (core.SandboxRuntime, error) {
@@ -49,7 +50,7 @@ func (r *timelineControlRuntime) ReadTimeline(ctx context.Context, job core.Job,
 	if turnID == "" {
 		turnID = "latest-native-turn"
 	}
-	return core.HarnessTimeline{Harness: "codex", ThreadID: threadID, TurnID: turnID, Status: "inProgress", Items: []json.RawMessage{json.RawMessage(`{"type":"agentMessage","id":"native-item","phase":"commentary","text":"Still working"}`)}}, nil
+	return core.HarnessTimeline{Harness: "codex", ThreadID: threadID, TurnID: turnID, Status: "inProgress", CompletedItems: []core.HarnessConversationItem{{Index: 0, NativeItemID: "native-input", Kind: "input", ClientID: r.sourceRun}, {Index: 1, NativeItemID: "native-final", Kind: "reply", Text: "[PDF](sandbox:/report.pdf)"}}, Items: []json.RawMessage{json.RawMessage(`{"type":"agentMessage","id":"native-item","phase":"commentary","text":"Still working"}`)}}, nil
 }
 
 func TestControlTimelineUsesPostgresCustodyAndCleanupFence(t *testing.T) {
@@ -89,7 +90,18 @@ func TestControlTimelineUsesPostgresCustodyAndCleanupFence(t *testing.T) {
 	}
 	var message controlapi.Message
 	controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, "/v1/jobs/"+job.ID+"/messages", credential, key+"-message", controlapi.SendMessageRequest{Text: "Retained work"}), http.StatusCreated, &message)
+	messagePath := "/v1/jobs/" + job.ID + "/messages/" + message.ID + "/timeline"
+	problemCode(messagePath, "", 401, "unauthenticated")
+	problemCode(messagePath, credential, 409, "timeline_unavailable")
+	problemCode("/v1/jobs/"+job.ID+"/messages/not-ours/timeline", credential, 404, "message_not_found")
+	for _, query := range []string{"?turn_id=foreign", "?message_id=other"} {
+		problemCode(messagePath+query, credential, 400, "invalid_query")
+	}
+	var denied controlapi.Problem
+	controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, messagePath, credential, "", nil), 405, &denied)
+	controlTestJSON(t, controlTestRequest(t, handler, http.MethodGet, messagePath, credential, "", map[string]string{"input": "forbidden"}), 415, &denied)
 	runID := core.AgentRunID(message.ID)
+	runtime.sourceRun = runID
 	if err := store.PrepareAgentRun(ctx, runID, "codex", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -108,6 +120,11 @@ func TestControlTimelineUsesPostgresCustodyAndCleanupFence(t *testing.T) {
 	beforeJob, err := store.Job(ctx, job.ID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	var messageTimeline controlapi.MessageTimeline
+	controlTestJSON(t, controlTestRequest(t, handler, http.MethodGet, messagePath, credential, "", nil), 200, &messageTimeline)
+	if messageTimeline.MessageID != message.ID || messageTimeline.JobID != job.ID || messageTimeline.TurnID != "native-turn" || messageTimeline.Status != "inProgress" || len(messageTimeline.Items) != 2 || messageTimeline.Items[0].MessageID != message.ID || messageTimeline.Items[0].Text != nil || messageTimeline.Items[1].Text == nil || *messageTimeline.Items[1].Text != "[PDF](sandbox:/report.pdf)" {
+		t.Fatalf("message timeline=%+v", messageTimeline)
 	}
 	var timeline controlapi.Timeline
 	controlTestJSON(t, controlTestRequest(t, handler, http.MethodGet, path, credential, "", nil), 200, &timeline)
@@ -132,7 +149,9 @@ func TestControlTimelineUsesPostgresCustodyAndCleanupFence(t *testing.T) {
 	}
 	runtime.block, runtime.entered = make(chan struct{}), make(chan struct{})
 	readDone := make(chan int, 1)
-	go func() { readDone <- controlTestRequest(t, handler, http.MethodGet, path, credential, "", nil).Code }()
+	go func() {
+		readDone <- controlTestRequest(t, handler, http.MethodGet, messagePath, credential, "", nil).Code
+	}()
 	<-runtime.entered
 	cleanupDone := make(chan error, 1)
 	go func() { cleanupDone <- store.ScheduleCleanup(ctx, tasks.QueueName(), job.ID, "") }()
@@ -149,6 +168,7 @@ func TestControlTimelineUsesPostgresCustodyAndCleanupFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := runtime.calls
+	problemCode(messagePath, credential, 409, "timeline_unavailable")
 	problemCode(path, credential, 409, "timeline_unavailable")
 	if runtime.calls != calls {
 		t.Fatal("read after cleanup reached native reader")

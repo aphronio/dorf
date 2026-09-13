@@ -103,3 +103,89 @@ func TestTimelineClientEnforcesCustodyAndPropagatesNativeFailures(t *testing.T) 
 		})
 	}
 }
+
+func TestMessageTimelineMapsOnlyInputsWithExactStoredTurnCustody(t *testing.T) {
+	job := core.Job{ID: "job", SandboxProfile: "profile", CleanupState: core.CleanupPending}
+	owned := core.Sandbox{ID: "sandbox", Name: "review-sandbox", JobID: job.ID, OwnershipNonce: strings.Repeat("a", 64)}
+	run := core.AgentRun{ID: "run", JobID: job.ID, MessageID: "message", SandboxID: owned.ID, Harness: "codex", ThreadID: "bound", TurnID: "selected", State: core.AgentRunActive}
+	message := core.Message{ID: "message", JobID: job.ID}
+	execution := core.AgentMessageExecution{Job: job, Message: message, AgentRun: run, Sandbox: owned}
+	store := &timelineTestStore{readerTestStore: &readerTestStore{job: job, sandbox: owned, execution: execution}, deliveries: []core.Delivery{{Message: message, AgentRun: run}}}
+	runtime := &timelineTestRuntime{store: store, result: core.HarnessTimeline{Harness: "codex", ThreadID: "bound", TurnID: "selected", Status: "inProgress", Items: []json.RawMessage{json.RawMessage(`{"id":"input","type":"userMessage"}`)}, CompletedItems: []core.HarnessConversationItem{{Index: 0, NativeItemID: "input", Kind: "input", ClientID: "run"}, {Index: 1, NativeItemID: "answer", Kind: "reply", Text: "[PDF](sandbox:/report.pdf)"}, {Index: 2, NativeItemID: "unknown", Kind: "input", ClientID: "not-ours"}}}}
+	handler, err := NewHandler(strings.Repeat("b", 64), Service{Store: store, Runtimes: runtime})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient("http://reader.test:8756", strings.Repeat("b", 64), &http.Client{Transport: readerHandlerTransport{handler: handler}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := client.ReadMessageTimeline(context.Background(), job.ID, message.ID)
+	if err != nil || len(result.CompletedItems) != 3 || result.CompletedItems[0].MessageID != message.ID || result.CompletedItems[0].ClientID != "" || result.CompletedItems[1].Text != "[PDF](sandbox:/report.pdf)" || result.CompletedItems[2].MessageID != "" || len(result.Items) != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	for _, invalid := range []string{"job", "message", "sandbox", "nonce", "thread", "turn", "harness", "cleanup", "stale-sandbox"} {
+		t.Run(invalid, func(t *testing.T) {
+			store.execution = execution
+			store.sandbox = owned
+			switch invalid {
+			case "job":
+				store.execution.AgentRun.JobID = "other"
+			case "message":
+				store.execution.AgentRun.MessageID = "other"
+			case "sandbox":
+				store.execution.AgentRun.SandboxID = "other"
+			case "nonce":
+				store.execution.Sandbox.OwnershipNonce = ""
+			case "thread":
+				store.execution.AgentRun.ThreadID = ""
+			case "turn":
+				store.execution.AgentRun.TurnID = ""
+			case "harness":
+				store.execution.AgentRun.Harness = ""
+			case "cleanup":
+				store.execution.Job.CleanupState = core.CleanupRequested
+			case "stale-sandbox":
+				store.sandbox.OwnershipNonce = strings.Repeat("c", 64)
+			}
+			before := runtime.calls
+			_, err := client.ReadMessageTimeline(context.Background(), job.ID, message.ID)
+			if !errors.Is(err, core.ErrTimelineUnavailable) || runtime.calls != before {
+				t.Fatalf("err=%v calls=%d/%d", err, runtime.calls, before)
+			}
+		})
+	}
+}
+
+func TestMessageTimelineDoesNotAttributeAnInputThroughForeignDelivery(t *testing.T) {
+	run := core.AgentRun{ID: "run", JobID: "job", MessageID: "message", SandboxID: "sandbox", Harness: "codex", ThreadID: "thread", TurnID: "turn"}
+	original := core.Delivery{Message: core.Message{ID: "message", JobID: "job"}, AgentRun: run}
+	for _, field := range []string{"job", "message-job", "message", "sandbox", "harness", "thread", "turn"} {
+		t.Run(field, func(t *testing.T) {
+			delivery := original
+			switch field {
+			case "job":
+				delivery.AgentRun.JobID = "other"
+			case "message-job":
+				delivery.Message.JobID = "other"
+			case "message":
+				delivery.AgentRun.MessageID = "other"
+			case "sandbox":
+				delivery.AgentRun.SandboxID = "other"
+			case "harness":
+				delivery.AgentRun.Harness = "other"
+			case "thread":
+				delivery.AgentRun.ThreadID = "other"
+			case "turn":
+				delivery.AgentRun.TurnID = "other"
+			}
+			result := core.HarnessTimeline{CompletedItems: []core.HarnessConversationItem{{Index: 0, Kind: "input", NativeItemID: "native", ClientID: "run", MessageID: "injected"}}}
+			if err := bindTimelineInputs(&result, []core.Delivery{delivery}, run); err != nil {
+				t.Fatal(err)
+			}
+			if result.CompletedItems[0].MessageID != "" || result.CompletedItems[0].ClientID != "" {
+				t.Fatalf("foreign attribution=%+v", result)
+			}
+		})
+	}
+}

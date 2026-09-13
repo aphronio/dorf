@@ -418,6 +418,12 @@ func NewHandler(token string, service Service) (http.Handler, error) {
 		CommandPath:   commandEndpoint(service),
 		StatusPath:    statusEndpoint(service),
 		TimelinePath: jsonEndpoint(MaxObservationBytes, func(ctx context.Context, input timelineRequest) (core.HarnessTimeline, error) {
+			if input.MessageID != "" {
+				if input.TurnID != "" {
+					return core.HarnessTimeline{}, ErrInvalidRequest
+				}
+				return service.ReadMessageTimeline(ctx, input.JobID, input.MessageID)
+			}
 			return service.ReadTimeline(ctx, input.JobID, input.TurnID)
 		}),
 		MessageObservationPath: jsonEndpoint(MaxObservationBytes, func(ctx context.Context, input messageObservationRequest) (core.MessageResult, error) {

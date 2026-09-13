@@ -1,9 +1,9 @@
 # D119: Native timeline reads preserve Harness history
 
-- **Applicability:** current
+- **Applicability:** partial
 - **Areas:** client-api, harnesses, interaction
 - **Read when:** Changing native conversation reads, public native references, or transcript custody.
-- **Decision history:** Accepted native timeline projection — 2026-09-13
+- **Decision history:** Accepted native timeline projection — 2026-09-13; extended by D123
 - **Decision:** Extend the authenticated Job projection with a passive read of one native
   conversation turn. Resolve the Job's default Sandbox and unique retained Harness thread under
   the existing cleanup fence. Expose native references and original conversation objects as read

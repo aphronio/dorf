@@ -318,6 +318,45 @@
         }
       }
     },
+    "/v1/jobs/{job}/messages/{message}/timeline": {
+      "get": {
+        "operationId": "readMessageTimeline",
+        "summary": "Read completed replies and inputs in the Message's native turn",
+        "description": "A passive read of the exact bound turn, including completed final replies before the turn settles. Entries preserve native order. Use thread_id, turn_id and index to identify retained entries; native_item_id is diagnostic only. Input message_id is present only when verified against Dorf custody. Missing binding or unavailable history returns timeline_unavailable.",
+        "tags": [
+          "Messages"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobID"
+          },
+          {
+            "$ref": "#/components/parameters/MessageID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completed conversation entries available at read time",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageTimeline"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/v1/jobs/{job}/timeline": {
       "get": {
         "operationId": "readJobTimeline",
@@ -860,6 +899,87 @@
         "properties": {
           "provider": { "type": "string" },
           "state": { "type": "string", "enum": ["running", "paused", "stopped", "missing", "unknown"] }
+        }
+      },
+      "MessageTimeline": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "job_id",
+          "message_id",
+          "harness",
+          "thread_id",
+          "turn_id",
+          "status",
+          "items"
+        ],
+        "properties": {
+          "job_id": {
+            "type": "string"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "harness": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "turn_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "inProgress",
+              "completed",
+              "failed",
+              "interrupted"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MessageTimelineItem"
+            }
+          }
+        }
+      },
+      "MessageTimelineItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "index",
+          "native_item_id",
+          "kind"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Zero-based order among completed inputs and final replies in this retained turn."
+          },
+          "native_item_id": {
+            "type": "string",
+            "description": "Native diagnostic reference. May change across active and persisted reads."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "input",
+              "reply"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Complete nonempty final reply text. Present on replies only."
+          },
+          "message_id": {
+            "type": "string",
+            "description": "Verified Dorf input Message identity, when known. Present on inputs only."
+          }
         }
       },
       "Timeline": {

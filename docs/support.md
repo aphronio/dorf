@@ -8,6 +8,12 @@ The response preserves the selected turn's conversation objects and their native
 does not require `thread/items/list` or a guest image upgrade. Pi has no timeline adapter in this
 slice. An unsupported full-turn read returns `timeline_unavailable`.
 
+Completed Message timelines are verified with Codex 0.154.0 in legacy, paginated, and default
+history modes. A completed assistant item can be read before its Turn settles. The adapter excludes
+commentary and unfinished assistant items. Missing or null phases remain eligible for legacy
+history. Entry order survives a cold read within the same retained history mode; raw native item
+IDs may change. The [API contract](control-api.md) defines input attribution and client identity.
+
 A timeline read can start an app-server when none is running. It never replaces a live server,
 loads or resumes a thread, or starts model work. Native history that the Harness cannot read stays
 unavailable. The [Remote Control API](control-api.md) owns client-visible read behavior and limits.

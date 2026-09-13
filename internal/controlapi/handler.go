@@ -56,6 +56,7 @@ func newHandlerContext(discovery Discovery, auth Auth, jobs Jobs, profiles Profi
 	h.mux.HandleFunc("/v1/jobs/{job}/timeline", h.authenticate(h.timelineRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/watch", h.authenticate(h.watchRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/messages", h.authenticate(h.sendMessageRoute))
+	h.mux.HandleFunc("/v1/jobs/{job}/messages/{message}/timeline", h.authenticate(h.messageTimelineRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/messages/{message}", h.authenticate(h.messageRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/messages/{message}/interrupt", h.authenticate(h.interruptMessageRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/retries", h.authenticate(h.retryRoute))

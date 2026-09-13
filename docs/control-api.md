@@ -174,6 +174,25 @@ and are not stable client cursors or guaranteed matches for notification IDs. Ea
 15-second native deadline and a 16 MiB total native response budget. Invalid pagination progress or
 an exceeded bound fails the whole read rather than returning truncated success.
 
+A Message timeline reads completed inputs and final assistant replies from that Message's exact
+bound Turn, even while the Turn remains active. The endpoint returns a flat Job and Message
+identity, native Harness/Thread/Turn references, Turn status, and ordered entries. Each entry has
+an `index`, diagnostic `native_item_id`, and `kind`. Reply entries carry complete nonempty `text`.
+Empty replies are omitted; whitespace is preserved. Input
+entries carry `message_id` only when the input matches a stored delivery in that same native Turn.
+Several Messages can share a Turn after steering. Input origin does not establish which reply
+answers which input. Commentary remains available through the raw Job timeline.
+
+Use the retained `thread_id`, `turn_id`, and entry `index` to identify completed entries across
+reads. The index counts only inputs and final replies. Equal reply text can appear at different
+indexes and must remain distinct. Native IDs can change between active and persisted reads.
+This identity holds within the retained session and its existing history mode. It does not cover
+rewriting the session or migrating its history mode. Clients own notification deduplication.
+
+A Message that has not bound a native Turn returns `timeline_unavailable`. Clients may retry while
+its delivery remains nonterminal. The Message timeline uses the same read bounds and cleanup
+custody as raw timelines. It stores no transcript and does not change terminal `result.output`.
+
 An unknown selected turn returns `turn_not_found`. Missing or conflicting thread custody, cleanup,
 unsupported Harness APIs, and unavailable history return `timeline_unavailable`. An existing Job
 without native history does not return an empty success. Cleanup waits for an active read's fence,

@@ -120,7 +120,8 @@ func (p *protocol) readTimeline(ctx context.Context, threadID, turnID string) (c
 				if err != nil {
 					return core.HarnessTimeline{}, err
 				}
-				return core.HarnessTimeline{Harness: Harness, ThreadID: threadID, TurnID: turn.ID, Status: turn.Status, Items: items}, nil
+				completed, _ := completedConversationItems(items)
+				return core.HarnessTimeline{Harness: Harness, ThreadID: threadID, TurnID: turn.ID, Status: turn.Status, Items: items, CompletedItems: completed}, nil
 			}
 		}
 		if page.NextCursor == nil {
@@ -168,6 +169,51 @@ func conversationItems(native []json.RawMessage) ([]json.RawMessage, error) {
 	}
 	if len(items) == 0 {
 		return nil, core.ErrTimelineUnavailable
+	}
+	return items, nil
+}
+
+func completedConversationItems(native []json.RawMessage) ([]core.HarnessConversationItem, error) {
+	items := make([]core.HarnessConversationItem, 0, len(native))
+	for _, raw := range native {
+		var fields struct {
+			ID       string  `json:"id"`
+			Type     string  `json:"type"`
+			Phase    *string `json:"phase"`
+			ClientID string  `json:"clientId"`
+			Text     *string `json:"text"`
+			Content  []*struct {
+				Text *string `json:"text"`
+			} `json:"content"`
+		}
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			return nil, core.ErrTimelineUnavailable
+		}
+		for _, block := range fields.Content {
+			if block == nil {
+				return nil, core.ErrTimelineUnavailable
+			}
+		}
+		entry := core.HarnessConversationItem{Index: len(items), NativeItemID: fields.ID}
+		switch fields.Type {
+		case "userMessage":
+			entry.Kind, entry.ClientID = "input", fields.ClientID
+		case "agentMessage":
+			if fields.Phase != nil && *fields.Phase != "final_answer" {
+				continue
+			}
+			var item map[string]any
+			if err := json.Unmarshal(raw, &item); err != nil {
+				return nil, core.ErrTimelineUnavailable
+			}
+			entry.Kind, entry.Text = "reply", agentMessageText(item)
+			if entry.Text == "" {
+				continue
+			}
+		default:
+			continue
+		}
+		items = append(items, entry)
 	}
 	return items, nil
 }
