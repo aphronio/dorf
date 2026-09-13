@@ -71,3 +71,21 @@ Browser packages and Chromium live in the Incus-specific recipe; the shared E2B 
 unchanged. Image metadata records the browser package, Python, Playwright, and Chromium versions.
 Provider credentials do not move to hosted Actions. Do not
 bypass the repository command for either path.
+
+## E2B template
+
+The E2B builder uses the shared guest recipe from a clean source commit. It loads
+`E2B_API_KEY` through Bun from the repository-root `.env`; an exported value takes
+precedence. Do not infer missing credentials from the calling shell alone. Check
+configuration without starting a paid build or displaying the key:
+
+```bash
+scripts/e2b/build-template.sh --check
+```
+
+Build the template with `scripts/e2b/build-template.sh`. The builder writes its exact
+reference and recipe provenance to `dist/e2b-template/profile.json`.
+Verify that build with `DORF_E2B_PROFILE_LIVE=1`, `E2B_API_KEY`, and
+`DORF_E2B_PROFILE_MANIFEST` pointing to the manifest, using
+`mise exec -- go test ./internal/e2b -run '^TestLiveCombinedHarnessProfile$' -count=1`.
+The Go test requires the key in its environment; it does not load `.env` itself.
