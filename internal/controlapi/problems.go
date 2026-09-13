@@ -51,6 +51,8 @@ var problemCatalog = []ProblemDescriptor{
 	describeProblem(404, "sandbox_not_found", "Sandbox not found", false),
 	describeProblem(409, "skill_refresh_unavailable", "The selected profile does not support skill refresh", false),
 	describeProblem(409, "steer_unavailable", "No exact active delivery can accept a steer", false),
+	describeProblem(409, "timeline_unavailable", "Native timeline is unavailable", false),
+	describeProblem(404, "turn_not_found", "Native turn not found", false),
 	describeProblem(401, "unauthenticated", "A valid Client credential is required", false),
 	describeProblem(415, "unsupported_media_type", "Content-Type does not match this operation", false),
 	describeProblem(400, "unsupported_precondition", "Conditional headers are not supported for this mutation", false),

@@ -4,7 +4,7 @@
   "info": {
     "title": "Dorf Remote Control API",
     "version": "1.0.0",
-    "description": "The authenticated, purpose-built remote boundary for one Dorf Deployment. A Job is the long-running resource; internal Tasks, AgentRuns, Threads, Turns, Actions, providers, and Harnesses are not exposed."
+    "description": "The authenticated, purpose-built remote boundary for one Dorf Deployment. A Job is the long-running resource; internal Tasks, AgentRuns, Actions, and providers are not exposed as resources. Timeline reads expose native Harness, Thread, and Turn references without granting control over them."
   },
   "servers": [
     {
@@ -315,6 +315,52 @@
             }
           },
           "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/v1/jobs/{job}/timeline": {
+      "get": {
+        "operationId": "readJobTimeline",
+        "summary": "Read one native conversation turn without starting work",
+        "description": "Returns original userMessage and agentMessage objects in native order. Omitted turn_id selects the latest started turn once. Unavailable, unsupported, oversized, or incomplete history fails without truncation.",
+        "tags": [
+          "Jobs"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobID"
+          },
+          {
+            "name": "turn_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Native conversation turn available at read time",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Timeline"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -795,6 +841,49 @@
       }
     },
     "schemas": {
+      "Timeline": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "job_id",
+          "harness",
+          "thread_id",
+          "turn_id",
+          "status",
+          "items"
+        ],
+        "properties": {
+          "job_id": {
+            "type": "string"
+          },
+          "harness": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "turn_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "inProgress",
+              "completed",
+              "failed",
+              "interrupted"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "description": "Original native userMessage and agentMessage objects, including phase and content, in native order."
+          }
+        }
+      },
       "OpenAPIDocument": {
         "type": "object",
         "description": "The canonical OpenAPI 3.1 document. Its full recursive shape is defined by the OpenAPI specification.",

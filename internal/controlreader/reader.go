@@ -394,6 +394,9 @@ func NewHandler(token string, service Service) (http.Handler, error) {
 		FileReadPath:  fileReadEndpoint(service),
 		FileWritePath: fileWriteEndpoint(service),
 		CommandPath:   commandEndpoint(service),
+		TimelinePath: jsonEndpoint(MaxObservationBytes, func(ctx context.Context, input timelineRequest) (core.HarnessTimeline, error) {
+			return service.ReadTimeline(ctx, input.JobID, input.TurnID)
+		}),
 		MessageObservationPath: jsonEndpoint(MaxObservationBytes, func(ctx context.Context, input messageObservationRequest) (core.MessageResult, error) {
 			return service.ObserveMessage(ctx, input.JobID, input.MessageID)
 		}),
@@ -542,6 +545,12 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
 
 func writeServiceError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, ErrJobNotFound):
+		writeProblem(w, http.StatusNotFound, "job_not_found")
+	case errors.Is(err, core.ErrTurnNotFound):
+		writeProblem(w, http.StatusNotFound, "turn_not_found")
+	case errors.Is(err, core.ErrTimelineUnavailable):
+		writeProblem(w, http.StatusConflict, "timeline_unavailable")
 	case errors.Is(err, ErrInvalidRequest):
 		writeProblem(w, http.StatusUnprocessableEntity, "invalid_request")
 	case errors.Is(err, ErrSandboxNotFound):
@@ -833,6 +842,12 @@ func decodeProblem(response *http.Response) error {
 		return fmt.Errorf("control reader returned HTTP %d", response.StatusCode)
 	}
 	switch value.Code {
+	case "job_not_found":
+		return ErrJobNotFound
+	case "turn_not_found":
+		return core.ErrTurnNotFound
+	case "timeline_unavailable":
+		return core.ErrTimelineUnavailable
 	case "unauthorized":
 		return ErrUnauthorized
 	case "invalid_request":
@@ -858,11 +873,11 @@ func problemMatchesStatus(code string, status int) bool {
 		return status == http.StatusUnauthorized
 	case "invalid_request":
 		return status == http.StatusBadRequest || status == http.StatusUnprocessableEntity
-	case "sandbox_not_found", "file_not_found":
+	case "sandbox_not_found", "file_not_found", "job_not_found", "turn_not_found":
 		return status == http.StatusNotFound
 	case "invalid_file_path":
 		return status == http.StatusUnprocessableEntity
-	case "unavailable", "response_too_large":
+	case "unavailable", "response_too_large", "timeline_unavailable":
 		return status == http.StatusConflict
 	default:
 		return false

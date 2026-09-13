@@ -1,5 +1,17 @@
 # Support and diagnostics
 
+## Native conversation timelines
+
+Timeline reads use Codex `thread/turns/list` with `itemsView: full`. Native proofs on Codex 0.147
+and 0.154 cover active commentary, steer input, historical selection, and a cold app-server restart.
+The response preserves the selected turn's conversation objects and their native order. This path
+does not require `thread/items/list` or a guest image upgrade. Pi has no timeline adapter in this
+slice. An unsupported full-turn read returns `timeline_unavailable`.
+
+A timeline read can start an app-server when none is running. It never replaces a live server,
+loads or resumes a thread, or starts model work. Native history that the Harness cannot read stays
+unavailable. The [Remote Control API](control-api.md) owns client-visible read behavior and limits.
+
 ## Optional Codex execution logs
 
 Set `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` in the worker process to enable OTLP/HTTP execution logs.

@@ -7,7 +7,8 @@ machine-readable authority is the embedded OpenAPI 3.1 document served by that D
 This is a projection of Dorf's existing Job custody, not a network serialization of Core. A Job is
 the long-running resource. Clients can also discover narrow Sandbox profile summaries for Job
 selection. PostgreSQL rows, Absurd tasks, AgentRuns, Threads, Turns, Actions, providers, Harnesses,
-profile configuration, and integration credentials are not public resources.
+profile configuration, and integration credentials are not public resources. Native timeline reads
+expose Harness, Thread, and Turn references without granting operations on those references.
 
 ## Client and authentication boundary
 
@@ -126,6 +127,26 @@ Sandbox. It derives from retained Message and AgentRun facts; queued follow-ups 
 acknowledgements do not replace it. The Message inspection path accepts `latest` in place of a
 Message ID and resolves the same reply. A Job with no settled reply returns `message_not_found`.
 
+The `job_timeline` capability exposes one passive native conversation turn in the Job's default
+Sandbox. Omission of `turn_id` selects the latest started native turn once. An explicit ID selects
+that turn in the Job's retained thread. The result keeps original `userMessage` and `agentMessage`
+objects in native order, including content, phase, IDs, and optional fields. Tool and reasoning
+items are excluded. Items are neither summaries nor correlations between Dorf Messages and replies.
+
+The native Harness owns this history. Dorf reads the selected full turn without retaining a
+transcript, resuming execution, refreshing skills, or registering an observation subscription.
+Historical selection follows native turn pages; the selected turn's status and items come from one
+native response. Later reads can differ as work progresses. Native item IDs are returned as supplied
+and are not stable client cursors or guaranteed matches for notification IDs. Each read has a
+15-second native deadline and a 16 MiB total native response budget. Invalid pagination progress or
+an exceeded bound fails the whole read rather than returning truncated success.
+
+An unknown selected turn returns `turn_not_found`. Missing or conflicting thread custody, cleanup,
+unsupported Harness APIs, and unavailable history return `timeline_unavailable`. An existing Job
+without native history does not return an empty success. Cleanup waits for an active read's fence,
+then prevents later reads. [Timeline support](support.md#native-conversation-timelines) describes
+the native API prerequisite. A client that needs durable history must own that requirement itself.
+
 Message requests default to `auto`: choose steer against the active Turn at admission, otherwise
 admit a follow. The stored request intent distinguishes automatic selection from explicit follow
 or steer, so replay cannot change either the request or its resolved target. A delivered steer
@@ -216,7 +237,8 @@ socket or identity, E2B key,
 GitHub credential, Gateway state, or provider configuration. The worker's narrow reader answers
 only default and named AI-connection observation, GitHub installation discovery, one exact stored
 Job Proposal observation, exact Job-owned Sandbox file reads and bounded Sandbox file writes, and one
-settled Message result. It has no generic proxy, provider selector, or credential response.
+settled Message result or native conversation turn. It has no generic proxy, provider selector,
+or credential response.
 
 The Compose manifest encodes startup dependencies, health checks, published ports, profile-gated
 services, and network attachment. The project uses no host networking and mounts no host Docker
