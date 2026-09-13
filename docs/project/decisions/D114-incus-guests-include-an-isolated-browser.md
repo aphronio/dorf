@@ -1,9 +1,9 @@
 # D114: Incus guests include an isolated browser
 
-- **Applicability:** current
+- **Applicability:** partial
 - **Areas:** sandboxes, harnesses, release
 - **Read when:** Changing browser tooling, guest browser persistence, or Incus image proof.
-- **Decision history:** Accepted after a retained Codex Sandbox completed browser navigation across Messages — 2026-09-11
+- **Decision history:** Accepted after a retained Codex Sandbox completed browser navigation across Messages — 2026-09-11; publication proof requirement removed by D124 — 2026-09-14
 - **Decision:** The official combined Incus image includes pinned browser-use, browser-harness,
   Playwright, and Chromium. Browser dependencies use their own Python environment. A systemd
   service starts one headless Chromium process with a fresh profile inside each VM. The plain

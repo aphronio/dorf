@@ -110,10 +110,6 @@ fi
 assets=("$INSTALLER" "$APP_ARCHIVE" "$CHECKSUMS")
 image_promoted=false
 if [[ "$OFFICIAL_IMAGE_RELEASE" == "$RELEASE_TAG" ]]; then
-  if [[ -z "${AI_CONNECTION:-}" ]]; then
-    echo "Set AI_CONNECTION to one ready AI connection name for Incus image promotion." >&2
-    exit 2
-  fi
   env OUTPUT_DIR="$OUTPUT_DIR" RELEASE_TAG="$RELEASE_TAG" \
     "$MISE" -C "$PROJECT_ROOT" exec -- "$PROJECT_ROOT/scripts/incus/release-dorf-image.sh"
   assets+=("$IMAGE_ARCHIVE" "$IMAGE_MANIFEST")
@@ -161,12 +157,12 @@ notes_path="$(mktemp)"
     "Official Incus image release: $OFFICIAL_IMAGE_RELEASE"
   if [[ "$image_promoted" == true ]]; then
     printf '%s\n' \
-      "The image was promoted after real Dorf Codex and Pi turns against one fingerprint." \
+      "The image was built from the pinned recipe and its archive and metadata were validated." \
       "Codex: $(jq -r .harnesses.codex.version "$IMAGE_MANIFEST")" \
       "Pi: $(jq -r .harnesses.pi.version "$IMAGE_MANIFEST")" \
       "Base: $(jq -r .base_image.reference "$IMAGE_MANIFEST")"
   else
-    printf '%s\n' "The previously proven image is reused without rebuilding or republishing it."
+    printf '%s\n' "The previously published image is reused without rebuilding or republishing it."
   fi
   printf '%s\n' \
     "Environment: Linux x86_64" \

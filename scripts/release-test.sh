@@ -245,7 +245,7 @@ reset_case() {
 
 release_env() {
   env \
-    AI_CONNECTION=test \
+    -u AI_CONNECTION -u PROOF_PROFILE -u DORF_HOST_COMMAND \
     GITHUB_REPOSITORY=aphronio/dorf \
     OUTPUT_DIR="$FIXTURE_ROOT/dist/release" \
     DORF_MISE="$FIXTURE_ROOT/.dorf/bin/mise" \

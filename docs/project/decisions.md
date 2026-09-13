@@ -135,9 +135,10 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D092: Investigation reports remain Sandbox files](decisions/D092-investigation-reports-remain-sandbox-files.md) (`current`). Changing how investigation reports are produced, accessed, or retained.
 - [D101: Compose owns deployment lifecycle; bootstrap privilege stays explicit](decisions/D101-compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit.md) (`current`). Changing Compose topology, setup-applied lifecycle, bootstrap, or release images.
 - [D106: Remove unused workflow capability declarations](decisions/D106-remove-unused-workflow-capability-declarations.md) (`current`). Adding optional provider requirements or workflow runtime metadata.
-- [D114: Incus guests include an isolated browser](decisions/D114-incus-guests-include-an-isolated-browser.md) (`current`). Changing browser tooling, guest browser persistence, or Incus image proof.
+- [D114: Incus guests include an isolated browser](decisions/D114-incus-guests-include-an-isolated-browser.md) (`partial`). Changing browser tooling, guest browser persistence, or Incus image proof.
 - [D120: Default idle pause with an admitted keep-running override](decisions/D120-default-idle-pause-with-an-admitted-keep-running-override.md) (`partial`). Changing Sandbox idle policy, E2B retention, or admission defaults.
 - [D122: Sandbox activity delays idle pause](decisions/D122-sandbox-activity-delays-idle-pause.md) (`current`). Changing idle pause timing, managed Sandbox access, or cancellation fences.
+- [D124: Image publication does not require live coding proofs](decisions/D124-image-publication-does-not-require-live-coding-proofs.md) (`current`). Changing Incus image publication prerequisites or release verification.
 
 ## Harnesses
 
@@ -156,7 +157,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D090: Open Jobs may have no current workflow operation](decisions/D090-open-jobs-may-have-no-current-workflow-operation.md) (`current`). Changing how an open Job waits when no workflow operation is eligible.
 - [D091: Profile verification gates admission, not admitted runtime](decisions/D091-profile-verification-gates-admission-not-admitted-runtime.md) (`current`). Changing profile verification, concurrent admission, or admitted runtime resolution.
 - [D109: Export diagnostics through the existing native Turn binding](decisions/D109-exact-turn-execution-diagnostics.md) (`current`). Changing native execution diagnostics, attribution, or exporter custody.
-- [D114: Incus guests include an isolated browser](decisions/D114-incus-guests-include-an-isolated-browser.md) (`current`). Changing browser tooling, guest browser persistence, or Incus image proof.
+- [D114: Incus guests include an isolated browser](decisions/D114-incus-guests-include-an-isolated-browser.md) (`partial`). Changing browser tooling, guest browser persistence, or Incus image proof.
 - [D117: Clients request skill refresh at fresh Turn boundaries](decisions/D117-client-requested-skill-refresh-at-fresh-turn-boundaries.md) (`current`). Changing skill discovery after client-managed Sandbox updates.
 - [D118: Messages retain ordered input attachments and immutable bytes](decisions/D118-messages-retain-ordered-input-attachments-and-immutable-bytes.md) (`current`). Changing Message attachments, input blob custody, native image delivery, or attachment replay.
 - [D119: Native timeline reads preserve Harness history](decisions/D119-native-timeline-reads-preserve-harness-history.md) (`partial`). Changing native conversation reads, public native references, or transcript custody.
@@ -270,7 +271,8 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D066: One credential-free image carries both verified Harnesses](decisions/D066-one-credential-free-image-carries-both-verified-harnesses.md) (`partial`). Changing combined Harness image packaging, promotion proof, or credential-free artifact contents.
 - [D094: Published PostgreSQL migrations are immutable and append-only](decisions/D094-published-postgresql-migrations-are-immutable-and-append-only.md) (`current`). Changing a published PostgreSQL schema or the migration runner.
 - [D101: Compose owns deployment lifecycle; bootstrap privilege stays explicit](decisions/D101-compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit.md) (`current`). Changing Compose topology, setup-applied lifecycle, bootstrap, or release images.
-- [D114: Incus guests include an isolated browser](decisions/D114-incus-guests-include-an-isolated-browser.md) (`current`). Changing browser tooling, guest browser persistence, or Incus image proof.
+- [D114: Incus guests include an isolated browser](decisions/D114-incus-guests-include-an-isolated-browser.md) (`partial`). Changing browser tooling, guest browser persistence, or Incus image proof.
+- [D124: Image publication does not require live coding proofs](decisions/D124-image-publication-does-not-require-live-coding-proofs.md) (`current`). Changing Incus image publication prerequisites or release verification.
 
 ## Historical decisions
 
