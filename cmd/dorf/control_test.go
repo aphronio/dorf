@@ -418,12 +418,13 @@ func TestPublicJobStatesKeepCleanupTruthSeparateFromExecution(t *testing.T) {
 		wantExecution string
 		wantCleanup   string
 		wantCode      string
+		failure       json.RawMessage
 	}{
 		{name: "healthy cleanup preserves idle", cleanup: core.CleanupScheduled, task: absurd.TaskRunning, execution: "idle", wantExecution: "idle", wantCleanup: "running"},
 		{name: "healthy cleanup stops queued work", cleanup: core.CleanupScheduled, task: absurd.TaskRunning, execution: "awaiting_agent", wantExecution: "stopped", wantCleanup: "running"},
 		{name: "healthy cleanup stops active work", cleanup: core.CleanupScheduled, task: absurd.TaskRunning, execution: "running", wantExecution: "stopped", wantCleanup: "running"},
 		{name: "healthy cleanup preserves attention", cleanup: core.CleanupScheduled, task: absurd.TaskRunning, execution: "stopped", wantExecution: "stopped", wantCleanup: "running", wantCode: "agent_attention"},
-		{name: "failed cleanup", cleanup: core.CleanupScheduled, task: absurd.TaskFailed, execution: "idle", wantExecution: "idle", wantCleanup: "failed", wantCode: "cleanup_failed"},
+		{name: "failed cleanup", failure: json.RawMessage(`{"message":"create Incus instance private-sandbox: Reached maximum number of instances in project private-project"}`), cleanup: core.CleanupScheduled, task: absurd.TaskFailed, execution: "idle", wantExecution: "idle", wantCleanup: "failed", wantCode: "cleanup_failed"},
 		{name: "requested cleanup preserves failure", cleanup: core.CleanupRequested, task: absurd.TaskFailed, execution: "idle", wantExecution: "failed", wantCleanup: "requested", wantCode: "execution_failed"},
 		{name: "requested cleanup accepts cancellation window", cleanup: core.CleanupRequested, task: absurd.TaskCancelled, execution: "running", wantExecution: "stopped", wantCleanup: "requested"},
 		{name: "missing task attachment", cleanup: core.CleanupPending, task: "", execution: "provisioning_sandbox", wantExecution: "failed", wantCleanup: "not_requested", wantCode: "execution_failed"},
@@ -437,7 +438,7 @@ func TestPublicJobStatesKeepCleanupTruthSeparateFromExecution(t *testing.T) {
 			}
 			view, err := publicCommonJob(core.Job{
 				ID: "job-1", CleanupState: test.cleanup, CleanupAttention: privateMarker,
-			}, controlapi.JobKindDirect, test.execution, inputAttention, test.task,
+			}, controlapi.JobKindDirect, test.execution, inputAttention, taskResultView{State: test.task, failure: test.failure},
 				[]core.Sandbox{{ID: "sandbox-1", JobID: "job-1", Name: "default"}})
 			if err != nil {
 				t.Fatal(err)

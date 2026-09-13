@@ -1610,7 +1610,7 @@ func (a controlAPIJobs) projectDirect(ctx context.Context, job core.Job) (contro
 		}
 		attention = &controlapi.Attention{Code: code, Detail: "Job execution needs operator attention; inspect the deployment service logs."}
 	}
-	common, err := publicCommonJob(job, controlapi.JobKindDirect, executionState, attention, task.State, snapshot.Sandboxes)
+	common, err := publicCommonJob(job, controlapi.JobKindDirect, executionState, attention, task, snapshot.Sandboxes)
 	return controlapi.DirectJob{Job: common}, err
 }
 
@@ -1641,7 +1641,7 @@ func (a controlAPIJobs) projectCoding(ctx context.Context, job core.Job) (contro
 		executionState = "stopped"
 		attention = &controlapi.Attention{Code: "job_attention", Detail: "Job execution needs operator attention; inspect the deployment service logs."}
 	}
-	common, err := publicCommonJob(job, controlapi.JobKindCoding, executionState, attention, task.State, snapshot.Sandboxes)
+	common, err := publicCommonJob(job, controlapi.JobKindCoding, executionState, attention, task, snapshot.Sandboxes)
 	if err != nil {
 		return controlapi.CodingJob{}, err
 	}
@@ -1687,7 +1687,7 @@ func (a controlAPIJobs) projectInvestigation(ctx context.Context, job core.Job) 
 	case work.Kind == "":
 		executionState = "idle"
 	}
-	common, err := publicCommonJob(job, controlapi.JobKindInvestigation, executionState, attention, task.State,
+	common, err := publicCommonJob(job, controlapi.JobKindInvestigation, executionState, attention, task,
 		[]core.Sandbox{snapshot.MainSandbox})
 	if err != nil {
 		return controlapi.InvestigationJob{}, err
@@ -1710,7 +1710,7 @@ func publicJobCreator(id, name string) *controlapi.JobCreator {
 	return &controlapi.JobCreator{ID: id, Name: name}
 }
 
-func publicCommonJob(job core.Job, kind, executionState string, attention *controlapi.Attention, taskState absurd.TaskResultState, owned []core.Sandbox) (controlapi.Job, error) {
+func publicCommonJob(job core.Job, kind, executionState string, attention *controlapi.Attention, task taskResultView, owned []core.Sandbox) (controlapi.Job, error) {
 	if executionState == "" {
 		return controlapi.Job{}, fmt.Errorf("Job %s has an incomplete public projection", job.ID)
 	}
@@ -1721,16 +1721,16 @@ func publicCommonJob(job core.Job, kind, executionState string, attention *contr
 	if cleanupState == "" {
 		return controlapi.Job{}, fmt.Errorf("Job %s has unknown cleanup state %q", job.ID, job.CleanupState)
 	}
-	if (job.CleanupState == core.CleanupPending && failedExecutionTask(taskState)) ||
-		(job.CleanupState == core.CleanupRequested && taskState == absurd.TaskFailed) {
+	if (job.CleanupState == core.CleanupPending && failedExecutionTask(task.State)) ||
+		(job.CleanupState == core.CleanupRequested && task.State == absurd.TaskFailed) {
 		executionState = "failed"
-		attention = &controlapi.Attention{Code: "execution_failed", Detail: "Job execution stopped; inspect the deployment service logs, repair the cause, then retry."}
+		attention = publicExecutionFailure(task)
 	}
 	if job.CleanupState != core.CleanupPending {
 		if executionState == "provisioning_sandbox" || executionState == "connecting_model_access" || executionState == "awaiting_agent" || executionState == "running" {
 			executionState = "stopped"
 		}
-		if job.CleanupState == core.CleanupScheduled && failedExecutionTask(taskState) {
+		if job.CleanupState == core.CleanupScheduled && failedExecutionTask(task.State) {
 			cleanupState = "failed"
 			attention = &controlapi.Attention{Code: "cleanup_failed", Detail: "Cleanup stopped before all resources were released; inspect the deployment service logs."}
 		}
@@ -1749,6 +1749,21 @@ func publicCommonJob(job core.Job, kind, executionState string, attention *contr
 		Admission: controlapi.Admission{Open: job.AdmissionOpen}, Execution: controlapi.State{State: executionState},
 		Attention: attention, Cleanup: controlapi.State{State: cleanupState}, Sandboxes: sandboxes,
 	}, nil
+}
+
+func publicExecutionFailure(task taskResultView) *controlapi.Attention {
+	var failure struct {
+		Message string `json:"message"`
+	}
+	if task.State == absurd.TaskFailed && json.Unmarshal(task.failure, &failure) == nil {
+		_, creation, found := strings.Cut(failure.Message, "create Incus instance ")
+		_, detail, _ := strings.Cut(creation, ": ")
+		if found && (strings.HasPrefix(detail, "Reached maximum number of instances in project ") ||
+			strings.HasPrefix(detail, `Reached maximum number of instances of type "virtual-machine" in project `)) {
+			return &controlapi.Attention{Code: "sandbox_capacity_exhausted", Detail: "Sandbox creation failed because the VM limit was reached. Free capacity or increase the limit, then retry."}
+		}
+	}
+	return &controlapi.Attention{Code: "execution_failed", Detail: "Job execution stopped; inspect the deployment service logs, repair the cause, then retry."}
 }
 
 func failedExecutionTask(state absurd.TaskResultState) bool {
