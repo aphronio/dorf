@@ -15,7 +15,8 @@ unavailable. The [Remote Control API](control-api.md) owns client-visible read b
 ## Optional Codex execution logs
 
 Set `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` in the worker process to enable OTLP/HTTP execution logs.
-An empty endpoint disables this observer. `OTEL_EXPORTER_OTLP_LOGS_HEADERS` supplies exporter
+An empty endpoint disables log export. Native Turn observation still tracks when workspace
+instructions need to be supplied again. `OTEL_EXPORTER_OTLP_LOGS_HEADERS` supplies exporter
 authentication; `OTEL_RESOURCE_ATTRIBUTES` can set `deployment.environment.name`. For the managed
 Compose worker, put these variables in `${XDG_CONFIG_HOME:-$HOME/.config}/dorf/telemetry.env`,
 owned by the deployment operator with mode `0600`, then recreate the worker. This optional file
