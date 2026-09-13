@@ -79,9 +79,15 @@ Workspace instructions supplied at creation are installed within Sandbox prepara
 Harness work can start. Clients may also initialize missing files through the bounded workspace
 file API before sending the first Message. Workspace files are the live instruction authority.
 The Codex adapter loads AGENTS.md natively on a new thread, sends a read notice when it changes,
-and injects SOUL.md as native developer context only initially or after its contents change.
+and injects SOUL.md as native user context only initially or after its contents change.
+Workspace refresh notices also carry user authority. A fixed developer notice revokes any legacy
+workspace-derived developer instructions before refreshed user content, without embedding file
+contents or altering the application instruction snapshot.
 Process-local hashes avoid repeating unchanged context. A lost cache causes rehydration from the
-same files. Message text and durable Core records do not carry instruction snapshots.
+same files. Separately, Messages retain an optional immutable application developer instruction
+snapshot. The Codex adapter injects its complete replacement at developer authority before a fresh
+Turn, preserving built-in model instructions. Recovery of an accepted Turn and steering do not
+apply snapshots. Client-owned application policy remains outside Dorf Core.
 Clients request skill refresh through durable Message input. Existing delivery selection decides
 when a fresh Turn can start. Effective refresh derives from pending requests and accepted native
 Turn bindings in the same Agent lane. The Codex adapter calls `skills/list` with forced reload only

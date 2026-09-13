@@ -1,13 +1,13 @@
 -- name: GetMessageBySender :one
 select id,job_id,from_kind,from_id,sequence,input,attachments,delivery_intent,requested_intent,
-       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at,refresh_skills
+       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at,refresh_skills,developer_instructions
 from dorf.job_messages
 where job_id=sqlc.arg(job_id) and from_kind=sqlc.arg(from_kind)
   and from_id=sqlc.arg(from_id);
 
 -- name: GetMessage :one
 select id,job_id,from_kind,from_id,sequence,input,attachments,delivery_intent,
-       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at,refresh_skills
+       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at,refresh_skills,developer_instructions
 from dorf.job_messages
 where id=sqlc.arg(message_id);
 
@@ -40,12 +40,12 @@ where job_id=sqlc.arg(job_id);
 
 -- name: InsertMessage :exec
 insert into dorf.job_messages(
-    id,job_id,from_kind,from_id,sequence,input,attachments,delivery_intent,steer_target_turn_id,requested_intent,refresh_skills
+    id,job_id,from_kind,from_id,sequence,input,attachments,delivery_intent,steer_target_turn_id,requested_intent,refresh_skills,developer_instructions
 )
 values(
     sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(from_kind),sqlc.arg(from_id),
     sqlc.arg(sequence),sqlc.arg(input),sqlc.arg(attachments)::jsonb,sqlc.arg(delivery_intent),
-    nullif(sqlc.arg(steer_target_turn_id)::text,''),sqlc.arg(requested_intent),sqlc.arg(refresh_skills)
+    nullif(sqlc.arg(steer_target_turn_id)::text,''),sqlc.arg(requested_intent),sqlc.arg(refresh_skills),sqlc.narg(developer_instructions)
 );
 
 -- name: GetFirstUnsettledInput :one
@@ -79,7 +79,7 @@ limit 1;
 
 -- name: ListDeliveries :many
 select m.id as message_id,m.job_id as message_job_id,m.from_kind,m.from_id,m.sequence,m.input,m.attachments,m.delivery_intent,
-       coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,m.refresh_skills,
+       coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,m.refresh_skills,m.developer_instructions,
        m.admitted_at,
        (ar.id is not null)::boolean as agent_run_present,
        coalesce(ar.id,'') as agent_run_id,coalesce(ar.job_id,'') as agent_run_job_id,

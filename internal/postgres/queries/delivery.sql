@@ -40,6 +40,6 @@ with current_turn_start as (
       and not exists(select 1 from current_unbound_mutation)
 )
 select m.id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,m.attachments,m.delivery_intent,
-       coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,m.admitted_at,m.refresh_skills
+       coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,m.admitted_at,m.refresh_skills,m.developer_instructions
 from candidate c join dorf.job_messages m on m.id=c.message_id
 order by c.priority,c.sequence limit 1;

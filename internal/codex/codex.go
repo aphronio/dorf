@@ -880,6 +880,9 @@ func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRun
 			return TurnOutcome{}, &skillsReloadError{err: err}
 		}
 	}
+	if err := p.injectDeveloperInstructions(ctx, sessionID, goal.DeveloperInstructions); err != nil {
+		return TurnOutcome{}, err
+	}
 	if err := p.injectWorkspaceInstructions(ctx, sessionID); err != nil {
 		return TurnOutcome{}, err
 	}

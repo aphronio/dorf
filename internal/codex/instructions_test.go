@@ -33,9 +33,16 @@ func TestWorkspaceInstructionsFollowFileChangesInOneThread(t *testing.T) {
 			return map[string]any{"thread": map[string]any{"id": "retained-thread"}}, false
 		case "thread/inject_items":
 			items := params["items"].([]any)
-			item := items[0].(map[string]any)
-			if len(items) != 1 || item["role"] != "developer" {
-				t.Fatal("workspace context was not a single native developer message")
+			if len(items) != 2 {
+				t.Fatal("workspace context requires an authority notice and user content")
+			}
+			notice := items[0].(map[string]any)
+			if notice["role"] != "developer" || notice["content"].([]any)[0].(map[string]any)["text"] != workspaceAuthorityNotice {
+				t.Fatal("workspace authority notice was changed")
+			}
+			item := items[1].(map[string]any)
+			if item["role"] != "user" {
+				t.Fatal("workspace context did not have user authority")
 			}
 			injections <- item["content"].([]any)[0].(map[string]any)["text"].(string)
 			return map[string]any{}, false

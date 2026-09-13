@@ -229,7 +229,7 @@ func (h AgentHandle) Message(ctx context.Context, key string, input MessageInput
 	request := MessageAdmission{
 		JobID: h.jobID, SandboxID: h.sandboxID, FromKind: MessageFromHuman,
 		FromID: key, Input: input.Text, Attachments: append([]MessageAttachment(nil), input.Attachments...), Intent: intent,
-		RefreshSkills: refreshSkills,
+		RefreshSkills: refreshSkills, DeveloperInstructions: input.DeveloperInstructions,
 	}
 	return h.admitMessage(ctx, key, request)
 }
@@ -269,7 +269,7 @@ func (h AgentHandle) admitMessage(ctx context.Context, key string, request Messa
 	targetValid := message.Intent == MessageFollow && message.TargetTurnID == "" || message.Intent == MessageSteer && message.TargetTurnID != ""
 	accepted := MessageAdmission{
 		JobID: message.JobID, SandboxID: admitted.SandboxID, FromKind: message.FromKind, FromID: message.FromID,
-		Input: message.Input, Attachments: message.Attachments, Intent: request.Intent, RefreshSkills: message.RefreshSkills,
+		Input: message.Input, Attachments: message.Attachments, Intent: request.Intent, RefreshSkills: message.RefreshSkills, DeveloperInstructions: message.DeveloperInstructions,
 	}
 	if !sameMessageAdmission(accepted, request) || message.ID != expectedID || message.Sequence <= 0 || !request.Intent.accepts(message.Intent) || !targetValid {
 		return MessageReceipt{}, fmt.Errorf("Agent Message admission returned a foreign receipt")
@@ -293,7 +293,7 @@ func (h AgentHandle) admitMessage(ctx context.Context, key string, request Messa
 }
 
 func sameMessageAdmission(left, right MessageAdmission) bool {
-	if left.RefreshSkills != right.RefreshSkills || left.JobID != right.JobID || left.SandboxID != right.SandboxID ||
+	if !SameDeveloperInstructions(left.DeveloperInstructions, right.DeveloperInstructions) || left.RefreshSkills != right.RefreshSkills || left.JobID != right.JobID || left.SandboxID != right.SandboxID ||
 		left.FromKind != right.FromKind || left.FromID != right.FromID || left.Input != right.Input || left.Intent != right.Intent ||
 		len(left.Attachments) != len(right.Attachments) {
 		return false

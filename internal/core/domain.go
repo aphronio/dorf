@@ -210,17 +210,18 @@ type MessageAttachment struct {
 }
 
 type Message struct {
-	RefreshSkills bool                  `json:"refresh_skills,omitempty"`
-	ID            string                `json:"id"`
-	JobID         string                `json:"job_id"`
-	FromKind      MessageFromKind       `json:"from_kind"`
-	FromID        string                `json:"from_id"`
-	Sequence      int64                 `json:"sequence"`
-	Input         string                `json:"input"`
-	Attachments   []MessageAttachment   `json:"attachments,omitempty"`
-	Intent        MessageDeliveryIntent `json:"intent"`
-	TargetTurnID  string                `json:"target_turn_id,omitempty"`
-	AdmittedAt    time.Time             `json:"admitted_at,omitempty"`
+	DeveloperInstructions *string               `json:"developer_instructions,omitempty"`
+	RefreshSkills         bool                  `json:"refresh_skills,omitempty"`
+	ID                    string                `json:"id"`
+	JobID                 string                `json:"job_id"`
+	FromKind              MessageFromKind       `json:"from_kind"`
+	FromID                string                `json:"from_id"`
+	Sequence              int64                 `json:"sequence"`
+	Input                 string                `json:"input"`
+	Attachments           []MessageAttachment   `json:"attachments,omitempty"`
+	Intent                MessageDeliveryIntent `json:"intent"`
+	TargetTurnID          string                `json:"target_turn_id,omitempty"`
+	AdmittedAt            time.Time             `json:"admitted_at,omitempty"`
 }
 
 type MessageDeliveryIntent string

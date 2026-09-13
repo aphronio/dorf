@@ -240,10 +240,11 @@ type Sandbox struct {
 }
 
 type SendMessageRequest struct {
-	RefreshSkills bool                    `json:"refresh_skills,omitempty"`
-	Text          string                  `json:"text"`
-	Intent        string                  `json:"intent,omitempty"`
-	Attachments   []SendMessageAttachment `json:"-"`
+	DeveloperInstructions *string                 `json:"developer_instructions,omitempty"`
+	RefreshSkills         bool                    `json:"refresh_skills,omitempty"`
+	Text                  string                  `json:"text"`
+	Intent                string                  `json:"intent,omitempty"`
+	Attachments           []SendMessageAttachment `json:"-"`
 }
 
 // SendMessageAttachment is one caller-supplied filename and byte body. The

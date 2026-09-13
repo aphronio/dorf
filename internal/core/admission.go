@@ -29,8 +29,9 @@ func ValidClientReference(value string) bool {
 // already entered Dorf's immutable blob store; Core retains only their exact
 // ordered metadata.
 type MessageInput struct {
-	Text        string
-	Attachments []MessageAttachment
+	DeveloperInstructions *string
+	Text                  string
+	Attachments           []MessageAttachment
 }
 
 func ValidMessageAttachment(attachment MessageAttachment) bool {
@@ -77,7 +78,7 @@ func ValidMessageAttachments(attachments []MessageAttachment) bool {
 }
 
 func ValidMessageInput(input MessageInput) bool {
-	return utf8.ValidString(input.Text) && !strings.ContainsRune(input.Text, 0) && len(input.Text) <= MaxMessageInputBytes &&
+	return ValidDeveloperInstructions(input.DeveloperInstructions) && utf8.ValidString(input.Text) && !strings.ContainsRune(input.Text, 0) && len(input.Text) <= MaxMessageInputBytes &&
 		(strings.TrimSpace(input.Text) != "" || len(input.Attachments) != 0) && ValidMessageAttachments(input.Attachments)
 }
 
@@ -99,14 +100,15 @@ type JobAdmission struct {
 
 // MessageAdmission is one client input admitted to its exact Agent lane.
 type MessageAdmission struct {
-	RefreshSkills bool
-	JobID         string
-	SandboxID     string
-	FromKind      MessageFromKind
-	FromID        string
-	Input         string
-	Attachments   []MessageAttachment
-	Intent        MessageDeliveryIntent
+	DeveloperInstructions *string
+	RefreshSkills         bool
+	JobID                 string
+	SandboxID             string
+	FromKind              MessageFromKind
+	FromID                string
+	Input                 string
+	Attachments           []MessageAttachment
+	Intent                MessageDeliveryIntent
 }
 
 // MessageAdmissionResult is the immutable durable admission acknowledged by
@@ -123,4 +125,13 @@ type MessageAdmissionResult struct {
 // Follow and Steer semantics remain invariant beneath it.
 type AgentMessageAdmission interface {
 	AdmitAgentMessage(context.Context, MessageAdmission) (MessageAdmissionResult, error)
+}
+
+// ValidDeveloperInstructions validates an optional complete application instruction snapshot.
+func ValidDeveloperInstructions(value *string) bool {
+	return value == nil || (utf8.ValidString(*value) && !strings.ContainsRune(*value, 0) && len(*value) <= MaxMessageInputBytes)
+}
+
+func SameDeveloperInstructions(left, right *string) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
 }

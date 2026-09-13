@@ -414,6 +414,7 @@
                 "additionalProperties": false,
                 "required": ["text", "attachment"],
                 "properties": {
+                  "developer_instructions": { "type": "string", "description": "Complete application developer instruction snapshot; an omitted part leaves it unchanged and an empty part clears it for a fresh Turn." },
                   "refresh_skills": { "type": "boolean", "default": false },
                   "text": { "type": "string", "description": "Verbatim Message text. May be empty when attachments are present." },
                   "intent": { "type": "string", "enum": ["auto", "follow", "steer"], "default": "auto" },
@@ -1279,6 +1280,7 @@
         "additionalProperties": false,
         "required": ["text"],
         "properties": {
+          "developer_instructions": { "type": ["string", "null"], "description": "Complete application developer instruction snapshot for a fresh Turn. Omitted or null leaves the current snapshot unchanged; empty clears it. Steer retains this immutable payload but never changes the active Turn or defers it to another Message. Idempotent replay requires the same value." },
           "refresh_skills": { "type": "boolean", "default": false, "description": "Request an installed-skill reload on a supported profile (currently Codex). A follow refreshes before its fresh Turn. A steer leaves the running Turn unchanged and retains the request for the next fresh Turn. Auto uses its resolved delivery intent. Retained on idempotent replay." },
           "text": { "type": "string", "description": "Verbatim Message text. JSON requests require nonempty text; multipart requests may use empty text when attachments are present." },
           "intent": { "type": "string", "enum": ["auto", "follow", "steer"], "default": "auto", "description": "Steer active work or follow when idle, resolved once at admission." }

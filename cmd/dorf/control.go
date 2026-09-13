@@ -19,7 +19,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unicode/utf8"
 
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/clientconfig"
@@ -1195,8 +1194,8 @@ func (a controlAPIJobs) SendMessage(ctx context.Context, jobID, key string, inpu
 	if err != nil {
 		return controlapi.Message{}, false, err
 	}
-	if (len(input.Attachments) == 0 && strings.TrimSpace(input.Text) == "") || len(input.Text) > core.MaxMessageInputBytes ||
-		!utf8.ValidString(input.Text) || strings.ContainsRune(input.Text, 0) {
+	if (len(input.Attachments) == 0 && strings.TrimSpace(input.Text) == "") ||
+		!core.ValidDeveloperInstructions(&input.Text) || !core.ValidDeveloperInstructions(input.DeveloperInstructions) {
 		return controlapi.Message{}, false, controlapi.ErrInvalidInput
 	}
 	attachments, err := a.retainMessageAttachments(ctx, job.SandboxProfile, input.Attachments)
@@ -1224,7 +1223,7 @@ func (a controlAPIJobs) SendMessage(ctx context.Context, jobID, key string, inpu
 	if err != nil {
 		return controlapi.Message{}, false, err
 	}
-	receipt, err := sandbox.Agent().Message(ctx, key, core.MessageInput{Text: input.Text, Attachments: attachments}, options...)
+	receipt, err := sandbox.Agent().Message(ctx, key, core.MessageInput{Text: input.Text, Attachments: attachments, DeveloperInstructions: input.DeveloperInstructions}, options...)
 	if err != nil {
 		return controlapi.Message{}, receipt.Created, controlMessageError(err)
 	}

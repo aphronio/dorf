@@ -310,6 +310,11 @@ func encodeMessageMultipart(input controlapi.SendMessageRequest) ([]byte, string
 			return nil, "", fmt.Errorf("encode Message intent")
 		}
 	}
+	if input.DeveloperInstructions != nil {
+		if err := writer.WriteField("developer_instructions", *input.DeveloperInstructions); err != nil {
+			return nil, "", err
+		}
+	}
 	if input.RefreshSkills {
 		if err := writer.WriteField("refresh_skills", "true"); err != nil {
 			return nil, "", fmt.Errorf("encode Message skill refresh")

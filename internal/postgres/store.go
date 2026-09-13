@@ -36,7 +36,7 @@ const (
 	AbsurdSchemaSHA256  = "d34309370c539f3a51f2b36b69b1f77551f8e4a14480a1c8def8bb8f40fd9aab"
 )
 
-var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql", "009_message_attachments.sql"}
+var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql", "009_message_attachments.sql", "010_message_developer_instructions.sql"}
 
 type Store struct{ DB *sql.DB }
 
@@ -247,7 +247,7 @@ func normalizeMessage(input core.MessageAdmission) (core.MessageAdmission, error
 	if input.Intent != core.MessageFollow && input.Intent != core.MessageSteer && input.Intent != core.MessageAuto {
 		return core.MessageAdmission{}, fmt.Errorf("message intent must be auto, follow, or steer")
 	}
-	if !core.ValidMessageInput(core.MessageInput{Text: input.Input, Attachments: input.Attachments}) {
+	if !core.ValidMessageInput(core.MessageInput{Text: input.Input, Attachments: input.Attachments, DeveloperInstructions: input.DeveloperInstructions}) {
 		return core.MessageAdmission{}, fmt.Errorf("message text or attachments are invalid")
 	}
 	input.Attachments = append([]core.MessageAttachment(nil), input.Attachments...)
@@ -297,6 +297,7 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 	var message core.Message
 	message.TargetTurnID = target.turnID
 	message.RefreshSkills = input.RefreshSkills
+	message.DeveloperInstructions = input.DeveloperInstructions
 	message.Sequence, err = queries.NextMessageSequence(ctx, input.JobID)
 	if err != nil {
 		return core.Message{}, false, err
@@ -307,7 +308,7 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 	if err != nil {
 		return core.Message{}, false, err
 	}
-	if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{ID: message.ID, JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID, Sequence: message.Sequence, Input: message.Input, Attachments: attachments, DeliveryIntent: message.Intent, RequestedIntent: string(input.Intent), RefreshSkills: input.RefreshSkills, SteerTargetTurnID: message.TargetTurnID}); err != nil {
+	if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{ID: message.ID, JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID, Sequence: message.Sequence, Input: message.Input, Attachments: attachments, DeliveryIntent: message.Intent, RequestedIntent: string(input.Intent), DeveloperInstructions: instructionSQL(input.DeveloperInstructions), RefreshSkills: input.RefreshSkills, SteerTargetTurnID: message.TargetTurnID}); err != nil {
 		return core.Message{}, false, err
 	}
 	runID := core.AgentRunID(message.ID)
@@ -339,7 +340,7 @@ func replayMessageAdmission(ctx context.Context, queries *dbsql.Queries, row dbs
 	}
 	stored := core.MessageAdmission{
 		JobID: run.JobID, SandboxID: run.SandboxID, FromKind: message.FromKind, FromID: message.FromID,
-		Input: message.Input, Attachments: message.Attachments, Intent: core.MessageDeliveryIntent(row.RequestedIntent), RefreshSkills: message.RefreshSkills,
+		Input: message.Input, Attachments: message.Attachments, Intent: core.MessageDeliveryIntent(row.RequestedIntent), RefreshSkills: message.RefreshSkills, DeveloperInstructions: message.DeveloperInstructions,
 	}
 	if !sameMessageAdmission(stored, input) {
 		return core.Message{}, false, fmt.Errorf("%w: sender %s/%q", core.ErrMessageReplayConflict, input.FromKind, input.FromID)
@@ -531,6 +532,7 @@ func messageFromSenderRow(row dbsql.GetMessageBySenderRow) (core.Message, error)
 	}
 	message.AdmittedAt = row.AdmittedAt
 	message.RefreshSkills = row.RefreshSkills
+	message.DeveloperInstructions = instructionPointer(row.DeveloperInstructions)
 	return message, nil
 }
 
@@ -560,7 +562,7 @@ func decodeMessageAttachments(encoded []byte) ([]core.MessageAttachment, error) 
 }
 
 func sameMessageAdmission(left, right core.MessageAdmission) bool {
-	if left.RefreshSkills != right.RefreshSkills || left.JobID != right.JobID || left.SandboxID != right.SandboxID ||
+	if !core.SameDeveloperInstructions(left.DeveloperInstructions, right.DeveloperInstructions) || left.RefreshSkills != right.RefreshSkills || left.JobID != right.JobID || left.SandboxID != right.SandboxID ||
 		left.FromKind != right.FromKind || left.FromID != right.FromID || left.Input != right.Input || left.Intent != right.Intent ||
 		len(left.Attachments) != len(right.Attachments) {
 		return false
@@ -833,6 +835,7 @@ func (s Store) Deliveries(ctx context.Context, jobID string) ([]core.Delivery, e
 		}
 		message.AdmittedAt = r.AdmittedAt
 		message.RefreshSkills = r.RefreshSkills
+		message.DeveloperInstructions = instructionPointer(r.DeveloperInstructions)
 		run := agentRunFromValues(r.AgentRunID, r.AgentRunJobID, r.AgentRunMessageID, r.State, r.Harness, r.ThreadID, r.BaselineRecorded, r.BaselineTurnID, r.TurnID, r.TurnOutcome, r.Attention, r.Role, r.InputRevision)
 		run.Capability = r.Capability
 		run.SandboxID = r.SandboxID
@@ -904,6 +907,7 @@ func (s Store) AgentMessageExecution(ctx context.Context, messageID string) (cor
 	}
 	message.AdmittedAt = messageRow.AdmittedAt
 	message.RefreshSkills = messageRow.RefreshSkills
+	message.DeveloperInstructions = instructionPointer(messageRow.DeveloperInstructions)
 	runRow, err := queries.GetAgentRunByMessage(ctx, message.ID)
 	if err != nil {
 		return core.AgentMessageExecution{}, fmt.Errorf("Message %s has no atomically admitted AgentRun: %w", message.ID, err)
@@ -1551,4 +1555,17 @@ func expectOneRows(rows int64, err error) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+func instructionSQL(value *string) sql.NullString {
+	if value == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: *value, Valid: true}
+}
+func instructionPointer(value sql.NullString) *string {
+	if !value.Valid {
+		return nil
+	}
+	return &value.String
 }

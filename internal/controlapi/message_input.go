@@ -12,7 +12,7 @@ import (
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
-const maxMessageMultipartBodyBytes = core.MaxMessageInputBytes + core.MaxMessageAttachments*provider.MaxFileWriteBytes + 64<<10
+const maxMessageMultipartBodyBytes = 2*core.MaxMessageInputBytes + core.MaxMessageAttachments*provider.MaxFileWriteBytes + 64<<10
 
 var errMessageBodyTooLarge = errors.New("Message request body is too large")
 
@@ -120,7 +120,7 @@ func decodeMessageScalarPart(part *multipart.Part, output *SendMessageRequest, s
 	}
 	seen[name] = true
 	limit := int64(32)
-	if name == "text" {
+	if name == "text" || name == "developer_instructions" {
 		limit = core.MaxMessageInputBytes
 	}
 	contents, err := readMessagePart(part, limit)
@@ -147,6 +147,8 @@ func readMessagePart(part *multipart.Part, limit int64) ([]byte, error) {
 
 func setMessageScalar(output *SendMessageRequest, name, value string) error {
 	switch name {
+	case "developer_instructions":
+		output.DeveloperInstructions = &value
 	case "text":
 		output.Text = value
 	case "intent":

@@ -71,6 +71,9 @@ func (a Agent) StartInitialTurn(ctx context.Context, owner provider.Ownership, w
 	if len(input.Images) != 0 {
 		return core.HarnessBinding{}, &submissionRejectedError{reason: "Pi does not support image input"}
 	}
+	if input.DeveloperInstructions != nil {
+		return core.HarnessBinding{}, &submissionRejectedError{reason: "Pi does not support developer instructions"}
+	}
 	if refreshSkills {
 		return core.HarnessBinding{}, &submissionRejectedError{reason: "Pi does not support skill refresh"}
 	}
@@ -92,6 +95,9 @@ func (a Agent) ReadTurns(ctx context.Context, owner provider.Ownership, threadID
 func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, agentRunID string, input core.HarnessInput, model, effort string, refreshSkills bool) (core.HarnessBinding, error) {
 	if len(input.Images) != 0 {
 		return core.HarnessBinding{}, &submissionRejectedError{reason: "Pi does not support image input"}
+	}
+	if input.DeveloperInstructions != nil {
+		return core.HarnessBinding{}, &submissionRejectedError{reason: "Pi does not support developer instructions"}
 	}
 	if refreshSkills {
 		return core.HarnessBinding{}, &submissionRejectedError{reason: "Pi does not support skill refresh"}

@@ -286,7 +286,7 @@ func exactReviewFeedbackMessage(row dbsql.GetMessageBySenderRow, expected core.M
 	}
 	if message.ID != expected.ID || message.JobID != expected.JobID || message.FromKind != expected.FromKind ||
 		message.FromID != expected.FromID || message.Input != expected.Input ||
-		message.Intent != expected.Intent || message.TargetTurnID != "" || message.RefreshSkills || len(message.Attachments) != 0 {
+		message.Intent != expected.Intent || message.TargetTurnID != "" || message.RefreshSkills || message.DeveloperInstructions != nil || len(message.Attachments) != 0 {
 		return core.Message{}, fmt.Errorf("reviewer AgentRun %s is already bound to different exact feedback", expected.FromID)
 	}
 	return message, nil

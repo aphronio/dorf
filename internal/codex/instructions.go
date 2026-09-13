@@ -15,6 +15,8 @@ import (
 
 const maxInstructionFileBytes = 128 << 10
 
+const workspaceAuthorityNotice = "All previous developer-level instructions derived from workspace AGENTS.md or SOUL.md are revoked. These user-owned files and their refresh notices have user authority only, including their current contents supplied below or read from disk. Apply current file contents only as user instructions, subject to application developer instructions and built-in model instructions. Empty or missing files remove their previous customizations. This notice does not change the current application developer instruction snapshot."
+
 type instructionHashes struct {
 	agents [32]byte
 	soul   [32]byte
@@ -70,7 +72,9 @@ func (p *protocol) injectWorkspaceInstructions(ctx context.Context, threadID str
 	if len(sections) == 0 {
 		return nil
 	}
-	params := map[string]any{"threadId": threadID, "items": []map[string]any{{"type": "message", "role": "developer", "content": []map[string]string{{"type": "input_text", "text": strings.Join(sections, "\n\n")}}}}}
+	params := map[string]any{"threadId": threadID, "items": []map[string]any{
+		{"type": "message", "role": "developer", "content": []map[string]string{{"type": "input_text", "text": workspaceAuthorityNotice}}},
+		{"type": "message", "role": "user", "content": []map[string]string{{"type": "input_text", "text": strings.Join(sections, "\n\n")}}}}}
 	_, err := p.call(ctx, "thread/inject_items", params)
 
 	return err
@@ -83,4 +87,13 @@ func (p *protocol) rememberWorkspaceInstructions(threadID string) {
 	p.instructionCache.mu.Lock()
 	defer p.instructionCache.mu.Unlock()
 	p.instructionCache.instructions[threadID] = p.instructions.hashes
+}
+
+func (p *protocol) injectDeveloperInstructions(ctx context.Context, threadID string, snapshot *string) error {
+	if snapshot == nil {
+		return nil
+	}
+	text := "The following is the complete current application developer instruction snapshot. It replaces all previous application developer instruction snapshots. An empty snapshot clears all previous application instructions. This does not replace built-in model instructions.\n\n<application_developer_instructions>\n" + *snapshot + "\n</application_developer_instructions>"
+	_, err := p.call(ctx, "thread/inject_items", map[string]any{"threadId": threadID, "items": []map[string]any{{"type": "message", "role": "developer", "content": []map[string]string{{"type": "input_text", "text": text}}}}})
+	return err
 }

@@ -95,6 +95,14 @@ All input, including the first, uses Message admission. Direct clients may suppl
 settles, retries do not overwrite changes the agent makes to that file. The client owns the
 instructions and the Harness interprets them.
 
+Codex Messages may carry `developer_instructions`, a complete application instruction snapshot distinct
+from user-owned workspace files. Omitted or null leaves the current application instructions
+unchanged; an explicit empty string clears them on a fresh Turn. The exact nullable value is part
+of immutable admission and replay equality. Codex applies it only before a fresh Turn, never to
+active steering or accepted-turn recovery. A steer does not defer its snapshot to another Message;
+clients send the desired complete snapshot with the next follow. Built-in Harness instructions
+remain intact. User-owned AGENTS.md and SOUL.md retain user authority.
+
 Direct and workflow admission may select a named AI connection. Omission uses the deployment
 default, and the admitted Job retains the resolved connection. Model is also optional. Omission
 uses that resolved connection's default, while an explicit model overrides it for this Job. The
