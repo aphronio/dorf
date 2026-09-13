@@ -1,5 +1,12 @@
 # Releasing Dorf
 
+Choose `MAJOR.MINOR.PATCH` deliberately before publication. During the current `0.x` phase,
+use a minor release for new capabilities or changed public/default behavior, and a patch release
+for compatible fixes and maintenance. Reset the patch number to zero when advancing the minor.
+The leading zero means the public contract is still evolving; `1.0.0` should mark an explicit
+stability commitment, not a release-count milestone. See [Semantic Versioning](https://semver.org/).
+The release version is owned by [`internal/version/version.go`](../internal/version/version.go).
+
 From a clean commit on `main` already available on GitHub with successful CI, dispatch the Release
 workflow. CI owns the full repository and PostgreSQL-backed checks. The publication workflow installs
 only the pinned release toolchain, requires a successful push CI run for the exact event commit, and

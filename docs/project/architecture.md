@@ -65,6 +65,15 @@ and reconciles resources against their external authorities before declaring the
 after a workflow, composed module, or client has requested resource release. Core never infers that
 request from success, failure, an Outcome, inactivity, or a need for human input.
 
+Idle power management reconciles the admitted Job policy through an optional provider capability.
+It runs under the Job effect fence and checks durable deliveries before pausing any owned Sandbox.
+Message admission may race with a provider pause; native delivery waits for the same fence and
+resumes the Sandbox before execution. Retries derive eligibility again rather than replaying a
+stale pause request. The provider owns power state and native snapshot storage; Dorf stores only
+the admitted policy, not a second snapshot or power-state ledger. The consumer runtimes request
+idle reconciliation at their wait boundaries. Control-reader access requests it after releasing
+the read fence, so observation cannot deadlock by nesting the same fence.
+
 ## Execution model
 
 One admission creates one durable execution owner with its configuration and a stable

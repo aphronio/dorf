@@ -119,3 +119,9 @@ func IsArtifactUnavailable(err error) bool {
 	var unavailable *ArtifactUnavailableError
 	return errors.As(err, &unavailable)
 }
+
+// MemoryPauser is an optional provider capability. Providers without a proved
+// memory-pause implementation retain their existing running lifecycle.
+type MemoryPauser interface {
+	PauseOwned(context.Context, Ownership) error
+}

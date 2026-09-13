@@ -122,11 +122,14 @@ func (s Service) withSandbox(ctx context.Context, sandboxID string, call func(co
 		return ErrUnavailable
 	}
 
+	var idleRuntime core.Execution
+	defer func() { core.ReconcileIdle(ctx, idleRuntime, owned.JobID) }()
 	err = s.Store.WithJobFence(ctx, owned.JobID, func() error {
 		runtime, job, err := s.sandboxAuthority(ctx, owned)
 		if err != nil {
 			return err
 		}
+		idleRuntime = runtime.Execution
 		err = call(runtime, job, owned)
 		switch {
 		case errors.Is(err, provider.ErrInvalidFilePath):
@@ -179,6 +182,8 @@ func (s Service) ObserveMessage(ctx context.Context, jobID, messageID string) (c
 		return core.MessageResult{}, fmt.Errorf("control reader Message authority is not configured")
 	}
 	var result core.MessageResult
+	var idleRuntime core.Execution
+	defer func() { core.ReconcileIdle(ctx, idleRuntime, jobID) }()
 	err := s.Store.WithJobFence(ctx, jobID, func() error {
 		authoritative, err := s.Store.AgentMessageExecution(ctx, messageID)
 		if errors.Is(err, postgres.ErrNotFound) {
@@ -204,6 +209,7 @@ func (s Service) ObserveMessage(ctx context.Context, jobID, messageID string) (c
 		if runtime.SandboxProfile != job.SandboxProfile || runtime.Execution == nil {
 			return fmt.Errorf("resolved Sandbox runtime has no exact Message observation authority")
 		}
+		idleRuntime = runtime.Execution
 		result, err = runtime.Execution.ObserveSettledAgentMessage(ctx, job.ID, messageID)
 		if err != nil {
 			return err

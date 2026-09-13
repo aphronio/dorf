@@ -21,6 +21,7 @@ var (
 // as the resolved profile, provider default, and GitHub installation is added
 // only by AdmissionService and retained in Admission.
 type AdmissionRequest struct {
+	KeepRunning        bool
 	CreatedByClientID  string
 	ClientReference    string
 	AdmissionKey       string
@@ -197,7 +198,7 @@ func normalizeAdmissionRequest(request AdmissionRequest) (Admission, error) {
 	}
 	return Admission{
 		JobAdmission: core.JobAdmission{
-			CreatedByClientID: request.CreatedByClientID, ClientReference: request.ClientReference,
+			KeepRunning: request.KeepRunning, CreatedByClientID: request.CreatedByClientID, ClientReference: request.ClientReference,
 			AdmissionKey: request.AdmissionKey, Workflow: Workflow, WorkflowRevision: WorkflowRevision,
 			SandboxProfile:     request.SandboxProfile,
 			ProviderConnection: request.ProviderConnection, Model: request.Model, ReasoningEffort: request.ReasoningEffort,

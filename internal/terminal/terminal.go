@@ -171,3 +171,14 @@ func (e Externals) ExecSandbox(ctx context.Context, job core.Job, owned core.San
 	}
 	return output, nil
 }
+
+func (e Externals) SandboxPause(ctx context.Context, job core.Job, owned core.Sandbox) error {
+	if owned.JobID != job.ID || owned.ID == "" {
+		return fmt.Errorf("Sandbox pause requires its exact Job owner")
+	}
+	pauser, ok := e.Sandbox.(provider.MemoryPauser)
+	if !ok {
+		return nil
+	}
+	return pauser.PauseOwned(ctx, ownershipMetadata(owned))
+}

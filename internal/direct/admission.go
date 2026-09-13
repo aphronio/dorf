@@ -21,6 +21,7 @@ var (
 // AdmissionRequest is the caller-owned direct input. Deployment defaults are
 // resolved only for a new Job and retained in its durable admission.
 type AdmissionRequest struct {
+	KeepRunning        bool
 	CreatedByClientID  string
 	ClientReference    string
 	AdmissionKey       string
@@ -148,7 +149,7 @@ func normalizeAdmissionRequest(request AdmissionRequest) (core.JobAdmission, err
 		return core.JobAdmission{}, ErrInvalidAdmission
 	}
 	return core.JobAdmission{
-		CreatedByClientID: request.CreatedByClientID, ClientReference: request.ClientReference,
+		KeepRunning: request.KeepRunning, CreatedByClientID: request.CreatedByClientID, ClientReference: request.ClientReference,
 		AdmissionKey: request.AdmissionKey, AgentsMD: request.AgentsMD, SandboxProfile: request.SandboxProfile,
 		ProviderConnection: request.ProviderConnection, Model: request.Model, ReasoningEffort: request.ReasoningEffort,
 	}, nil
