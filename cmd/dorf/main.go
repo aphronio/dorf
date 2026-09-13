@@ -1337,6 +1337,7 @@ func openClosed(open bool) string {
 }
 
 type taskResultView struct {
+	failure   json.RawMessage
 	TaskID    string                 `json:"task_id,omitempty"`
 	State     absurd.TaskResultState `json:"state,omitempty"`
 	Result    json.RawMessage        `json:"result,omitempty"`
@@ -1362,6 +1363,7 @@ func projectTaskResult(taskID string, snapshot *absurd.TaskResultSnapshot) taskR
 		return taskResultView{TaskID: taskID, State: "missing"}
 	}
 	return taskResultView{
+		failure:   snapshot.Failure,
 		TaskID:    taskID,
 		State:     snapshot.State,
 		Result:    snapshot.Result,

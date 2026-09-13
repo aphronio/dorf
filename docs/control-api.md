@@ -138,6 +138,11 @@ whether execution needs attention or is `idle`. A steer acknowledgement without 
 not change this status. Direct Job `idle` means no outstanding work, not that the caller's task is
 finished.
 
+A failed Sandbox creation caused by a recognized VM or instance limit reports
+`sandbox_capacity_exhausted` in Job attention. Its fixed detail explains that capacity must be freed
+or the limit increased before retry. Unknown execution failures retain generic attention. Public
+Job attention does not expose provider error text, and cleanup failure takes precedence.
+
 The Job snapshot's optional `latest_reply_id` identifies the latest settled reply in its main
 Sandbox. It derives from retained Message and AgentRun facts; queued follow-ups and steer delivery
 acknowledgements do not replace it. The Message inspection path accepts `latest` in place of a
