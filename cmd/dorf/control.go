@@ -1789,7 +1789,7 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 	}
 	server := controlapi.NewServer(controlapi.Discovery{
 		Product: "dorf", Version: version.Version,
-		Capabilities: []string{"direct_jobs", "coding_jobs", "codebase_investigation_jobs", "job_list", "profile_list", "job_watch", "messages", "message_interrupt", "job_retry", "job_abandon", "sandbox_files", "sandbox_exec", "latest_reply", "evidence"},
+		Capabilities: []string{"direct_jobs", "coding_jobs", "codebase_investigation_jobs", "job_list", "profile_list", "job_watch", "job_timeline", "messages", "message_interrupt", "job_retry", "job_abandon", "sandbox_files", "sandbox_exec", "latest_reply", "evidence"},
 	}, auth, jobs, controlAPIProfiles{store: store})
 	serverCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()

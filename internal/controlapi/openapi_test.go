@@ -51,6 +51,7 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 		"/v1/workflows/coding/jobs":   {"post"},
 		"/v1/workflows/codebase-investigation/jobs": {"post"},
 		"/v1/jobs/{job}":                              {"get"},
+		"/v1/jobs/{job}/timeline":                     {"get"},
 		"/v1/jobs/{job}/watch":                        {"get"},
 		"/v1/jobs/{job}/messages":                     {"post"},
 		"/v1/jobs/{job}/messages/{message}":           {"get"},

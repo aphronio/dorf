@@ -150,6 +150,12 @@ reconciles the same AgentRun; it does not silently create another judgment attem
 An Agent handle is bound to one exact Job-owned Sandbox. Submission, history reconciliation, wait,
 and steer through that handle cannot fall back to another Sandbox in the Job.
 
+Passive timeline reads use an optional Sandbox runtime capability. The provider reader derives
+the default Sandbox and unique native thread from retained Job deliveries under the cleanup fence.
+It passes those bound coordinates to the Harness adapter and returns original conversation items.
+The Harness owns ordering and history storage. Dorf adds no transcript table, execution, or
+observation subscription. The [Remote Control API](../control-api.md) owns public read semantics.
+
 Once a Turn is durably bound as active, Core's read-only Harness observation remains separate from
 Message delivery. Internal delivery reconciliation alternates observation with an interruptible
 durable wait, so an accepted steer can wake and overtake polling without another controller path or

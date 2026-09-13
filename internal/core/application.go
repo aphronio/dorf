@@ -35,6 +35,7 @@ type CleanupRuntimeResolver interface {
 }
 
 type SandboxRuntime struct {
+	Timeline       SandboxTimelineReader
 	Execution      Execution
 	Files          SandboxFileReader
 	Commands       SandboxCommandExecutor
