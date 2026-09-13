@@ -42,12 +42,16 @@ func configuredObservations(ctx context.Context, stderr io.Writer) (*codex.Obser
 	if err != nil {
 		fmt.Fprintln(stderr, "Execution diagnostics could not initialize; work remains enabled.")
 	}
-	if publisher == nil {
-		return nil, func() {}
+	var emit func(telemetry.Event)
+	if publisher != nil {
+		emit = publisher.Emit
 	}
-	observations := codex.NewObservations(ctx, publisher.Emit)
+	observations := codex.NewObservations(ctx, emit)
 	return observations, func() {
 		observations.Close()
+		if publisher == nil {
+			return
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if publisher.Shutdown(shutdownCtx) != nil {

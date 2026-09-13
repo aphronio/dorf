@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -11,6 +12,30 @@ import (
 	"github.com/aphronio/dorf/internal/direct"
 	"github.com/aphronio/dorf/internal/incus"
 )
+
+func TestConfiguredObservationsSurviveUnavailableExport(t *testing.T) {
+	for _, test := range []struct {
+		name, endpoint, attributes string
+		warning                    bool
+	}{
+		{name: "disabled"},
+		{name: "invalid resource", endpoint: "http://127.0.0.1:1/v1/logs", attributes: "missing-equals", warning: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", test.endpoint)
+			t.Setenv("OTEL_RESOURCE_ATTRIBUTES", test.attributes)
+			var stderr bytes.Buffer
+			observations, close := configuredObservations(context.Background(), &stderr)
+			defer close()
+			if observations == nil {
+				t.Fatal("instruction tracking was disabled with diagnostic export")
+			}
+			if got := strings.Contains(stderr.String(), "could not initialize"); got != test.warning {
+				t.Fatalf("initialization warning=%t, want %t", got, test.warning)
+			}
+		})
+	}
+}
 
 func TestDirectClientPromptIsExactAndFailClosed(t *testing.T) {
 	job := core.Job{ID: "job-direct"}

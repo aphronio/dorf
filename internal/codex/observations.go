@@ -20,14 +20,27 @@ type Observations struct {
 	cancel       context.CancelFunc
 	emit         func(telemetry.Event)
 	mu           sync.Mutex
-	active       map[string]bool
-	instructions map[string]instructionHashes
+	active       map[observationKey]bool
+	instructions map[instructionScope]instructionHashes
 	wg           sync.WaitGroup
 }
 
 func NewObservations(ctx context.Context, emit func(telemetry.Event)) *Observations {
 	ctx, cancel := context.WithCancel(ctx)
-	return &Observations{ctx: ctx, cancel: cancel, emit: emit, active: make(map[string]bool), instructions: make(map[string]instructionHashes)}
+	return &Observations{ctx: ctx, cancel: cancel, emit: emit, active: make(map[observationKey]bool), instructions: make(map[instructionScope]instructionHashes)}
+}
+
+type instructionScope struct {
+	jobID, sandboxID, threadID string
+}
+
+type observationKey struct {
+	scope  instructionScope
+	turnID string
+}
+
+func (p *protocol) instructionScope(threadID string) instructionScope {
+	return instructionScope{jobID: p.owner.JobID, sandboxID: p.owner.SandboxID, threadID: threadID}
 }
 
 func (o *Observations) Close() {
@@ -41,28 +54,33 @@ type observedTurn struct {
 	run        core.AgentRun
 	threadID   string
 	turnID     string
-	key        string
+	key        observationKey
 	subscribed bool
 	complete   bool
 }
 
-func (p *protocol) bindObservation(threadID, turnID string, subscribed bool) {
+func (p *protocol) bindObservation(threadID, turnID string, subscribed bool) bool {
 	if p.observations == nil || p.observed != nil || p.execution.ID == "" || turnID == "" {
-		return
+		return false
 	}
-	key := p.execution.JobID + "/" + threadID + "/" + turnID
+	key := observationKey{scope: p.instructionScope(threadID), turnID: turnID}
 	p.observations.mu.Lock()
-	defer p.observations.mu.Unlock()
 	if p.observations.ctx.Err() != nil || p.observations.active[key] {
-		return
+		p.observations.mu.Unlock()
+		return false
 	}
 	p.observations.active[key] = true
 	p.observations.wg.Add(1)
 	p.observed = &observedTurn{run: p.execution, threadID: threadID, turnID: turnID, key: key, subscribed: subscribed}
+	if subscribed && p.instructions != nil {
+		p.observations.instructions[key.scope] = p.instructions.hashes
+	}
+	p.observations.mu.Unlock()
 	for _, message := range p.pendingObservations {
 		p.observeNotification(message)
 	}
 	p.pendingObservations = nil
+	return true
 }
 
 func (p *protocol) finish() {
@@ -96,7 +114,9 @@ func (p *protocol) observeUntilSettled() {
 		}
 		for _, turn := range turns {
 			if turn.ID == p.observed.turnID && turn.Terminal() {
-				p.emitObservation("codex.turn.snapshot", time.Now(), map[string]any{"status": turn.Status}, false)
+				if p.observations.emit != nil {
+					p.emitObservation("codex.turn.snapshot", time.Now(), map[string]any{"status": turn.Status}, false)
+				}
 				return
 			}
 		}
@@ -110,27 +130,34 @@ func (p *protocol) observeUntilSettled() {
 }
 
 func (p *protocol) observationGap() {
-	p.forgetWorkspaceInstructions()
+	p.forgetWorkspaceInstructions(p.observed.threadID)
 	if p.observations.ctx.Err() == nil {
 		p.emitObservation("codex.observation.disconnected", time.Now(), nil, true)
 	}
 }
 
 func (p *protocol) observeNotification(message map[string]any) {
-	if p.observations == nil {
+	if p.observations == nil || p.execution.ID == "" {
 		return
 	}
 	method := stringValue(message["method"])
+	params, _ := message["params"].(map[string]any)
+	compaction := false
 	switch method {
-	case "turn/started", "turn/completed", "item/started", "item/completed", "thread/tokenUsage/updated":
+	case "item/started", "item/completed":
+		item, _ := params["item"].(map[string]any)
+		compaction = stringValue(item["type"]) == "contextCompaction"
+	case "turn/started", "turn/completed", "thread/tokenUsage/updated":
 	default:
+		return
+	}
+	if p.observations.emit == nil && method != "turn/completed" && !compaction {
 		return
 	}
 	if p.observed == nil {
 		p.pendingObservations = append(p.pendingObservations, message)
 		return
 	}
-	params, _ := message["params"].(map[string]any)
 	threadID, turnID := stringValue(params["threadId"]), stringValue(params["turnId"])
 	turn, _ := params["turn"].(map[string]any)
 	if turn != nil {
@@ -139,6 +166,19 @@ func (p *protocol) observeNotification(message map[string]any) {
 	if threadID != p.observed.threadID || turnID != p.observed.turnID {
 		return
 	}
+	if method == "turn/completed" {
+		p.observed.complete = true
+	}
+	if compaction {
+		p.forgetWorkspaceInstructions(threadID)
+	}
+	if p.observations.emit == nil {
+		return
+	}
+	p.emitNativeNotification(message, method, params)
+}
+
+func (p *protocol) emitNativeNotification(message map[string]any, method string, params map[string]any) {
 	at := time.Now()
 	if emitted, ok := message["emittedAtMs"].(float64); ok {
 		at = time.UnixMilli(int64(emitted))
@@ -147,18 +187,15 @@ func (p *protocol) observeNotification(message map[string]any) {
 	failed := false
 	switch method {
 	case "turn/started", "turn/completed":
+		turn, _ := params["turn"].(map[string]any)
 		for _, key := range []string{"status", "error", "startedAt", "completedAt", "durationMs"} {
 			if value := turn[key]; value != nil {
 				fields[key] = value
 			}
 		}
 		failed = stringValue(turn["status"]) == "failed"
-		p.observed.complete = method == "turn/completed"
 	case "item/started", "item/completed":
 		item, _ := params["item"].(map[string]any)
-		if stringValue(item["type"]) == "contextCompaction" {
-			p.forgetWorkspaceInstructions()
-		}
 		fields, failed = itemObservation(item, method)
 		if fields == nil {
 			return
@@ -169,16 +206,19 @@ func (p *protocol) observeNotification(message map[string]any) {
 	p.emitObservation("codex."+method, at, fields, failed)
 }
 
-func (p *protocol) forgetWorkspaceInstructions() {
-	if p.instructionCache == nil || p.observed == nil {
+func (p *protocol) forgetWorkspaceInstructions(threadID string) {
+	if p.observations == nil {
 		return
 	}
-	p.instructionCache.mu.Lock()
-	defer p.instructionCache.mu.Unlock()
-	delete(p.instructionCache.instructions, p.observed.threadID)
+	p.observations.mu.Lock()
+	defer p.observations.mu.Unlock()
+	delete(p.observations.instructions, p.instructionScope(threadID))
 }
 
 func (p *protocol) emitObservation(name string, at time.Time, fields map[string]any, failed bool) {
+	if p.observations.emit == nil {
+		return
+	}
 	attributes := map[string]any{
 		"dorf.job_id": p.observed.run.JobID, "dorf.message_id": p.observed.run.MessageID,
 		"dorf.agent_run_id": p.observed.run.ID, "native.thread_id": p.observed.threadID,

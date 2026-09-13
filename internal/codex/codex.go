@@ -155,7 +155,7 @@ func (a Agent) startInitialTurn(ctx context.Context, owner provider.Ownership, w
 	var sessionID string
 	var outcome TurnOutcome
 	err = a.withServer(ctx, owner, func(protocol *protocol) error {
-		protocol.instructions, protocol.instructionCache = instructions, a.Observations
+		protocol.instructions = instructions
 		protocol.refreshSkills = refreshSkills
 		var err error
 		sessionID, outcome, err = protocol.reconcileInitialTurn(ctx, workspace, agentRunID, input, model, effort, capability)
@@ -198,7 +198,7 @@ func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspac
 	}
 	var outcome TurnOutcome
 	err = a.withServer(ctx, owner, func(protocol *protocol) error {
-		protocol.instructions, protocol.instructionCache = instructions, a.Observations
+		protocol.instructions = instructions
 		protocol.refreshSkills = refreshSkills
 		var err error
 		outcome, err = protocol.resumeAndStartTurn(ctx, threadID, workspace, agentRunID, input, model, effort, "danger-full-access")
@@ -474,19 +474,19 @@ func dialProtocol(ctx context.Context, endpoint, token string, headers http.Head
 type protocol struct {
 	refreshSkills       bool
 	instructions        *workspaceInstructions
-	instructionCache    *Observations
 	freshThread         bool
 	connection          *websocket.Conn
 	nextID              int
 	observations        *Observations
+	owner               provider.Ownership
 	execution           core.AgentRun
 	observed            *observedTurn
 	pendingObservations []map[string]any
 }
 
 func (p *protocol) configureObservations(ctx context.Context, observations *Observations, owner provider.Ownership) {
-	if run, ok := telemetry.Execution(ctx); observations != nil && ok && run.JobID == owner.JobID && run.SandboxID == owner.SandboxID {
-		p.observations = observations
+	p.observations, p.owner = observations, owner
+	if run, ok := telemetry.Execution(ctx); ok && run.JobID == owner.JobID && run.SandboxID == owner.SandboxID {
 		p.execution = run
 	}
 }
@@ -880,10 +880,16 @@ func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRun
 			return TurnOutcome{}, &skillsReloadError{err: err}
 		}
 	}
+	bound := false
+	defer func() {
+		if !bound {
+			p.forgetWorkspaceInstructions(sessionID)
+		}
+	}()
 	if err := p.injectDeveloperInstructions(ctx, sessionID, goal.DeveloperInstructions); err != nil {
 		return TurnOutcome{}, err
 	}
-	if err := p.injectWorkspaceInstructions(ctx, sessionID); err != nil {
+	if err := p.injectWorkspaceInstructions(ctx, sessionID, agentRunID); err != nil {
 		return TurnOutcome{}, err
 	}
 	result, err := p.call(ctx, "turn/start", map[string]any{"threadId": sessionID, "clientUserMessageId": agentRunID, "input": nativeUserInput(goal), "cwd": workspace, "model": model, "effort": effort, "approvalPolicy": "never", "sandboxPolicy": map[string]string{"type": policyType}})
@@ -895,10 +901,9 @@ func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRun
 	if id == "" {
 		return TurnOutcome{}, fmt.Errorf("turn/start response is missing result.turn.id")
 	}
-	p.rememberWorkspaceInstructions(sessionID)
 	outcome := TurnOutcome{ID: id, Status: "running"}
 	if p.execution.ID == agentRunID {
-		p.bindObservation(sessionID, id, true)
+		bound = p.bindObservation(sessionID, id, true)
 	}
 	return outcome, nil
 }

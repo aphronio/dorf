@@ -50,17 +50,21 @@ func (a Agent) readWorkspaceInstructions(ctx context.Context, owner provider.Own
 	}, nil
 }
 
-func (p *protocol) injectWorkspaceInstructions(ctx context.Context, threadID string) error {
+func (p *protocol) injectWorkspaceInstructions(ctx context.Context, threadID, agentRunID string) error {
 	current := p.instructions
 	if current == nil {
 		return nil
 	}
 	var previous instructionHashes
 	var known bool
-	if p.instructionCache != nil {
-		p.instructionCache.mu.Lock()
-		previous, known = p.instructionCache.instructions[threadID]
-		p.instructionCache.mu.Unlock()
+	if o := p.observations; o != nil {
+		o.mu.Lock()
+		if o.ctx.Err() == nil && p.execution.ID != "" && p.execution.ID == agentRunID {
+			previous, known = o.instructions[p.instructionScope(threadID)]
+		} else {
+			delete(o.instructions, p.instructionScope(threadID))
+		}
+		o.mu.Unlock()
 	}
 	var sections []string
 	if !p.freshThread && (!known || previous.agents != current.hashes.agents) {
@@ -78,15 +82,6 @@ func (p *protocol) injectWorkspaceInstructions(ctx context.Context, threadID str
 	_, err := p.call(ctx, "thread/inject_items", params)
 
 	return err
-}
-
-func (p *protocol) rememberWorkspaceInstructions(threadID string) {
-	if p.instructions == nil || p.instructionCache == nil {
-		return
-	}
-	p.instructionCache.mu.Lock()
-	defer p.instructionCache.mu.Unlock()
-	p.instructionCache.instructions[threadID] = p.instructions.hashes
 }
 
 func (p *protocol) injectDeveloperInstructions(ctx context.Context, threadID string, snapshot *string) error {

@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Deferred deployment proof (2026-09-12): CLI commands and JSON parsing are stale.
+# Refresh before the clean-host or material deployment-change proof required by D101.
+# Context: docs/project/decisions/D101-compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit.md
+
 set -euo pipefail
 
 readonly KVM_DEVICE="${DORF_PROOF_KVM_DEVICE:-/dev/kvm}"
