@@ -326,6 +326,21 @@ func (q *Queries) GetMessageInterruptTarget(ctx context.Context, arg GetMessageI
 	return i, err
 }
 
+const hasPendingAgentRuns = `-- name: HasPendingAgentRuns :one
+select exists (
+    select 1 from dorf.agent_runs
+    where job_id=$1
+      and state not in ('completed','failed','interrupted')
+)
+`
+
+func (q *Queries) HasPendingAgentRuns(ctx context.Context, jobID string) (bool, error) {
+	row := q.db.QueryRowContext(ctx, hasPendingAgentRuns, jobID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const insertAdmittedAgentRun = `-- name: InsertAdmittedAgentRun :execrows
 insert into dorf.agent_runs(
     id,job_id,message_id,harness,thread_id,role,state,input_revision,capability,sandbox_id

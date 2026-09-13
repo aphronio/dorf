@@ -54,7 +54,7 @@ func (q *Queries) ClearWorkflowAttention(ctx context.Context, arg ClearWorkflowA
 
 const getAdmittedJobForUpdate = `-- name: GetAdmittedJobForUpdate :one
 select id,admission_key,workflow_name,workflow_revision,agents_md,sandbox_profile,provider_connection,
-       model,reasoning_effort,client_reference
+       model,reasoning_effort,client_reference,keep_running
 from dorf.jobs
 where admission_key=$1
 for update
@@ -71,6 +71,7 @@ type GetAdmittedJobForUpdateRow struct {
 	Model              string
 	ReasoningEffort    string
 	ClientReference    string
+	KeepRunning        bool
 }
 
 func (q *Queries) GetAdmittedJobForUpdate(ctx context.Context, admissionKey string) (GetAdmittedJobForUpdateRow, error) {
@@ -87,6 +88,7 @@ func (q *Queries) GetAdmittedJobForUpdate(ctx context.Context, admissionKey stri
 		&i.Model,
 		&i.ReasoningEffort,
 		&i.ClientReference,
+		&i.KeepRunning,
 	)
 	return i, err
 }
@@ -96,7 +98,7 @@ select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(cre
        j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        c.repository,c.starting_revision,c.revision,c.branch,
        c.github_repository,c.github_installation_id,c.base_branch,
-       j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
+       j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.keep_running,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(j.workflow_attention,'') as workflow_attention,
        coalesce(j.workflow_attention_source,'') as workflow_attention_source,
@@ -131,6 +133,7 @@ type GetCodingJobRow struct {
 	ProviderConnection      string
 	Model                   string
 	ReasoningEffort         string
+	KeepRunning             bool
 	AdmissionOpen           bool
 	CleanupState            core.CleanupState
 	CurrentTaskID           string
@@ -165,6 +168,7 @@ func (q *Queries) GetCodingJob(ctx context.Context, jobID string) (GetCodingJobR
 		&i.ProviderConnection,
 		&i.Model,
 		&i.ReasoningEffort,
+		&i.KeepRunning,
 		&i.AdmissionOpen,
 		&i.CleanupState,
 		&i.CurrentTaskID,
@@ -250,7 +254,7 @@ func (q *Queries) GetCurrentJobTaskForUpdate(ctx context.Context, jobID string) 
 const getJob = `-- name: GetJob :one
 select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(creator.name,'') as created_by_client_name,j.client_reference,
        j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
-       j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
+       j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.keep_running,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(j.workflow_attention,'') as workflow_attention,
        coalesce(j.workflow_attention_source,'') as workflow_attention_source,
@@ -277,6 +281,7 @@ type GetJobRow struct {
 	ProviderConnection      string
 	Model                   string
 	ReasoningEffort         string
+	KeepRunning             bool
 	AdmissionOpen           bool
 	CleanupState            core.CleanupState
 	CurrentTaskID           string
@@ -304,6 +309,7 @@ func (q *Queries) GetJob(ctx context.Context, jobID string) (GetJobRow, error) {
 		&i.ProviderConnection,
 		&i.Model,
 		&i.ReasoningEffort,
+		&i.KeepRunning,
 		&i.AdmissionOpen,
 		&i.CleanupState,
 		&i.CurrentTaskID,
@@ -349,7 +355,7 @@ func (q *Queries) GetJobAdmissionForUpdate(ctx context.Context, jobID string) (G
 const getJobForSandboxActionAuthorization = `-- name: GetJobForSandboxActionAuthorization :one
 select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(creator.name,'') as created_by_client_name,j.client_reference,
        j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
-       j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
+       j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.keep_running,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(current_task.task_name,'') as current_task_name,
        coalesce(j.workflow_attention,'') as workflow_attention,
@@ -378,6 +384,7 @@ type GetJobForSandboxActionAuthorizationRow struct {
 	ProviderConnection      string
 	Model                   string
 	ReasoningEffort         string
+	KeepRunning             bool
 	AdmissionOpen           bool
 	CleanupState            core.CleanupState
 	CurrentTaskID           string
@@ -406,6 +413,7 @@ func (q *Queries) GetJobForSandboxActionAuthorization(ctx context.Context, jobID
 		&i.ProviderConnection,
 		&i.Model,
 		&i.ReasoningEffort,
+		&i.KeepRunning,
 		&i.AdmissionOpen,
 		&i.CleanupState,
 		&i.CurrentTaskID,
@@ -484,13 +492,13 @@ func (q *Queries) GetRevisionJobForUpdate(ctx context.Context, jobID string) (Ge
 const insertAdmittedJob = `-- name: InsertAdmittedJob :execrows
 insert into dorf.jobs(
     id,admission_key,workflow_name,workflow_revision,agents_md,created_by_client_id,client_reference,
-    sandbox_profile,provider_connection,model,reasoning_effort
+    sandbox_profile,provider_connection,model,reasoning_effort,keep_running
 )
 values(
     $1,$2,$3,$4,
     $5,nullif($6::text,''),$7,
     $8,$9,$10,
-    $11
+    $11,$12
 )
 on conflict(admission_key) do nothing
 `
@@ -507,6 +515,7 @@ type InsertAdmittedJobParams struct {
 	ProviderConnection string
 	Model              string
 	ReasoningEffort    string
+	KeepRunning        bool
 }
 
 func (q *Queries) InsertAdmittedJob(ctx context.Context, arg InsertAdmittedJobParams) (int64, error) {
@@ -522,6 +531,7 @@ func (q *Queries) InsertAdmittedJob(ctx context.Context, arg InsertAdmittedJobPa
 		arg.ProviderConnection,
 		arg.Model,
 		arg.ReasoningEffort,
+		arg.KeepRunning,
 	)
 	if err != nil {
 		return 0, err

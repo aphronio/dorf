@@ -66,6 +66,7 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 			if work.Kind == WorkComplete {
 				return core.TaskResultV1{JobID: params.JobID, Outcome: "admission-closed"}, nil
 			}
+			core.ReconcileIdle(ctx, runtime.Agent, params.JobID)
 			sequence, err := store.NextWakeSequence(ctx, params.JobID)
 			if err != nil {
 				return core.TaskResultV1{}, err

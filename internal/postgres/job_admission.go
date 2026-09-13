@@ -56,7 +56,7 @@ func admitJob(ctx context.Context, store Store, coreInput core.JobAdmission, que
 			CreatedByClientID: coreInput.CreatedByClientID, ClientReference: coreInput.ClientReference,
 			ID: id, AdmissionKey: coreInput.AdmissionKey, WorkflowName: coreInput.Workflow, WorkflowRevision: coreInput.WorkflowRevision,
 			AgentsMd: coreInput.AgentsMD, SandboxProfile: coreInput.SandboxProfile, ProviderConnection: coreInput.ProviderConnection,
-			Model: coreInput.Model, ReasoningEffort: coreInput.ReasoningEffort,
+			KeepRunning: coreInput.KeepRunning, Model: coreInput.Model, ReasoningEffort: coreInput.ReasoningEffort,
 		})
 		if err != nil {
 			return core.Job{}, false, err
@@ -70,7 +70,7 @@ func admitJob(ctx context.Context, store Store, coreInput core.JobAdmission, que
 		ClientReference: storedRow.ClientReference,
 		AdmissionKey:    storedRow.AdmissionKey, Workflow: core.WorkflowName(storedRow.WorkflowName), WorkflowRevision: storedRow.WorkflowRevision,
 		AgentsMD: storedRow.AgentsMd, SandboxProfile: storedRow.SandboxProfile, ProviderConnection: storedRow.ProviderConnection,
-		Model: storedRow.Model, ReasoningEffort: storedRow.ReasoningEffort,
+		KeepRunning: storedRow.KeepRunning, Model: storedRow.Model, ReasoningEffort: storedRow.ReasoningEffort,
 	}
 	// A replay may come from another Client; only the first admission records its creator.
 	comparison := coreInput

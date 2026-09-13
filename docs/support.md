@@ -170,3 +170,23 @@ environment dumps, Harness transcript contents, complete inspection output, watc
 Message output to a report. Those surfaces may contain the caller's full goal or agent output.
 Report only the needed Job ID and reviewed state, attention, and cleanup facts; redact caller input
 first.
+
+## E2B idle pause
+
+E2B supports full-memory pause between turns. Background processes are suspended and resume with
+the Sandbox; they do not continue working while paused. Clients must reconnect network sessions.
+The [Control API](control-api.md#resources) owns the admitted override and read behavior.
+New E2B Sandboxes also request provider auto-pause on timeout rather than destructive expiry.
+This fallback does not remove account continuous-runtime limits, and provider fallback behavior
+can cold-boot a Sandbox if a memory snapshot cannot complete. Existing Sandboxes retain their
+creation-time timeout policy.
+
+A transient idle-pause error leaves the Turn result intact and emits a worker warning containing
+the Job identity. The durable runtime attempts idle reconciliation again on its next wake. Check
+provider availability and account limits when warnings persist; do not equate a settled Turn with
+confirmed provider pause. A missing retained Sandbox is an ownership/recovery error, not permission
+to start a replacement conversation silently.
+
+The native Go adapter's disposable live proof preserved a background process, boot identity and an
+in-memory random nonce across two pause/resume cycles. The test verifies cleanup through exact
+ownership discovery. It does not establish model-connection survival across a provider time limit.

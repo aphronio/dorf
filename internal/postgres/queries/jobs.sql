@@ -1,7 +1,7 @@
 -- name: GetJob :one
 select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(creator.name,'') as created_by_client_name,j.client_reference,
        j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
-       j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
+       j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.keep_running,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(j.workflow_attention,'') as workflow_attention,
        coalesce(j.workflow_attention_source,'') as workflow_attention_source,
@@ -41,7 +41,7 @@ select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(cre
        j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        c.repository,c.starting_revision,c.revision,c.branch,
        c.github_repository,c.github_installation_id,c.base_branch,
-       j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
+       j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.keep_running,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(j.workflow_attention,'') as workflow_attention,
        coalesce(j.workflow_attention_source,'') as workflow_attention_source,
@@ -89,19 +89,19 @@ where job_id=sqlc.arg(job_id) and revision=sqlc.arg(comparison_base_oid);
 -- name: InsertAdmittedJob :execrows
 insert into dorf.jobs(
     id,admission_key,workflow_name,workflow_revision,agents_md,created_by_client_id,client_reference,
-    sandbox_profile,provider_connection,model,reasoning_effort
+    sandbox_profile,provider_connection,model,reasoning_effort,keep_running
 )
 values(
     sqlc.arg(id),sqlc.arg(admission_key),sqlc.arg(workflow_name),sqlc.arg(workflow_revision),
     sqlc.arg(agents_md),nullif(sqlc.arg(created_by_client_id)::text,''),sqlc.arg(client_reference),
     sqlc.arg(sandbox_profile),sqlc.arg(provider_connection),sqlc.arg(model),
-    sqlc.arg(reasoning_effort)
+    sqlc.arg(reasoning_effort),sqlc.arg(keep_running)
 )
 on conflict(admission_key) do nothing;
 
 -- name: GetAdmittedJobForUpdate :one
 select id,admission_key,workflow_name,workflow_revision,agents_md,sandbox_profile,provider_connection,
-       model,reasoning_effort,client_reference
+       model,reasoning_effort,client_reference,keep_running
 from dorf.jobs
 where admission_key=sqlc.arg(admission_key)
 for update;
@@ -143,7 +143,7 @@ for update;
 -- name: GetJobForSandboxActionAuthorization :one
 select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(creator.name,'') as created_by_client_name,j.client_reference,
        j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
-       j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
+       j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.keep_running,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(current_task.task_name,'') as current_task_name,
        coalesce(j.workflow_attention,'') as workflow_attention,

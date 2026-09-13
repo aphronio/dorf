@@ -144,6 +144,7 @@ func (p SandboxProfile) CurrentDefinitionHash() string {
 }
 
 type Job struct {
+	KeepRunning             bool         `json:"keep_running"`
 	CreatedByClientID       string       `json:"created_by_client_id,omitempty"`
 	CreatedByClientName     string       `json:"created_by_client_name,omitempty"`
 	ClientReference         string       `json:"client_reference,omitempty"`

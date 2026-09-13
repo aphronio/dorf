@@ -85,6 +85,7 @@ func ValidMessageInput(input MessageInput) bool {
 // admission. Workflow packages extend it with their own typed input; a direct
 // client leaves both workflow identity fields empty.
 type JobAdmission struct {
+	KeepRunning        bool
 	CreatedByClientID  string
 	ClientReference    string
 	AdmissionKey       string

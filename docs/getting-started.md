@@ -607,3 +607,11 @@ has resumed it yet; use `dorf job inspect JOB_ID` to observe current work and pr
 Cleanup remains separately observable. `dorf job cleanup JOB_ID` is an explicit client request to
 release the Job's resources; Core reconciles that request or retries an incomplete cleanup, then
 inspection reports the resulting facts.
+
+### Keep a worker running between turns
+
+New E2B-backed Jobs pause their Sandboxes when idle. Add `--keep-running` to `dorf run`,
+`dorf workflow run coding`, or `dorf workflow run codebase-investigation` when background work
+must continue between turns. The override is saved with the Job and must match on an explicit
+admission replay. It does not disable provider timeout limits. Other providers keep their
+existing lifecycle until their pause capability is supported.

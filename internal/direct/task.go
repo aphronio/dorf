@@ -98,6 +98,7 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 				}
 				return core.TaskResultV1{}, err
 			}
+			core.ReconcileIdle(ctx, runtime.Execution, params.JobID)
 			sequence, err := store.NextWakeSequence(ctx, params.JobID)
 			if err != nil {
 				return core.TaskResultV1{}, err

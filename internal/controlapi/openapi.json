@@ -987,6 +987,7 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "keep_running": { "type": "boolean", "default": false, "description": "Disable pause between turns for this Job. E2B pauses idle Sandboxes by default; other providers retain their existing lifecycle. Does not bypass provider timeouts." },
           "client_reference": { "type": "string", "maxLength": 255, "description": "Optional opaque caller thread or task reference; retained at admission. Empty means no reference." },
           "agents_md": { "type": "string", "maxLength": 1048576, "description": "Initial workspace AGENTS.md, installed before the Harness starts" },
           "profile": { "type": "string", "description": "Named verified profile; omitted or empty selects the Deployment default" },
@@ -1000,6 +1001,7 @@
         "additionalProperties": false,
         "required": ["repository", "revision", "base_branch"],
         "properties": {
+          "keep_running": { "type": "boolean", "default": false, "description": "Disable pause between turns for this Job. E2B pauses idle Sandboxes by default; other providers retain their existing lifecycle. Does not bypass provider timeouts." },
           "client_reference": { "type": "string", "maxLength": 255, "description": "Optional opaque caller thread or task reference; retained at admission. Empty means no reference." },
           "repository": { "type": "string", "minLength": 1 },
           "revision": { "$ref": "#/components/schemas/GitCommitOID" },
@@ -1016,6 +1018,7 @@
         "additionalProperties": false,
         "required": ["repository", "revision"],
         "properties": {
+          "keep_running": { "type": "boolean", "default": false, "description": "Disable pause between turns for this Job. E2B pauses idle Sandboxes by default; other providers retain their existing lifecycle. Does not bypass provider timeouts." },
           "client_reference": { "type": "string", "maxLength": 255, "description": "Optional opaque caller thread or task reference; retained at admission. Empty means no reference." },
           "repository": {
             "type": "string",
@@ -1102,6 +1105,7 @@
         "type": "object",
         "required": ["id", "kind", "profile", "model", "reasoning", "admission", "execution", "attention", "cleanup", "sandboxes"],
         "properties": {
+          "keep_running": { "type": "boolean", "default": false, "description": "Disable pause between turns for this Job. E2B pauses idle Sandboxes by default; other providers retain their existing lifecycle. Does not bypass provider timeouts." },
           "client_reference": { "type": "string", "maxLength": 255, "description": "Optional opaque caller thread or task reference; retained at admission. Empty means no reference." },
           "created_by_client": { "oneOf": [{ "$ref": "#/components/schemas/JobCreator" }, { "type": "null" }], "description": "Authenticated creator of the first admission; null for unattributed Jobs. Revoked Clients remain identifiable." },
           "id": { "type": "string", "minLength": 1 },
