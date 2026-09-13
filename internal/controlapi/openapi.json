@@ -693,6 +693,18 @@
         }
       }
     },
+    "/v1/sandboxes/{sandbox}/status": {
+      "get": {
+        "operationId": "getSandboxStatus",
+        "summary": "Observe provider state without waking or pausing the Sandbox",
+        "tags": ["Sandboxes"],
+        "parameters": [{ "name": "sandbox", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": { "description": "Fresh provider observation; unknown means an unrecognized provider state", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SandboxStatus" } } } },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/v1/sandboxes/{sandbox}/exec": {
       "post": {
         "operationId": "execSandbox",
@@ -842,6 +854,14 @@
       }
     },
     "schemas": {
+      "SandboxStatus": {
+        "type": "object", "additionalProperties": false,
+        "required": ["provider", "state"],
+        "properties": {
+          "provider": { "type": "string" },
+          "state": { "type": "string", "enum": ["running", "paused", "stopped", "missing", "unknown"] }
+        }
+      },
       "Timeline": {
         "type": "object",
         "additionalProperties": false,

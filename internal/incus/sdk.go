@@ -117,7 +117,7 @@ func (c *sdkClient) Instance(ctx context.Context, name string) (Instance, error)
 }
 
 func instanceFromAPI(instance api.Instance) Instance {
-	return Instance{Name: instance.Name, Config: cloneStrings(instance.Config), Running: instance.IsActive()}
+	return Instance{Name: instance.Name, Config: cloneStrings(instance.Config), Running: instance.IsActive(), Status: instance.Status}
 }
 
 func (c *sdkClient) CreateInstance(ctx context.Context, request CreateInstanceRequest) error {

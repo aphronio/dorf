@@ -84,6 +84,17 @@ else:raise RuntimeError('background process unavailable')`)
 		if err != nil || paused.State != "paused" {
 			t.Fatalf("pause state=%s %v", paused.State, err)
 		}
+		// Passive status reads must leave the in-memory process paused.
+		for range 3 {
+			observed, err := adapter.ObserveOwned(ctx, owned)
+			if err != nil || observed.State != "paused" || observed.Provider != "e2b" {
+				t.Fatalf("passive observation=%+v %v", observed, err)
+			}
+		}
+		stillPaused, err := client.InspectOwned(ctx, sandbox.ProviderID, owner)
+		if err != nil || stillPaused.State != "paused" {
+			t.Fatalf("observation woke VM: %v", err)
+		}
 		// Repeated idle reconciliation must not wake or re-pause the resource.
 		if err := adapter.PauseOwned(ctx, owned); err != nil {
 			t.Fatal(err)

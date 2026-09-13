@@ -25,6 +25,7 @@ type Instance struct {
 	Name    string
 	Config  map[string]string
 	Running bool
+	Status  string
 }
 
 type CreateInstanceRequest struct {

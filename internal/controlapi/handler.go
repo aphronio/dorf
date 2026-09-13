@@ -63,6 +63,7 @@ func newHandlerContext(discovery Discovery, auth Auth, jobs Jobs, profiles Profi
 	h.mux.HandleFunc("/v1/jobs/{job}/abandon", h.authenticate(h.abandonRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/cleanup", h.authenticate(h.cleanupRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}", h.authenticate(h.jobRoute))
+	h.mux.HandleFunc("/v1/sandboxes/{sandbox}/status", h.authenticate(h.sandboxStatusRoute))
 	h.mux.HandleFunc("/v1/sandboxes/{sandbox}/exec", h.authenticate(h.sandboxExecRoute))
 	h.mux.HandleFunc("/v1/sandboxes/{sandbox}/files", h.authenticate(h.fileRoute))
 	h.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
@@ -733,6 +734,7 @@ var serviceProblems = []struct {
 	{ErrMessageNotFound, "message_not_found"},
 	{ErrTurnNotFound, "turn_not_found"},
 	{ErrTimelineUnavailable, "timeline_unavailable"},
+	{ErrSandboxStatusUnavailable, "sandbox_status_unavailable"},
 	{ErrSandboxExecUnavailable, "sandbox_exec_unavailable"},
 	{ErrSandboxExecFailed, "sandbox_exec_failed"},
 	{ErrSandboxNotFound, "sandbox_not_found"},

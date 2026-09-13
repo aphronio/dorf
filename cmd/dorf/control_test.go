@@ -815,3 +815,7 @@ func TestRemoteMessageHumanDeliveryLabels(t *testing.T) {
 		})
 	}
 }
+
+func (f *remoteCLIJobs) ReadSandboxStatus(context.Context, string) (provider.Status, error) {
+	return provider.Status{Provider: "incus", State: "running"}, nil
+}

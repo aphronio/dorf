@@ -34,7 +34,12 @@ type CleanupRuntimeResolver interface {
 	ResolveCleanup(context.Context, string) (CleanupRuntime, error)
 }
 
+type SandboxStatusReader interface {
+	ReadSandboxStatus(context.Context, Job, Sandbox) (provider.Status, error)
+}
+
 type SandboxRuntime struct {
+	Status         SandboxStatusReader
 	Timeline       SandboxTimelineReader
 	Execution      Execution
 	Files          SandboxFileReader

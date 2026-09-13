@@ -296,3 +296,9 @@ identity, workload identity, mTLS, MCP, A2A, hand-written SDK families, webhooks
 store, listable Sandbox files, public workflow registration, a workflow DSL, or a
 high-availability hosted control-plane topology. A concrete client must earn the next smallest
 surface.
+
+Sandbox status reads return a fresh provider name and normalized machine state. They use provider
+metadata without starting, connecting to, pausing, or reconciling the machine. Reads are fenced
+against cleanup. Job execution being idle does not imply that its machine is paused. A missing
+owned resource is reported explicitly; an unavailable provider check returns a retryable Problem.
+These observations are not stored and may change immediately after a response.

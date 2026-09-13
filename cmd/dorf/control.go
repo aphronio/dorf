@@ -1000,6 +1000,7 @@ type controlAPIJobs struct {
 }
 
 type controlReader interface {
+	ReadSandboxStatus(context.Context, string) (provider.Status, error)
 	Exec(context.Context, string, provider.Command) (provider.CommandResult, error)
 	ReadFile(context.Context, string, string) ([]byte, error)
 	WriteFile(context.Context, string, string, []byte, bool) error
@@ -1809,7 +1810,7 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 	}
 	server := controlapi.NewServer(controlapi.Discovery{
 		Product: "dorf", Version: version.Version,
-		Capabilities: []string{"direct_jobs", "coding_jobs", "codebase_investigation_jobs", "job_list", "profile_list", "job_watch", "job_timeline", "messages", "message_interrupt", "job_retry", "job_abandon", "sandbox_files", "sandbox_exec", "latest_reply", "evidence"},
+		Capabilities: []string{"direct_jobs", "coding_jobs", "codebase_investigation_jobs", "job_list", "profile_list", "job_watch", "job_timeline", "messages", "message_interrupt", "job_retry", "job_abandon", "sandbox_files", "sandbox_exec", "sandbox_status", "latest_reply", "evidence"},
 	}, auth, jobs, controlAPIProfiles{store: store})
 	serverCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -1910,4 +1911,28 @@ func (a controlAPIJobs) ExecSandbox(ctx context.Context, sandboxID string, comma
 	default:
 		return result, nil
 	}
+}
+
+func (a controlAPIJobs) ReadSandboxStatus(ctx context.Context, sandboxID string) (provider.Status, error) {
+	owned, err := a.store.Sandbox(ctx, sandboxID)
+	if errors.Is(err, postgres.ErrNotFound) {
+		return provider.Status{}, controlapi.ErrSandboxNotFound
+	}
+	if err != nil {
+		return provider.Status{}, err
+	}
+	if _, err := a.supportedJob(ctx, owned.JobID); err != nil {
+		return provider.Status{}, err
+	}
+	if a.reader == nil {
+		return provider.Status{}, controlapi.ErrSandboxStatusUnavailable
+	}
+	result, err := a.reader.ReadSandboxStatus(ctx, sandboxID)
+	if errors.Is(err, controlreader.ErrSandboxNotFound) {
+		return provider.Status{}, controlapi.ErrSandboxNotFound
+	}
+	if err != nil {
+		return provider.Status{}, controlapi.ErrSandboxStatusUnavailable
+	}
+	return result, nil
 }

@@ -80,6 +80,7 @@ func (r profileRuntimeResolver) ResolveSandbox(ctx context.Context, name string)
 		Execution:      resolved.Execution,
 		Files:          resolved.Externals,
 		Commands:       resolved.Externals,
+		Status:         resolved.Externals,
 		Timeline:       resolved.Externals,
 		SandboxProfile: resolved.SandboxProfile,
 	}, nil

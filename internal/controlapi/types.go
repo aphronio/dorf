@@ -20,6 +20,7 @@ var (
 	ErrInvalidCursor                  = errors.New("invalid control API Job cursor")
 	ErrJobNotFound                    = errors.New("control API Job not found")
 	ErrMessageNotFound                = errors.New("control API Message not found")
+	ErrSandboxStatusUnavailable       = errors.New("Sandbox status is unavailable")
 	ErrSandboxExecUnavailable         = errors.New("Sandbox command is unavailable")
 	ErrSandboxExecFailed              = errors.New("Sandbox command outcome is unknown")
 	ErrSandboxNotFound                = errors.New("control API Sandbox not found")
@@ -324,6 +325,7 @@ type Auth interface {
 // Implementations compose Core and the fixed workflow seams and return only
 // purpose-built public snapshots.
 type Jobs interface {
+	ReadSandboxStatus(context.Context, string) (provider.Status, error)
 	ExecSandbox(context.Context, string, provider.Command) (provider.CommandResult, error)
 	List(context.Context, int, string) (JobList, error)
 	AdmitDirect(context.Context, string, string, AdmitJobRequest) (DirectJob, bool, error)

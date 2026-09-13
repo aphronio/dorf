@@ -49,6 +49,7 @@ var problemCatalog = []ProblemDescriptor{
 	describeProblem(502, "sandbox_exec_failed", "Sandbox command outcome is unknown; inspect before retrying", false),
 	describeProblem(409, "sandbox_exec_unavailable", "Sandbox command is unavailable", false),
 	describeProblem(404, "sandbox_not_found", "Sandbox not found", false),
+	describeProblem(503, "sandbox_status_unavailable", "Sandbox status is unavailable", true),
 	describeProblem(409, "skill_refresh_unavailable", "The selected profile does not support skill refresh", false),
 	describeProblem(409, "steer_unavailable", "No exact active delivery can accept a steer", false),
 	describeProblem(409, "timeline_unavailable", "Native timeline is unavailable", false),

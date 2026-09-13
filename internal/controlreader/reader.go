@@ -105,6 +105,10 @@ func (s Service) ReadFile(ctx context.Context, sandboxID, relativePath string) (
 }
 
 func (s Service) withSandbox(ctx context.Context, sandboxID string, call func(core.SandboxRuntime, core.Job, core.Sandbox) error) error {
+	return s.accessSandbox(ctx, sandboxID, true, call)
+}
+
+func (s Service) accessSandbox(ctx context.Context, sandboxID string, reconcileIdle bool, call func(core.SandboxRuntime, core.Job, core.Sandbox) error) error {
 	if !validIdentity(sandboxID) {
 		return ErrSandboxNotFound
 	}
@@ -123,7 +127,11 @@ func (s Service) withSandbox(ctx context.Context, sandboxID string, call func(co
 	}
 
 	var idleRuntime core.Execution
-	defer func() { core.ReconcileIdle(ctx, idleRuntime, owned.JobID) }()
+	defer func() {
+		if reconcileIdle {
+			core.ReconcileIdle(ctx, idleRuntime, owned.JobID)
+		}
+	}()
 	err = s.Store.WithJobFence(ctx, owned.JobID, func() error {
 		runtime, job, err := s.sandboxAuthority(ctx, owned)
 		if err != nil {
@@ -400,6 +408,7 @@ func NewHandler(token string, service Service) (http.Handler, error) {
 		FileReadPath:  fileReadEndpoint(service),
 		FileWritePath: fileWriteEndpoint(service),
 		CommandPath:   commandEndpoint(service),
+		StatusPath:    statusEndpoint(service),
 		TimelinePath: jsonEndpoint(MaxObservationBytes, func(ctx context.Context, input timelineRequest) (core.HarnessTimeline, error) {
 			return service.ReadTimeline(ctx, input.JobID, input.TurnID)
 		}),

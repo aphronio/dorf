@@ -572,13 +572,14 @@ type readerTestRuntimes struct {
 	files     core.SandboxFileReader
 	execution core.Execution
 	commands  core.SandboxCommandExecutor
+	status    core.SandboxStatusReader
 }
 
 func (r readerTestRuntimes) ResolveSandbox(_ context.Context, profile string) (core.SandboxRuntime, error) {
 	if profile != r.profile {
 		return core.SandboxRuntime{}, errors.New("foreign profile")
 	}
-	return core.SandboxRuntime{SandboxProfile: profile, Files: r.files, Execution: r.execution, Commands: r.commands}, nil
+	return core.SandboxRuntime{SandboxProfile: profile, Files: r.files, Execution: r.execution, Commands: r.commands, Status: r.status}, nil
 }
 
 type readerTestFiles struct {

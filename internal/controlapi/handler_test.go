@@ -954,3 +954,7 @@ func TestSandboxExecReportsExitStatusAndDoesNotReplayUncertainCommands(t *testin
 		t.Fatalf("uncertain command was replayed or misreported: %+v calls=%d", problem, jobs.execCalls)
 	}
 }
+
+func (f *fakeJobs) ReadSandboxStatus(context.Context, string) (provider.Status, error) {
+	return provider.Status{Provider: "e2b", State: "paused"}, nil
+}

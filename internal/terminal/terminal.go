@@ -182,3 +182,14 @@ func (e Externals) SandboxPause(ctx context.Context, job core.Job, owned core.Sa
 	}
 	return pauser.PauseOwned(ctx, ownershipMetadata(owned))
 }
+
+func (e Externals) ReadSandboxStatus(ctx context.Context, job core.Job, owned core.Sandbox) (provider.Status, error) {
+	if owned.JobID != job.ID || owned.ID == "" {
+		return provider.Status{}, fmt.Errorf("Sandbox observation requires its exact Job owner")
+	}
+	observer, ok := e.Sandbox.(provider.StatusObserver)
+	if !ok {
+		return provider.Status{}, fmt.Errorf("Sandbox observation is unsupported")
+	}
+	return observer.ObserveOwned(ctx, ownershipMetadata(owned))
+}
