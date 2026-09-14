@@ -191,9 +191,13 @@ Message delivery. Internal delivery reconciliation alternates observation with a
 durable wait, so an accepted steer can wake and overtake polling without another controller path or
 duplicate Turn.
 
-The remote message default resolves automatic intent at admission: steer an active Turn, otherwise
-follow. The accepted request intent and the resolved delivery intent are different facts; both are
-retained so replay never reselects a target. Explicit follow and steer keep their invariant semantics.
+The remote message default initially resolves automatic intent at admission: steer an active Turn,
+otherwise follow. The accepted request intent and current effective delivery intent are different
+facts. If reconciliation proves that the selected active Turn became terminal without accepting the
+exact automatic Message, Core atomically changes that same Message to follow and returns it to FIFO
+selection. It does not retarget another active Turn. Replay preserves the immutable request and
+Message identity while returning the current effective intent. Explicit follow and steer keep their
+invariant semantics.
 
 An interrupt is a monotonic request on the original Turn-starting AgentRun. A client may address a
 steer Message, but the request binds its original Turn rather than the latest run. Acceptance and

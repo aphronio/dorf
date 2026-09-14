@@ -214,6 +214,7 @@ type Message struct {
 	Observation           bool                  `json:"observation,omitempty"`
 	DeveloperInstructions *string               `json:"developer_instructions,omitempty"`
 	RefreshSkills         bool                  `json:"refresh_skills,omitempty"`
+	RequestedIntent       MessageDeliveryIntent `json:"-"`
 	ID                    string                `json:"id"`
 	JobID                 string                `json:"job_id"`
 	FromKind              MessageFromKind       `json:"from_kind"`
@@ -239,8 +240,9 @@ func (intent MessageDeliveryIntent) accepts(resolved MessageDeliveryIntent) bool
 }
 
 // AgentRun is the durable delivery of one Message to an agent harness. A Follow
-// binds a new Turn; a Steer remains bound to the exact active Turn captured at
-// admission and never falls back to creating a Turn.
+// binds a new Turn. An explicit Steer remains bound to the exact active Turn
+// captured at admission; an Auto Message may become a Follow before acceptance
+// when Core proves that its selected Steer target is terminal.
 type AgentRun struct {
 	ID                 string        `json:"id"`
 	JobID              string        `json:"job_id"`

@@ -431,7 +431,7 @@ retained Evidence remains readable after cleanup.
 
 `run` receipts include the accepted Job and Message. `job inspect` reports the Job ID and exact Sandbox IDs. For an investigation,
 it also prints the exact report retrieval command followed by the cleanup command. Follow may queue
-before current work settles. Steer targets only the exact active Turn and never becomes a Follow.
+before current work settles. Explicit steer targets only the exact active Turn and never becomes a Follow.
 `job watch` reconnects from the canonical snapshot, and Ctrl-C stops only the view. Retry is
 accepted only for eligible failed execution. Evidence is verified metadata. Sandbox file retrieval
 returns exact bytes and must happen before cleanup, which closes Message admission and file reads.
@@ -524,11 +524,13 @@ for a Message that has at least one attachment. Dorf sends each file by value, s
 changes do not change an accepted Message. The [Remote Control API](control-api.md#resources) links
 to the accepted formats and limits.
 
-The default `--intent auto` steers an active Turn or admits a Follow when none is active. Dorf
-chooses once at admission and preserves that choice on replay. Use `--intent follow` to queue a
-distinct Turn even while earlier work is active, or `--intent steer` to require an active target.
-An admitted Steer has priority over queued follows, never falls back to a new Turn, and fails
-honestly if its target becomes terminal before delivery.
+The default `--intent auto` steers an active Turn or admits a Follow when none is active. If that
+Turn terminates without accepting the automatic Message, Dorf changes the same Message to a Follow
+and returns it to FIFO selection. Replay preserves the original request and Message identity while
+returning its current effective intent. Use `--intent follow` to queue a distinct Turn even while
+earlier work is active, or `--intent steer` to require an active target. An explicit Steer has
+priority over queued follows, never falls back to a new Turn, and fails honestly if its target
+becomes terminal before delivery.
 
 After changing installed skills, add `--refresh-skills` to the next Codex Message. The request
 uses the [Message delivery rules](control-api.md#resources) and survives steering until a

@@ -40,10 +40,10 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D089: Core reads exact Sandbox files but does not retain generic deliverables](decisions/D089-core-reads-exact-sandbox-files-but-does-not-retain-generic-deliverables.md) (`partial`). Changing Sandbox file reads, deliverable retention, or cleanup-time file access.
 - [D090: Open Jobs may have no current workflow operation](decisions/D090-open-jobs-may-have-no-current-workflow-operation.md) (`current`). Changing how an open Job waits when no workflow operation is eligible.
 - [D095: The CLI is Dorf's first direct trusted client](decisions/D095-the-cli-is-dorf-s-first-direct-trusted-client.md) (`partial`). Changing direct Job semantics or the CLI's role as a Core client.
-- [D096: Follow and steer are invariant custody; cleanup timing remains consumer policy](decisions/D096-follow-and-steer-are-invariant-custody-cleanup-timing-remains-consumer-policy.md) (`current`). Changing follow, steer, or consumer-controlled cleanup semantics.
+- [D096: Follow and steer are invariant custody; cleanup timing remains consumer policy](decisions/D096-follow-and-steer-are-invariant-custody-cleanup-timing-remains-consumer-policy.md) (`partial`). Changing follow, steer, or consumer-controlled cleanup semantics.
 - [D104: Technology choices stay replaceable](decisions/D104-technology-choices-stay-replaceable.md) (`current`). Reviewing a technology replacement, migration, or compatibility obligation.
 - [D107: Commit Job task scheduling and attachment together](decisions/D107-commit-job-task-scheduling-and-attachment-together.md) (`current`). Changing admission, task handoffs, cleanup scheduling, or recovery across Absurd and Dorf.
-- [D108: Reuse direct Jobs for retained sessions and exact message control](decisions/D108-direct-session-message-control.md) (`current`). Changing automatic message intent, interruption, or direct Job session continuity.
+- [D108: Reuse direct Jobs for retained sessions and exact message control](decisions/D108-direct-session-message-control.md) (`partial`). Changing automatic message intent, interruption, or direct Job session continuity.
 - [D109: Export diagnostics through the existing native Turn binding](decisions/D109-exact-turn-execution-diagnostics.md) (`current`). Changing native execution diagnostics, attribution, or exporter custody.
 - [D110: Separate Job setup from Message delivery](decisions/D110-separate-job-setup-from-messages.md) (`current`). Changing Job creation, workspace instructions, or Message admission.
 - [D111: Workspace files own live Codex instructions](decisions/D111-workspace-files-own-live-codex-instructions.md) (`partial`). Changing workspace instruction editing or Codex context loading.
@@ -54,6 +54,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D120: Default idle pause with an admitted keep-running override](decisions/D120-default-idle-pause-with-an-admitted-keep-running-override.md) (`partial`). Changing Sandbox idle policy, E2B retention, or admission defaults.
 - [D121: Messages retain application developer instructions](decisions/D121-messages-retain-application-developer-instructions.md) (`current`). Changing application instruction custody or Harness prompt authority.
 - [D122: Sandbox activity delays idle pause](decisions/D122-sandbox-activity-delays-idle-pause.md) (`current`). Changing idle pause timing, managed Sandbox access, or cancellation fences.
+- [D126: Automatic messages preserve eventual delivery](decisions/D126-automatic-messages-preserve-eventual-delivery.md) (`current`). Changing automatic message resolution, steer reconciliation, or message replay.
 
 ## Workflows
 
@@ -90,7 +91,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D090: Open Jobs may have no current workflow operation](decisions/D090-open-jobs-may-have-no-current-workflow-operation.md) (`current`). Changing how an open Job waits when no workflow operation is eligible.
 - [D092: Investigation reports remain Sandbox files](decisions/D092-investigation-reports-remain-sandbox-files.md) (`current`). Changing how investigation reports are produced, accessed, or retained.
 - [D093: GitHub authentication is an optional deployment integration](decisions/D093-github-authentication-is-an-optional-deployment-integration.md) (`current`). Changing GitHub App setup, credential custody, or repository token minting.
-- [D096: Follow and steer are invariant custody; cleanup timing remains consumer policy](decisions/D096-follow-and-steer-are-invariant-custody-cleanup-timing-remains-consumer-policy.md) (`current`). Changing follow, steer, or consumer-controlled cleanup semantics.
+- [D096: Follow and steer are invariant custody; cleanup timing remains consumer policy](decisions/D096-follow-and-steer-are-invariant-custody-cleanup-timing-remains-consumer-policy.md) (`partial`). Changing follow, steer, or consumer-controlled cleanup semantics.
 - [D099: Fixed typed workflow admission reuses remote Job control](decisions/D099-fixed-typed-workflow-admission-reuses-remote-job-control.md) (`current`). Changing remote admission or projection for a built-in typed workflow.
 - [D106: Remove unused workflow capability declarations](decisions/D106-remove-unused-workflow-capability-declarations.md) (`current`). Adding optional provider requirements or workflow runtime metadata.
 
@@ -102,7 +103,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D074: Investigation drafts wait for exact human disposition](decisions/D074-investigation-drafts-wait-for-exact-human-disposition.md) (`partial`). Changing investigation draft revision loops, Harness Thread reuse, or disposition policy.
 - [D075: Core mechanisms do not own workflow or interaction policy](decisions/D075-core-mechanisms-do-not-own-workflow-or-interaction-policy.md) (`partial`). Changing ownership between Core mechanisms, workflow policy, and client interaction policy.
 - [D095: The CLI is Dorf's first direct trusted client](decisions/D095-the-cli-is-dorf-s-first-direct-trusted-client.md) (`partial`). Changing direct Job semantics or the CLI's role as a Core client.
-- [D096: Follow and steer are invariant custody; cleanup timing remains consumer policy](decisions/D096-follow-and-steer-are-invariant-custody-cleanup-timing-remains-consumer-policy.md) (`current`). Changing follow, steer, or consumer-controlled cleanup semantics.
+- [D096: Follow and steer are invariant custody; cleanup timing remains consumer policy](decisions/D096-follow-and-steer-are-invariant-custody-cleanup-timing-remains-consumer-policy.md) (`partial`). Changing follow, steer, or consumer-controlled cleanup semantics.
 - [D098: Remote direct Job control exposes the existing interaction loop](decisions/D098-remote-direct-job-control-exposes-the-existing-interaction-loop.md) (`current`). Changing remote Job observation, messaging, retry, files, or Evidence access.
 - [D103: Every ordinary CLI Job operation uses the authenticated control API](decisions/D103-every-ordinary-cli-job-operation-uses-the-authenticated-control-api.md) (`partial`). Changing how CLI Job operations reach deployment authority.
 - [D119: Native timeline reads preserve Harness history](decisions/D119-native-timeline-reads-preserve-harness-history.md) (`partial`). Changing native conversation reads, public native references, or transcript custody.
@@ -188,7 +189,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D102: One guided Dorf domain publishes two distinct public origins](decisions/D102-one-guided-dorf-domain-publishes-two-distinct-public-origins.md) (`current`). Changing guided Cloudflare ingress or either public Dorf origin.
 - [D103: Every ordinary CLI Job operation uses the authenticated control API](decisions/D103-every-ordinary-cli-job-operation-uses-the-authenticated-control-api.md) (`partial`). Changing how CLI Job operations reach deployment authority.
 - [D105: Host-issued integration keys use ordinary revocable Clients](decisions/D105-host-issued-integration-keys-use-ordinary-revocable-clients.md) (`current`). Provisioning bearer credentials for unattended integrations.
-- [D108: Reuse direct Jobs for retained sessions and exact message control](decisions/D108-direct-session-message-control.md) (`current`). Changing automatic message intent, interruption, or direct Job session continuity.
+- [D108: Reuse direct Jobs for retained sessions and exact message control](decisions/D108-direct-session-message-control.md) (`partial`). Changing automatic message intent, interruption, or direct Job session continuity.
 - [D110: Separate Job setup from Message delivery](decisions/D110-separate-job-setup-from-messages.md) (`current`). Changing Job creation, workspace instructions, or Message admission.
 - [D111: Workspace files own live Codex instructions](decisions/D111-workspace-files-own-live-codex-instructions.md) (`partial`). Changing workspace instruction editing or Codex context loading.
 - [D112: Jobs retain authenticated Client attribution](decisions/D112-jobs-retain-authenticated-client-attribution.md) (`current`). Changing Job attribution, admission replay, or operator cleanup inspection.
@@ -202,6 +203,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D122: Sandbox activity delays idle pause](decisions/D122-sandbox-activity-delays-idle-pause.md) (`current`). Changing idle pause timing, managed Sandbox access, or cancellation fences.
 - [D123: Message timelines project completed native replies](decisions/D123-message-timelines-project-completed-native-replies.md) (`current`). Changing live assistant reply delivery, retained item identity, or input attribution.
 - [D125: Messages distinguish application observations](decisions/D125-messages-distinguish-application-observations.md) (`current`). Delivering asynchronous application updates without impersonating human input.
+- [D126: Automatic messages preserve eventual delivery](decisions/D126-automatic-messages-preserve-eventual-delivery.md) (`current`). Changing automatic message resolution, steer reconciliation, or message replay.
 
 ## Deployment and setup
 
@@ -249,10 +251,11 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D092: Investigation reports remain Sandbox files](decisions/D092-investigation-reports-remain-sandbox-files.md) (`current`). Changing how investigation reports are produced, accessed, or retained.
 - [D094: Published PostgreSQL migrations are immutable and append-only](decisions/D094-published-postgresql-migrations-are-immutable-and-append-only.md) (`current`). Changing a published PostgreSQL schema or the migration runner.
 - [D107: Commit Job task scheduling and attachment together](decisions/D107-commit-job-task-scheduling-and-attachment-together.md) (`current`). Changing admission, task handoffs, cleanup scheduling, or recovery across Absurd and Dorf.
-- [D108: Reuse direct Jobs for retained sessions and exact message control](decisions/D108-direct-session-message-control.md) (`current`). Changing automatic message intent, interruption, or direct Job session continuity.
+- [D108: Reuse direct Jobs for retained sessions and exact message control](decisions/D108-direct-session-message-control.md) (`partial`). Changing automatic message intent, interruption, or direct Job session continuity.
 - [D110: Separate Job setup from Message delivery](decisions/D110-separate-job-setup-from-messages.md) (`current`). Changing Job creation, workspace instructions, or Message admission.
 - [D117: Clients request skill refresh at fresh Turn boundaries](decisions/D117-client-requested-skill-refresh-at-fresh-turn-boundaries.md) (`current`). Changing skill discovery after client-managed Sandbox updates.
 - [D118: Messages retain ordered input attachments and immutable bytes](decisions/D118-messages-retain-ordered-input-attachments-and-immutable-bytes.md) (`current`). Changing Message attachments, input blob custody, native image delivery, or attachment replay.
+- [D126: Automatic messages preserve eventual delivery](decisions/D126-automatic-messages-preserve-eventual-delivery.md) (`current`). Changing automatic message resolution, steer reconciliation, or message replay.
 
 ## GitHub integration
 

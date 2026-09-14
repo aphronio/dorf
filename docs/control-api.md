@@ -138,7 +138,9 @@ A server-generated response key would not resolve a lost admission response.
 Job inspection is the canonical snapshot and supports representation ETags. Watch is an SSE delivery
 optimization over complete canonical snapshots: it may coalesce intermediate values and reconnects
 by reading current truth rather than replaying a second event log. Follow is durable FIFO input;
-steer remains bound to the exact active Turn and never degrades into Follow. Retry accepts only an
+explicit steer remains bound to the exact active Turn and never degrades into Follow. An automatic
+Message may become follow only when reconciliation proves its selected Turn became terminal without
+accepting that exact Message. Retry accepts only an
 eligible failed execution. Abandon records an idempotent `abandoned` Outcome only for a coding Job,
 then requests cleanup. Cleanup remains separate from execution and Outcome. A settled Message whose
 internal encoded JSON observation exceeds 16 MiB returns
@@ -208,9 +210,12 @@ without native history does not return an empty success. Cleanup waits for an ac
 then prevents later reads. [Timeline support](support.md#native-conversation-timelines) describes
 the native API prerequisite. A client that needs durable history must own that requirement itself.
 
-Message requests default to `auto`: choose steer against the active Turn at admission, otherwise
-admit a follow. The stored request intent distinguishes automatic selection from explicit follow
-or steer, so replay cannot change either the request or its resolved target. A delivered steer
+Message requests default to `auto`: initially choose steer against the active Turn at admission,
+otherwise admit a follow. The stored request intent distinguishes automatic selection from explicit
+follow or steer. If the exact selected Turn terminates without accepting an automatic Message,
+Dorf changes that same Message's effective intent to follow and reselects it through the FIFO. It
+does not resubmit, duplicate, or retarget the request. Replay returns that current effective intent
+while enforcing the original request equality. A delivered steer
 can have a null result while its Turn is still active; clients wait for the result, not merely
 delivery acknowledgement, before presenting the final answer.
 

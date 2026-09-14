@@ -28,6 +28,7 @@ type ExecutionStore interface {
 	PrepareAgentRun(context.Context, string, string, string) error
 	BindAgentRun(context.Context, string, string, string, string, string) error
 	BindSteer(context.Context, string, string, string) error
+	RequeueAutoMessageAsFollow(context.Context, string, string) error
 	FailAgentRun(context.Context, string, string) error
 	UncertainAgentRun(context.Context, string, string) error
 	AgentRunAttention(context.Context, string, string) error
@@ -131,6 +132,10 @@ func (s ExecutionService) bindAgentRun(ctx context.Context, runID, harness, thre
 
 func (s ExecutionService) bindSteer(ctx context.Context, runID, turnID, outcome string) error {
 	return s.recordAgentRun(ctx, func() error { return s.store.BindSteer(ctx, runID, turnID, outcome) })
+}
+
+func (s ExecutionService) requeueAutoMessageAsFollow(ctx context.Context, runID, targetTurnID string) error {
+	return s.recordAgentRun(ctx, func() error { return s.store.RequeueAutoMessageAsFollow(ctx, runID, targetTurnID) })
 }
 
 func (s ExecutionService) failAgentRun(ctx context.Context, runID, reason string) error {
@@ -348,7 +353,7 @@ func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery De
 		return s.bindSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciliation.Turn.Status)
 	}
 	if reconciliation.Classification == "target-terminal" {
-		return s.failAgentRun(ctx, run.ID, "steer target became terminal before the exact Message was accepted")
+		return s.settleTerminalSteerTarget(ctx, delivery)
 	}
 	if reconciliation.Classification == "uncertain" {
 		return s.uncertainAgentRun(ctx, run.ID, reconciliation.Reason)
@@ -376,7 +381,7 @@ func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery De
 			return s.bindSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciled.Turn.Status)
 		}
 		if reconciled.Classification == "target-terminal" {
-			return s.failAgentRun(ctx, run.ID, "steer target became terminal before the exact Message was accepted")
+			return s.settleTerminalSteerTarget(ctx, delivery)
 		}
 		if reconciled.Classification == "uncertain" {
 			return s.uncertainAgentRun(ctx, run.ID, reconciled.Reason)
@@ -390,6 +395,13 @@ func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery De
 		return err
 	}
 	return s.bindSteer(ctx, run.ID, acceptedTurnID, reconciliation.Turn.Status)
+}
+
+func (s ExecutionService) settleTerminalSteerTarget(ctx context.Context, delivery Delivery) error {
+	if delivery.Message.RequestedIntent == MessageAuto {
+		return s.requeueAutoMessageAsFollow(ctx, delivery.AgentRun.ID, delivery.Message.TargetTurnID)
+	}
+	return s.failAgentRun(ctx, delivery.AgentRun.ID, "steer target became terminal before the exact Message was accepted")
 }
 
 func (s ExecutionService) reach(ctx context.Context, point string, delivery Delivery) error {

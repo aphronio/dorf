@@ -64,8 +64,10 @@ the same repository, process, or binary does not move its policy into Core.
 Message intent is reusable custody rather than consumer policy. While admission is open, an accepted
 follow joins the FIFO, reuses the authoritative retained Harness Thread, and receives a distinct
 Turn, even when accepted before earlier work settles. A steer atomically captures the exact active
-Turn, has priority over queued follows, never falls back to a new Turn, and fails honestly if that
-target becomes terminal. Consumers and workflows supply typed execution envelopes and deterministic
+Turn and has priority over queued follows. Explicit steer never falls back to a new Turn and fails
+honestly if that target becomes terminal. Automatic intent returns the same Message to the follow
+FIFO only after Core proves that its selected Turn terminated without accepting it. Consumers and
+workflows supply typed execution envelopes and deterministic
 infrastructure readiness; they do not authorize these intents, reorder them, or choose their Thread
 semantics.
 

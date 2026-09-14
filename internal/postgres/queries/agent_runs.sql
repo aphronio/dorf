@@ -119,6 +119,31 @@ where id=sqlc.arg(run_id) and harness is not null and thread_id is not null
   and (turn_id is null or turn_id=sqlc.arg(turn_id))
 returning coalesce(turn_outcome,'') as turn_outcome;
 
+-- name: RequeueAutoMessageAsFollow :execrows
+with eligible as (
+    select m.id
+    from dorf.job_messages m
+    join dorf.agent_runs ar on ar.message_id=m.id
+    where ar.id=sqlc.arg(run_id)
+      and m.requested_intent='auto' and m.delivery_intent='steer'
+      and m.steer_target_turn_id=sqlc.arg(target_turn_id)
+      and ar.turn_id is null and ar.state in ('pending','submitting','uncertain')
+      and (ar.baseline_turn_id is null or ar.baseline_turn_id=m.steer_target_turn_id)
+    for update of m,ar
+), requeued_message as (
+    update dorf.job_messages m
+    set delivery_intent='follow',steer_target_turn_id=null
+    from eligible e
+    where m.id=e.id
+    returning m.id
+)
+update dorf.agent_runs ar
+set state='pending',baseline_turn_id=null,attention=null
+from requeued_message m
+where ar.id=sqlc.arg(run_id) and ar.message_id=m.id
+  and ar.turn_id is null and ar.state in ('pending','submitting','uncertain')
+  and (ar.baseline_turn_id is null or ar.baseline_turn_id=sqlc.arg(target_turn_id));
+
 -- name: FailAgentRun :execrows
 update dorf.agent_runs
 set state='failed',
