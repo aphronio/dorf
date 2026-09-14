@@ -791,6 +791,131 @@
           }
         ]
       }
+    },
+    "/v1/jobs/{job}/messages/{message}/observation": {
+      "get": {
+        "operationId": "readMessageObservation",
+        "summary": "Read coherent Message outcome and completed replies",
+        "description": "One coherent durable delivery/outcome and completed native reply projection. Binding and contiguous completed indexes identify entries; native IDs are diagnostic. An opaque cursor binds the exact Message and consumed-prefix digest. This explicit read may hydrate authoritative retained history if the ephemeral cache is missing or gapped. It does not fetch terminal result text separately. A completion watermark proves the complete final prefix as well as durable outcome; outcome alone is not sufficient.",
+        "tags": [
+          "Messages"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobID"
+          },
+          {
+            "$ref": "#/components/parameters/MessageID"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Coherent Message observation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageObservation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/v1/jobs/{job}/messages/{message}/observation/stream": {
+      "get": {
+        "operationId": "streamMessageObservation",
+        "summary": "Stream coherent Message outcome and completed replies",
+        "description": "One coherent durable delivery/outcome and completed native reply projection. Binding and contiguous completed indexes identify entries; native IDs are diagnostic. An opaque cursor binds the exact Message and consumed-prefix digest. Native events drive observation SSE frames. Each data field is MessageObservation; id is its cursor when bound. At-least-once reconnect may replay entries. Compact durable-status checks settle outcome without native history polling. A missing ephemeral cache returns resync_deferred; gaps require explicit observation or timeline hydration. Subscription and heartbeats never resume a Sandbox or count as activity. Streams remain open after complete, ending within one minute for authentication renewal; reconnect with the last fully processed cursor.",
+        "tags": [
+          "Messages"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobID"
+          },
+          {
+            "$ref": "#/components/parameters/MessageID"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "required": false,
+            "description": "Alternative to cursor; if both are supplied they must match.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          },
+          {
+            "name": "Accept",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "text/event-stream"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Coherent Message observation",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "description": "SSE observation events whose data is MessageObservation."
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1578,6 +1703,148 @@
           "truncated": {
             "type": "boolean",
             "description": "One or both output streams exceeded 64 KiB and were truncated."
+          }
+        }
+      },
+      "ObservationBinding": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "harness",
+          "thread_id",
+          "turn_id"
+        ],
+        "properties": {
+          "harness": {
+            "type": "string",
+            "minLength": 1
+          },
+          "thread_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "turn_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "MessageObservation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "attention",
+          "job_id",
+          "message_id",
+          "intent",
+          "interrupt_requested",
+          "delivery",
+          "outcome",
+          "binding",
+          "items",
+          "cursor",
+          "from_index",
+          "next_index",
+          "completion_watermark",
+          "state"
+        ],
+        "properties": {
+          "attention": {"anyOf": [{"$ref": "#/components/schemas/Attention"}, {"type": "null"}]},
+          "job_id": {
+            "type": "string"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "intent": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "follow",
+              "steer"
+            ]
+          },
+          "interrupt_requested": {
+            "type": "boolean"
+          },
+          "delivery": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "accepted",
+                  "running",
+                  "completed",
+                  "failed"
+                ]
+              }
+            }
+          },
+          "outcome": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "completed",
+              "failed",
+              "interrupted",
+              null
+            ]
+          },
+          "binding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ObservationBinding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MessageTimelineItem"
+            }
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque exact Message/binding and consumed-prefix digest cursor. Persist only after processing the entire returned suffix."
+          },
+          "from_index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "next_index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "completion_watermark": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Final completed-prefix count, present only after authoritative native terminal history and durable outcome settle. Failure before native binding has zero watermark."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "observing",
+              "complete",
+              "resync_deferred",
+              "gap"
+            ]
           }
         }
       }

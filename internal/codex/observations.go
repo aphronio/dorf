@@ -15,6 +15,7 @@ import (
 // Observations keeps an already-authenticated subscription after a control
 // operation returns. It never submits work or decides a Message's outcome.
 type Observations struct {
+	Replies      *ReplyFeed
 	ctx          context.Context
 	cancel       context.CancelFunc
 	emit         func(telemetry.Event)
@@ -26,7 +27,7 @@ type Observations struct {
 
 func NewObservations(ctx context.Context, emit func(telemetry.Event)) *Observations {
 	ctx, cancel := context.WithCancel(ctx)
-	return &Observations{ctx: ctx, cancel: cancel, emit: emit, active: make(map[observationKey]bool), instructions: make(map[instructionScope]instructionHashes)}
+	return &Observations{Replies: NewReplyFeed(), ctx: ctx, cancel: cancel, emit: emit, active: make(map[observationKey]bool), instructions: make(map[instructionScope]instructionHashes)}
 }
 
 type instructionScope struct {
@@ -50,12 +51,19 @@ func (o *Observations) Close() {
 }
 
 type observedTurn struct {
-	run        core.AgentRun
-	threadID   string
-	turnID     string
-	key        observationKey
-	subscribed bool
-	complete   bool
+	run            core.AgentRun
+	threadID       string
+	turnID         string
+	key            observationKey
+	subscribed     bool
+	complete       bool
+	replyOrder     []string
+	replyItems     map[string]json.RawMessage
+	replyProcessed int
+	replyBytes     int
+	replyOverflow  bool
+	replyRefresh   bool
+	replySettled   bool
 }
 
 func (p *protocol) bindObservation(threadID, turnID string, subscribed bool) bool {
@@ -75,6 +83,11 @@ func (p *protocol) bindObservation(threadID, turnID string, subscribed bool) boo
 		p.observations.instructions[key.scope] = p.instructions.hashes
 	}
 	p.observations.mu.Unlock()
+	p.observations.Replies.Begin(p.replyBinding(), subscribed)
+	if p.pendingObservationOverflow {
+		p.observed.replyRefresh = true
+		p.observations.Replies.Gap(p.replyBinding())
+	}
 	for _, message := range p.pendingObservations {
 		p.observeNotification(message)
 	}
@@ -104,11 +117,18 @@ func (p *protocol) finish() {
 }
 
 func (p *protocol) observeUntilSettled() {
+	defer p.settleReplyFeed()
 	if !p.observed.subscribed && !p.observed.complete {
 		if err := p.resumeThread(p.observations.ctx, p.observed.threadID); err != nil {
 			p.observationGap()
 			return
 		}
+		timeline, timelineErr := p.readTimeline(p.observations.ctx, p.observed.threadID, p.observed.turnID)
+		if timelineErr != nil {
+			p.observationGap()
+			return
+		}
+		p.observations.Replies.Seed(p.replyBinding(), timeline.CompletedItems, terminal(timeline.Status))
 		turns, err := p.readTurns(p.observations.ctx, p.observed.threadID)
 		if err != nil {
 			p.observationGap()
@@ -116,6 +136,7 @@ func (p *protocol) observeUntilSettled() {
 		}
 		for _, turn := range turns {
 			if turn.ID == p.observed.turnID && turn.Terminal() {
+				p.observed.complete = true
 				if p.observations.emit != nil {
 					p.emitObservation("codex.turn.snapshot", time.Now(), map[string]any{"status": turn.Status}, false)
 				}
@@ -124,6 +145,12 @@ func (p *protocol) observeUntilSettled() {
 		}
 	}
 	for !p.observed.complete {
+		if p.observed.replyRefresh {
+			if !p.refreshReplyPrefix() {
+				return
+			}
+			continue
+		}
 		if _, err := p.receiveRaw(p.observations.ctx); err != nil {
 			p.observationGap()
 			return
@@ -132,6 +159,7 @@ func (p *protocol) observeUntilSettled() {
 }
 
 func (p *protocol) observationGap() {
+	p.observations.Replies.Gap(p.replyBinding())
 	p.forgetWorkspaceInstructions(p.observed.threadID)
 	if p.observations.ctx.Err() == nil {
 		p.emitObservation("codex.observation.disconnected", time.Now(), nil, true)
@@ -153,10 +181,18 @@ func (p *protocol) observeNotification(message map[string]any) {
 	default:
 		return
 	}
-	if p.observations.emit == nil && method != "turn/completed" && !compaction {
-		return
-	}
+
 	if p.observed == nil {
+		raw, _ := json.Marshal(message)
+		if p.pendingObservationBytes+len(raw) > replyFeedMaxBytes {
+			p.pendingObservationOverflow = true
+			p.pendingObservations = nil
+			return
+		}
+		if p.pendingObservationOverflow {
+			return
+		}
+		p.pendingObservationBytes += len(raw)
 		p.pendingObservations = append(p.pendingObservations, message)
 		return
 	}
@@ -168,6 +204,7 @@ func (p *protocol) observeNotification(message map[string]any) {
 	if threadID != p.observed.threadID || turnID != p.observed.turnID {
 		return
 	}
+	p.observeReply(method, params)
 	if method == "turn/completed" {
 		p.observed.complete = true
 	}
@@ -250,4 +287,40 @@ func itemObservation(item map[string]any, method string) (map[string]any, bool) 
 	}
 	exitCode, _ := item["exitCode"].(float64)
 	return map[string]any{"item": item}, stringValue(item["status"]) == "failed" || exitCode != 0
+}
+
+// Native completion summaries do not contain the full retained prefix. Settle
+// once against authoritative history before advertising a final watermark.
+func (p *protocol) settleReplyFeed() {
+	if !p.observed.complete || p.observed.replySettled || p.observations.ctx.Err() != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(p.observations.ctx, 15*time.Second)
+	defer cancel()
+	timeline, err := p.readTimeline(ctx, p.observed.threadID, p.observed.turnID)
+	if err != nil || !terminal(timeline.Status) || timeline.CompletedItems == nil {
+		p.observations.Replies.Gap(p.replyBinding())
+		return
+	}
+	p.observations.Replies.Seed(p.replyBinding(), timeline.CompletedItems, true)
+}
+
+// Recovered subscriptions reconcile only in response to native completions,
+// using their existing authenticated connection; there is no history timer.
+func (p *protocol) refreshReplyPrefix() bool {
+	p.observed.replyRefresh = false
+	ctx, cancel := context.WithTimeout(p.observations.ctx, 15*time.Second)
+	defer cancel()
+	timeline, err := p.readTimeline(ctx, p.observed.threadID, p.observed.turnID)
+	if err != nil || timeline.CompletedItems == nil {
+		p.observationGap()
+		return false
+	}
+	complete := terminal(timeline.Status)
+	p.observations.Replies.Seed(p.replyBinding(), timeline.CompletedItems, complete)
+	if complete {
+		p.observed.complete = true
+		p.observed.replySettled = true
+	}
+	return true
 }

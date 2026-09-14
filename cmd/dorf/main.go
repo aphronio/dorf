@@ -135,7 +135,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		if err := registerWorkerTasks(store, client, cfg, observations); err != nil {
 			return err
 		}
-		return worker(ctx, store, client, cfg, args[1:], stdout, stderr)
+		return worker(ctx, store, client, cfg, args[1:], stdout, stderr, observations)
 	default:
 		return usage(stderr)
 	}
@@ -1255,7 +1255,7 @@ func runDoctor(ctx context.Context, db *sql.DB, cfg config.Config, args []string
 	return nil
 }
 
-func worker(ctx context.Context, store postgres.Store, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
+func worker(ctx context.Context, store postgres.Store, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer, observationFeeds ...*codex.Observations) error {
 	set := flag.NewFlagSet("worker", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	once := set.Bool("once", false, "claim at most one batch and return")
@@ -1278,6 +1278,10 @@ func worker(ctx context.Context, store postgres.Store, client *absurd.Client, cf
 		return err
 	}
 	readerService := controlReaderService(store, client, cfg)
+	if len(observationFeeds) > 0 && observationFeeds[0] != nil {
+		readerService.Replies = observationFeeds[0].Replies
+		readerService.Runtimes = profileRuntimeResolver{cfg: cfg, store: store, client: client, observations: observationFeeds[0]}
+	}
 	reader, err := newWorkerControlReader(strings.TrimSpace(os.Getenv("DORF_CONTROL_READER_TOKEN")), readerService)
 	if err != nil {
 		return err

@@ -350,6 +350,13 @@ func (s *instructionSession) serve(t *testing.T, ctx context.Context, conn *webs
 			if s.failure != "missing turn ID" {
 				result["turn"] = map[string]any{"id": "native-" + s.runID}
 			}
+		case "thread/turns/list":
+			status := "inProgress"
+			if !s.recovery || reads >= 2 {
+				status = "completed"
+			}
+			result["data"] = []any{map[string]any{"id": "native-" + s.runID, "status": status, "itemsView": "full", "items": []any{map[string]any{"id": "input", "type": "userMessage", "clientId": s.runID, "content": []any{}}}}}
+			result["nextCursor"] = nil
 		case "thread/read":
 			reads++
 			result["thread"] = map[string]any{"id": "retained-thread", "turns": []any{map[string]any{"id": "native-" + s.runID, "status": "inProgress", "items": []any{}}}}

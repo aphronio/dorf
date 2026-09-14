@@ -104,6 +104,13 @@ func TestObservationsRecoverOnlyDurablyBoundTurn(t *testing.T) {
 		if method == "thread/resume" {
 			return map[string]any{"thread": map[string]any{"id": "thread"}}, false
 		}
+		if method == "thread/turns/list" {
+			status := "inProgress"
+			if reads > 1 {
+				status = "interrupted"
+			}
+			return map[string]any{"data": []any{map[string]any{"id": "bound", "status": status, "itemsView": "full", "items": []any{map[string]any{"id": "input", "type": "userMessage", "content": []any{}}}}}, "nextCursor": nil}, false
+		}
 		if method == "thread/read" {
 			reads++
 			status := "inProgress"

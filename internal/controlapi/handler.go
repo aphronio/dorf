@@ -56,6 +56,8 @@ func newHandlerContext(discovery Discovery, auth Auth, jobs Jobs, profiles Profi
 	h.mux.HandleFunc("/v1/jobs/{job}/timeline", h.authenticate(h.timelineRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/watch", h.authenticate(h.watchRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/messages", h.authenticate(h.sendMessageRoute))
+	h.mux.HandleFunc("/v1/jobs/{job}/messages/{message}/observation", h.authenticate(h.messageObservationRoute))
+	h.mux.HandleFunc("/v1/jobs/{job}/messages/{message}/observation/stream", h.authenticate(h.messageObservationRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/messages/{message}/timeline", h.authenticate(h.messageTimelineRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/messages/{message}", h.authenticate(h.messageRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/messages/{message}/interrupt", h.authenticate(h.interruptMessageRoute))
@@ -488,10 +490,7 @@ func (h *handler) watchRoute(w http.ResponseWriter, r *http.Request, client cont
 			return
 		}
 	}
-	authenticationDeadline := time.Now().Add(watchAuthenticationTTL)
-	if !client.CredentialExpiresAt.IsZero() && client.CredentialExpiresAt.Before(authenticationDeadline) {
-		authenticationDeadline = client.CredentialExpiresAt
-	}
+	authenticationDeadline := streamAuthenticationDeadline(client)
 	ctx, cancel := context.WithDeadline(r.Context(), authenticationDeadline)
 	stopShutdown := context.AfterFunc(h.shutdown, cancel)
 	defer stopShutdown()
@@ -828,4 +827,12 @@ func credentialExpiry(expiry time.Time) *time.Time {
 		return nil
 	}
 	return &expiry
+}
+
+func streamAuthenticationDeadline(client controlauth.Client) time.Time {
+	deadline := time.Now().Add(watchAuthenticationTTL)
+	if !client.CredentialExpiresAt.IsZero() && client.CredentialExpiresAt.Before(deadline) {
+		return client.CredentialExpiresAt
+	}
+	return deadline
 }

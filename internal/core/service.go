@@ -62,6 +62,12 @@ type AgentRunOperation interface {
 	History(context.Context, AgentRun) (HarnessHistory, error)
 }
 
+// ScopedAgentRunOperation optionally retains adapter resources for one contract
+// execution inside the existing Job fence and Sandbox activity boundary.
+type ScopedAgentRunOperation interface {
+	WithScope(context.Context, AgentRun, func(context.Context, AgentRunOperation) error) error
+}
+
 type AgentExecutionResolver interface {
 	ResolveAgentPrompt(context.Context, AgentMessageExecution) (string, error)
 	ResolveAgentRunOperation(context.Context, AgentMessageExecution) (AgentRunOperation, error)
@@ -328,6 +334,16 @@ func (s ExecutionService) executeAgentRun(ctx context.Context, delivery Delivery
 			}
 			return HarnessTurn{}, err
 		},
+	}
+	if scoped, ok := operation.(ScopedAgentRunOperation); ok {
+		var turn HarnessTurn
+		err := scoped.WithScope(ctx, delivery.AgentRun, func(ctx context.Context, bound AgentRunOperation) error {
+			contract.operation = bound
+			var err error
+			turn, err = contract.execute(ctx)
+			return err
+		})
+		return turn, err
 	}
 	return contract.execute(ctx)
 }

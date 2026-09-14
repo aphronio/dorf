@@ -34,7 +34,7 @@ internal/coding	verifyGitRevisionObservation	21
 internal/composeconfig	validateSpec	44
 internal/config	Load	38
 internal/controlapi	(*handler).jobListRoute	18
-internal/controlapi	(*handler).watchRoute	32
+internal/controlapi	(*handler).watchRoute	30
 internal/controlclient	(*Client).watchJobOnce	32
 internal/controlreader	(Service).ObserveMessage	29
 internal/controlreader	(Service).ObservePullRequest	25

@@ -109,6 +109,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D119: Native timeline reads preserve Harness history](decisions/D119-native-timeline-reads-preserve-harness-history.md) (`partial`). Changing native conversation reads, public native references, or transcript custody.
 - [D123: Message timelines project completed native replies](decisions/D123-message-timelines-project-completed-native-replies.md) (`current`). Changing live assistant reply delivery, retained item identity, or input attribution.
 - [D125: Messages distinguish application observations](decisions/D125-messages-distinguish-application-observations.md) (`current`). Delivering asynchronous application updates without impersonating human input.
+- [D127: Message observations deliver completed prefix deltas](decisions/D127-message-observations-deliver-completed-prefix-deltas.md) (`current`). Changing Message observation, native connection reuse, stream replay, or idle behavior.
 
 ## Sandboxes and profiles
 
@@ -165,6 +166,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D119: Native timeline reads preserve Harness history](decisions/D119-native-timeline-reads-preserve-harness-history.md) (`partial`). Changing native conversation reads, public native references, or transcript custody.
 - [D123: Message timelines project completed native replies](decisions/D123-message-timelines-project-completed-native-replies.md) (`current`). Changing live assistant reply delivery, retained item identity, or input attribution.
 - [D125: Messages distinguish application observations](decisions/D125-messages-distinguish-application-observations.md) (`current`). Delivering asynchronous application updates without impersonating human input.
+- [D127: Message observations deliver completed prefix deltas](decisions/D127-message-observations-deliver-completed-prefix-deltas.md) (`current`). Changing Message observation, native connection reuse, stream replay, or idle behavior.
 
 ## Model access
 
@@ -204,6 +206,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D123: Message timelines project completed native replies](decisions/D123-message-timelines-project-completed-native-replies.md) (`current`). Changing live assistant reply delivery, retained item identity, or input attribution.
 - [D125: Messages distinguish application observations](decisions/D125-messages-distinguish-application-observations.md) (`current`). Delivering asynchronous application updates without impersonating human input.
 - [D126: Automatic messages preserve eventual delivery](decisions/D126-automatic-messages-preserve-eventual-delivery.md) (`current`). Changing automatic message resolution, steer reconciliation, or message replay.
+- [D127: Message observations deliver completed prefix deltas](decisions/D127-message-observations-deliver-completed-prefix-deltas.md) (`current`). Changing Message observation, native connection reuse, stream replay, or idle behavior.
 
 ## Deployment and setup
 

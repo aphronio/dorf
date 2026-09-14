@@ -68,6 +68,10 @@ func (p *protocol) timelinePage(ctx context.Context, params map[string]any, stat
 			return timelinePage{}, err
 		}
 		if response.ID == nil {
+			var notification map[string]any
+			if json.Unmarshal(raw, &notification) == nil {
+				p.observeNotification(notification)
+			}
 			continue
 		}
 		if *response.ID != id || len(response.Error) > 0 && string(response.Error) != "null" {

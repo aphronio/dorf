@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/aphronio/dorf/internal/codex"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/postgres"
 )
@@ -185,6 +186,9 @@ func (s Service) ReadMessageTimeline(ctx context.Context, jobID, messageID strin
 		}
 		if err := validateTimeline(result, run.Harness, run.ThreadID, run.TurnID); err != nil {
 			return err
+		}
+		if s.Replies != nil {
+			s.Replies.Seed(codex.ReplyBinding{JobID: jobID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce, Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID}, result.CompletedItems, terminalMessageOutcome(result.Status))
 		}
 		deliveries, err := store.Deliveries(ctx, jobID)
 		if err != nil {

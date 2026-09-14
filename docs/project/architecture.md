@@ -186,6 +186,20 @@ It passes those bound coordinates to the Harness adapter and returns original co
 The Harness owns ordering and history storage. Dorf adds no transcript table, execution, or
 observation subscription. The [Remote Control API](../control-api.md) owns public read semantics.
 
+Message observations join durable delivery state to a bounded ephemeral projection of that same
+completed native prefix. Fresh native completed-item events append to the worker projection;
+recovered subscriptions reconcile the prefix on native events over their existing connection. The
+private control reader authenticates custody and forwards changes to public subscribers. Final native
+history reconciliation supplies a completion watermark, while Core remains the outcome authority.
+Subscribers do not own Sandbox activity, and missing replay after a restart does not implicitly
+resume an idle Sandbox. Explicit timeline inspection remains a separate operation.
+
+An ordinary existing-thread follow may hold one authenticated native protocol across the existing
+history, durable baseline, and submission sequence. This is an operation resource scope, not a new
+execution state or a cross-claim session cache. Failed mutations reconcile over fresh authenticated
+history. Accepted observation can retain the protocol until settlement; it does not retain the
+submission scope or the Job effect fence.
+
 Once a Turn is durably bound as active, Core's read-only Harness observation remains separate from
 Message delivery. Internal delivery reconciliation alternates observation with an interruptible
 durable wait, so an accepted steer can wake and overtake polling without another controller path or

@@ -29,3 +29,9 @@ type Harness interface {
 type InterruptibleHarness interface {
 	InterruptTurn(context.Context, provider.Ownership, string, string) (core.HarnessBinding, error)
 }
+
+// ScopedHarness retains native resources only for the supplied operation.
+// The bound Harness must not escape the callback.
+type ScopedHarness interface {
+	WithOperation(context.Context, provider.Ownership, string, func(context.Context, Harness) error) error
+}

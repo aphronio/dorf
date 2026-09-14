@@ -204,6 +204,32 @@ A Message that has not bound a native Turn returns `timeline_unavailable`. Clien
 its delivery remains nonterminal. The Message timeline uses the same read bounds and cleanup
 custody as raw timelines. It stores no transcript and does not change terminal `result.output`.
 
+A Message observation returns delivery state, effective intent, interruption state, optional native
+binding, and a suffix of completed inputs and final replies. Its cursor is scoped to the exact Job,
+Message, native binding, and consumed prefix. Clients treat it as opaque. `from_index` and
+`next_index` describe the returned contiguous suffix. A terminal outcome alone does not prove all
+replies have arrived: clients finish after consuming through the `completion_watermark` of a
+complete observation. A terminal failure before native binding has an empty completed prefix.
+
+The observation SSE endpoint returns the same envelopes when native items or durable status change.
+It accepts a cursor query or `Last-Event-ID`; conflicting values are rejected. Clients acknowledge a
+cursor only after their publication is durable and tolerate overlapping replay. Native item IDs
+remain diagnostic. The stream uses bounded buffering and authenticated lifetimes; reconnecting is
+part of the contract. The OpenAPI document owns exact paths, states, and response fields.
+
+Worker projection memory is ephemeral and bounded. A passive stream with unavailable replay returns
+`resync_deferred`, and an inconsistent prefix returns `gap`. Neither state authorizes a transparent
+Sandbox resume. An explicit observation read may hydrate native history under the existing read
+fence. Full timeline inspection remains available separately. Subscription lifetime, status checks,
+and heartbeats do not count as Sandbox activity, so a control connection may remain open while the
+Sandbox sleeps. SSE is driven by native projection changes; its compact durable-state check does
+not perform native history polling.
+
+Live observation streams require the worker's private control-reader capability, which shares the
+native observer's projection. A manually supervised inline reader supports explicit observation
+snapshots but returns `timeline_unavailable` for streaming; it does not advertise a detached cache
+as a live native source.
+
 An unknown selected turn returns `turn_not_found`. Missing or conflicting thread custody, cleanup,
 unsupported Harness APIs, and unavailable history return `timeline_unavailable`. An existing Job
 without native history does not return an empty success. Cleanup waits for an active read's fence,

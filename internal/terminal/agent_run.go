@@ -103,3 +103,23 @@ func (o AgentRunOperation) owner(ctx context.Context, run core.AgentRun) (provid
 	}
 	return o.externals.owner(ctx, o.sandbox.ID)
 }
+
+func (o AgentRunOperation) WithScope(ctx context.Context, run core.AgentRun, fn func(context.Context, core.AgentRunOperation) error) error {
+	scoped, ok := o.externals.Agent.(ScopedHarness)
+	if !ok || o.messageIntent != core.MessageFollow || run.ThreadID == "" || run.TurnID != "" || (run.State != core.AgentRunPending && run.State != core.AgentRunSubmitting) {
+		return fn(ctx, o)
+	}
+	// Core rejects a conflicting durable Harness before native I/O. Preserve
+	// that ordering rather than acquiring an optional provider scope first.
+	if run.Harness != "" && run.Harness != o.externals.Agent.Name() {
+		return fn(ctx, o)
+	}
+	owner, err := o.owner(ctx, run)
+	if err != nil {
+		return err
+	}
+	return scoped.WithOperation(ctx, owner, run.ThreadID, func(ctx context.Context, harness Harness) error {
+		o.externals.Agent = harness
+		return fn(ctx, o)
+	})
+}

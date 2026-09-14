@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aphronio/dorf/internal/codex"
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/core"
 	githubapi "github.com/aphronio/dorf/internal/github"
@@ -82,11 +83,13 @@ type PullRequestObservation interface {
 // Service owns provider-facing reads. It accepts only durable Dorf identities
 // and one already-validated Sandbox file path.
 type Service struct {
-	Store         Store
-	Runtimes      core.SandboxRuntimeResolver
-	Provider      AdmissionProvider
-	Installations InstallationDiscovery
-	PullRequests  PullRequestObservation
+	ObservationAttention func(context.Context, core.Job) (string, error)
+	Replies              *codex.ReplyFeed
+	Store                Store
+	Runtimes             core.SandboxRuntimeResolver
+	Provider             AdmissionProvider
+	Installations        InstallationDiscovery
+	PullRequests         PullRequestObservation
 }
 
 func (s Service) ReadFile(ctx context.Context, sandboxID, relativePath string) ([]byte, error) {
@@ -410,6 +413,10 @@ func NewHandler(token string, service Service) (http.Handler, error) {
 		return nil, fmt.Errorf("control reader token must be one 256-bit lowercase hex value")
 	}
 	routes := map[string]http.HandlerFunc{
+		CoherentObservationPath: jsonEndpoint(MaxObservationBytes, func(ctx context.Context, input observationRequest) (MessageObservation, error) {
+			return service.ReadMessageObservation(ctx, input.JobID, input.MessageID, input.Cursor)
+		}),
+		ObservationStreamPath: observationStreamEndpoint(service),
 		HealthPath: jsonEndpoint(0, func(context.Context, struct{}) (healthResponse, error) {
 			return healthResponse{Ready: true}, nil
 		}),
@@ -457,6 +464,9 @@ func NewHandler(token string, service Service) (http.Handler, error) {
 			return
 		}
 		timeout := handlerTimeout
+		if r.URL.Path == ObservationStreamPath {
+			timeout = ObservationStreamTimeout
+		}
 		if r.URL.Path == CommandPath {
 			timeout = provider.CommandTransportTimeout
 		}

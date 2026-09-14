@@ -34,6 +34,7 @@ type Agent struct {
 	Port         int
 	Timeout      time.Duration
 	Observations *Observations
+	operation    *nativeOperation
 }
 
 const Harness = "codex"
@@ -180,6 +181,18 @@ func (a Agent) ReadInitialTurns(ctx context.Context, owner provider.Ownership, w
 }
 
 func (a Agent) ReadTurns(ctx context.Context, owner provider.Ownership, threadID string) (core.HarnessHistory, error) {
+	if a.operation != nil {
+		if err := a.operation.check(ctx, owner); err != nil {
+			return core.HarnessHistory{}, err
+		}
+		if threadID != a.operation.threadID {
+			return core.HarnessHistory{}, fmt.Errorf("native operation requires its exact Thread")
+		}
+		if a.operation.invalid {
+			return a.operation.original.ReadTurns(ctx, owner, threadID)
+		}
+	}
+
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	var turns []TurnOutcome
@@ -192,6 +205,9 @@ func (a Agent) ReadTurns(ctx context.Context, owner provider.Ownership, threadID
 }
 
 func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, agentRunID string, input core.HarnessInput, model, effort string, refreshSkills bool) (core.HarnessBinding, error) {
+	if a.operation != nil && threadID != a.operation.threadID {
+		return core.HarnessBinding{}, fmt.Errorf("native operation requires its exact Thread")
+	}
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	var outcome TurnOutcome
@@ -280,6 +296,15 @@ func (a Agent) timeoutContext(ctx context.Context) (context.Context, context.Can
 }
 
 func (a Agent) withSandboxAccess(ctx context.Context, owner provider.Ownership, fn func(Agent) error) error {
+	if a.operation != nil {
+		if err := a.operation.check(ctx, owner); err != nil {
+			return err
+		}
+		if a.operation.invalid {
+			return fmt.Errorf("native operation transport is invalid")
+		}
+	}
+
 	if scoped, ok := a.Sandbox.(provider.ScopedAccess); ok {
 		return scoped.WithAccess(ctx, owner, func(sandbox provider.Sandbox) error {
 			a.Sandbox = sandbox
@@ -290,6 +315,13 @@ func (a Agent) withSandboxAccess(ctx context.Context, owner provider.Ownership, 
 }
 
 func (a Agent) withServer(ctx context.Context, owner provider.Ownership, fn func(*protocol) error) error {
+	if a.operation != nil {
+		return a.operation.use(ctx, a, owner, fn)
+	}
+	return a.openServer(ctx, owner, fn)
+}
+
+func (a Agent) openServer(ctx context.Context, owner provider.Ownership, fn func(*protocol) error) error {
 	return a.withSandboxAccess(ctx, owner, func(a Agent) error {
 		endpoint, err := a.Sandbox.Endpoint(ctx, owner, a.Port)
 		if err != nil {
@@ -351,7 +383,7 @@ func (a Agent) withServerEndpointController(ctx context.Context, owner provider.
 		protocol, dialErr := dialProtocol(ctx, endpoint.dial, probe.token, endpoint.headers, endpoint.dialContext)
 		if dialErr == nil {
 			protocol.configureObservations(ctx, a.Observations, owner)
-			defer protocol.finish()
+			defer a.finishProtocol(protocol)
 			if authorize != nil {
 				if err := authorize(); err != nil {
 					return err
@@ -390,7 +422,7 @@ func (a Agent) withServerEndpointController(ctx context.Context, owner provider.
 		protocol, dialErr := dialProtocol(ctx, endpoint.dial, token, endpoint.headers, endpoint.dialContext)
 		if dialErr == nil {
 			protocol.configureObservations(ctx, a.Observations, owner)
-			defer protocol.finish()
+			defer a.finishProtocol(protocol)
 			if authorize != nil {
 				if err := authorize(); err != nil {
 					return err
@@ -488,16 +520,18 @@ func dialProtocol(ctx context.Context, endpoint, token string, headers http.Head
 }
 
 type protocol struct {
-	refreshSkills       bool
-	instructions        *workspaceInstructions
-	freshThread         bool
-	connection          *websocket.Conn
-	nextID              int
-	observations        *Observations
-	owner               provider.Ownership
-	execution           core.AgentRun
-	observed            *observedTurn
-	pendingObservations []map[string]any
+	refreshSkills              bool
+	instructions               *workspaceInstructions
+	freshThread                bool
+	connection                 *websocket.Conn
+	nextID                     int
+	observations               *Observations
+	owner                      provider.Ownership
+	execution                  core.AgentRun
+	observed                   *observedTurn
+	pendingObservations        []map[string]any
+	pendingObservationBytes    int
+	pendingObservationOverflow bool
 }
 
 func (p *protocol) configureObservations(ctx context.Context, observations *Observations, owner provider.Ownership) {
@@ -824,6 +858,7 @@ func (p *protocol) readTurns(ctx context.Context, sessionID string) ([]TurnOutco
 		parsed := parseTurn(turn)
 		if parsed.ID != "" {
 			turns = append(turns, parsed)
+			p.seedReadTurn(sessionID, turn)
 			if !parsed.Terminal() && p.execution.TurnID == parsed.ID {
 				p.bindObservation(sessionID, parsed.ID, false)
 			}
