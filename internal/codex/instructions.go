@@ -29,15 +29,13 @@ type workspaceInstructions struct {
 }
 
 func (a Agent) readWorkspaceInstructions(ctx context.Context, owner provider.Ownership, workspace string) (*workspaceInstructions, error) {
+	contentsByName, err := a.readInstructionFiles(ctx, owner)
+	if err != nil {
+		return nil, err
+	}
 	files := make(map[string]string, 2)
 	for _, name := range []string{"AGENTS.md", "SOUL.md"} {
-		contents, err := a.Sandbox.ReadFile(ctx, owner, name)
-		if errors.Is(err, os.ErrNotExist) {
-			contents, err = nil, nil
-		}
-		if err != nil {
-			return nil, fmt.Errorf("read Codex workspace instructions %s: %w", name, err)
-		}
+		contents := contentsByName[name]
 		if len(contents) > maxInstructionFileBytes || !utf8.Valid(contents) || strings.ContainsRune(string(contents), 0) {
 			return nil, fmt.Errorf("Codex instruction file %s must be valid UTF-8 without null bytes and at most %d bytes", name, maxInstructionFileBytes)
 		}
@@ -48,6 +46,29 @@ func (a Agent) readWorkspaceInstructions(ctx context.Context, owner provider.Own
 		hashes:     instructionHashes{agents: sha256.Sum256([]byte(files["AGENTS.md"])), soul: sha256.Sum256([]byte(files["SOUL.md"]))},
 		soul:       files["SOUL.md"],
 	}, nil
+}
+
+func (a Agent) readInstructionFiles(ctx context.Context, owner provider.Ownership) (map[string][]byte, error) {
+	names := []string{"AGENTS.md", "SOUL.md"}
+	if batch, ok := a.Sandbox.(provider.FileBatchReader); ok {
+		files, err := batch.ReadFiles(ctx, owner, names, maxInstructionFileBytes)
+		if err != nil {
+			return nil, fmt.Errorf("read Codex workspace instructions: %w", err)
+		}
+		return files, nil
+	}
+	files := make(map[string][]byte, len(names))
+	for _, name := range names {
+		contents, err := a.Sandbox.ReadFile(ctx, owner, name)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read Codex workspace instructions %s: %w", name, err)
+		}
+		files[name] = contents
+	}
+	return files, nil
 }
 
 func (p *protocol) injectWorkspaceInstructions(ctx context.Context, threadID, agentRunID string) error {

@@ -10,7 +10,6 @@ import (
 
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/telemetry"
-	"github.com/coder/websocket"
 )
 
 // Observations keeps an already-authenticated subscription after a control
@@ -85,7 +84,10 @@ func (p *protocol) bindObservation(threadID, turnID string, subscribed bool) boo
 
 func (p *protocol) finish() {
 	if p.observed == nil {
-		p.connection.Close(websocket.StatusNormalClosure, "done")
+		// No subscription owns this connection after the control operation.
+		// Close handshakes discard application data and cannot resolve an
+		// indeterminate submission, so do not wait for the peer here.
+		p.connection.CloseNow()
 		return
 	}
 	o := p.observations

@@ -148,18 +148,20 @@ func (a Agent) ReadStrictReviewTurn(ctx context.Context, owner provider.Ownershi
 func (a Agent) startInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID string, input core.HarnessInput, model, effort, capability string, refreshSkills bool) (string, TurnOutcome, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
-	instructions, err := a.readWorkspaceInstructions(ctx, owner, workspace)
-	if err != nil {
-		return "", TurnOutcome{}, err
-	}
 	var sessionID string
 	var outcome TurnOutcome
-	err = a.withServer(ctx, owner, func(protocol *protocol) error {
-		protocol.instructions = instructions
-		protocol.refreshSkills = refreshSkills
-		var err error
-		sessionID, outcome, err = protocol.reconcileInitialTurn(ctx, workspace, agentRunID, input, model, effort, capability)
-		return err
+	err := a.withSandboxAccess(ctx, owner, func(a Agent) error {
+		instructions, err := a.readWorkspaceInstructions(ctx, owner, workspace)
+		if err != nil {
+			return err
+		}
+		return a.withServer(ctx, owner, func(protocol *protocol) error {
+			protocol.instructions = instructions
+			protocol.refreshSkills = refreshSkills
+			var err error
+			sessionID, outcome, err = protocol.reconcileInitialTurn(ctx, workspace, agentRunID, input, model, effort, capability)
+			return err
+		})
 	})
 	return sessionID, outcome, err
 }
@@ -192,17 +194,19 @@ func (a Agent) ReadTurns(ctx context.Context, owner provider.Ownership, threadID
 func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, agentRunID string, input core.HarnessInput, model, effort string, refreshSkills bool) (core.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
-	instructions, err := a.readWorkspaceInstructions(ctx, owner, workspace)
-	if err != nil {
-		return core.HarnessBinding{}, err
-	}
 	var outcome TurnOutcome
-	err = a.withServer(ctx, owner, func(protocol *protocol) error {
-		protocol.instructions = instructions
-		protocol.refreshSkills = refreshSkills
-		var err error
-		outcome, err = protocol.resumeAndStartTurn(ctx, threadID, workspace, agentRunID, input, model, effort, "danger-full-access")
-		return err
+	err := a.withSandboxAccess(ctx, owner, func(a Agent) error {
+		instructions, err := a.readWorkspaceInstructions(ctx, owner, workspace)
+		if err != nil {
+			return err
+		}
+		return a.withServer(ctx, owner, func(protocol *protocol) error {
+			protocol.instructions = instructions
+			protocol.refreshSkills = refreshSkills
+			var err error
+			outcome, err = protocol.resumeAndStartTurn(ctx, threadID, workspace, agentRunID, input, model, effort, "danger-full-access")
+			return err
+		})
 	})
 	return core.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: outcome}, err
 }
@@ -275,12 +279,24 @@ func (a Agent) timeoutContext(ctx context.Context) (context.Context, context.Can
 	return context.WithCancel(ctx)
 }
 
-func (a Agent) withServer(ctx context.Context, owner provider.Ownership, fn func(*protocol) error) error {
-	endpoint, err := a.Sandbox.Endpoint(ctx, owner, a.Port)
-	if err != nil {
-		return err
+func (a Agent) withSandboxAccess(ctx context.Context, owner provider.Ownership, fn func(Agent) error) error {
+	if scoped, ok := a.Sandbox.(provider.ScopedAccess); ok {
+		return scoped.WithAccess(ctx, owner, func(sandbox provider.Sandbox) error {
+			a.Sandbox = sandbox
+			return fn(a)
+		})
 	}
-	return a.withServerEndpointController(ctx, owner, endpointAccess{listen: endpoint.ListenURL, dial: endpoint.DialURL, headers: endpoint.Headers(), dialContext: endpoint.DialContext()}, false, nil, fn)
+	return fn(a)
+}
+
+func (a Agent) withServer(ctx context.Context, owner provider.Ownership, fn func(*protocol) error) error {
+	return a.withSandboxAccess(ctx, owner, func(a Agent) error {
+		endpoint, err := a.Sandbox.Endpoint(ctx, owner, a.Port)
+		if err != nil {
+			return err
+		}
+		return a.withServerEndpointController(ctx, owner, endpointAccess{listen: endpoint.ListenURL, dial: endpoint.DialURL, headers: endpoint.Headers(), dialContext: endpoint.DialContext()}, false, nil, fn)
+	})
 }
 
 func (a Agent) withReviewServer(ctx context.Context, owner provider.Ownership, review provider.ReviewMetadata, fn func(*protocol) error) error {

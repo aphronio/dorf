@@ -48,6 +48,13 @@ func (c Client) ConnectEndpoint(ctx context.Context, providerID string, port int
 	if err != nil {
 		return Endpoint{}, err
 	}
+	return connectionEndpoint(providerID, port, response)
+}
+
+func connectionEndpoint(providerID string, port int, response connectionResponse) (Endpoint, error) {
+	if port < 1 || port > 65535 {
+		return Endpoint{}, fmt.Errorf("E2B endpoint port must be between 1 and 65535")
+	}
 	if response.TrafficAccessToken == "" {
 		return Endpoint{}, fmt.Errorf("E2B connect response omitted its scoped traffic token")
 	}

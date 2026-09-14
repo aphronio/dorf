@@ -243,6 +243,10 @@ func (c Client) ConnectEnvd(ctx context.Context, providerID string, timeout time
 	if err != nil {
 		return EnvdConnection{}, err
 	}
+	return envdConnection(providerID, response)
+}
+
+func envdConnection(providerID string, response connectionResponse) (EnvdConnection, error) {
 	if response.EnvdVersion == "" || response.EnvdAccessToken == "" {
 		return EnvdConnection{}, fmt.Errorf("E2B connect response omitted required scoped envd material")
 	}

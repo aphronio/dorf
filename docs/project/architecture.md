@@ -345,6 +345,13 @@ operation carries exact Dorf ownership while provider locators, lifecycle APIs, 
 topology, and connection capabilities remain adapter-private. Consumer code selects a verified
 profile rather than branching on provider or Harness identity.
 
+Within one bounded native operation under the existing Job fence, an adapter may resolve exact
+Sandbox ownership and provider connection capabilities once for adjacent access. That access ends
+with the callback, honors cancellation, and cannot be reused for another owner or durable attempt.
+Lifecycle and strict-review attestation remain fresh. This does not remove native-history recovery
+or permit replay of an ambiguously accepted command. Live instruction files may be read together
+while preserving each file's validation and missing-file semantics.
+
 The shipped workflows use the baseline Sandbox and Harness contracts. There is no separate
 optional provider-capability declaration or matching layer. Add an extension only when a concrete
 workflow requires behavior beyond that baseline and an adapter can prove it.
