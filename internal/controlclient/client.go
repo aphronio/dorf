@@ -297,7 +297,7 @@ func (c *Client) SendMessage(ctx context.Context, jobID, key string, input contr
 }
 
 func encodeMessageMultipart(input controlapi.SendMessageRequest) ([]byte, string, error) {
-	if len(input.Attachments) > core.MaxMessageAttachments || len(input.Text) > core.MaxMessageInputBytes {
+	if input.Observation || len(input.Attachments) > core.MaxMessageAttachments || len(input.Text) > core.MaxMessageInputBytes {
 		return nil, "", fmt.Errorf("Message exceeds the input limits")
 	}
 	var body bytes.Buffer

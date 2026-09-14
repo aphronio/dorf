@@ -245,6 +245,7 @@ type Sandbox struct {
 }
 
 type SendMessageRequest struct {
+	Observation           bool                    `json:"observation,omitempty"`
 	DeveloperInstructions *string                 `json:"developer_instructions,omitempty"`
 	RefreshSkills         bool                    `json:"refresh_skills,omitempty"`
 	Text                  string                  `json:"text"`

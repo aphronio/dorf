@@ -1201,7 +1201,8 @@ func (a controlAPIJobs) SendMessage(ctx context.Context, jobID, key string, inpu
 	if err != nil {
 		return controlapi.Message{}, false, err
 	}
-	if (len(input.Attachments) == 0 && strings.TrimSpace(input.Text) == "") ||
+	if !core.ValidObservationDelivery(input.Observation, core.MessageDeliveryIntent(input.Intent), len(input.Attachments)) ||
+		(len(input.Attachments) == 0 && strings.TrimSpace(input.Text) == "") ||
 		!core.ValidDeveloperInstructions(&input.Text) || !core.ValidDeveloperInstructions(input.DeveloperInstructions) {
 		return controlapi.Message{}, false, controlapi.ErrInvalidInput
 	}
@@ -1230,7 +1231,7 @@ func (a controlAPIJobs) SendMessage(ctx context.Context, jobID, key string, inpu
 	if err != nil {
 		return controlapi.Message{}, false, err
 	}
-	receipt, err := sandbox.Agent().Message(ctx, key, core.MessageInput{Text: input.Text, Attachments: attachments, DeveloperInstructions: input.DeveloperInstructions}, options...)
+	receipt, err := sandbox.Agent().Message(ctx, key, core.MessageInput{Text: input.Text, Attachments: attachments, Observation: input.Observation, DeveloperInstructions: input.DeveloperInstructions}, options...)
 	if err != nil {
 		return controlapi.Message{}, receipt.Created, controlMessageError(err)
 	}

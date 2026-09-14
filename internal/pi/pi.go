@@ -71,6 +71,9 @@ func (a Agent) StartInitialTurn(ctx context.Context, owner provider.Ownership, w
 	if len(input.Images) != 0 {
 		return core.HarnessBinding{}, &submissionRejectedError{reason: "Pi does not support image input"}
 	}
+	if input.Observation {
+		return core.HarnessBinding{}, &submissionRejectedError{reason: "Pi does not support observation input"}
+	}
 	if input.DeveloperInstructions != nil {
 		return core.HarnessBinding{}, &submissionRejectedError{reason: "Pi does not support developer instructions"}
 	}
@@ -96,6 +99,9 @@ func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspac
 	if len(input.Images) != 0 {
 		return core.HarnessBinding{}, &submissionRejectedError{reason: "Pi does not support image input"}
 	}
+	if input.Observation {
+		return core.HarnessBinding{}, &submissionRejectedError{reason: "Pi does not support observation input"}
+	}
 	if input.DeveloperInstructions != nil {
 		return core.HarnessBinding{}, &submissionRejectedError{reason: "Pi does not support developer instructions"}
 	}
@@ -120,6 +126,9 @@ func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspac
 }
 
 func (a Agent) SteerTurn(ctx context.Context, owner provider.Ownership, _ string, targetTurnID, agentRunID string, input core.HarnessInput) (string, error) {
+	if input.Observation {
+		return "", &submissionRejectedError{reason: "Pi does not support observation input"}
+	}
 	if len(input.Images) != 0 {
 		return "", &submissionRejectedError{reason: "Pi does not support image input"}
 	}

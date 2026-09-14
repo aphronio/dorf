@@ -1424,6 +1424,7 @@
         "additionalProperties": false,
         "required": ["text"],
         "properties": {
+          "observation": { "type": "boolean", "default": false, "description": "Deliver application-generated text rather than human input. Requires explicit follow intent, no attachments, and a supporting profile. Retained on idempotent replay." },
           "developer_instructions": { "type": ["string", "null"], "description": "Complete application developer instruction snapshot for a fresh Turn. Omitted or null leaves the current snapshot unchanged; empty clears it. Steer retains this immutable payload but never changes the active Turn or defers it to another Message. Idempotent replay requires the same value." },
           "refresh_skills": { "type": "boolean", "default": false, "description": "Request an installed-skill reload on a supported profile (currently Codex). A follow refreshes before its fresh Turn. A steer leaves the running Turn unchanged and retains the request for the next fresh Turn. Auto uses its resolved delivery intent. Retained on idempotent replay." },
           "text": { "type": "string", "description": "Verbatim Message text. JSON requests require nonempty text; multipart requests may use empty text when attachments are present." },

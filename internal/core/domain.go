@@ -211,6 +211,7 @@ type MessageAttachment struct {
 }
 
 type Message struct {
+	Observation           bool                  `json:"observation,omitempty"`
 	DeveloperInstructions *string               `json:"developer_instructions,omitempty"`
 	RefreshSkills         bool                  `json:"refresh_skills,omitempty"`
 	ID                    string                `json:"id"`

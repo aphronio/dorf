@@ -120,7 +120,7 @@ func (p *protocol) readTimeline(ctx context.Context, threadID, turnID string) (c
 				if err != nil {
 					return core.HarnessTimeline{}, err
 				}
-				completed, _ := completedConversationItems(items)
+				completed, _ := completedConversationItems(turn.Items)
 				return core.HarnessTimeline{Harness: Harness, ThreadID: threadID, TurnID: turn.ID, Status: turn.Status, Items: items, CompletedItems: completed}, nil
 			}
 		}
@@ -154,6 +154,7 @@ func decodeTimelineTurn(raw json.RawMessage) (nativeTimelineTurn, error) {
 func conversationItems(native []json.RawMessage) ([]json.RawMessage, error) {
 	items := make([]json.RawMessage, 0, len(native))
 	seen := make(map[string]bool)
+	hasObservation := false
 	for _, raw := range native {
 		var item struct {
 			ID   string `json:"id"`
@@ -163,11 +164,18 @@ func conversationItems(native []json.RawMessage) ([]json.RawMessage, error) {
 			return nil, core.ErrTimelineUnavailable
 		}
 		seen[item.ID] = true
+		if item.Type == "functionCallOutput" {
+			var fields map[string]any
+			if err := json.Unmarshal(raw, &fields); err != nil {
+				return nil, core.ErrTimelineUnavailable
+			}
+			hasObservation = hasObservation || observationDeliveryID(fields) != ""
+		}
 		if item.Type == "userMessage" || item.Type == "agentMessage" {
 			items = append(items, raw)
 		}
 	}
-	if len(items) == 0 {
+	if len(items) == 0 && !hasObservation {
 		return nil, core.ErrTimelineUnavailable
 	}
 	return items, nil
@@ -198,6 +206,15 @@ func completedConversationItems(native []json.RawMessage) ([]core.HarnessConvers
 		switch fields.Type {
 		case "userMessage":
 			entry.Kind, entry.ClientID = "input", fields.ClientID
+		case "functionCallOutput":
+			var item map[string]any
+			if err := json.Unmarshal(raw, &item); err != nil {
+				return nil, core.ErrTimelineUnavailable
+			}
+			entry.Kind, entry.ClientID = "input", observationDeliveryID(item)
+			if entry.ClientID == "" {
+				continue
+			}
 		case "agentMessage":
 			if fields.Phase != nil && *fields.Phase != "final_answer" {
 				continue

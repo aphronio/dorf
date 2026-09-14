@@ -107,6 +107,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D103: Every ordinary CLI Job operation uses the authenticated control API](decisions/D103-every-ordinary-cli-job-operation-uses-the-authenticated-control-api.md) (`partial`). Changing how CLI Job operations reach deployment authority.
 - [D119: Native timeline reads preserve Harness history](decisions/D119-native-timeline-reads-preserve-harness-history.md) (`partial`). Changing native conversation reads, public native references, or transcript custody.
 - [D123: Message timelines project completed native replies](decisions/D123-message-timelines-project-completed-native-replies.md) (`current`). Changing live assistant reply delivery, retained item identity, or input attribution.
+- [D125: Messages distinguish application observations](decisions/D125-messages-distinguish-application-observations.md) (`current`). Delivering asynchronous application updates without impersonating human input.
 
 ## Sandboxes and profiles
 
@@ -162,6 +163,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D118: Messages retain ordered input attachments and immutable bytes](decisions/D118-messages-retain-ordered-input-attachments-and-immutable-bytes.md) (`current`). Changing Message attachments, input blob custody, native image delivery, or attachment replay.
 - [D119: Native timeline reads preserve Harness history](decisions/D119-native-timeline-reads-preserve-harness-history.md) (`partial`). Changing native conversation reads, public native references, or transcript custody.
 - [D123: Message timelines project completed native replies](decisions/D123-message-timelines-project-completed-native-replies.md) (`current`). Changing live assistant reply delivery, retained item identity, or input attribution.
+- [D125: Messages distinguish application observations](decisions/D125-messages-distinguish-application-observations.md) (`current`). Delivering asynchronous application updates without impersonating human input.
 
 ## Model access
 
@@ -199,6 +201,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D121: Messages retain application developer instructions](decisions/D121-messages-retain-application-developer-instructions.md) (`current`). Changing application instruction custody or Harness prompt authority.
 - [D122: Sandbox activity delays idle pause](decisions/D122-sandbox-activity-delays-idle-pause.md) (`current`). Changing idle pause timing, managed Sandbox access, or cancellation fences.
 - [D123: Message timelines project completed native replies](decisions/D123-message-timelines-project-completed-native-replies.md) (`current`). Changing live assistant reply delivery, retained item identity, or input attribution.
+- [D125: Messages distinguish application observations](decisions/D125-messages-distinguish-application-observations.md) (`current`). Delivering asynchronous application updates without impersonating human input.
 
 ## Deployment and setup
 

@@ -18,6 +18,7 @@ type AgentRunOperation struct {
 	job                   core.Job
 	sandbox               core.Sandbox
 	messageIntent         core.MessageDeliveryIntent
+	observation           bool
 	refreshSkills         bool
 	developerInstructions *string
 	messageID             string
@@ -30,7 +31,7 @@ func NewAgentRunOperation(externals Externals, execution core.AgentMessageExecut
 		return AgentRunOperation{}, fmt.Errorf("ordinary Agent operation requires the exact Message and Job-owned Sandbox")
 	}
 	return AgentRunOperation{externals: externals, job: execution.Job, sandbox: execution.Sandbox, messageIntent: execution.Message.Intent, refreshSkills: execution.RefreshSkills,
-		developerInstructions: execution.Message.DeveloperInstructions, messageID: execution.Message.ID, attachments: slices.Clone(execution.Message.Attachments)}, nil
+		observation: execution.Message.Observation, developerInstructions: execution.Message.DeveloperInstructions, messageID: execution.Message.ID, attachments: slices.Clone(execution.Message.Attachments)}, nil
 }
 
 func (o AgentRunOperation) Harness() string { return o.externals.Agent.Name() }
@@ -57,6 +58,7 @@ func (o AgentRunOperation) Submit(ctx context.Context, run core.AgentRun, input 
 	if err != nil {
 		return core.HarnessBinding{}, err
 	}
+	prepared.Observation = o.observation
 	prepared.DeveloperInstructions = o.developerInstructions
 	if run.ThreadID == "" {
 		return o.externals.Agent.StartInitialTurn(ctx, owner, o.externals.Sandbox.Workspace(), run.ID, prepared, o.job.Model, o.job.ReasoningEffort, o.refreshSkills)

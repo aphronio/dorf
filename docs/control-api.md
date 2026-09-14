@@ -116,6 +116,15 @@ active steering or accepted-turn recovery. A steer does not defer its snapshot t
 clients send the desired complete snapshot with the next follow. Built-in Harness instructions
 remain intact. User-owned AGENTS.md and SOUL.md retain user authority.
 
+Codex Messages may set `observation: true` to deliver application-generated text rather than
+human input. Observations require explicit `intent: "follow"` and no attachments. They use the
+same durable FIFO queue and resume an idle Agent; active Turns finish before observation delivery.
+Human steering retains its priority and exact-Turn semantics. Unsupported profiles reject the
+request before admission. The flag is immutable and included in idempotent replay equality.
+The Codex adapter uses native tool output and retains an input identity for completed Message
+attribution across cold reads. Raw timeline views omit observation payloads. Dorf does not decide
+which application events to produce, how to interpret them, or whether to notify the user.
+
 Direct and workflow admission may select a named AI connection. Omission uses the deployment
 default, and the admitted Job retains the resolved connection. Model is also optional. Omission
 uses that resolved connection's default, while an explicit model overrides it for this Job. The

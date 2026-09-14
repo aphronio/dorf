@@ -3,6 +3,7 @@ package core
 // HarnessInput contains materialized ordinary input. Durable attachment identity
 // stays on Message; adapters receive verified image bytes rather than file paths.
 type HarnessInput struct {
+	Observation           bool
 	DeveloperInstructions *string
 	Text                  string
 	Images                []HarnessImage

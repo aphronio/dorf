@@ -25,10 +25,11 @@ func ValidClientReference(value string) bool {
 	return utf8.ValidString(value) && utf8.RuneCountInString(value) <= MaxClientReferenceLength && !strings.ContainsRune(value, 0)
 }
 
-// MessageInput is the complete accepted user input. Attachment bytes have
+// MessageInput is the complete accepted input. Attachment bytes have
 // already entered Dorf's immutable blob store; Core retains only their exact
 // ordered metadata.
 type MessageInput struct {
+	Observation           bool
 	DeveloperInstructions *string
 	Text                  string
 	Attachments           []MessageAttachment
@@ -78,7 +79,7 @@ func ValidMessageAttachments(attachments []MessageAttachment) bool {
 }
 
 func ValidMessageInput(input MessageInput) bool {
-	return ValidDeveloperInstructions(input.DeveloperInstructions) && utf8.ValidString(input.Text) && !strings.ContainsRune(input.Text, 0) && len(input.Text) <= MaxMessageInputBytes &&
+	return (!input.Observation || len(input.Attachments) == 0) && ValidDeveloperInstructions(input.DeveloperInstructions) && utf8.ValidString(input.Text) && !strings.ContainsRune(input.Text, 0) && len(input.Text) <= MaxMessageInputBytes &&
 		(strings.TrimSpace(input.Text) != "" || len(input.Attachments) != 0) && ValidMessageAttachments(input.Attachments)
 }
 
@@ -101,6 +102,7 @@ type JobAdmission struct {
 
 // MessageAdmission is one client input admitted to its exact Agent lane.
 type MessageAdmission struct {
+	Observation           bool
 	DeveloperInstructions *string
 	RefreshSkills         bool
 	JobID                 string
@@ -135,4 +137,9 @@ func ValidDeveloperInstructions(value *string) bool {
 
 func SameDeveloperInstructions(left, right *string) bool {
 	return left == nil && right == nil || left != nil && right != nil && *left == *right
+}
+
+// ValidObservationDelivery keeps application observations on the text-only Follow path.
+func ValidObservationDelivery(observation bool, intent MessageDeliveryIntent, attachments int) bool {
+	return !observation || intent == MessageFollow && attachments == 0
 }

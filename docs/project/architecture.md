@@ -106,6 +106,12 @@ invalidates that knowledge. A lost cache causes rehydration from the same files.
 retain an optional immutable application developer instruction snapshot. The Codex adapter injects its complete replacement at developer authority before a fresh
 Turn, preserving built-in model instructions. Recovery of an accepted Turn and steering do not
 apply snapshots. Client-owned application policy remains outside Dorf Core.
+Messages may also distinguish application observations from human input. Observations use the
+existing Follow queue and text storage. Codex submits them as native tool output with an embedded
+AgentRun identity for completed-input attribution after reconnect; the ordinary Follow recovery
+algorithm is unchanged. Client semantics and visibility remain outside Core. Other Harnesses must
+support this input kind explicitly rather than translating it to a human message.
+
 Clients request skill refresh through durable Message input. Existing delivery selection decides
 when a fresh Turn can start. Effective refresh derives from pending requests and accepted native
 Turn bindings in the same Agent lane. The Codex adapter calls `skills/list` with forced reload only

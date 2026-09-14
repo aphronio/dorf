@@ -195,7 +195,7 @@ func (q *Queries) GetLatestTurnStartRun(ctx context.Context, jobID string) (GetL
 
 const getMessage = `-- name: GetMessage :one
 select id,job_id,from_kind,from_id,sequence,input,attachments,delivery_intent,
-       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at,refresh_skills,developer_instructions
+       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at,refresh_skills,developer_instructions,observation
 from dorf.job_messages
 where id=$1
 `
@@ -213,6 +213,7 @@ type GetMessageRow struct {
 	AdmittedAt            time.Time
 	RefreshSkills         bool
 	DeveloperInstructions sql.NullString
+	Observation           bool
 }
 
 func (q *Queries) GetMessage(ctx context.Context, messageID string) (GetMessageRow, error) {
@@ -231,13 +232,14 @@ func (q *Queries) GetMessage(ctx context.Context, messageID string) (GetMessageR
 		&i.AdmittedAt,
 		&i.RefreshSkills,
 		&i.DeveloperInstructions,
+		&i.Observation,
 	)
 	return i, err
 }
 
 const getMessageBySender = `-- name: GetMessageBySender :one
 select id,job_id,from_kind,from_id,sequence,input,attachments,delivery_intent,requested_intent,
-       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at,refresh_skills,developer_instructions
+       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at,refresh_skills,developer_instructions,observation
 from dorf.job_messages
 where job_id=$1 and from_kind=$2
   and from_id=$3
@@ -263,6 +265,7 @@ type GetMessageBySenderRow struct {
 	AdmittedAt            time.Time
 	RefreshSkills         bool
 	DeveloperInstructions sql.NullString
+	Observation           bool
 }
 
 func (q *Queries) GetMessageBySender(ctx context.Context, arg GetMessageBySenderParams) (GetMessageBySenderRow, error) {
@@ -282,18 +285,19 @@ func (q *Queries) GetMessageBySender(ctx context.Context, arg GetMessageBySender
 		&i.AdmittedAt,
 		&i.RefreshSkills,
 		&i.DeveloperInstructions,
+		&i.Observation,
 	)
 	return i, err
 }
 
 const insertMessage = `-- name: InsertMessage :exec
 insert into dorf.job_messages(
-    id,job_id,from_kind,from_id,sequence,input,attachments,delivery_intent,steer_target_turn_id,requested_intent,refresh_skills,developer_instructions
+    id,job_id,from_kind,from_id,sequence,input,attachments,delivery_intent,steer_target_turn_id,requested_intent,refresh_skills,developer_instructions,observation
 )
 values(
     $1,$2,$3,$4,
     $5,$6,$7::jsonb,$8,
-    nullif($9::text,''),$10,$11,$12
+    nullif($9::text,''),$10,$11,$12,$13
 )
 `
 
@@ -310,6 +314,7 @@ type InsertMessageParams struct {
 	RequestedIntent       string
 	RefreshSkills         bool
 	DeveloperInstructions sql.NullString
+	Observation           bool
 }
 
 func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) error {
@@ -326,13 +331,14 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) er
 		arg.RequestedIntent,
 		arg.RefreshSkills,
 		arg.DeveloperInstructions,
+		arg.Observation,
 	)
 	return err
 }
 
 const listDeliveries = `-- name: ListDeliveries :many
 select m.id as message_id,m.job_id as message_job_id,m.from_kind,m.from_id,m.sequence,m.input,m.attachments,m.delivery_intent,
-       coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,m.refresh_skills,m.developer_instructions,
+       coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,m.refresh_skills,m.developer_instructions,m.observation,
        m.admitted_at,
        (ar.id is not null)::boolean as agent_run_present,
        coalesce(ar.id,'') as agent_run_id,coalesce(ar.job_id,'') as agent_run_job_id,
@@ -369,6 +375,7 @@ type ListDeliveriesRow struct {
 	SteerTargetTurnID     string
 	RefreshSkills         bool
 	DeveloperInstructions sql.NullString
+	Observation           bool
 	AdmittedAt            time.Time
 	AgentRunPresent       bool
 	AgentRunID            string
@@ -413,6 +420,7 @@ func (q *Queries) ListDeliveries(ctx context.Context, jobID string) ([]ListDeliv
 			&i.SteerTargetTurnID,
 			&i.RefreshSkills,
 			&i.DeveloperInstructions,
+			&i.Observation,
 			&i.AdmittedAt,
 			&i.AgentRunPresent,
 			&i.AgentRunID,

@@ -827,6 +827,10 @@ func parseTurn(turn map[string]any) TurnOutcome {
 		if !ok {
 			continue
 		}
+		if deliveryID := observationDeliveryID(item); deliveryID != "" {
+			outcome.AcceptedMessageIDs = append(outcome.AcceptedMessageIDs, deliveryID)
+			continue
+		}
 		if item["type"] == "userMessage" {
 			if clientID := stringValue(item["clientId"]); clientID != "" {
 				outcome.AcceptedMessageIDs = append(outcome.AcceptedMessageIDs, clientID)
@@ -900,7 +904,13 @@ func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRun
 	if err := p.injectWorkspaceInstructions(ctx, sessionID, agentRunID); err != nil {
 		return TurnOutcome{}, err
 	}
-	result, err := p.call(ctx, "turn/start", map[string]any{"threadId": sessionID, "clientUserMessageId": agentRunID, "input": nativeUserInput(goal), "cwd": workspace, "model": model, "effort": effort, "approvalPolicy": "never", "sandboxPolicy": map[string]string{"type": policyType}})
+	params := map[string]any{"threadId": sessionID, "clientUserMessageId": agentRunID, "input": nativeUserInput(goal), "cwd": workspace, "model": model, "effort": effort, "approvalPolicy": "never", "sandboxPolicy": map[string]string{"type": policyType}}
+	if goal.Observation {
+		delete(params, "clientUserMessageId")
+		params["input"] = []any{}
+		params["toolOutput"] = nativeObservation(agentRunID, goal.Text)
+	}
+	result, err := p.call(ctx, "turn/start", params)
 	if err != nil {
 		return TurnOutcome{}, err
 	}
@@ -917,6 +927,9 @@ func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRun
 }
 
 func (p *protocol) steerTurn(ctx context.Context, sessionID, turnID, agentRunID string, input core.HarnessInput) (string, error) {
+	if input.Observation {
+		return "", fmt.Errorf("observations require follow delivery")
+	}
 	if err := p.resumeThread(ctx, sessionID); err != nil {
 		return "", err
 	}

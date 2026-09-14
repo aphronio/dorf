@@ -192,16 +192,16 @@ func (a composedMessageAdmissions) AdmitAgentMessage(ctx context.Context, input 
 	if err != nil {
 		return core.MessageAdmissionResult{}, err
 	}
-	if input.RefreshSkills || input.DeveloperInstructions != nil {
+	if input.Observation || input.RefreshSkills || input.DeveloperInstructions != nil {
 		profile, err := a.store.SandboxProfile(ctx, job.SandboxProfile)
 		if err != nil {
 			return core.MessageAdmissionResult{}, err
 		}
 		if profile.Harness != codex.Harness {
-			if input.DeveloperInstructions != nil {
-				return core.MessageAdmissionResult{}, controlapi.ErrInvalidInput
+			if input.RefreshSkills {
+				return core.MessageAdmissionResult{}, controlapi.ErrSkillRefreshUnavailable
 			}
-			return core.MessageAdmissionResult{}, controlapi.ErrSkillRefreshUnavailable
+			return core.MessageAdmissionResult{}, controlapi.ErrInvalidInput
 		}
 	}
 	var admitted core.MessageAdmissionResult
