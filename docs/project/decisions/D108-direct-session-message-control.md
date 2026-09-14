@@ -1,9 +1,10 @@
 # D108: Reuse direct Jobs for retained sessions and exact message control
 
-- **Applicability:** current
+- **Applicability:** partial
 - **Areas:** core, persistence, client-api
 - **Read when:** Changing automatic message intent, interruption, or direct Job session continuity.
-- **Decision history:** Accepted, 2026-09-09.
+- **Decision history:** Accepted, 2026-09-09. Automatic-intent terminal-target behavior superseded by
+  D126, 2026-09-14.
 - **Decision:** Reuse direct Jobs and native Harness session storage. Remote messages default to
   steering active work or following when idle, resolved once at admission. Preserve the requested
   intent separately from the admitted delivery target. Add idempotent exact-message interruption

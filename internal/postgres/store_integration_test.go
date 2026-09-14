@@ -1475,6 +1475,160 @@ func TestSteerTargetTerminalBeforeAcceptanceFailsWithoutNewTurn(t *testing.T) {
 	}
 }
 
+func TestAutoSteerTargetTerminalBeforeAcceptanceRequeuesSameMessageAsFollowFIFO(t *testing.T) {
+	_, store, client := testDatabase(t)
+	ctx := context.Background()
+	job, threadID := prepareTransportIntegrationJob(t, store, "auto-steer-terminal-follow")
+	target, err := codingDelivery(ctx, store, job.ID)
+	if err != nil || target == nil {
+		t.Fatalf("target delivery=%#v err=%v", target, err)
+	}
+	if err := store.PrepareAgentRun(ctx, target.AgentRun.ID, "codex", ""); err != nil {
+		t.Fatal(err)
+	}
+	targetTurnID := "turn-target-" + job.ID
+	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "running"); err != nil {
+		t.Fatal(err)
+	}
+	queued, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{
+		JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman,
+		FromID: "queued-before-auto", Input: "deliver me first", Intent: core.MessageFollow,
+	})
+	if err != nil || !queued.Created {
+		t.Fatalf("queued=%#v err=%v", queued, err)
+	}
+	automaticInput := core.MessageAdmission{
+		JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman,
+		FromID: "terminal-race-auto", Input: "do not lose this input", Intent: core.MessageAuto,
+	}
+	automatic, err := store.AdmitCodingMessage(ctx, automaticInput)
+	if err != nil || !automatic.Created || automatic.Message.Intent != core.MessageSteer || automatic.Message.TargetTurnID != targetTurnID {
+		t.Fatalf("automatic=%#v err=%v", automatic, err)
+	}
+	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	externals := &integrationExternals{
+		turnStatus: "completed",
+		turns:      []core.HarnessTurn{{ID: targetTurnID, Status: "completed"}},
+	}
+	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
+		WithAgentExecution(resultBoundaryAgentExecution{externals: externals})
+	taskName := "dorf-terminal-auto-follow-proof-v1"
+	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
+		if _, err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
+			return core.TaskResultV1{}, err
+		}
+		if submitted := externals.submittedSequences(); len(submitted) != 0 {
+			return core.TaskResultV1{}, fmt.Errorf("terminal-target automatic Message submitted before FIFO re-selection: %v", submitted)
+		}
+		next, err := codingDelivery(taskCtx, store, job.ID)
+		if err != nil || next == nil || next.Message.ID != queued.Message.ID {
+			return core.TaskResultV1{}, fmt.Errorf("next FIFO delivery=%#v err=%v", next, err)
+		}
+		if _, err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
+			return core.TaskResultV1{}, err
+		}
+		next, err = codingDelivery(taskCtx, store, job.ID)
+		if err != nil || next == nil || next.Message.ID != automatic.Message.ID || next.Message.Intent != core.MessageFollow || next.Message.TargetTurnID != "" {
+			return core.TaskResultV1{}, fmt.Errorf("automatic follow delivery=%#v err=%v", next, err)
+		}
+		if _, err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
+			return core.TaskResultV1{}, err
+		}
+		return core.TaskResultV1{JobID: job.ID, Outcome: "terminal-auto-follow-completed"}, nil
+	}))
+	spawned, err := client.Spawn(ctx, taskName, core.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: taskName + ":" + job.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AttachJobTask(ctx, job.ID, "", spawned.TaskID, taskName); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "terminal-auto-follow", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.AwaitTaskResult(ctx, client.QueueName(), spawned.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := store.AdmitCodingMessage(ctx, automaticInput)
+	if err != nil || replayed.Created || replayed.Message.ID != automatic.Message.ID || replayed.Message.Intent != core.MessageFollow || replayed.Message.TargetTurnID != "" {
+		t.Fatalf("automatic replay=%#v err=%v", replayed, err)
+	}
+	deliveries, err := store.Deliveries(ctx, job.ID)
+	if err != nil || len(deliveries) != 3 {
+		t.Fatalf("deliveries=%#v err=%v", deliveries, err)
+	}
+	if deliveries[1].Message.ID != queued.Message.ID || deliveries[2].Message.ID != automatic.Message.ID || deliveries[2].AgentRun.State != core.AgentRunCompleted || deliveries[2].AgentRun.TurnID == targetTurnID {
+		t.Fatalf("same-Message automatic follow did not preserve FIFO and distinct Turn: %#v", deliveries)
+	}
+	if submitted := externals.submittedSequences(); !reflect.DeepEqual(submitted, []int64{queued.Message.Sequence, automatic.Message.Sequence}) {
+		t.Fatalf("submitted sequences=%v", submitted)
+	}
+}
+
+func TestAutoSteerErrorRequeuesAfterHistoryProvesTargetTerminalWithoutAcceptance(t *testing.T) {
+	_, store, client := testDatabase(t)
+	ctx := context.Background()
+	job, threadID := prepareTransportIntegrationJob(t, store, "auto-steer-error-terminal-follow")
+	target, err := codingDelivery(ctx, store, job.ID)
+	if err != nil || target == nil {
+		t.Fatalf("target delivery=%#v err=%v", target, err)
+	}
+	if err := store.PrepareAgentRun(ctx, target.AgentRun.ID, "codex", ""); err != nil {
+		t.Fatal(err)
+	}
+	targetTurnID := "turn-target-" + job.ID
+	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "running"); err != nil {
+		t.Fatal(err)
+	}
+	automatic, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{
+		JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman,
+		FromID: "steer-error-terminal-auto", Input: "preserve after uncertain acknowledgement", Intent: core.MessageAuto,
+	})
+	if err != nil || !automatic.Created || automatic.Message.Intent != core.MessageSteer {
+		t.Fatalf("automatic=%#v err=%v", automatic, err)
+	}
+	externals := &integrationExternals{
+		turnStatus:      "running",
+		turns:           []core.HarnessTurn{{ID: targetTurnID, Status: "running"}},
+		steerErr:        errors.New("steer acknowledgement lost"),
+		terminalOnSteer: true,
+	}
+	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
+		WithAgentExecution(resultBoundaryAgentExecution{externals: externals})
+	taskName := "dorf-steer-error-terminal-auto-follow-proof-v1"
+	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
+		if _, err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
+			return core.TaskResultV1{}, err
+		}
+		if _, err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
+			return core.TaskResultV1{}, err
+		}
+		next, err := codingDelivery(taskCtx, store, job.ID)
+		if err != nil || next == nil || next.Message.ID != automatic.Message.ID || next.Message.Intent != core.MessageFollow || next.Message.TargetTurnID != "" {
+			return core.TaskResultV1{}, fmt.Errorf("automatic follow after steer error=%#v err=%v", next, err)
+		}
+		return core.TaskResultV1{JobID: job.ID, Outcome: "terminal-auto-follow-requeued"}, nil
+	}))
+	spawned, err := client.Spawn(ctx, taskName, core.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: taskName + ":" + job.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AttachJobTask(ctx, job.ID, "", spawned.TaskID, taskName); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "steer-error-terminal-auto-follow", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.AwaitTaskResult(ctx, client.QueueName(), spawned.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	if submitted := externals.submittedSequences(); !reflect.DeepEqual(submitted, []int64{automatic.Message.Sequence}) {
+		t.Fatalf("submitted sequences=%v", submitted)
+	}
+}
+
 func TestTerminalHarnessTurnAllowsSameThreadFollowFIFO(t *testing.T) {
 	for _, status := range []string{"completed", "failed", "interrupted"} {
 		t.Run(status, func(t *testing.T) {
@@ -2996,12 +3150,14 @@ func completeNextIntegrationRun(t *testing.T, store postgres.Store, jobID, threa
 type integrationExternals struct {
 	coding.ReviewExecution
 	gitworkspace.Operations
-	mu         sync.Mutex
-	turns      []core.HarnessTurn
-	submitted  []int64
-	inputs     []string
-	effects    []core.ActionKind
-	turnStatus string
+	mu              sync.Mutex
+	turns           []core.HarnessTurn
+	submitted       []int64
+	inputs          []string
+	effects         []core.ActionKind
+	turnStatus      string
+	steerErr        error
+	terminalOnSteer bool
 }
 
 type reviewOperationIntegrationExternals struct {
@@ -3191,7 +3347,14 @@ func (e *integrationExternals) AgentSteer(_ context.Context, _ core.Job, deliver
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.submitted = append(e.submitted, delivery.Message.Sequence)
-	return delivery.Message.TargetTurnID, nil
+	if e.terminalOnSteer {
+		for index := range e.turns {
+			if e.turns[index].ID == delivery.Message.TargetTurnID {
+				e.turns[index].Status = "completed"
+			}
+		}
+	}
+	return delivery.Message.TargetTurnID, e.steerErr
 }
 func (e *integrationExternals) RouteRevoke(context.Context, core.Job, core.Sandbox, core.Route) error {
 	return e.effect(core.ActionRouteRevoke)

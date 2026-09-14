@@ -308,6 +308,7 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 	}
 	message.ID = core.MessageID(input.JobID, input.FromKind, input.FromID)
 	message.JobID, message.FromKind, message.FromID, message.Input, message.Attachments, message.Intent = input.JobID, input.FromKind, input.FromID, input.Input, input.Attachments, target.intent
+	message.RequestedIntent = input.Intent
 	attachments, err := encodeMessageAttachments(message.Attachments)
 	if err != nil {
 		return core.Message{}, false, err
@@ -540,6 +541,7 @@ func messageFromSenderRow(row dbsql.GetMessageBySenderRow) (core.Message, error)
 		return core.Message{}, err
 	}
 	message.AdmittedAt = row.AdmittedAt
+	message.RequestedIntent = core.MessageDeliveryIntent(row.RequestedIntent)
 	message.RefreshSkills = row.RefreshSkills
 	message.Observation = row.Observation
 	message.DeveloperInstructions = instructionPointer(row.DeveloperInstructions)
@@ -844,6 +846,7 @@ func (s Store) Deliveries(ctx context.Context, jobID string) ([]core.Delivery, e
 			return nil, err
 		}
 		message.AdmittedAt = r.AdmittedAt
+		message.RequestedIntent = core.MessageDeliveryIntent(r.RequestedIntent)
 		message.RefreshSkills = r.RefreshSkills
 		message.Observation = r.Observation
 		message.DeveloperInstructions = instructionPointer(r.DeveloperInstructions)
@@ -917,6 +920,7 @@ func (s Store) AgentMessageExecution(ctx context.Context, messageID string) (cor
 		return core.AgentMessageExecution{}, err
 	}
 	message.AdmittedAt = messageRow.AdmittedAt
+	message.RequestedIntent = core.MessageDeliveryIntent(messageRow.RequestedIntent)
 	message.RefreshSkills = messageRow.RefreshSkills
 	message.Observation = messageRow.Observation
 	message.DeveloperInstructions = instructionPointer(messageRow.DeveloperInstructions)
@@ -1257,7 +1261,7 @@ func (s Store) AgentMessage(ctx context.Context, jobID string) (*core.AgentMessa
 	}
 	message := core.Message{
 		ID: row.ID, JobID: row.JobID, FromKind: core.MessageFromKind(row.FromKind), FromID: row.FromID,
-		RefreshSkills: row.RefreshSkills, Sequence: row.Sequence, Intent: core.MessageDeliveryIntent(row.DeliveryIntent), TargetTurnID: row.SteerTargetTurnID, AdmittedAt: row.AdmittedAt,
+		RefreshSkills: row.RefreshSkills, Sequence: row.Sequence, Intent: core.MessageDeliveryIntent(row.DeliveryIntent), RequestedIntent: core.MessageDeliveryIntent(row.RequestedIntent), TargetTurnID: row.SteerTargetTurnID, AdmittedAt: row.AdmittedAt,
 	}
 	runRow, err := queries.GetAgentRunByMessage(ctx, message.ID)
 	if err != nil {
@@ -1425,6 +1429,21 @@ func (s Store) BindSteer(ctx context.Context, runID, turnID, status string) erro
 	}
 	if outcome != "" && bound != outcome {
 		return fmt.Errorf("AgentRun %s outcome %s conflicts with observed %s", runID, bound, outcome)
+	}
+	return tx.Commit()
+}
+
+func (s Store) RequeueAutoMessageAsFollow(ctx context.Context, runID, targetTurnID string) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	rows, err := dbsql.New(s.DB).WithTx(tx).RequeueAutoMessageAsFollow(ctx, dbsql.RequeueAutoMessageAsFollowParams{
+		RunID: runID, TargetTurnID: sql.NullString{String: targetTurnID, Valid: true},
+	})
+	if err := expectOneRows(rows, err); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

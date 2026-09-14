@@ -195,7 +195,7 @@ func (q *Queries) GetLatestTurnStartRun(ctx context.Context, jobID string) (GetL
 
 const getMessage = `-- name: GetMessage :one
 select id,job_id,from_kind,from_id,sequence,input,attachments,delivery_intent,
-       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at,refresh_skills,developer_instructions,observation
+       requested_intent,coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at,refresh_skills,developer_instructions,observation
 from dorf.job_messages
 where id=$1
 `
@@ -209,6 +209,7 @@ type GetMessageRow struct {
 	Input                 string
 	Attachments           json.RawMessage
 	DeliveryIntent        core.MessageDeliveryIntent
+	RequestedIntent       string
 	SteerTargetTurnID     string
 	AdmittedAt            time.Time
 	RefreshSkills         bool
@@ -228,6 +229,7 @@ func (q *Queries) GetMessage(ctx context.Context, messageID string) (GetMessageR
 		&i.Input,
 		&i.Attachments,
 		&i.DeliveryIntent,
+		&i.RequestedIntent,
 		&i.SteerTargetTurnID,
 		&i.AdmittedAt,
 		&i.RefreshSkills,
@@ -338,7 +340,7 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) er
 
 const listDeliveries = `-- name: ListDeliveries :many
 select m.id as message_id,m.job_id as message_job_id,m.from_kind,m.from_id,m.sequence,m.input,m.attachments,m.delivery_intent,
-       coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,m.refresh_skills,m.developer_instructions,m.observation,
+       m.requested_intent,coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,m.refresh_skills,m.developer_instructions,m.observation,
        m.admitted_at,
        (ar.id is not null)::boolean as agent_run_present,
        coalesce(ar.id,'') as agent_run_id,coalesce(ar.job_id,'') as agent_run_job_id,
@@ -372,6 +374,7 @@ type ListDeliveriesRow struct {
 	Input                 string
 	Attachments           json.RawMessage
 	DeliveryIntent        core.MessageDeliveryIntent
+	RequestedIntent       string
 	SteerTargetTurnID     string
 	RefreshSkills         bool
 	DeveloperInstructions sql.NullString
@@ -417,6 +420,7 @@ func (q *Queries) ListDeliveries(ctx context.Context, jobID string) ([]ListDeliv
 			&i.Input,
 			&i.Attachments,
 			&i.DeliveryIntent,
+			&i.RequestedIntent,
 			&i.SteerTargetTurnID,
 			&i.RefreshSkills,
 			&i.DeveloperInstructions,

@@ -60,7 +60,8 @@ func RefreshSkills() MessageOption { return MessageOption{refreshSkills: true} }
 func Steer() MessageOption { return MessageOption{intent: MessageSteer} }
 
 // PreferSteer chooses Steer at admission when an active Turn exists; otherwise
-// it admits a Follow. The resolved intent and target never change afterward.
+// it admits a Follow. When Core proves that the selected Turn terminated
+// without accepting the Message, the same Message returns to FIFO as a Follow.
 func PreferSteer() MessageOption { return MessageOption{intent: MessageAuto} }
 
 func (h JobHandle) ID() string { return h.id }

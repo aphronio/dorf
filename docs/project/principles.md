@@ -34,9 +34,10 @@ a Sandbox rather than owning infrastructure. A continuing harness Thread supplie
 continuity. Every AgentRun consumes one durable Message and retains its exact Turn binding. Every
 Message selected for agent delivery has one AgentRun record. While admission is open, a follow joins
 the FIFO, reuses the authoritative retained Thread, and creates a distinct Turn. A steer atomically
-targets the exact active Turn, may overtake queued follows, and never falls back to a new Turn; it
-fails honestly when that target becomes terminal. Harness protocol and transcripts remain behind the
-adapter.
+targets the exact active Turn and may overtake queued follows. Explicit steer never falls back to a
+new Turn and fails honestly when that target becomes terminal. Automatic intent preserves eventual
+input delivery: after proof that its selected Turn terminated without accepting the exact Message,
+the same Message returns to FIFO as a follow. Harness protocol and transcripts remain behind the adapter.
 
 Do not introduce a durable Worker merely as a synonym for a process or AgentRun. Add Worker only
 when persistent personality, capability, reputation, ownership, or memory across Jobs becomes a
