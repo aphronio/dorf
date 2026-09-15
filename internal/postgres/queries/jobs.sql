@@ -97,7 +97,7 @@ values(
     sqlc.arg(sandbox_profile),sqlc.arg(provider_connection),sqlc.arg(model),
     sqlc.arg(reasoning_effort),sqlc.arg(keep_running)
 )
-on conflict(admission_key) do nothing;
+on conflict do nothing;
 
 -- name: GetAdmittedJobForUpdate :one
 select id,admission_key,workflow_name,workflow_revision,agents_md,sandbox_profile,provider_connection,

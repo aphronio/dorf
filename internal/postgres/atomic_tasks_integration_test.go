@@ -142,6 +142,36 @@ func TestConcurrentAtomicAdmissionIsAttachedBeforeWorkerCanRun(t *testing.T) {
 	}
 }
 
+func TestAdmissionPrimaryKeyConflictDoesNotAdoptForeignJob(t *testing.T) {
+	_, store, client := testDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	input := atomicAdmissionInput(t)
+	jobID := core.JobID(input.AdmissionKey)
+	foreignAdmissionKey := input.AdmissionKey + "-foreign"
+	if _, err := store.DB.ExecContext(ctx, `
+insert into dorf.jobs(
+    id,admission_key,workflow_name,workflow_revision,agents_md,
+    sandbox_profile,provider_connection,model,reasoning_effort,keep_running
+) values($1,$2,'','','',$3,$4,$5,$6,false)
+`, jobID, foreignAdmissionKey, input.SandboxProfile, input.ProviderConnection, input.Model, input.ReasoningEffort); err != nil {
+		t.Fatal(err)
+	}
+
+	job, created, err := store.AdmitDirect(ctx, input, client.QueueName())
+	if err == nil || created || job.ID != "" {
+		t.Fatalf("primary-key conflict admission=%#v created=%t err=%v", job, created, err)
+	}
+	stored, err := store.Job(ctx, jobID)
+	if err != nil || stored.AdmissionKey != foreignAdmissionKey || stored.CurrentTaskID != "" {
+		t.Fatalf("foreign Job was changed or adopted: %#v err=%v", stored, err)
+	}
+	history, err := store.JobTasks(ctx, jobID)
+	if err != nil || len(history) != 0 {
+		t.Fatalf("primary-key conflict scheduled work: %#v err=%v", history, err)
+	}
+}
+
 func TestAtomicCleanupRollsBackCancellationAndAppendsOneTask(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

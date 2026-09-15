@@ -500,7 +500,7 @@ values(
     $8,$9,$10,
     $11,$12
 )
-on conflict(admission_key) do nothing
+on conflict do nothing
 `
 
 type InsertAdmittedJobParams struct {
