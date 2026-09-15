@@ -491,3 +491,9 @@ resumes retained Threads and checks settled Turn history without starting new ag
 verified binding, exact hold release, and execution wake commit together. Failed recovery retains
 input and exposes attention. Cleanup handles every reserved resource and retained checkpoint,
 including a lost checkpoint response and E2B's backing-snapshot dependency. D135 records the choice.
+
+Shared guest images install Codex through a pinned Nix generation. Package staging uses the guest's
+existing Internet access before delivery is held; it does not change the active executable. Nix
+selects immutable executables while provider checkpoints recover matching mutable state. Image
+replacement and live-process migration are not prerequisites for an ordinary package update.
+D136 records the package boundary; the active implementation plan tracks deployment proof.

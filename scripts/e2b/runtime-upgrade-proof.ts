@@ -118,7 +118,7 @@ async function create() {
 async function copyRecipes() {
   await run(`mkdir -p ${guest}`);
   for (const name of ['guest.sh', 'package.nix', 'packages.json', 'native-session.py']) {
-    const path = resolve(root, 'scripts/runtime-upgrade', name);
+    const path = resolve(root, name === 'native-session.py' ? 'scripts/runtime-upgrade' : 'scripts/sandbox/packages', name);
     if (provider === 'incus') await incus('file', 'push', path, `${id}${guest}/${name}`);
     else await sandbox!.files.write(`${guest}/${name}`, await readFile(path), { user: 'root' });
   }

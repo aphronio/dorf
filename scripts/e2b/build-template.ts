@@ -40,6 +40,12 @@ async function main() {
 
   const recipe = await readFile(recipePath);
   const recipeSHA256 = createHash("sha256").update(recipe).digest("hex");
+  const packageDirectory = "scripts/sandbox/packages";
+  const packageInputs: Record<string, string> = {};
+  for (const name of ["guest.sh", "package.nix", "packages.json"]) {
+    const path = `${packageDirectory}/${name}`;
+    packageInputs[path] = createHash("sha256").update(await readFile(resolve(projectRoot, path))).digest("hex");
+  }
   const provision = [
     `DORF_BASE_IMAGE=${shellQuote(baseReference)}`,
     `DORF_BASE_FINGERPRINT=${shellQuote(baseDigest)}`,
@@ -48,6 +54,10 @@ async function main() {
 
   const template = Template({ fileContextPath: projectRoot })
     .fromImage(baseReference)
+    .copy(packageDirectory, "/usr/local/share/dorf/packages", {
+      forceUpload: true,
+      user: "root",
+    })
     .copy(recipeRelativePath, "/tmp/provision-dorf-guest.sh", {
       forceUpload: true,
       mode: 0o755,
@@ -82,6 +92,7 @@ async function main() {
     profile: {
       recipe: recipeRelativePath,
       recipe_sha256: recipeSHA256,
+      package_inputs: packageInputs,
       metadata_path: "/usr/local/share/dorf/image.json",
       workspace: "/workspace/job",
       default_user: "root",

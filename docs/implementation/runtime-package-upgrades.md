@@ -137,8 +137,10 @@ Progress as of 2026-09-15:
 - Retained direct-task coordinator implemented for pre-staged Codex packages: operator admission,
   checkpoint/recovery receipts, exact native quiescence and retained-Thread verification, atomic
   replacement binding and release, replacement/backing-checkpoint cleanup, and correlated telemetry.
-- Distribution remains operator-managed. Production delivery of closures to restricted-network
-  guests and automatic fleet rollout remain unimplemented; no Job network policy is weakened.
+- Distribution remains operator-managed. The shared image recipe installs Nix-managed Codex and
+  its package helper downloads pinned packages directly inside Internet-enabled guests, verifying
+  them before activation. Offline delivery is deferred until
+  a concrete deployment needs it; automatic fleet rollout remains unimplemented.
   The local Responses fixture does not prove a real Provider Gateway reconnection.
 
 ### Verified provider evidence
@@ -189,19 +191,50 @@ Internet-enabled disposable VM; activation and recovery do not change its networ
 
 ### Current operator boundary and remaining work
 
+The Nix image slice passed both candidate builds and live verification on 2026-09-15. These are
+disposable local/test artifacts from an explicitly recorded dirty tree, with exact input hashes;
+they have not been published or promoted into a deployment profile.
+
+| Provider | Candidate build proof | Retained-worker proof |
+| --- | --- | --- |
+| Incus | `upgrade-proof-2e72ef4e336f` | `worker-upgrade-incus-1789482252` |
+| E2B | `upgrade-proof-88f1f93c4142` | `worker-upgrade-e2b-1789482129` |
+
+Incus fingerprint: `cd569f45a5ff25eab6b447eae7be7b10209501eb9cca9a5e407e567185bfc468`.
+E2B template: `dorf-nix-upgrade-proof-88f1f93c4142:0b55c486-ab2e-4fc1-9fce-345029ca86aa`.
+Both guests had Nix-managed Codex before staging, and used the installed helper to download the
+second pinned version. Activation, forced rollback, original native context, nonempty queued
+replies, exactly one model request per input, and all test VM/checkpoint cleanup passed. Incus
+restored `dorf-f4f76fd18578a28aad69` in place; E2B replaced `inqk3z9pterhnckohjd8t` with
+`iiqv44xbbemtp1zsayk0g`. Candidate images/templates remain available for inspection.
+
+The first E2B readiness check exceeded its combined 30-second startup bound while running Pi.
+A separate disposable probe completed Pi startup in 9.1 seconds and a repeat in 1.1 seconds;
+the combined cold-start readiness bound is now 90 seconds. The successful profile check verified
+Codex, Pi, Nix, executable selection, package provenance, and absence of image credentials. Logfire
+ingestion is confirmed in the 14:17–14:26 UTC window: 4 Incus image events, 6 E2B image events
+(including the initial failure), and 35/37 coordinator events respectively. Each coordinator proof
+has one `upgraded` and one `rolled_back` outcome. The full deterministic repository gate also passed.
+
 `dorf upgrade request` accepts an exact staged Nix closure and version for a direct Job. The same
 retained task owns native work and upgrade reconciliation. A restarted executor reloads receipts;
 stale claims or a changed source binding cannot select a replacement. The operator-facing receipt
 and Job projection retain source/destination resources, checkpoint, package versions, verification,
 terminal outcome, and failure codes. The profile revision remains unchanged.
 
-Next, add pinned Nix and the initial Codex generation to the shared guest recipe used by both the
-Incus image and E2B template builders, then build and verify both artifacts. The current shared
-recipe installs Codex through npm; only the disposable proofs bootstrap Nix. Existing VMs require
-a separate one-time bootstrap because profile promotion changes future VM creation only.
+The shared guest recipe now installs pinned Nix and the initial Codex generation for both Incus
+images and E2B templates. One package directory supplies image construction, guest staging, and
+upgrade proofs. Pi retains its existing installation. Existing VMs require a separate one-time
+bootstrap because profile promotion changes future VM creation only.
 
-Still to prove or implement: restricted-network package distribution, real Provider Gateway routing
-through replacement, automatic rollout policy, and a broader supported package catalog. The current
+Use the VM's existing Internet access to download pinned packages and verify their integrity before
+holding delivery and activating an upgrade. No controller-side package relay or offline import path
+is needed for this slice. If a deployment's network policy blocks package downloads, report the
+staging failure without changing that policy. Defer offline delivery until a concrete need appears.
+
+Still to prove or implement: real Provider Gateway routing through replacement and one-time
+bootstrap of existing deployment VMs. Automatic rollout policy and a broader supported package
+catalog are deferred; they are not prerequisites for this Codex slice. The current
 operator path deliberately requires a staged closure. Do not interpret the disposable fixture as
 permission to upgrade a retained user VM or as a production deployment receipt.
 

@@ -626,9 +626,13 @@ existing lifecycle until their pause capability is supported.
 
 ## Upgrade a retained Codex workspace
 
-For an existing direct Job, first stage a verified immutable Nix closure inside its Sandbox. The
-[upgrade recipe](../scripts/runtime-upgrade/README.md) owns package staging and verification steps.
-Staging must preserve the Sandbox's network policy. Then request activation with an exact reusable ID:
+For an existing direct Job, first stage a verified immutable Nix closure inside its Sandbox. New
+images include `dorf-packages stage VERSION`, which downloads a supported pinned version using the
+guest's existing Internet access without changing the active Codex. Its retained store path is
+available through `readlink -f /usr/local/share/dorf/packages/generations/VERSION`. Older images
+require the one-time Nix bootstrap described by the
+[upgrade recipe](../scripts/runtime-upgrade/README.md). Staging must preserve the Sandbox's network
+policy. Then request activation with an exact reusable ID:
 
 ```bash
 dorf upgrade request JOB --id upgrade-20260915-example --package /nix/store/HASH-codex-VERSION --version VERSION

@@ -66,6 +66,23 @@ Browser packages and Chromium live in the Incus-specific recipe. Image metadata 
 browser package, Python, Playwright, and Chromium versions. Deployment profile verification
 remains a separate admission requirement. Use the repository release command for both paths.
 
+## Shared guest packages
+
+Both builders consume the shared Debian guest recipe and
+[`scripts/sandbox/packages`](../scripts/sandbox/packages). That directory pins Nix, Nixpkgs, and
+the official prebuilt Codex archives. Codex is installed into the `dorf-runner` Nix profile; Pi
+retains its existing installation. The guest includes `dorf-packages` for staging supported pinned
+versions with Internet access. Image metadata records the Codex package manager, exact source
+archive integrity, and immutable store path. Nix generations do not replace VM-state checkpoints.
+
+For disposable local candidate builds and retained-conversation verification, use
+`mise run integration:nix-image build incus` or `mise run integration:nix-image build e2b`.
+Each prints the exact `verify` command and retains a build receipt with input hashes. The recipe
+allows an explicitly recorded dirty source tree for iteration; it does not publish an official
+release, promote a deployment profile, or update an existing user VM. Verify both candidates
+sequentially against the configured disposable PostgreSQL database. The verification uses the
+image's installed package helper and requires baked-in Nix before staging additional versions.
+
 ## E2B template
 
 The E2B builder uses the shared guest recipe from a clean source commit. It loads

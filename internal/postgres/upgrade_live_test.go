@@ -79,7 +79,11 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 	}
 	run("mkdir -p /opt/dorf-upgrade-proof /workspace/upgrade-worker-proof")
 	for _, name := range []string{"guest.sh", "package.nix", "packages.json", "responses-fixture.py"} {
-		content, err := os.ReadFile(filepath.Join("../../scripts/runtime-upgrade", name))
+		directory := "../../scripts/sandbox/packages"
+		if name == "responses-fixture.py" {
+			directory = "../../scripts/runtime-upgrade"
+		}
+		content, err := os.ReadFile(filepath.Join(directory, name))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -88,12 +92,18 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 		}
 	}
 	t.Log("stage pinned Nix packages")
-	run("bash /opt/dorf-upgrade-proof/guest.sh bootstrap")
-	run("bash /opt/dorf-upgrade-proof/guest.sh stage 0.154.0")
-	run("bash /opt/dorf-upgrade-proof/guest.sh stage 0.147.0")
-	run("bash /opt/dorf-upgrade-proof/guest.sh activate 0.154.0")
-	target := run("readlink -f /opt/dorf-upgrade-proof/generations/0.154.0")
-	oldTarget := run("readlink -f /opt/dorf-upgrade-proof/generations/0.147.0")
+	packageDirectory := "/opt/dorf-upgrade-proof"
+	if os.Getenv("DORF_UPGRADE_REQUIRE_NIX_IMAGE") == "1" {
+		run("test \"$(jq -r .harnesses.codex.package_manager /usr/local/share/dorf/image.json)\" = nix; test \"$(readlink -f /usr/local/bin/codex)\" = \"$(readlink -f /nix/var/nix/profiles/dorf-runner)/bin/codex\"; test ! -e /opt/node/lib/node_modules/@openai/codex; nix --version; pi --version")
+		packageDirectory = "/usr/local/share/dorf/packages"
+	} else {
+		run("bash /opt/dorf-upgrade-proof/guest.sh bootstrap")
+	}
+	run("bash \"$1/guest.sh\" stage 0.154.0", packageDirectory)
+	run("bash \"$1/guest.sh\" stage 0.147.0", packageDirectory)
+	run("bash \"$1/guest.sh\" activate 0.154.0", packageDirectory)
+	target := run("readlink -f \"$1/generations/0.154.0\"", packageDirectory)
+	oldTarget := run("readlink -f \"$1/generations/0.147.0\"", packageDirectory)
 	agent := codex.Agent{Sandbox: sandbox, Port: 8755, Timeout: 2 * time.Minute}
 	external := liveUpgradeExternals{Externals: terminal.Externals{Sandbox: sandbox, Agent: agent, Ownership: func(ctx context.Context, id string) (provider.Ownership, error) {
 		current, err := store.Sandbox(ctx, id)
@@ -233,7 +243,11 @@ func liveUpgradeSandbox(t *testing.T, selected string) provider.Sandbox {
 		var manifest struct {
 			Image string `json:"image_fingerprint"`
 		}
-		data, err := os.ReadFile("../../dist/release-0.10.1/dorf-incus-vm-v5-x86_64.json")
+		manifestPath := os.Getenv("DORF_UPGRADE_INCUS_MANIFEST")
+		if manifestPath == "" {
+			manifestPath = "../../dist/release-0.10.1/dorf-incus-vm-v5-x86_64.json"
+		}
+		data, err := os.ReadFile(manifestPath)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -242,6 +256,9 @@ func liveUpgradeSandbox(t *testing.T, selected string) provider.Sandbox {
 		}
 		connection := incus.DefaultConnectionConfig()
 		connection.Project = "dorf-runtime-upgrade-proof"
+		if project := os.Getenv("DORF_UPGRADE_INCUS_PROJECT"); project != "" {
+			connection.Project = project
+		}
 		return incus.Adapter{Sandbox: incus.Sandbox{Config: incus.Config{Image: manifest.Image, Network: "incusbr0", DiskSize: "50GiB", Workspace: "/workspace", Connection: connection}}}
 	}
 	if selected != "e2b" {
@@ -252,7 +269,11 @@ func liveUpgradeSandbox(t *testing.T, selected string) provider.Sandbox {
 			Reference string `json:"reference"`
 		} `json:"template"`
 	}
-	data, err := os.ReadFile("../../dist/e2b-template/profile.json")
+	manifestPath := os.Getenv("DORF_E2B_PROFILE_MANIFEST")
+	if manifestPath == "" {
+		manifestPath = "../../dist/e2b-template/profile.json"
+	}
+	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		t.Fatal(err)
 	}

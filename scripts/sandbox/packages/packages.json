@@ -1,4 +1,5 @@
 {
+  "default_codex": "0.154.0",
   "nix": {
     "version": "2.35.2",
     "url": "https://releases.nixos.org/nix/nix-2.35.2/nix-2.35.2-x86_64-linux.tar.xz",

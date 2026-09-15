@@ -8,6 +8,9 @@ readonly INPUTS=(
   scripts/incus/build-dorf-image.sh
   scripts/incus/provision-browser.sh
   scripts/sandbox/provision-dorf-guest.sh
+  scripts/sandbox/packages/guest.sh
+  scripts/sandbox/packages/package.nix
+  scripts/sandbox/packages/packages.json
 )
 
 for command in git go jq sha256sum; do

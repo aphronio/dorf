@@ -79,9 +79,12 @@ type Archive struct {
 }
 
 type Harness struct {
-	Package      string `json:"package"`
-	Version      string `json:"version"`
-	NPMIntegrity string `json:"npm_integrity"`
+	Package        string `json:"package"`
+	Version        string `json:"version"`
+	NPMIntegrity   string `json:"npm_integrity"`
+	PackageManager string `json:"package_manager,omitempty"`
+	SourceURL      string `json:"source_url,omitempty"`
+	StorePath      string `json:"store_path,omitempty"`
 }
 type imageMetadata struct {
 	Harnesses     map[string]Harness `json:"harnesses"`

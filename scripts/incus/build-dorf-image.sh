@@ -38,6 +38,8 @@ for _ in {1..60}; do
   sleep 2
 done
 incus exec "$BUILD_VM" -- true >/dev/null
+incus exec "$BUILD_VM" -- mkdir -p /usr/local/share/dorf
+incus file push -r "$SCRIPT_DIR/../sandbox/packages" "$BUILD_VM/usr/local/share/dorf/"
 incus file push "$GUEST_SCRIPT" "$BUILD_VM/tmp/provision-dorf-guest.sh"
 incus exec "$BUILD_VM" -- chmod +x /tmp/provision-dorf-guest.sh
 incus exec "$BUILD_VM" -- env \

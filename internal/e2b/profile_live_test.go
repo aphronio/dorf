@@ -38,7 +38,7 @@ func TestLiveCombinedHarnessProfile(t *testing.T) {
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Provider != "e2b" || manifest.Template.Reference == "" || manifest.SourceDirty {
+	if manifest.Provider != "e2b" || manifest.Template.Reference == "" || (manifest.SourceDirty && os.Getenv("DORF_ALLOW_DIRTY_TEMPLATE_BUILD") != "1") {
 		t.Fatalf("invalid exact E2B template manifest: %#v", manifest)
 	}
 	recipe, err := os.ReadFile(filepath.Join(projectRoot, filepath.FromSlash(manifest.Profile.Recipe)))
@@ -48,6 +48,19 @@ func TestLiveCombinedHarnessProfile(t *testing.T) {
 	recipeDigest := sha256.Sum256(recipe)
 	if hex.EncodeToString(recipeDigest[:]) != manifest.Profile.RecipeSHA256 {
 		t.Fatal("E2B template manifest does not match the checked-out guest recipe")
+	}
+	if len(manifest.Profile.PackageInputs) != 3 {
+		t.Fatal("E2B template manifest omitted pinned package inputs")
+	}
+	for path, expected := range manifest.Profile.PackageInputs {
+		input, err := os.ReadFile(filepath.Join(projectRoot, filepath.FromSlash(path)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(input)
+		if hex.EncodeToString(digest[:]) != expected {
+			t.Fatalf("template package input changed: %s", path)
+		}
 	}
 
 	owner := liveOwnership(t, "profile")
@@ -125,6 +138,11 @@ test "$(pwd)" = /workspace/job
 test -w /workspace/job
 codex --version
 pi --version
+nix --version
+test "$(jq -r .harnesses.codex.package_manager /usr/local/share/dorf/image.json)" = nix
+test "$(readlink -f /usr/local/bin/codex)" = "$(readlink -f /nix/var/nix/profiles/dorf-runner)/bin/codex"
+test ! -e /opt/node/lib/node_modules/@openai/codex
+test -x /usr/local/bin/dorf-packages
 ! command -v npm
 ! command -v npx
 test ! -e /root/.codex/auth.json
@@ -134,8 +152,10 @@ test ! -e /root/.config/dorf/provider-route.key
 test ! -e /home/user/.codex/auth.json
 printf 'profile-ready\n'`
 	if _, err := executor.Exec(ctx, ExecRequest{
-		Argv:           []string{"/bin/bash", "-lc", readinessScript},
-		ProcessTimeout: 30 * time.Second,
+		Argv: []string{"/bin/bash", "-lc", readinessScript},
+		// A freshly restored template fetches pages lazily. Allow the combined
+		// Codex, Pi, and Nix cold starts while retaining a bounded readiness probe.
+		ProcessTimeout: 90 * time.Second,
 		Stdout:         &readiness,
 	}); err != nil {
 		t.Fatalf("profile readiness: %v\n%s", err, readiness.String())
@@ -162,9 +182,10 @@ type e2bTemplateManifest struct {
 		Digest    string `json:"digest"`
 	} `json:"base_image"`
 	Profile struct {
-		Recipe       string `json:"recipe"`
-		RecipeSHA256 string `json:"recipe_sha256"`
-		MetadataPath string `json:"metadata_path"`
+		Recipe        string            `json:"recipe"`
+		RecipeSHA256  string            `json:"recipe_sha256"`
+		MetadataPath  string            `json:"metadata_path"`
+		PackageInputs map[string]string `json:"package_inputs"`
 	} `json:"profile"`
 	SourceDirty bool `json:"source_dirty"`
 }

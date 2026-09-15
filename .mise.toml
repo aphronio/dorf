@@ -112,3 +112,7 @@ run = "go test -p 1 ./internal/postgres ./internal/controlreader ./cmd/dorf -run
 [tasks."integration:upgrade-worker"]
 description = "Prove the retained worker's package activation, rollback, queue, and cleanup on a disposable VM"
 run = "bun scripts/e2b/runtime-upgrade-worker.ts"
+
+[tasks."integration:nix-image"]
+description = "Build or verify a disposable Nix-managed Codex image on Incus or E2B"
+run = "bun scripts/e2b/nix-image.ts"

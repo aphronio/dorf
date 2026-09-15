@@ -29,14 +29,21 @@ supplies model responses; the proof does not need an AI account or perform user 
 - E2B: `E2B_API_KEY` and the built template manifest selected by the recipe. Bun may load the local
   repository `.env`; credentials are never included in evidence. The account must support snapshots.
 
-No Nix installation on the host is needed. `packages.json` pins Nix, Nixpkgs, and the exact official
+No Nix installation on the host is needed. The shared
+[`packages.json`](../sandbox/packages/packages.json) pins Nix, Nixpkgs, and the exact official
 Codex archives. `guest.sh stage VERSION` builds an immutable closure and retains a GC root without
 changing the active runner. `guest.sh activate VERSION` requires that staged closure and switches
 the Nix profile. `guest.sh source-hash` is a maintenance helper for updating the Nixpkgs pin.
 
-Staging currently downloads packages inside the disposable guest. This proves Internet-enabled
-Sandboxes only. Production package delivery to restricted-network E2B Sandboxes remains part of
-the implementation plan; an upgrade must preserve the admitted network policy.
+Staging downloads packages inside the guest using its existing Internet access. Offline delivery
+is deferred until a concrete deployment needs it. A blocked download must not change network policy.
+
+The shared package helper is installed as `dorf-packages` in new images. Build and verify exact
+disposable candidates with `mise run integration:nix-image build incus` and the corresponding E2B
+command. Each prints a repeatable verification command tied to its input hashes and artifact ID.
+That verification requires Nix-managed Codex before any guest bootstrap and stages additional
+versions using the installed helper. Candidate images remain available for inspection; test VMs
+and checkpoints are removed by the retained-worker proof on success.
 
 ## Evidence and limits
 

@@ -20,6 +20,10 @@ func TestCreateManifestRequiresAndRetainsCombinedHarnessIdentity(t *testing.T) {
 	metadata := filepath.Join(directory, "image.json")
 	nodeDigest := "sha256:" + strings.Repeat("d", 64)
 	value := completeImageMetadata()
+	codex := value["harnesses"].(map[string]any)["codex"].(map[string]string)
+	codex["package_manager"] = "nix"
+	codex["store_path"] = "/nix/store/" + strings.Repeat("a", 32) + "-dorf-codex-0.146.0"
+	codex["source_url"] = "https://registry.npmjs.org/@openai/codex/-/codex-0.146.0-linux-x64.tgz"
 	contents, _ := json.Marshal(value)
 	if err := os.WriteFile(metadata, contents, 0o600); err != nil {
 		t.Fatal(err)
@@ -41,6 +45,9 @@ func TestCreateManifestRequiresAndRetainsCombinedHarnessIdentity(t *testing.T) {
 	}
 	if manifest.Harnesses["codex"].Package != "@openai/codex" || manifest.Harnesses["codex"].Version != "0.146.0" || manifest.Harnesses["pi"].Package != "@earendil-works/pi-coding-agent" || manifest.Harnesses["pi"].Version != "0.52.12" {
 		t.Fatalf("manifest did not retain both exact Harness identities: %#v", manifest.Harnesses)
+	}
+	if manifest.Harnesses["codex"].PackageManager != "nix" || manifest.Harnesses["codex"].StorePath != codex["store_path"] || manifest.Harnesses["codex"].SourceURL != codex["source_url"] {
+		t.Fatal("manifest lost Nix package provenance")
 	}
 }
 

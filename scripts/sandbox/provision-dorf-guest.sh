@@ -13,8 +13,7 @@ readonly NODE_SHA256="14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b
 readonly GO_VERSION="1.26.5"
 readonly GO_SHA256="5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053"
 readonly CODEX_PACKAGE="@openai/codex"
-readonly CODEX_VERSION="0.154.0"
-readonly CODEX_NPM_INTEGRITY="sha512-FV/x1OHXYv/ifjf3mXj9ThTTAWcUZN6cGIRQRhRxkKNOPuImu1WW0c8ev1vUkE9XGH90dEnYG1tBjIkxRikg0w=="
+readonly PACKAGE_DIR=/usr/local/share/dorf/packages
 readonly PI_PACKAGE="@earendil-works/pi-coding-agent"
 readonly PI_VERSION="0.84.1"
 readonly PI_NPM_INTEGRITY="sha512-ncAqFrG+iybuPGOhMiZoEHkEzTpJgz3guYD32pD+M7ucc0WeHmauP6wa7qwP8V/KWvsZDVNa5XGsdZ7fkC7w7A=="
@@ -72,15 +71,23 @@ ln -sf /opt/dorf-python/bin/python /usr/local/bin/python3
 ln -sf /opt/dorf-python/bin/pip /usr/local/bin/pip
 ln -sf /opt/dorf-python/bin/pip /usr/local/bin/pip3
 
-observed_codex_integrity="$(npm view "$CODEX_PACKAGE@$CODEX_VERSION" dist.integrity)"
+chmod 0755 "$PACKAGE_DIR/guest.sh"
+ln -sfn "$PACKAGE_DIR/guest.sh" /usr/local/bin/dorf-packages
+dorf-packages bootstrap
+CODEX_VERSION="$(dorf-packages default-version)"
+dorf-packages stage "$CODEX_VERSION"
+dorf-packages activate "$CODEX_VERSION"
+for tool in nix nix-build nix-env nix-store; do
+  ln -sfn "/root/.nix-profile/bin/$tool" "/usr/local/bin/$tool"
+done
+CODEX_NPM_INTEGRITY="$(jq -r --arg version "$CODEX_VERSION" '.codex[$version].hash' "$PACKAGE_DIR/packages.json")"
+CODEX_SOURCE_URL="$(jq -r --arg version "$CODEX_VERSION" '.codex[$version].url' "$PACKAGE_DIR/packages.json")"
 observed_pi_integrity="$(npm view "$PI_PACKAGE@$PI_VERSION" dist.integrity)"
-if [[ "$observed_codex_integrity" != "$CODEX_NPM_INTEGRITY" ]] ||
-  [[ "$observed_pi_integrity" != "$PI_NPM_INTEGRITY" ]]; then
+if [[ "$observed_pi_integrity" != "$PI_NPM_INTEGRITY" ]]; then
   echo "A pinned Harness package no longer matches its recorded npm integrity." >&2
   exit 1
 fi
-npm install -g "$CODEX_PACKAGE@$CODEX_VERSION" "$PI_PACKAGE@$PI_VERSION"
-ln -sf /opt/node/bin/codex /usr/local/bin/codex
+npm install -g "$PI_PACKAGE@$PI_VERSION"
 ln -sf /opt/node/bin/pi /usr/local/bin/pi
 codex --version >/dev/null
 pi --version >/dev/null
@@ -96,6 +103,8 @@ jq -n \
   --arg codex_package "$CODEX_PACKAGE" \
   --arg codex_version "$CODEX_VERSION" \
   --arg codex_npm_integrity "$CODEX_NPM_INTEGRITY" \
+  --arg codex_source_url "$CODEX_SOURCE_URL" \
+  --arg codex_store_path "$(readlink -f /nix/var/nix/profiles/dorf-runner)" \
   --arg pi_package "$PI_PACKAGE" \
   --arg pi_version "$PI_VERSION" \
   --arg pi_npm_integrity "$PI_NPM_INTEGRITY" \
@@ -110,6 +119,7 @@ jq -n \
   --arg jq "$(jq --version)" \
   --arg make "$(make --version | sed -n '1{s/^GNU Make //p;}')" \
   --arg node "$(node --version)" \
+  --arg nix "$(nix --version | awk '{print $3}')" \
   --arg pip "$(pip --version | awk '{print $2}')" \
   --arg pkg_config "$(pkg-config --version)" \
   --arg python "$(python --version | awk '{print $2}')" \
@@ -121,9 +131,11 @@ jq -n \
   --arg go_integrity "sha256:$GO_SHA256" \
   --arg node_integrity "sha256:$NODE_SHA256" \
   --arg uv_integrity "sha256:$UV_ARCHIVE_SHA256" \
+  --arg nix_integrity "sha256:$(jq -r .nix.sha256 "$PACKAGE_DIR/packages.json")" \
   '{
     harnesses: {
-      codex: {package: $codex_package, version: $codex_version, npm_integrity: $codex_npm_integrity},
+      codex: {package: $codex_package, version: $codex_version, npm_integrity: $codex_npm_integrity,
+        package_manager: "nix", source_url: $codex_source_url, store_path: $codex_store_path},
       pi: {package: $pi_package, version: $pi_version, npm_integrity: $pi_npm_integrity}
     },
     base_image: {reference: $base_reference, fingerprint: $base_fingerprint},
@@ -137,6 +149,7 @@ jq -n \
       jq: $jq,
       make: $make,
       node: $node,
+      nix: $nix,
       pip: $pip,
       "pkg-config": $pkg_config,
       python: $python,
@@ -146,7 +159,7 @@ jq -n \
       uv: $uv,
       wget: $wget
     },
-    tool_integrity: {go: $go_integrity, node: $node_integrity, uv: $uv_integrity}
+    tool_integrity: {go: $go_integrity, node: $node_integrity, uv: $uv_integrity, nix: $nix_integrity}
   }' > /usr/local/share/dorf/image.json
 chmod 0644 /usr/local/share/dorf/image.json
 
