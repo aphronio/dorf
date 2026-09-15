@@ -1,9 +1,9 @@
 # D136: Shared images install Codex through pinned Nix
 
-- **Applicability:** current
+- **Applicability:** partial
 - **Areas:** release, harnesses, sandboxes
 - **Read when:** Building guest images or changing how persistent Sandboxes obtain Codex packages.
-- **Decision history:** Refines D066's Codex npm installation; composes with D135 package recovery, 2026-09-15.
+- **Decision history:** Refines D066's Codex npm installation; composes with D135 package recovery, 2026-09-15; extended to the shared workstation by D137, 2026-09-15.
 - **Decision:** The shared Debian guest recipe installs pinned Nix and an initial Codex generation.
   Nix packages the official prebuilt executable from a hash-pinned archive. Pi retains its existing
   npm installation. Both Incus and E2B builders consume the same package inputs and retain their

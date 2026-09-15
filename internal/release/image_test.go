@@ -66,6 +66,39 @@ func TestCreateManifestRejectsIncompleteOrWrongBaseImage(t *testing.T) {
 	}
 }
 
+func TestCreateManifestRetainsNixWorkstationProvenance(t *testing.T) {
+	directory := t.TempDir()
+	archive := filepath.Join(directory, ArchiveName)
+	if err := os.WriteFile(archive, []byte("exact export"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	value := completeImageMetadata()
+	workstation := Workstation{StorePath: "/nix/store/" + strings.Repeat("a", 32) + "-dorf-workstation", NixpkgsRevision: strings.Repeat("b", 40), NixpkgsHash: strings.Repeat("c", 52)}
+	value["workstation"] = workstation
+	value["tool_integrity"] = map[string]string{"nix": "sha256:" + strings.Repeat("d", 64)}
+	metadata := filepath.Join(directory, "image.json")
+	contents, _ := json.Marshal(value)
+	if err := os.WriteFile(metadata, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(directory, "manifest.json")
+	if err := CreateManifest(archive, metadata, "v0.15.0", strings.Repeat("c", 40), "2026-09-15T00:00:00Z", output); err != nil {
+		t.Fatal(err)
+	}
+	manifest, opened, err := openValidatedImage(context.Background(), output, archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	if manifest.Workstation == nil || *manifest.Workstation != workstation {
+		t.Fatal("image lost immutable workstation provenance")
+	}
+	manifest.Workstation.StorePath = "/tmp/unverified"
+	if validate(manifest, archive) == nil {
+		t.Fatal("accepted unverified workstation identity")
+	}
+}
+
 func TestCreateManifestRejectsIncompleteBootstrapInventory(t *testing.T) {
 	directory := t.TempDir()
 	archive := filepath.Join(directory, ArchiveName)

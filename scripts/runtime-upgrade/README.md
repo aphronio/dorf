@@ -45,6 +45,15 @@ That verification requires Nix-managed Codex before any guest bootstrap and stag
 versions using the installed helper. Candidate images remain available for inspection; test VMs
 and checkpoints are removed by the retained-worker proof on success.
 
+The candidate receipt hashes the entire shared package source directory. Fresh-image verification
+also runs `scripts/sandbox/workstation-proof.py`: it checks Nix executable selection, compiles a C
+program, creates a Python environment, and exercises browser-use directly against a local page.
+It verifies that Playwright is absent and the installed skill matches the upstream CLI output.
+It first verifies that no browser is running, then owns and closes the browser it starts.
+There is no Dorf browser service. Each retained-worker proof writes `workstation.json`; compare
+the Incus and E2B files to establish identical package identity and tool versions. Workstation
+verification emits its outcome and package identity alongside the coordinator's telemetry.
+
 ## Evidence and limits
 
 Each run writes `.dorf/runtime-upgrade/<upgrade_id>/events.jsonl` and phase logs. Check

@@ -153,7 +153,8 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D133: Logical Sandboxes retain provider resource identities](decisions/D133-logical-sandboxes-retain-provider-resource-identities.md) (`current`). Replacing a provider VM, implementing package upgrade rollback, or investigating which infrastructure served a Job.
 - [D134: Delivery holds survive executor restarts](decisions/D134-delivery-holds-survive-executor-restarts.md) (`current`). Coordinating a persistent Sandbox upgrade or explaining accepted input that is waiting during maintenance.
 - [D135: Package recovery releases verified resource custody](decisions/D135-package-recovery-releases-verified-resource-custody.md) (`current`). Executing package upgrades, recovering replacement VMs, or investigating held messages and upgrade failures.
-- [D136: Shared images install Codex through pinned Nix](decisions/D136-shared-images-install-codex-through-pinned-nix.md) (`current`). Building guest images or changing how persistent Sandboxes obtain Codex packages.
+- [D136: Shared images install Codex through pinned Nix](decisions/D136-shared-images-install-codex-through-pinned-nix.md) (`partial`). Building guest images or changing how persistent Sandboxes obtain Codex packages.
+- [D137: Provider images share one Nix workstation](decisions/D137-provider-images-share-one-nix-workstation.md) (`current`). Changing shared guest tools, browser installation, or package parity between Incus and E2B.
 
 ## Harnesses
 
@@ -180,7 +181,8 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D125: Messages distinguish application observations](decisions/D125-messages-distinguish-application-observations.md) (`partial`). Delivering asynchronous application updates without impersonating human input.
 - [D127: Message observations deliver completed prefix deltas](decisions/D127-message-observations-deliver-completed-prefix-deltas.md) (`current`). Changing Message observation, native connection reuse, stream replay, or idle behavior.
 - [D131: Application observations reuse automatic delivery](decisions/D131-application-observations-reuse-automatic-delivery.md) (`current`). Delivering application updates into active work or recovering native start-or-steer races.
-- [D136: Shared images install Codex through pinned Nix](decisions/D136-shared-images-install-codex-through-pinned-nix.md) (`current`). Building guest images or changing how persistent Sandboxes obtain Codex packages.
+- [D136: Shared images install Codex through pinned Nix](decisions/D136-shared-images-install-codex-through-pinned-nix.md) (`partial`). Building guest images or changing how persistent Sandboxes obtain Codex packages.
+- [D137: Provider images share one Nix workstation](decisions/D137-provider-images-share-one-nix-workstation.md) (`current`). Changing shared guest tools, browser installation, or package parity between Incus and E2B.
 
 ## Model access
 
@@ -305,7 +307,8 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D101: Compose owns deployment lifecycle; bootstrap privilege stays explicit](decisions/D101-compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit.md) (`current`). Changing Compose topology, setup-applied lifecycle, bootstrap, or release images.
 - [D114: Incus guests include an isolated browser](decisions/D114-incus-guests-include-an-isolated-browser.md) (`partial`). Changing browser tooling, guest browser persistence, or Incus image proof.
 - [D124: Image publication does not require live coding proofs](decisions/D124-image-publication-does-not-require-live-coding-proofs.md) (`current`). Changing Incus image publication prerequisites or release verification.
-- [D136: Shared images install Codex through pinned Nix](decisions/D136-shared-images-install-codex-through-pinned-nix.md) (`current`). Building guest images or changing how persistent Sandboxes obtain Codex packages.
+- [D136: Shared images install Codex through pinned Nix](decisions/D136-shared-images-install-codex-through-pinned-nix.md) (`partial`). Building guest images or changing how persistent Sandboxes obtain Codex packages.
+- [D137: Provider images share one Nix workstation](decisions/D137-provider-images-share-one-nix-workstation.md) (`current`). Changing shared guest tools, browser installation, or package parity between Incus and E2B.
 
 ## Historical decisions
 

@@ -96,6 +96,32 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 	if os.Getenv("DORF_UPGRADE_REQUIRE_NIX_IMAGE") == "1" {
 		run("test \"$(jq -r .harnesses.codex.package_manager /usr/local/share/dorf/image.json)\" = nix; test \"$(readlink -f /usr/local/bin/codex)\" = \"$(readlink -f /nix/var/nix/profiles/dorf-runner)/bin/codex\"; test ! -e /opt/node/lib/node_modules/@openai/codex; nix --version; pi --version")
 		packageDirectory = "/usr/local/share/dorf/packages"
+		script, err := os.ReadFile("../../scripts/sandbox/workstation-proof.py")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sandbox.PutFile(ctx, owner, "/tmp/dorf-workstation-proof.py", script); err != nil {
+			t.Fatal(err)
+		}
+		result, err := sandbox.Exec(ctx, owner, nil, "browser-python", "/tmp/dorf-workstation-proof.py")
+		if err != nil || result.ExitCode != 0 {
+			emit(telemetry.Event{Name: "dorf.upgrade.workstation.failed", At: time.Now(), Failed: true, Attributes: map[string]any{"dorf.upgrade_id": id, "dorf.job_id": job.ID, "dorf.provider": selected}})
+			t.Fatalf("workstation proof failed (exit=%d): %v\n%s\n%s", result.ExitCode, err, result.Stdout, result.Stderr)
+		}
+		output := strings.TrimSpace(result.Stdout)
+		data := []byte(output[strings.LastIndex(output, "\n")+1:])
+		var proof struct {
+			Workstation string `json:"workstation"`
+			Result      string `json:"result"`
+		}
+		if err := json.Unmarshal(data, &proof); err != nil || proof.Result != "passed" {
+			t.Fatal("workstation proof omitted its verified package identity")
+		}
+		if err := os.WriteFile(filepath.Join(root, "workstation.json"), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		emit(telemetry.Event{Name: "dorf.upgrade.workstation.verified", At: time.Now(), Attributes: map[string]any{"dorf.upgrade_id": id, "dorf.job_id": job.ID, "dorf.provider": selected, "dorf.workstation_path": proof.Workstation}})
+		t.Logf("workstation proof: %s", output)
 	} else {
 		run("bash /opt/dorf-upgrade-proof/guest.sh bootstrap")
 	}

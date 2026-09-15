@@ -62,18 +62,22 @@ and removes its temporary build VM and image alias. Publication does not require
 deployment, AI connection, GitHub App installation, coding Job, or browser navigation proof.
 GitHub and GHCR publication credentials are still required.
 
-Browser packages and Chromium live in the Incus-specific recipe. Image metadata records the
-browser package, Python, Playwright, and Chromium versions. Deployment profile verification
-remains a separate admission requirement. Use the repository release command for both paths.
+Browser packages and Chromium live in the shared Nix workstation recipe. Image metadata records
+their versions and immutable workstation identity. Deployment profile verification remains a
+separate admission requirement. Use the repository release command for both paths.
 
 ## Shared guest packages
 
 Both builders consume the shared Debian guest recipe and
 [`scripts/sandbox/packages`](../scripts/sandbox/packages). That directory pins Nix, Nixpkgs, and
-the official prebuilt Codex archives. Codex is installed into the `dorf-runner` Nix profile; Pi
-retains its existing installation. The guest includes `dorf-packages` for staging supported pinned
-versions with Internet access. Image metadata records the Codex package manager, exact source
-archive integrity, and immutable store path. Nix generations do not replace VM-state checkpoints.
+the official prebuilt Codex archives. Codex uses the `dorf-runner` Nix profile; the remaining tools,
+Pi, and browser environment share `dorf-tools`. Their separation allows the verified Codex update
+to preserve the rest of the workstation. The guest includes `dorf-packages` for staging supported
+pinned Codex versions with Internet access. Image metadata retains actual tool versions, Harness
+archive identities, and the workstation's store path and Nixpkgs provenance. Nix generations do not
+replace VM-state checkpoints. No browser is started or managed by Dorf. Browser-use talks directly
+to Chromium through CDP; Playwright is not installed. The upstream browser-use installer supplies
+its skill unchanged, with no Dorf-specific text inserted.
 
 For disposable local candidate builds and retained-conversation verification, use
 `mise run integration:nix-image build incus` or `mise run integration:nix-image build e2b`.
@@ -82,6 +86,15 @@ allows an explicitly recorded dirty source tree for iteration; it does not publi
 release, promote a deployment profile, or update an existing user VM. Verify both candidates
 sequentially against the configured disposable PostgreSQL database. The verification uses the
 image's installed package helper and requires baked-in Nix before staging additional versions.
+The workstation probe compiles native code, creates a Python environment, and exercises browser-use
+through an agent-started Chromium process. Its retained `workstation.json` allows exact package
+parity comparison across providers.
+
+Use `python3 scripts/sandbox/packages/lock.py browser` or `pi` on a development machine to refresh
+the browser wheel inputs or Pi dependency lock. Review those changes and update Pi's `npm_deps_hash`
+from the Nix fetcher's reported hash when its dependency lock changes. Both provider builders must
+then pass the same fresh-image proof. Do not run workstation installation as an uncoordinated live
+upgrade on a retained user VM; the current recovery executor is scoped to Codex.
 
 ## E2B template
 

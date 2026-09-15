@@ -49,7 +49,7 @@ func TestLiveCombinedHarnessProfile(t *testing.T) {
 	if hex.EncodeToString(recipeDigest[:]) != manifest.Profile.RecipeSHA256 {
 		t.Fatal("E2B template manifest does not match the checked-out guest recipe")
 	}
-	if len(manifest.Profile.PackageInputs) != 3 {
+	if manifest.Profile.PackageInputs["scripts/sandbox/packages/workstation.nix"] == "" {
 		t.Fatal("E2B template manifest omitted pinned package inputs")
 	}
 	for path, expected := range manifest.Profile.PackageInputs {

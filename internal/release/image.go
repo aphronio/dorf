@@ -63,6 +63,7 @@ type Manifest struct {
 	Harnesses        map[string]Harness `json:"harnesses"`
 	Tools            map[string]string  `json:"tools"`
 	ToolIntegrity    map[string]string  `json:"tool_integrity"`
+	Workstation      *Workstation       `json:"workstation,omitempty"`
 	SourceCommit     string             `json:"source_commit"`
 	ValidatedAt      string             `json:"validated_at"`
 }
@@ -91,6 +92,13 @@ type imageMetadata struct {
 	BaseImage     BaseImage          `json:"base_image"`
 	Tools         map[string]string  `json:"tools"`
 	ToolIntegrity map[string]string  `json:"tool_integrity"`
+	Workstation   *Workstation       `json:"workstation,omitempty"`
+}
+
+type Workstation struct {
+	StorePath       string `json:"store_path"`
+	NixpkgsRevision string `json:"nixpkgs_revision"`
+	NixpkgsHash     string `json:"nixpkgs_hash"`
 }
 
 var oid = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -128,10 +136,8 @@ func CreateManifest(archivePath, metadataPath, tag, sourceCommit, validatedAt, o
 			return fmt.Errorf("image metadata has no %s version", tool)
 		}
 	}
-	for _, tool := range requiredToolIntegrity {
-		if !regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(metadata.ToolIntegrity[tool]) {
-			return fmt.Errorf("image metadata has no verified %s archive integrity", tool)
-		}
+	if err := validateToolIntegrity(metadata.ToolIntegrity, metadata.Workstation); err != nil {
+		return fmt.Errorf("image metadata: %w", err)
 	}
 	file, err := os.Open(archivePath)
 	if err != nil {
@@ -147,7 +153,7 @@ func CreateManifest(archivePath, metadataPath, tag, sourceCommit, validatedAt, o
 		return closeErr
 	}
 	fingerprint := hex.EncodeToString(hash.Sum(nil))
-	manifest := Manifest{SchemaVersion: 5, ReleaseTag: tag, Environment: "incus", Architecture: "x86_64", ImageType: "virtual-machine", ImageFingerprint: fingerprint, BaseImage: metadata.BaseImage, Archive: Archive{Name: ArchiveName, SHA256: fingerprint, Size: size}, Harnesses: metadata.Harnesses, Tools: metadata.Tools, ToolIntegrity: metadata.ToolIntegrity, SourceCommit: sourceCommit, ValidatedAt: validatedAt}
+	manifest := Manifest{SchemaVersion: 5, ReleaseTag: tag, Environment: "incus", Architecture: "x86_64", ImageType: "virtual-machine", ImageFingerprint: fingerprint, BaseImage: metadata.BaseImage, Archive: Archive{Name: ArchiveName, SHA256: fingerprint, Size: size}, Harnesses: metadata.Harnesses, Tools: metadata.Tools, ToolIntegrity: metadata.ToolIntegrity, Workstation: metadata.Workstation, SourceCommit: sourceCommit, ValidatedAt: validatedAt}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return err
@@ -261,9 +267,22 @@ func validate(m Manifest, archivePath string) error {
 			return fmt.Errorf("official image manifest omits %s", tool)
 		}
 	}
-	for _, tool := range requiredToolIntegrity {
-		if !regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(m.ToolIntegrity[tool]) {
-			return fmt.Errorf("official image manifest omits verified %s integrity", tool)
+	return validateToolIntegrity(m.ToolIntegrity, m.Workstation)
+}
+
+func validateToolIntegrity(integrity map[string]string, workstation *Workstation) error {
+	required := requiredToolIntegrity
+	if workstation != nil {
+		if !regexp.MustCompile(`^/nix/store/[0-9a-z]{32}-dorf-workstation$`).MatchString(workstation.StorePath) ||
+			!oid.MatchString(workstation.NixpkgsRevision) ||
+			!regexp.MustCompile(`^[0123456789abcdfghijklmnpqrsvwxyz]{52}$`).MatchString(workstation.NixpkgsHash) {
+			return fmt.Errorf("workstation has no exact Nix package identity")
+		}
+		required = []string{"nix"}
+	}
+	for _, tool := range required {
+		if !regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(integrity[tool]) {
+			return fmt.Errorf("image omits verified %s integrity", tool)
 		}
 	}
 	return nil

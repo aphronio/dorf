@@ -47,10 +47,15 @@ activate() {
 
 case ${1:-} in
   bootstrap) bootstrap ;;
+  install-workstation)
+    mkdir -p "$recipe_dir/generations"
+    path=$(/root/.nix-profile/bin/nix-build "$recipe_dir/workstation.nix" --out-link "$recipe_dir/generations/workstation")
+    /root/.nix-profile/bin/nix-env --profile /nix/var/nix/profiles/dorf-tools --set "$path"
+    ;;
   default-version) python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["default_codex"])' "$recipe_dir/packages.json" ;;
   stage) stage "${2:-}" ;;
   activate) activate "${2:-}" ;;
   inspect) readlink -f "$profile"; "$profile/bin/codex" --version ;;
   source-hash) /root/.nix-profile/bin/nix-prefetch-url --unpack "https://github.com/NixOS/nixpkgs/archive/$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["nixpkgs"]["revision"])' "$recipe_dir/packages.json").tar.gz" ;;
-  *) echo 'usage: guest.sh bootstrap|stage VERSION|activate VERSION|inspect|source-hash' >&2; exit 2 ;;
+  *) echo 'usage: guest.sh bootstrap|install-workstation|default-version|stage VERSION|activate VERSION|inspect|source-hash' >&2; exit 2 ;;
 esac

@@ -4,7 +4,7 @@
 - **Areas:** sandboxes, harnesses, release
 - **Read when:** Changing the supported Sandbox guest baseline, shared toolchain contents, or image construction integrity.
 - **Decision history:** Accepted profile baseline; combined Harness packaging refined by D066; second-provider
-  template qualified by D067 — 2026-08-14; Incus browser tooling added by D114 — 2026-09-11
+  template qualified by D067 — 2026-08-14; Incus browser tooling added by D114 — 2026-09-11; shared Nix workstation adopted by D137 — 2026-09-15
 - **Decision:** The official x86_64 Sandbox profile uses an exact provider-native Debian 13 base
   identity and carries only a cross-repository workstation baseline: Python 3.14 with pip, Node 24
   LTS, pinned Go and uv, Git, the verified Harness executables, native C/C++ build tools, and common

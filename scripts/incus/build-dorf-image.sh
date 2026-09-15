@@ -29,7 +29,8 @@ if [[ ! "$BASE_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]; then
 fi
 
 incus init "images:$BASE_FINGERPRINT" "$BUILD_VM" \
-  --vm --network "$NETWORK" -d "root,size=$ROOT_DISK_SIZE"
+  --vm --network "$NETWORK" -d "root,size=$ROOT_DISK_SIZE" \
+  -c limits.memory=4GiB -c limits.cpu=4
 incus start "$BUILD_VM"
 for _ in {1..60}; do
   if incus exec "$BUILD_VM" -- true >/dev/null 2>&1; then
@@ -47,9 +48,6 @@ incus exec "$BUILD_VM" -- env \
   "DORF_BASE_FINGERPRINT=$BASE_FINGERPRINT" \
   /tmp/provision-dorf-guest.sh
 incus exec "$BUILD_VM" -- rm -f /tmp/provision-dorf-guest.sh
-incus file push "$SCRIPT_DIR/provision-browser.sh" "$BUILD_VM/tmp/provision-browser.sh"
-incus exec "$BUILD_VM" -- bash /tmp/provision-browser.sh
-incus exec "$BUILD_VM" -- rm -f /tmp/provision-browser.sh
 
 CODEX_VERSION="$(incus exec "$BUILD_VM" -- jq -r .harnesses.codex.version /usr/local/share/dorf/image.json)"
 PI_VERSION="$(incus exec "$BUILD_VM" -- jq -r .harnesses.pi.version /usr/local/share/dorf/image.json)"
@@ -58,6 +56,8 @@ if [[ -n "$IMAGE_METADATA_PATH" ]]; then
   incus file pull "$BUILD_VM/usr/local/share/dorf/image.json" "$IMAGE_METADATA_PATH"
 fi
 incus exec "$BUILD_VM" -- sync
+# Discard deleted build downloads before exporting the sparse VM disk.
+incus exec "$BUILD_VM" -- fstrim --all
 incus stop "$BUILD_VM" --timeout 60
 incus publish "$BUILD_VM" --alias "$IMAGE_ALIAS" --reuse \
   description="Dorf Debian 13 VM with Codex $CODEX_VERSION and Pi $PI_VERSION" \

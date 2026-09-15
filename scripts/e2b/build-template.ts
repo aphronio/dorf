@@ -5,6 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Template, defaultBuildLogger } from "e2b";
+import { packageInputs } from "../sandbox/package-inputs";
 
 const sdkVersion = "2.39.0";
 const templateName = process.env.DORF_E2B_TEMPLATE_NAME ?? "standard";
@@ -41,11 +42,7 @@ async function main() {
   const recipe = await readFile(recipePath);
   const recipeSHA256 = createHash("sha256").update(recipe).digest("hex");
   const packageDirectory = "scripts/sandbox/packages";
-  const packageInputs: Record<string, string> = {};
-  for (const name of ["guest.sh", "package.nix", "packages.json"]) {
-    const path = `${packageDirectory}/${name}`;
-    packageInputs[path] = createHash("sha256").update(await readFile(resolve(projectRoot, path))).digest("hex");
-  }
+  const packages = await packageInputs(projectRoot);
   const provision = [
     `DORF_BASE_IMAGE=${shellQuote(baseReference)}`,
     `DORF_BASE_FINGERPRINT=${shellQuote(baseDigest)}`,
@@ -92,7 +89,7 @@ async function main() {
     profile: {
       recipe: recipeRelativePath,
       recipe_sha256: recipeSHA256,
-      package_inputs: packageInputs,
+      package_inputs: packages,
       metadata_path: "/usr/local/share/dorf/image.json",
       workspace: "/workspace/job",
       default_user: "root",

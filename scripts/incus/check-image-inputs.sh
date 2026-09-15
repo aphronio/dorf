@@ -6,11 +6,17 @@ readonly PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 readonly DESCRIPTOR="$PROJECT_ROOT/internal/release/official_image.json"
 readonly INPUTS=(
   scripts/incus/build-dorf-image.sh
-  scripts/incus/provision-browser.sh
   scripts/sandbox/provision-dorf-guest.sh
   scripts/sandbox/packages/guest.sh
   scripts/sandbox/packages/package.nix
   scripts/sandbox/packages/packages.json
+  scripts/sandbox/packages/nixpkgs.nix
+  scripts/sandbox/packages/workstation.nix
+  scripts/sandbox/packages/pi.nix
+  scripts/sandbox/packages/pi/package.json
+  scripts/sandbox/packages/pi/package-lock.json
+  scripts/sandbox/packages/browser.nix
+  scripts/sandbox/packages/browser-wheels.json
 )
 
 for command in git go jq sha256sum; do

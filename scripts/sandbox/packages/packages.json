@@ -18,5 +18,23 @@
       "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.154.0-linux-x64.tgz",
       "hash": "sha512-a4FI3A8sGtwGrOqltrPbrS2hajrHQG591EwmRfiRoLMb10VxdBtUGW4gu6IJVYENiYGA7k3P4jlRHEoCZU/s9Q=="
     }
+  },
+  "pi": {
+    "version": "0.84.1",
+    "npm_deps_hash": "sha256-9iCB6Ip2npnvQ6vhDrygujKuFteirNzWbrwKFcqM5Yo="
+  },
+  "browser": {
+    "version": "0.13.10",
+    "harness_version": "0.1.13",
+    "chromium_version": "151.0.7922.34",
+    "chromium": {
+      "url": "https://cdn.playwright.dev/builds/cft/151.0.7922.34/linux64/chrome-linux64.zip",
+      "hash": "sha256-roc2rCi8aSeFUVAPIZ/HSVdWSCY8Q+xZkHSe/0O5/Pg="
+    }
+  },
+  "uv": {
+    "version": "0.12.3",
+    "url": "https://github.com/astral-sh/uv/releases/download/0.12.3/uv-x86_64-unknown-linux-gnu.tar.gz",
+    "sha256": "600cf9a742aca00d292673b16b5acffaa7b8c269a364ad0c2e79498dcb1fe101"
   }
 }

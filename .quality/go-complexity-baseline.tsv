@@ -93,8 +93,8 @@ internal/proofbarrier	(Barrier).reach	18
 internal/proofbarrier	FromEnv	16
 internal/publication	(Service).proposeFenced	24
 internal/publication	(Service).pushFenced	22
-internal/release	CreateManifest	19
+internal/release	CreateManifest	18
 internal/release	InstallPublishedImage	24
-internal/release	validate	25
+internal/release	validate	23
 internal/review	FactsFromPaths	19
 scripts/bootstrap	Materialize	30

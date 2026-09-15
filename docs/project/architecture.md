@@ -497,3 +497,8 @@ existing Internet access before delivery is held; it does not change the active 
 selects immutable executables while provider checkpoints recover matching mutable state. Image
 replacement and live-process migration are not prerequisites for an ordinary package update.
 D136 records the package boundary; the active implementation plan tracks deployment proof.
+
+Both provider recipes also select one identical Nix workstation closure for developer and browser
+tools. Codex's separate runner profile remains the unit of the existing live update operation.
+Browser processes are agent-owned work inside the Sandbox, with no Dorf service lifecycle. D137
+records this boundary; provider OS bootstrapping remains outside workstation package parity.

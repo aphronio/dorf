@@ -2,6 +2,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { packageInputs } from "../sandbox/package-inputs";
 
 const [operation, provider, receiptPath] = process.argv.slice(2);
 if (!["build", "verify"].includes(operation) || !["incus", "e2b"].includes(provider)) {
@@ -9,9 +10,9 @@ if (!["build", "verify"].includes(operation) || !["incus", "e2b"].includes(provi
 }
 if (operation === "verify" && !receiptPath) throw new Error("verify requires the exact build receipt");
 const root = resolve(import.meta.dir, "../..");
-const inputs = ["scripts/sandbox/provision-dorf-guest.sh", ...["guest.sh", "package.nix", "packages.json"].map(name => `scripts/sandbox/packages/${name}`),
-  ...(provider === "incus" ? ["scripts/incus/build-dorf-image.sh", "scripts/incus/provision-browser.sh"] : ["scripts/e2b/build-template.ts"])];
-const hashes: Record<string, string> = {};
+const inputs = ["scripts/sandbox/provision-dorf-guest.sh", "scripts/sandbox/package-inputs.ts",
+  ...(provider === "incus" ? ["scripts/incus/build-dorf-image.sh"] : ["scripts/e2b/build-template.ts"])];
+const hashes = await packageInputs(root);
 for (const path of inputs) hashes[path] = createHash("sha256").update(await readFile(resolve(root, path))).digest("hex");
 const receipt = operation === "verify" ? JSON.parse(await readFile(resolve(receiptPath), "utf8")) : {
   id: `upgrade-proof-${randomBytes(6).toString("hex")}`, provider, inputs: hashes,

@@ -222,21 +222,84 @@ stale claims or a changed source binding cannot select a replacement. The operat
 and Job projection retain source/destination resources, checkpoint, package versions, verification,
 terminal outcome, and failure codes. The profile revision remains unchanged.
 
-The shared guest recipe now installs pinned Nix and the initial Codex generation for both Incus
-images and E2B templates. One package directory supplies image construction, guest staging, and
-upgrade proofs. Pi retains its existing installation. Existing VMs require a separate one-time
-bootstrap because profile promotion changes future VM creation only.
+The shared guest recipe installs pinned Nix, the initial Codex generation, and the same workstation
+package set for both Incus images and E2B templates. Pi, developer tools, and the browser environment
+come from Nix; the agent owns browser processes. Codex retains its separate runner profile so its
+upgrade cannot replace the workstation. One package directory supplies image construction, guest
+staging, and upgrade proofs. Profile promotion changes future VM creation only. Bootstrapping older images without Nix is outside the scope of this slice.
 
 Use the VM's existing Internet access to download pinned packages and verify their integrity before
 holding delivery and activating an upgrade. No controller-side package relay or offline import path
 is needed for this slice. If a deployment's network policy blocks package downloads, report the
 staging failure without changing that policy. Defer offline delivery until a concrete need appears.
 
-Still to prove or implement: real Provider Gateway routing through replacement and one-time
-bootstrap of existing deployment VMs. Automatic rollout policy and a broader supported package
+Still to prove: real Provider Gateway routing through replacement. Automatic rollout policy and a broader supported package
 catalog are deferred; they are not prerequisites for this Codex slice. The current
 operator path deliberately requires a staged closure. Do not interpret the disposable fixture as
 permission to upgrade a retained user VM or as a production deployment receipt.
+
+### Initial shared workstation verification
+
+Fresh guests on both providers reported the identical workstation
+`/nix/store/4dhf7dsi78p7amdmwfxgz95aypzv2q12-dorf-workstation` and matching tool inventories.
+The repeatable candidate recipe exercises compilation, Python environments, Playwright interaction,
+and browser-use navigation against a local fixture. It verifies that no browser runs at startup,
+then starts and closes its own browser. The resulting `workstation.json` records are retained with
+each worker proof; exact package versions remain in those records and image metadata.
+
+The first Incus candidate passed the live checks but exceeded the release archive size bound.
+The builder now discards unused filesystem blocks before publication, after removing temporary
+build inputs. The final archive is 1,486,102,348 bytes, within the unchanged 2,000,000,000-byte
+release bound.
+
+Final candidate and retained-worker checks passed on 2026-09-15:
+
+| Provider | Candidate build proof | Retained-worker proof |
+| --- | --- | --- |
+| Incus | `upgrade-proof-57e33c7d9a58` | `worker-upgrade-incus-1789485493` |
+| E2B | `upgrade-proof-7af8b4af375f` | `worker-upgrade-e2b-1789485194` |
+
+Incus fingerprint: `320d445597d874ae2a04c7226b7f1d4560f1ed07383aba7191358b23d07ec1db`.
+E2B template: `dorf-nix-upgrade-proof-7af8b4af375f:1e56502d-9b9a-400b-978d-603591da7350`.
+Both proofs passed activation, forced rollback, original conversation context, nonempty queued
+replies, and complete owned VM/checkpoint cleanup. The standalone packaging lab was also removed.
+The full repository gate and local binary build passed. These remain explicitly dirty-source test
+candidates, with exact input hashes; no deployment profile or retained user VM was changed.
+
+Logfire ingestion is confirmed for the final worker proofs in the 15:13–15:20 UTC window: 36
+Incus events and 38 E2B events, including workstation verification and one `upgraded` and one
+`rolled_back` receipt per provider. Query the worker proof ID for workstation identity and append
+`-0` or `-1` for each coordinator operation. Image build/verification events use the candidate IDs.
+
+### Browser dependency and skill correction
+
+The shared recipe now uses browser-use directly with preinstalled Chromium. Upstream browser-use
+and browser-harness control the browser through CDP and do not require Playwright for this flow.
+The separately selected Playwright package, its two exclusive Python dependencies, and the
+separate headless-shell/Playwright browser bundle are removed. Chromium itself supports headless mode.
+
+The installer copies the upstream browser-use skill without inserting or modifying any text. Future
+environment guidance must stay separate and follow observed agent friction. The fresh-image proof
+checks that the installed skill matches the upstream CLI output, Playwright is absent, and
+browser-use can navigate and click through an explicitly started Chromium process.
+
+The corrected E2B candidate `upgrade-proof-16e39a42ff0d` passed the profile and retained-worker
+checks with `worker-upgrade-e2b-1789486457`. Its template is
+`dorf-nix-upgrade-proof-16e39a42ff0d:ce1d8f9d-734c-4190-a7ac-952d356c22dd`.
+The rollback restore step failed once, then succeeded through the existing coordinator retry.
+The proof verified rollback, original context, substantive replies, and all resource/checkpoint
+cleanup. Logfire ingestion includes that restore failure and both restore attempts; the proof
+retains 41 coordinator/workstation events in the 15:34–15:37 UTC window. The provider's underlying
+error cause was not established by this proof.
+
+The corrected Incus candidate `upgrade-proof-5707827c7d5f` and retained-worker proof
+`worker-upgrade-incus-1789486623` also passed browser interaction, activation, rollback, native
+context, substantive replies, and complete cleanup. Its fingerprint is
+`59a6a6a426adf98c01d68e5941ad5f2848035e869a08b9d4380309ba9139b31e`; the archive is
+1,367,301,222 bytes. Both corrected candidates report the same workstation
+`/nix/store/5fzd1f3093nzvia98xmfdkhivpvxvjxf-dorf-workstation` and identical tool inventories.
+These results supersede the initial workstation candidates above. The repository gate passed;
+the candidates remain test-only pending clean release construction and profile promotion.
 
 ## References
 
