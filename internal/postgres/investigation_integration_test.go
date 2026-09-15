@@ -150,8 +150,8 @@ func (e *investigationExternals) effect(kind core.ActionKind) error {
 	e.effects = append(e.effects, kind)
 	return nil
 }
-func (e *investigationExternals) SandboxCreate(context.Context, core.Job, core.Sandbox) error {
-	return e.effect(core.ActionSandboxCreate)
+func (e *investigationExternals) SandboxCreate(_ context.Context, _ core.Job, owned core.Sandbox) (string, error) {
+	return owned.ID, e.effect(core.ActionSandboxCreate)
 }
 func (e *investigationExternals) ReconcileClone(context.Context, provider.Ownership, string, string, string) error {
 	return e.effect(gitworkspace.ActionRepositoryClone)

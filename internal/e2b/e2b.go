@@ -57,13 +57,14 @@ type CreateRequest struct {
 }
 
 type Sandbox struct {
-	ProviderID  string
-	TemplateID  string
-	EnvdVersion string
-	State       string
-	Metadata    map[string]string
-	StartedAt   time.Time
-	EndAt       time.Time
+	ProviderID         string
+	TemplateID         string
+	EnvdVersion        string
+	State              string
+	Metadata           map[string]string
+	StartedAt          time.Time
+	EndAt              time.Time
+	HasExternalVolumes bool
 }
 
 // EnvdConnection contains the short-lived, Sandbox-scoped material needed to
@@ -455,17 +456,18 @@ func (s createResponse) sandbox() Sandbox {
 }
 
 type listedSandbox struct {
-	SandboxID   string            `json:"sandboxID"`
-	TemplateID  string            `json:"templateID"`
-	EnvdVersion string            `json:"envdVersion"`
-	State       string            `json:"state"`
-	Metadata    map[string]string `json:"metadata"`
-	StartedAt   time.Time         `json:"startedAt"`
-	EndAt       time.Time         `json:"endAt"`
+	SandboxID    string            `json:"sandboxID"`
+	TemplateID   string            `json:"templateID"`
+	EnvdVersion  string            `json:"envdVersion"`
+	State        string            `json:"state"`
+	Metadata     map[string]string `json:"metadata"`
+	StartedAt    time.Time         `json:"startedAt"`
+	EndAt        time.Time         `json:"endAt"`
+	VolumeMounts []struct{}        `json:"volumeMounts"`
 }
 
 func (s listedSandbox) sandbox() Sandbox {
-	return Sandbox{ProviderID: s.SandboxID, TemplateID: s.TemplateID, EnvdVersion: s.EnvdVersion, State: s.State, Metadata: s.Metadata, StartedAt: s.StartedAt, EndAt: s.EndAt}
+	return Sandbox{ProviderID: s.SandboxID, TemplateID: s.TemplateID, EnvdVersion: s.EnvdVersion, State: s.State, Metadata: s.Metadata, StartedAt: s.StartedAt, EndAt: s.EndAt, HasExternalVolumes: len(s.VolumeMounts) > 0}
 }
 
 type detailSandbox listedSandbox

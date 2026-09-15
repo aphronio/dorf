@@ -32,10 +32,10 @@ cross-cutting change may alter several distinct promises. Update each owner, but
 changed fact across them. If a fact would need manual edits in several files, keep the exact value
 in its owner and replace the other copies with links or stable summaries.
 
-## Planned follow-up
+## Active implementation
 
 - [Package upgrades in persistent Sandboxes](implementation/runtime-package-upgrades.md): agreed
-  follow-up after the profile-revision slice; future scope, not current supported behavior.
+  implementation after the profile-revision slice; planned scope, not current supported behavior.
 
 ## Archived and non-normative material
 

@@ -36,7 +36,7 @@ const (
 	AbsurdSchemaSHA256  = "d34309370c539f3a51f2b36b69b1f77551f8e4a14480a1c8def8bb8f40fd9aab"
 )
 
-var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql", "009_message_attachments.sql", "010_job_idle_policy.sql", "011_message_developer_instructions.sql", "012_sandbox_idle_grace.sql", "013_message_observation.sql", "014_job_execution_wakes.sql", "015_observation_auto.sql", "016_profile_revisions.sql"}
+var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql", "009_message_attachments.sql", "010_job_idle_policy.sql", "011_message_developer_instructions.sql", "012_sandbox_idle_grace.sql", "013_message_observation.sql", "014_job_execution_wakes.sql", "015_observation_auto.sql", "016_profile_revisions.sql", "017_sandbox_resources.sql", "018_sandbox_delivery_holds.sql"}
 
 type Store struct{ DB *sql.DB }
 
@@ -362,6 +362,16 @@ type messageTarget struct {
 
 func resolveMessageTarget(ctx context.Context, queries *dbsql.Queries, input core.MessageAdmission, run admittedAgentRun) (messageTarget, error) {
 	target := messageTarget{intent: core.MessageFollow}
+	held, err := queries.SandboxDeliveryHeld(ctx, run.SandboxID)
+	if err != nil {
+		return messageTarget{}, err
+	}
+	if held {
+		if input.Intent == core.MessageSteer {
+			return messageTarget{}, core.ErrMessageSteerUnavailable
+		}
+		return target, nil
+	}
 	if input.Intent == core.MessageFollow {
 		return target, nil
 	}
@@ -751,7 +761,7 @@ func (s Store) Sandbox(ctx context.Context, id string) (core.Sandbox, error) {
 	if err != nil {
 		return core.Sandbox{}, err
 	}
-	return core.Sandbox{ID: row.ID, JobID: row.JobID, Name: row.Name, OwnershipNonce: row.OwnershipNonce}, nil
+	return core.Sandbox{ID: row.ID, JobID: row.JobID, Name: row.Name, OwnershipNonce: row.OwnershipNonce, ResourceID: row.ActiveResourceID, ProviderID: row.ProviderID}, nil
 }
 func (s Store) Sandboxes(ctx context.Context, jobID string) ([]core.Sandbox, error) {
 	rows, err := dbsql.New(s.DB).ListJobSandboxes(ctx, jobID)
@@ -760,7 +770,7 @@ func (s Store) Sandboxes(ctx context.Context, jobID string) ([]core.Sandbox, err
 	}
 	out := make([]core.Sandbox, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, core.Sandbox{ID: r.ID, JobID: r.JobID, Name: r.Name, OwnershipNonce: r.OwnershipNonce})
+		out = append(out, core.Sandbox{ID: r.ID, JobID: r.JobID, Name: r.Name, OwnershipNonce: r.OwnershipNonce, ResourceID: r.ActiveResourceID, ProviderID: r.ProviderID})
 	}
 	return out, nil
 }
@@ -825,7 +835,7 @@ func (s Store) EnsureSandbox(ctx context.Context, jobID, name string) (core.Sand
 	if err := tx.Commit(); err != nil {
 		return core.Sandbox{}, err
 	}
-	return core.Sandbox{ID: row.ID, JobID: row.JobID, Name: row.Name, OwnershipNonce: row.OwnershipNonce}, nil
+	return core.Sandbox{ID: row.ID, JobID: row.JobID, Name: row.Name, OwnershipNonce: row.OwnershipNonce, ResourceID: row.ActiveResourceID, ProviderID: row.ProviderID}, nil
 }
 
 func (s Store) Deliveries(ctx context.Context, jobID string) ([]core.Delivery, error) {
@@ -1156,6 +1166,13 @@ func (s Store) RecordSandboxActionSuccess(ctx context.Context, id string) error 
 	if err := expectOneRows(queries.RecordSandboxActionSuccess(ctx, id)); err != nil {
 		return err
 	}
+	if completed.Action.Kind == core.ActionSandboxDelete {
+		if err := expectOneRows(queries.RecordSandboxResourceDeleted(ctx, dbsql.RecordSandboxResourceDeletedParams{
+			ResourceID: completed.Sandbox.ResourceID, SandboxID: completed.Sandbox.ID,
+		})); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -1231,7 +1248,7 @@ func authorizeSandboxActionTx(ctx context.Context, queries *dbsql.Queries, id, t
 			WorkflowAttentionAt: timeValue(job.WorkflowAttentionAt), CleanupAttention: job.CleanupAttention,
 			AdmittedAt: job.AdmittedAt, CleanedAt: timeValue(job.CleanedAt),
 		},
-		Sandbox: core.Sandbox{ID: owned.ID, JobID: owned.JobID, Name: owned.Name, OwnershipNonce: owned.OwnershipNonce},
+		Sandbox: core.Sandbox{ID: owned.ID, JobID: owned.JobID, Name: owned.Name, OwnershipNonce: owned.OwnershipNonce, ResourceID: owned.ActiveResourceID, ProviderID: owned.ProviderID},
 		Action:  actionFromValues(row.ID, row.JobID, row.Kind, row.State, row.ScopeKey, row.CreatedAt, row.SettledAt),
 		TaskID:  job.CurrentTaskID, TaskName: job.CurrentTaskName,
 	}, nil

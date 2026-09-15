@@ -185,7 +185,7 @@ func reviewRunView(row dbsql.DorfReviewRunProjection) coding.ReviewRunView {
 		Role: row.Role, InputRevision: row.InputRevision, Capability: row.Capability,
 		SandboxID: row.SandboxID, SubmissionNonce: row.SubmissionNonce,
 		Request: messageFromValues(row.MessageID, row.JobID, core.MessageFromKind(row.RequestFromKind), row.RequestFromID, row.RequestSequence, row.RequestInput, core.MessageDeliveryIntent(row.RequestDeliveryIntent), row.RequestTargetTurnID),
-		Sandbox: core.Sandbox{ID: row.SandboxID, JobID: row.JobID, Name: row.SandboxName, OwnershipNonce: row.OwnershipNonce},
+		Sandbox: core.Sandbox{ID: row.SandboxID, JobID: row.JobID, Name: row.SandboxName, OwnershipNonce: row.OwnershipNonce, ResourceID: row.ActiveResourceID, ProviderID: row.ProviderID},
 	}
 	view.Request.AdmittedAt = row.RequestAdmittedAt
 	if row.StartedAt.Valid {

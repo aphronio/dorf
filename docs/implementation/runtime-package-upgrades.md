@@ -1,8 +1,8 @@
 # Plan: Package upgrades in persistent Sandboxes
 
-Status: deferred follow-up, agreed on 2026-09-15. Start after the profile-revision slice in
-[D132](../project/decisions/D132-profile-revisions-separate-promotion-from-job-custody.md) is finished.
-This plan records future work; it does not describe shipped behavior.
+Status: in progress, started on 2026-09-15 after the profile-revision slice in
+[D132](../project/decisions/D132-profile-revisions-separate-promotion-from-job-custody.md).
+This plan records implementation scope; it does not describe shipped behavior.
 
 ## Goal and scope
 
@@ -68,6 +68,24 @@ route reconnection, and old-resource cleanup; a normal pause/resume does not imp
 rollback. Keep the old and replacement resources from both processing queued work. Reconcile a
 lost provider acknowledgement before retrying creation or restore.
 
+The live E2B adapter proof established that the provider refuses to delete a snapshot while a
+running replacement uses it. After rollback, retain that checkpoint as a dependency of the new
+resource until the resource is deleted. A successful upgrade without replacement can release its
+checkpoint. Incus does not require retaining a restored snapshot as the running VM's image.
+
+### Stable logical Sandbox, replaceable provider resource
+
+Keep the Job and logical Sandbox IDs stable. Bind each logical Sandbox explicitly to its active
+provider resource. Retain an append-only replacement history, accessible through Job inspection,
+with the previous and replacement provider IDs, upgrade ID, checkpoint reference, reason,
+verification timestamps, and cleanup outcome. Incus restore records the same resource ID on both
+sides; E2B restore records a new one. Do not duplicate this history on the Job itself.
+
+Persist replacement intent before creating a VM. Exact resource ownership must distinguish the
+old VM from the replacement while both exist; broad owner discovery must not choose arbitrarily.
+Hold delivery until verification succeeds and the active binding is committed. Preserve the old
+resource's identity after cleanup so operators can correlate execution and Logfire records.
+
 Check mounted storage coverage during the provider proof: Incus instance snapshots do not include
 separately attached custom volumes. Local snapshots cannot undo external actions, so upgrade
 verification must not send email or perform other real external mutations.
@@ -102,13 +120,70 @@ not determine whether the system can restore a checkpoint.
 
 ## Implementation and verification order
 
-1. Finish the profile-revision slice and its review before starting this work.
-2. Prove the package install and checkpoint/restore sequence on disposable Incus and E2B Sandboxes.
-   Measure interruption time and verify an existing runner conversation can resume after rollback.
-3. Add the smallest durable upgrade operation and delivery hold needed for recovery. Exercise
-   incoming messages and controller restart while held; prove no lost or duplicate delivery.
-4. Expose structured maintenance status for consuming applications.
-5. Verify the full flow with correlated Logfire events and update current architecture, support,
+Progress as of 2026-09-15:
+
+- Profile promotion and resource/delivery-hold foundations are implemented.
+- Repeatable [package/provider recipe](../../scripts/runtime-upgrade/README.md) passes on Incus and
+  E2B using Dorf's Go checkpoint adapters: package activation, nonempty native replies, original
+  context, exact local-state restoration, retry identity, and resource/checkpoint cleanup.
+- Resource foundation implemented: separate records, active binding, immutable attested locator,
+  migration preserving ownership, Job inspection history, and retained deletion receipts.
+  Checkpoint authority/fault tests, live proofs, and the full deterministic gate pass.
+- Delivery-hold foundation implemented for direct Jobs: durable admission barrier, FIFO release
+  with an atomic execution wake, stale-release protection, idle/access exclusion, and cleanup.
+  `mise run integration:delivery-hold` verifies storage, public waiting status, and an actual
+  Absurd worker restart with exactly one native submission per queued Message.
+
+- Still pending: durable upgrade request/executor, native quiescence and recovery verification,
+  atomic replacement binding and history, cleanup of replacement resources/backing checkpoints,
+  upgrade-phase telemetry, and the combined control-plane/provider proof.
+  Production package delivery to restricted-network E2B guests also remains unimplemented; the
+  recipe stages downloads with Internet access and must not weaken a Job's network policy.
+  These facts do not claim that running user VMs can be upgraded yet.
+
+### Verified provider evidence
+
+The 2026-09-15 adapter proofs retained a native Codex conversation through version activation and
+rollback, restored its exact pre-upgrade local-state digest, retried capture/replacement without
+duplication, and completed owned resource/checkpoint cleanup:
+
+| Provider | Proof ID | Provider resource before / after rollback |
+| --- | --- | --- |
+| Incus | `upgrade-proof-701729244a19` | Same instance, named after the proof ID |
+| E2B | `upgrade-proof-f8124c50519f` | `iurz4xun9cg77bli8j8fh` / `iv18dmd4ezji4rygyt36x` |
+
+Logfire ingestion is verified: 33 events per proof, including injected verification failure,
+rollback, proof success, and completed cleanup, with the expected provider identities. Query
+`dorf.upgrade_id` in the 2026-09-15 11:33–11:41 UTC window. An initial query-service outage returned
+503; a later read confirmed the submitted records. No event re-export was needed.
+
+The repeatable lost-checkpoint-response probes also passed their expected-failure assertions:
+Incus `upgrade-proof-4b379a575785` and E2B `upgrade-proof-a34067e7ec65`. Both retained the source
+after discarding the accepted checkpoint response, reported failure, and then completed the
+standalone cleanup recovery recipe. Logfire contains 23 events per probe, including checkpoint
+failure and completed cleanup recovery, in the 2026-09-15 12:12–12:18 UTC window. These prove
+recipe recovery and provider reconciliation, not restart recovery of a durable upgrade executor.
+
+### Next implementation boundary
+
+Ship the active-resource switch together with the durable delivery hold and cleanup coordination.
+Persist replacement ownership before the provider call; use a compare-and-set on the expected
+source binding after native recovery verification. Preserve source and destination records and
+link the replacement to its upgrade/checkpoint. A restarted executor must reconcile the same
+operation, and a stale executor must not reactivate a superseded resource. Until this boundary is
+implemented, checkpoint adapters are exercised by the disposable recipe only.
+
+New automatic messages during the hold become FIFO follows. Continue observing pre-hold active
+turns and settling their steers; queued follows do not prevent reaching the quiet boundary. Release
+must atomically publish the verified binding and wake normal delivery. Job cleanup must fence the
+upgrade executor and account for every reserved resource and retained backing checkpoint.
+
+## Remaining sequence
+
+1. Compose the proven delivery hold with a durable upgrade executor, native quiescence checks,
+   package activation, recovery verification, and atomic resource switching.
+2. Extend the hold banner with verification and failed-recovery states derived from executor receipts.
+3. Verify the full flow with correlated Logfire events and update current architecture, support,
    operator documentation, and the decision record when the implementation is established.
 
 Use short fault-injection loops: successful upgrade; checkpoint failure before mutation; failed

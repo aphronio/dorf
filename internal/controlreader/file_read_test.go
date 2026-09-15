@@ -305,3 +305,5 @@ func waitForAtomic(t *testing.T, value *atomic.Int32, want int, what string) {
 var _ Store = (*boundedStore)(nil)
 var _ core.SandboxRuntimeResolver = boundedRuntimes{}
 var _ core.SandboxFileReader = (*boundedFiles)(nil)
+
+func (*boundedStore) SandboxDeliveryHeld(context.Context, string) (bool, error) { return false, nil }

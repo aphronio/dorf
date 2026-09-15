@@ -141,7 +141,7 @@ func TestAuthenticatedClientObservesOnlyExactOwnedMessageWithBoundedResult(t *te
 		AgentRun: core.AgentRun{ID: "run-1", JobID: job.ID, MessageID: "message-1", SandboxID: owned.ID, State: core.AgentRunCompleted, TurnOutcome: "completed"},
 	}
 	observation := &readerTestObservation{result: core.MessageResult{MessageID: "message-1", Outcome: "completed", Output: "exact output"}}
-	store := &readerTestStore{sandbox: owned, execution: core.AgentMessageExecution{
+	store := &readerTestStore{job: job, sandbox: owned, execution: core.AgentMessageExecution{
 		Job: job, Message: delivery.Message, AgentRun: delivery.AgentRun, Sandbox: owned,
 	}}
 	service := Service{
@@ -508,6 +508,7 @@ func TestClientRequiresExactProblemResponse(t *testing.T) {
 }
 
 type readerTestStore struct {
+	deliveryHeld       bool
 	activityStarts     int
 	activityFinishes   int
 	job                core.Job
@@ -734,4 +735,8 @@ func (s *readerTestStore) FinishSandboxActivity(ctx context.Context, jobID strin
 	}
 	s.activityFinishes++
 	return nil
+}
+
+func (s *readerTestStore) SandboxDeliveryHeld(context.Context, string) (bool, error) {
+	return s.deliveryHeld, nil
 }

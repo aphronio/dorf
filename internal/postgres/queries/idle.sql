@@ -11,4 +11,7 @@ where j.id=sqlc.arg(job_id)
 returning coalesce(j.sandbox_last_active_at <= clock_timestamp() - make_interval(secs => sqlc.arg(seconds)::double precision) and not exists (
     select 1 from dorf.agent_runs ar
     where ar.job_id=sqlc.arg(job_id) and ar.state not in ('completed','failed','interrupted')
+) and not exists (
+    select 1 from dorf.sandbox_delivery_holds h join dorf.sandboxes s on s.id=h.sandbox_id
+    where s.job_id=j.id and h.released_at is null
 ),false)::boolean as idle;

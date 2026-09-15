@@ -24,9 +24,17 @@ where s.job_id=sqlc.arg(job_id)
     or not exists(select 1 from dorf.actions a where a.job_id=s.job_id and a.kind='sandbox-delete' and a.scope_key=s.id and a.state='succeeded')
   );
 
--- name: CompleteCleanup :execrows
-update dorf.jobs
-set cleanup_state='complete',cleanup_attention=null,
-    workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null,
-    cleaned_at=coalesce(cleaned_at,clock_timestamp())
-where id=sqlc.arg(job_id) and cleanup_state='scheduled';
+-- name: CompleteCleanup :one
+with completed as (
+    update dorf.jobs j0
+    set cleanup_state='complete',cleanup_attention=null,
+        workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null,
+        cleaned_at=coalesce(cleaned_at,clock_timestamp())
+    where j0.id=sqlc.arg(job_id) and j0.cleanup_state='scheduled'
+    returning j0.id
+), released as (
+    update dorf.sandbox_delivery_holds h set released_at=clock_timestamp()
+    from dorf.sandboxes s join completed j on j.id=s.job_id
+    where h.sandbox_id=s.id and h.released_at is null
+)
+select count(*) from completed;

@@ -65,6 +65,22 @@ and reconciles resources against their external authorities before declaring the
 after a workflow, composed module, or client has requested resource release. Core never infers that
 request from success, failure, an Outcome, inactivity, or a need for human input.
 
+A logical Sandbox has one active resource binding. Each provider VM has a separate retained
+resource record containing its ownership token and, after attestation, its opaque provider locator.
+Creation records that locator under the Job fence before settling the create Action. Retrying the
+observation may confirm the same locator; it cannot redirect the existing resource record. Migration
+preserves original ownership tokens and leaves previously unrecorded provider locators unknown.
+Provider replacement will switch the active binding under a delivery hold while preserving resource
+history; the upgrade coordination remains [active implementation](../implementation/runtime-package-upgrades.md).
+
+Direct Jobs support a retained delivery hold per Sandbox. The hold serializes with Message admission
+and the Job effect fence. New automatic input becomes a FIFO follow; existing active turns and
+pre-hold steers can settle. Pending follows, idle pause, and external workspace access respect the
+hold. Its exact operation ID owns release, which commits with an execution wake; replay cannot
+reopen an old hold or release a newer one. Completed cleanup releases any remaining hold after
+resource cleanup has been established. A hold is a delivery barrier, not proof of native quiescence
+or permission to mutate a VM. The upgrade coordinator must supply those additional proofs.
+
 Idle power management reconciles the admitted Job policy through an optional provider capability.
 It runs under the Job effect fence and checks durable deliveries before pausing any owned Sandbox.
 Message admission may race with a provider pause; native delivery waits for the same fence and
@@ -387,7 +403,8 @@ names; unrelated slices need one relevant end-to-end terminal.
 ## Harness and Sandbox adapters
 
 Sandbox and Harness implementations meet provider-neutral custody contracts. Every external
-operation carries exact Dorf ownership while provider locators, lifecycle APIs, command transports,
+operation carries exact Dorf ownership. Core retains opaque provider locators for investigation;
+their interpretation, lifecycle APIs, command transports,
 topology, and connection capabilities remain adapter-private. Consumer code selects a verified
 profile rather than branching on provider or Harness identity.
 

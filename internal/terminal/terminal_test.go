@@ -17,11 +17,11 @@ func TestSandboxPreparationInstallsInstructionsBeforeItCanSucceed(t *testing.T) 
 	owned := core.Sandbox{ID: "sandbox-instructions", JobID: job.ID, OwnershipNonce: "owned"}
 	sandbox := &instructionsSandbox{writeErr: errors.New("temporary file transport failure")}
 	externals := Externals{Sandbox: sandbox}
-	if err := externals.SandboxCreate(context.Background(), job, owned); !errors.Is(err, sandbox.writeErr) {
+	if _, err := externals.SandboxCreate(context.Background(), job, owned); !errors.Is(err, sandbox.writeErr) {
 		t.Fatalf("preparation completed without instructions: %v", err)
 	}
 	sandbox.writeErr = nil
-	if err := externals.SandboxCreate(context.Background(), job, owned); err != nil {
+	if _, err := externals.SandboxCreate(context.Background(), job, owned); err != nil {
 		t.Fatal(err)
 	}
 	if sandbox.path != "/workspace/job/AGENTS.md" || sandbox.contents != job.AgentsMD || sandbox.owner != ownershipMetadata(owned) {
@@ -38,6 +38,9 @@ type instructionsSandbox struct {
 }
 
 func (*instructionsSandbox) Workspace() string { return "/workspace/job" }
+func (*instructionsSandbox) ObserveOwned(_ context.Context, owner provider.Ownership) (provider.Status, error) {
+	return provider.Status{Provider: "test", State: "running", ProviderID: owner.SandboxID}, nil
+}
 func (s *instructionsSandbox) ReconcileOwnedCreate(context.Context, provider.Ownership) error {
 	s.created = true
 	return nil

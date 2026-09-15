@@ -97,7 +97,7 @@ func TestCodingMessagesReloadsCurrentSandboxCustodyForReview(t *testing.T) {
 		t.Fatalf("review runs=%d, want 1", len(initial))
 	}
 	nonce := fmt.Sprintf("%064x", time.Now().UnixNano())
-	if _, err := store.DB.ExecContext(ctx, `update dorf.sandboxes set ownership_nonce=$1 where id=$2`, nonce, initial[0].SandboxID); err != nil {
+	if _, err := store.DB.ExecContext(ctx, `update dorf.sandbox_resources set ownership_nonce=$1 where id=(select active_resource_id from dorf.sandboxes where id=$2)`, nonce, initial[0].SandboxID); err != nil {
 		t.Fatal(err)
 	}
 

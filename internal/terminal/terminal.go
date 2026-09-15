@@ -29,18 +29,27 @@ func (e Externals) ReadSandboxFile(ctx context.Context, job core.Job, owned core
 	return e.Sandbox.ReadFile(ctx, ownershipMetadata(owned), relativePath)
 }
 
-func (e Externals) SandboxCreate(ctx context.Context, job core.Job, sandbox core.Sandbox) error {
+func (e Externals) SandboxCreate(ctx context.Context, job core.Job, sandbox core.Sandbox) (string, error) {
 	if sandbox.JobID != job.ID {
-		return fmt.Errorf("Sandbox does not belong to exact Job %s", job.ID)
+		return "", fmt.Errorf("Sandbox does not belong to exact Job %s", job.ID)
 	}
 	owner := ownershipMetadata(sandbox)
 	if err := e.Sandbox.ReconcileOwnedCreate(ctx, owner); err != nil {
-		return err
+		return "", err
 	}
 	if job.AgentsMD != "" {
-		return e.Sandbox.PutFile(ctx, owner, filepath.Join(e.Sandbox.Workspace(), "AGENTS.md"), []byte(job.AgentsMD))
+		if err := e.Sandbox.PutFile(ctx, owner, filepath.Join(e.Sandbox.Workspace(), "AGENTS.md"), []byte(job.AgentsMD)); err != nil {
+			return "", err
+		}
 	}
-	return nil
+	status, err := e.ReadSandboxStatus(ctx, job, sandbox)
+	if err != nil {
+		return "", err
+	}
+	if status.ProviderID == "" {
+		return "", fmt.Errorf("created Sandbox has no attested provider identity")
+	}
+	return status.ProviderID, nil
 }
 
 func ownershipMetadata(sandbox core.Sandbox) provider.Ownership {

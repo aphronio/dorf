@@ -111,6 +111,13 @@ insert into dorf.agent_runs(id,job_id,message_id,role,state,sandbox_id) values('
 	if err := migrateDorf(ctx, tx); err != nil {
 		t.Fatalf("baseline replay: %v", err)
 	}
+	var resourceID, retainedNonce string
+	var providerID sql.NullString
+	if err := tx.QueryRowContext(ctx, `select s.active_resource_id,r.ownership_nonce,r.provider_id
+ from dorf.sandboxes s join dorf.sandbox_resources r on r.id=s.active_resource_id
+ where s.id='sandbox-current'`).Scan(&resourceID, &retainedNonce, &providerID); err != nil || resourceID != "sandbox-current:initial" || retainedNonce != strings.Repeat("d", 64) || providerID.Valid {
+		t.Fatalf("migrated resource=%q provider=%v ownership preserved=%t err=%v", resourceID, providerID, retainedNonce == strings.Repeat("d", 64), err)
+	}
 	var jobRevision, candidateRevision, artifact string
 	var activeRevision sql.NullString
 	if err := tx.QueryRowContext(ctx, `select j.sandbox_profile_revision,p.candidate_revision,p.active_revision,r.artifact

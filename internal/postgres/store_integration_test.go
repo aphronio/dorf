@@ -104,16 +104,17 @@ type blockingCreateExternals struct {
 	once    sync.Once
 }
 
-func (e *blockingCreateExternals) SandboxCreate(ctx context.Context, job core.Job, sandbox core.Sandbox) error {
-	if err := e.integrationExternals.SandboxCreate(ctx, job, sandbox); err != nil {
-		return err
+func (e *blockingCreateExternals) SandboxCreate(ctx context.Context, job core.Job, sandbox core.Sandbox) (string, error) {
+	providerID, err := e.integrationExternals.SandboxCreate(ctx, job, sandbox)
+	if err != nil {
+		return "", err
 	}
 	e.once.Do(func() { close(e.entered) })
 	select {
 	case <-e.release:
-		return nil
+		return providerID, nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return "", ctx.Err()
 	}
 }
 
@@ -519,6 +520,10 @@ func TestPostgresDirectBootstrapFollowAndExplicitCleanup(t *testing.T) {
 	cleaned, err := store.Job(ctx, job.ID)
 	if err != nil || cleaned.CleanupState != core.CleanupComplete {
 		t.Fatalf("explicit direct cleanup=%#v err=%v", cleaned, err)
+	}
+	resources, err := store.SandboxResources(ctx, job.ID)
+	if err != nil || len(resources) != 1 || resources[0].ProviderID == "" || resources[0].ObservedAt.IsZero() || resources[0].DeletedAt.IsZero() {
+		t.Fatalf("cleanup did not retain the observed resource and deletion receipt: count=%d err=%v", len(resources), err)
 	}
 }
 
@@ -2648,7 +2653,9 @@ func TestJobHandleEnsuresStableDefaultAndNamedSandboxes(t *testing.T) {
 	}
 	conflictName := "conflict"
 	foreignNonce := fmt.Sprintf("%x", sha256.Sum256([]byte(job.ID+":"+conflictName)))
-	if _, err := db.ExecContext(ctx, `insert into dorf.sandboxes(id,job_id,name,ownership_nonce) values($1,$2,$3,$4)`,
+	if _, err := db.ExecContext(ctx, `with reserved as (
+ insert into dorf.sandboxes(id,job_id,name,active_resource_id) values($1,$2,$3,$1 || ':initial') returning id,active_resource_id
+) insert into dorf.sandbox_resources(id,sandbox_id,ownership_nonce) select active_resource_id,id,$4 from reserved`,
 		core.NamedSandboxID(job.ID, conflictName), foreign.ID, "foreign", foreignNonce); err != nil {
 		t.Fatal(err)
 	}
@@ -3391,8 +3398,8 @@ func (e *integrationExternals) effect(kind core.ActionKind) error {
 	e.mu.Unlock()
 	return nil
 }
-func (e *integrationExternals) SandboxCreate(context.Context, core.Job, core.Sandbox) error {
-	return e.effect(core.ActionSandboxCreate)
+func (e *integrationExternals) SandboxCreate(_ context.Context, _ core.Job, owned core.Sandbox) (string, error) {
+	return owned.ID, e.effect(core.ActionSandboxCreate)
 }
 func (e *integrationExternals) ReconcileClone(context.Context, provider.Ownership, string, string, string) error {
 	return e.effect(gitworkspace.ActionRepositoryClone)

@@ -4,8 +4,9 @@ import "context"
 
 // Status is a fresh provider observation, not the Job execution state.
 type Status struct {
-	Provider string `json:"provider"`
-	State    string `json:"state"`
+	Provider   string `json:"provider"`
+	State      string `json:"state"`
+	ProviderID string `json:"provider_id,omitempty"`
 }
 
 // StatusObserver must not start, connect to, pause, or otherwise mutate a Sandbox.

@@ -58,6 +58,7 @@ var (
 // Store is the durable custody needed to prove one read belongs to one Job.
 // The provider-facing process receives no alternate resource or profile input.
 type Store interface {
+	SandboxDeliveryHeld(context.Context, string) (bool, error)
 	core.SandboxActivityStore
 	Job(context.Context, string) (core.Job, error)
 	CodingJob(context.Context, string) (coding.Job, error)
@@ -190,6 +191,13 @@ func (s Service) sandboxAuthority(ctx context.Context, owned core.Sandbox) (core
 	if current != owned {
 		return core.SandboxRuntime{}, core.Job{}, ErrUnavailable
 	}
+	held, err := s.Store.SandboxDeliveryHeld(ctx, owned.ID)
+	if err != nil {
+		return core.SandboxRuntime{}, core.Job{}, err
+	}
+	if held {
+		return core.SandboxRuntime{}, core.Job{}, ErrUnavailable
+	}
 	runtime, err := s.Runtimes.ResolveSandbox(ctx, job.ProfileRef())
 	if err != nil {
 		return core.SandboxRuntime{}, core.Job{}, fmt.Errorf("resolve Sandbox profile for file read: %w", err)
@@ -228,9 +236,9 @@ func (s Service) ObserveMessage(ctx context.Context, jobID, messageID string) (c
 			!validIdentity(authoritative.Sandbox.OwnershipNonce) || authoritative.AgentRun.SandboxID != authoritative.Sandbox.ID {
 			return ErrUnavailable
 		}
-		runtime, err := s.Runtimes.ResolveSandbox(ctx, job.ProfileRef())
+		runtime, _, err := s.sandboxAuthority(ctx, authoritative.Sandbox)
 		if err != nil {
-			return fmt.Errorf("resolve Sandbox profile for Message observation: %w", err)
+			return err
 		}
 		if runtime.SandboxProfile != job.ProfileRef() || runtime.Execution == nil {
 			return fmt.Errorf("resolved Sandbox runtime has no exact Message observation authority")

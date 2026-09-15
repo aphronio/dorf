@@ -190,6 +190,20 @@ type Sandbox struct {
 	JobID          string `json:"job_id"`
 	Name           string `json:"name"`
 	OwnershipNonce string `json:"-"`
+	ResourceID     string `json:"resource_id"`
+	ProviderID     string `json:"provider_id,omitempty"`
+}
+
+// SandboxResource retains one provider VM's identity after it stops serving
+// its logical Sandbox. Ownership material never appears in inspection output.
+type SandboxResource struct {
+	ID             string    `json:"id"`
+	SandboxID      string    `json:"sandbox_id"`
+	OwnershipNonce string    `json:"-"`
+	ProviderID     string    `json:"provider_id,omitempty"`
+	ReservedAt     time.Time `json:"reserved_at"`
+	ObservedAt     time.Time `json:"observed_at,omitempty"`
+	DeletedAt      time.Time `json:"deleted_at,omitempty"`
 }
 
 // Route is the deterministic provider route serving one Sandbox. Its

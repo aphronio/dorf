@@ -77,6 +77,21 @@ opaque, and malformed or altered cursors return the published `invalid_cursor` P
 contains only Job kinds understood by this API revision. Investigation admission requires a
 credential-free reachable HTTPS repository and an exact Revision.
 
+Each Sandbox in Job inspection includes its active resource record ID and the provider VM ID when
+that locator has been attested and recorded. A missing provider ID means it has not been recorded;
+it does not prove the VM is absent. The live Sandbox status operation returns a freshly attested
+provider ID when present. These are diagnostic locators; clients keep addressing the logical Sandbox.
+The nested resource history retains reservation, observation, and deletion receipts after cleanup.
+Ownership tokens are never included. A deletion receipt records confirmed cleanup; a missing
+receipt does not establish that the provider VM still exists.
+
+An active Sandbox delivery hold is included in Job inspection. Pending follows remain `accepted`
+and carry `wait_reason: workspace_upgrade`; they have no fabricated completion result. New automatic
+input queues as a follow while held. Explicit steering is unavailable, while already-admitted
+steers and active turns may finish. Workspace file, command, and native-history access can return
+their existing unavailable Problems during maintenance. Passive Job inspection remains available.
+The hold primitive does not expose a public upgrade request or authorize package mutations.
+
 Job admission defaults `keep_running` to false for direct, coding, and investigation Jobs.
 E2B Sandboxes become eligible for pause after one minute without native activity, when no AgentRun
 remains pending, active, or uncertain. The existing durable polling loop performs the pause, usually

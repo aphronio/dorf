@@ -20,6 +20,7 @@ import (
 const responsivenessNativeCompletionDelay = 100 * time.Millisecond
 
 type responsivenessHarness struct {
+	submissions     int
 	mu              sync.Mutex
 	turn            core.HarnessTurn
 	submitted       chan time.Time
@@ -62,6 +63,7 @@ func (responsivenessOperation) Harness() string { return "codex" }
 
 func (o responsivenessOperation) Submit(_ context.Context, run core.AgentRun, _ string) (core.HarnessBinding, error) {
 	o.harness.mu.Lock()
+	o.harness.submissions++
 	status := o.harness.submitStatus
 	if status == "" {
 		status = "inProgress"

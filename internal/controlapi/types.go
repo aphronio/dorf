@@ -241,8 +241,27 @@ type Attention struct {
 }
 
 type Sandbox struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID           string               `json:"id"`
+	Name         string               `json:"name"`
+	ResourceID   string               `json:"resource_id,omitempty"`
+	ProviderID   string               `json:"provider_id,omitempty"`
+	Resources    []SandboxResource    `json:"resources,omitempty"`
+	DeliveryHold *SandboxDeliveryHold `json:"delivery_hold,omitempty"`
+}
+
+type SandboxDeliveryHold struct {
+	ID          string    `json:"id"`
+	Reason      string    `json:"reason"`
+	RequestedAt time.Time `json:"requested_at"`
+}
+
+// SandboxResource is retained infrastructure history, without ownership secrets.
+type SandboxResource struct {
+	ID         string     `json:"id"`
+	ProviderID string     `json:"provider_id,omitempty"`
+	ReservedAt time.Time  `json:"reserved_at"`
+	ObservedAt *time.Time `json:"observed_at,omitempty"`
+	DeletedAt  *time.Time `json:"deleted_at,omitempty"`
 }
 
 type SendMessageRequest struct {
@@ -264,6 +283,7 @@ type SendMessageAttachment struct {
 // Message projects one accepted delivery without exposing its Harness Thread,
 // Turn, or internal AgentRun identity.
 type Message struct {
+	WaitReason         string         `json:"wait_reason,omitempty"`
 	InterruptRequested bool           `json:"interrupt_requested"`
 	ID                 string         `json:"id"`
 	JobID              string         `json:"job_id"`

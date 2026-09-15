@@ -76,8 +76,8 @@ func (e capacityExternals) provider(ctx context.Context, job core.Job) error {
 	})
 }
 
-func (e capacityExternals) SandboxCreate(ctx context.Context, job core.Job, _ core.Sandbox) error {
-	return e.provider(ctx, job)
+func (e capacityExternals) SandboxCreate(ctx context.Context, job core.Job, owned core.Sandbox) (string, error) {
+	return owned.ID, e.provider(ctx, job)
 }
 func (e capacityExternals) RouteCreate(ctx context.Context, job core.Job, _ core.Sandbox, _ core.Route) error {
 	return e.provider(ctx, job)

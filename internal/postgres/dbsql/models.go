@@ -74,12 +74,14 @@ type DorfReviewRunProjection struct {
 	SandboxName           string
 	OwnershipNonce        string
 	SubmissionNonce       string
+	ActiveResourceID      string
+	ProviderID            string
 }
 
-// Job-owned isolated workstations used by one or more AgentRuns
-type DorfSandbox struct {
-	ID             string
-	JobID          string
-	Name           string
-	OwnershipNonce string
+type DorfSandboxDeliveryHold struct {
+	ID          string
+	SandboxID   string
+	Reason      string
+	RequestedAt time.Time
+	ReleasedAt  sql.NullTime
 }

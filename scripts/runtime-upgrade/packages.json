@@ -1,0 +1,21 @@
+{
+  "nix": {
+    "version": "2.35.2",
+    "url": "https://releases.nixos.org/nix/nix-2.35.2/nix-2.35.2-x86_64-linux.tar.xz",
+    "sha256": "0c3960a9792331a22081c3c7a5d8465db9b17c50b3acdf18587fa4c6f2cb1158"
+  },
+  "nixpkgs": {
+    "revision": "c3eea5b2156db11c7eeeada3dc737711255b253e",
+    "sha256": "0rc7g4hjfkk2m3j2qwggvz1ns505wql0r7wzj4jnxbybkl66kn5x"
+  },
+  "codex": {
+    "0.147.0": {
+      "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.147.0-linux-x64.tgz",
+      "hash": "sha512-0W9MBxPpWW0cSkNqrTDN2jR7rzzT7oNMhQY5446lT2Lw5cz5yhDTck4Va9rjkQEm+HlFzP/dmEMSZbXfJsINmw=="
+    },
+    "0.154.0": {
+      "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.154.0-linux-x64.tgz",
+      "hash": "sha512-a4FI3A8sGtwGrOqltrPbrS2hajrHQG591EwmRfiRoLMb10VxdBtUGW4gu6IJVYENiYGA7k3P4jlRHEoCZU/s9Q=="
+    }
+  }
+}

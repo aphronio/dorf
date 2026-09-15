@@ -4,9 +4,13 @@ values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(kind),'unsettled')
 on conflict do nothing;
 
 -- name: ReserveSandbox :execrows
-insert into dorf.sandboxes(id,job_id,name,ownership_nonce)
-values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(name),sqlc.arg(ownership_nonce))
-on conflict do nothing;
+with reserved as (
+    insert into dorf.sandboxes(id,job_id,name,active_resource_id)
+    values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(name),sqlc.arg(id)::text || ':initial')
+    on conflict do nothing returning id,active_resource_id
+)
+insert into dorf.sandbox_resources(id,sandbox_id,ownership_nonce)
+select active_resource_id,id,sqlc.arg(ownership_nonce) from reserved;
 
 -- name: GetActionForUpdate :one
 select id,job_id,kind,state,scope_key,created_at,settled_at

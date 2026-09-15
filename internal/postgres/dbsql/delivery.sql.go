@@ -51,6 +51,7 @@ with current_turn_start as (
     where m.job_id=$1 and m.delivery_intent='follow'
       and ar.state in ('pending','submitting')
       and ar.turn_id is null
+      and not exists(select 1 from dorf.sandbox_delivery_holds h where h.sandbox_id=ar.sandbox_id and h.released_at is null)
       and not exists(select 1 from unsettled_steer)
       and not exists(select 1 from current_turn_start)
       and not exists(select 1 from current_unbound_mutation)

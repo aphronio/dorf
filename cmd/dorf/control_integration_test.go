@@ -247,6 +247,15 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 		t.Fatalf("Message conflict=%#v", problem)
 	}
 
+	owned, err := store.Sandbox(ctx, core.MainSandboxName(committed.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WithJobFence(ctx, committed.ID, func() error {
+		return store.BindSandboxResource(ctx, owned, "synthetic-provider-original")
+	}); err != nil {
+		t.Fatal(err)
+	}
 	for _, kind := range []core.ActionKind{core.ActionSandboxCreate, core.ActionRouteCreate} {
 		action, err := store.GetOrCreateSandboxAction(ctx, core.MainSandboxName(committed.ID), kind)
 		if err != nil {
@@ -259,9 +268,20 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	assertExecution := func(want string) {
 		t.Helper()
 		var inspected controlapi.DirectJob
-		controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID, credential, "", nil), http.StatusOK, &inspected)
+		response := controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID, credential, "", nil)
+		if strings.Contains(response.Body.String(), owned.OwnershipNonce) || strings.Contains(response.Body.String(), "ownership_nonce") {
+			t.Fatal("Job inspection exposed ownership material")
+		}
+		controlTestJSON(t, response, http.StatusOK, &inspected)
 		if inspected.Execution.State != want || inspected.Attention != nil {
 			t.Fatalf("execution=%+v attention=%+v, want %s without attention", inspected.Execution, inspected.Attention, want)
+		}
+		if len(inspected.Sandboxes) != 1 || len(inspected.Sandboxes[0].Resources) != 1 {
+			t.Fatal("inspection omitted retained provider resources")
+		}
+		resource := inspected.Sandboxes[0].Resources[0]
+		if resource.ID != owned.ResourceID || resource.ProviderID != "synthetic-provider-original" || resource.ObservedAt == nil || resource.DeletedAt != nil {
+			t.Fatalf("inspection resource=%+v", resource)
 		}
 	}
 	assertExecution("awaiting_agent")
@@ -367,6 +387,27 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	if latest.ID != accepted.ID {
 		t.Fatal("pending work displaced the latest reply")
 	}
+	hold, err := store.HoldSandboxDelivery(ctx, restartedTasks.QueueName(), committed.ID, owned.ID, committed.ID+":upgrade")
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID+"/messages/"+pending.ID, credential, "", nil), http.StatusOK, &pending)
+	if pending.WaitReason != "workspace_upgrade" || pending.Delivery.State != "accepted" || pending.Result != nil {
+		t.Fatal("held Message was not reported as accepted and waiting without a result")
+	}
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID, credential, "", nil), http.StatusOK, &withReply)
+	if len(withReply.Sandboxes) != 1 || withReply.Sandboxes[0].DeliveryHold == nil || withReply.Sandboxes[0].DeliveryHold.ID != hold.ID {
+		t.Fatal("Job inspection omitted the durable delivery hold")
+	}
+	if err := store.ReleaseSandboxDelivery(ctx, restartedTasks.QueueName(), committed.ID, owned.ID, hold.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Decode into a fresh DTO because omitted optional fields must not reuse a previous value.
+	var released controlapi.Message
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID+"/messages/"+pending.ID, credential, "", nil), http.StatusOK, &released)
+	if released.WaitReason != "" {
+		t.Fatal("released Message retained a queue wait reason")
+	}
 
 	cleanup := controlTestRequest(t, restarted, http.MethodPut, "/v1/jobs/"+committed.ID+"/cleanup", credential, "", nil)
 	var cleaning controlapi.DirectJob
@@ -390,6 +431,19 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	finalFact, err := store.Job(ctx, committed.ID)
 	if err != nil || finalFact.CurrentTaskID != cleaningFact.CurrentTaskID || finalFact.CleanupState != core.CleanupScheduled {
 		t.Fatalf("replayed cleanup durable=%#v err=%v", finalFact, err)
+	}
+	for _, kind := range []core.ActionKind{core.ActionRouteRevoke, core.ActionSandboxDelete} {
+		action, err := store.GetOrCreateSandboxAction(ctx, owned.ID, kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.RecordSandboxActionSuccess(ctx, action.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	controlTestJSON(t, controlTestRequest(t, finalHandler, http.MethodGet, "/v1/jobs/"+committed.ID, credential, "", nil), http.StatusOK, &cleaning)
+	if len(cleaning.Sandboxes) != 1 || len(cleaning.Sandboxes[0].Resources) != 1 || cleaning.Sandboxes[0].Resources[0].DeletedAt == nil {
+		t.Fatal("Job inspection lost the resource deletion receipt after API restart")
 	}
 }
 

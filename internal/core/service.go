@@ -23,6 +23,7 @@ type ExecutionStore interface {
 	WithJobFence(context.Context, string, func() error) error
 	AuthorizeSandboxAction(context.Context, string, string, string) (SandboxActionAuthorization, error)
 	RecordSandboxActionSuccess(context.Context, string) error
+	BindSandboxResource(context.Context, Sandbox, string) error
 	SetWorkflowAttention(context.Context, string, string, string) error
 	ClearWorkflowAttention(context.Context, string, string) error
 	PrepareAgentRun(context.Context, string, string, string) error
@@ -45,7 +46,7 @@ type SteerExternals interface {
 
 type Externals interface {
 	SteerExternals
-	SandboxCreate(context.Context, Job, Sandbox) error
+	SandboxCreate(context.Context, Job, Sandbox) (string, error)
 	RouteCreate(context.Context, Job, Sandbox, Route) error
 	RouteRevoke(context.Context, Job, Sandbox, Route) error
 	SandboxDelete(context.Context, Job, Sandbox) error
@@ -745,7 +746,14 @@ func (s ExecutionService) ExecuteSandboxAction(ctx context.Context, jobID, sandb
 	return s.runSandboxAction(ctx, jobID, sandboxID, kind, func(ctx context.Context, authorized SandboxActionAuthorization) error {
 		switch authorized.Action.Kind {
 		case ActionSandboxCreate:
-			return s.externals.SandboxCreate(ctx, authorized.Job, authorized.Sandbox)
+			providerID, err := s.externals.SandboxCreate(ctx, authorized.Job, authorized.Sandbox)
+			if err != nil {
+				return err
+			}
+			if err := s.requireClaim(ctx); err != nil {
+				return err
+			}
+			return s.store.BindSandboxResource(ctx, authorized.Sandbox, providerID)
 		case ActionRouteCreate:
 			return s.externals.RouteCreate(ctx, authorized.Job, authorized.Sandbox, RouteForSandbox(authorized.Sandbox))
 		case ActionRouteRevoke:

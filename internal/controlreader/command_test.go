@@ -66,6 +66,11 @@ func TestCommandsUseAuthenticatedJobCustodyAndCleanupFence(t *testing.T) {
 	if err != nil || result.Stdout != executor.stdout || executor.command.Stdin != command.Stdin {
 		t.Fatalf("JSON-escaped output did not survive transport: %v", err)
 	}
+	store.deliveryHeld = true
+	if _, err := client.Exec(context.Background(), owned.ID, command); !errors.Is(err, ErrUnavailable) || executor.calls != 2 {
+		t.Fatalf("upgrade-held command reached provider: %v", err)
+	}
+	store.deliveryHeld = false
 	store.job.CleanupState = core.CleanupRequested
 	if _, err := client.Exec(context.Background(), owned.ID, command); !errors.Is(err, ErrUnavailable) || executor.calls != 2 {
 		t.Fatalf("cleanup-fenced command reached provider: %v", err)

@@ -100,3 +100,11 @@ golangci-lint run
 scripts/check-go-complexity.sh check
 go vet ./...
 """
+
+[tasks."integration:runtime-upgrade"]
+description = "Prove Nix package activation and VM-state rollback on disposable Incus or E2B"
+run = "scripts/runtime-upgrade/prove.sh"
+
+[tasks."integration:delivery-hold"]
+description = "Prove durable hold, worker restart, FIFO release, cleanup, and inspection against PostgreSQL"
+run = "go test -p 1 ./internal/postgres ./internal/controlreader ./cmd/dorf -run 'TestDeliveryHold|TestCommandsUseAuthenticatedJobCustodyAndCleanupFence|TestControlAPIPostgresReplayRestartAndCleanup' -count=1"

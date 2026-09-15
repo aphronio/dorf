@@ -1031,6 +1031,7 @@
         "required": ["provider", "state"],
         "properties": {
           "provider": { "type": "string" },
+          "provider_id": { "type": "string", "description": "Freshly attested provider resource locator, when present" },
           "state": { "type": "string", "enum": ["running", "paused", "stopped", "missing", "unknown"] }
         }
       },
@@ -1510,7 +1511,33 @@
         "required": ["id", "name"],
         "properties": {
           "id": { "type": "string", "minLength": 1 },
-          "name": { "type": "string", "minLength": 1 }
+          "name": { "type": "string", "minLength": 1 },
+          "resource_id": { "type": "string", "minLength": 1 },
+          "provider_id": { "type": "string", "minLength": 1 },
+          "resources": { "type": "array", "items": { "$ref": "#/components/schemas/SandboxResource" } },
+          "delivery_hold": { "$ref": "#/components/schemas/SandboxDeliveryHold" }
+        }
+      },
+      "SandboxDeliveryHold": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "reason", "requested_at"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "reason": { "type": "string", "enum": ["workspace_upgrade"] },
+          "requested_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "SandboxResource": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "reserved_at"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "provider_id": { "type": "string", "minLength": 1 },
+          "reserved_at": { "type": "string", "format": "date-time" },
+          "observed_at": { "type": "string", "format": "date-time" },
+          "deleted_at": { "type": "string", "format": "date-time" }
         }
       },
       "CodingProposal": {
@@ -1573,6 +1600,7 @@
           "job_id": { "type": "string", "minLength": 1 },
           "sequence": { "type": "integer", "minimum": 1 },
           "interrupt_requested": { "type": "boolean", "description": "Stop was accepted for this exact Turn; the result reports its observed outcome." },
+          "wait_reason": { "type": "string", "enum": ["workspace_upgrade"], "description": "Accepted input is waiting for a durable workspace delivery hold to be released." },
           "intent": { "type": "string", "enum": ["follow", "steer"] },
           "delivery": { "$ref": "#/components/schemas/MessageDeliveryState" },
           "result": {

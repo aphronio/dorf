@@ -31,6 +31,7 @@ func (s Sandbox) ObserveOwned(ctx context.Context, owner provider.Ownership) (pr
 	if err := attestRequiredConfig(instance.Config, ownershipConfig(owner)); err != nil {
 		return result, err
 	}
+	result.ProviderID = instance.Name
 	switch strings.ToLower(instance.Status) {
 	case "running":
 		result.State = "running"

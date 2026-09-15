@@ -15,6 +15,7 @@ func (a Adapter) ObserveOwned(ctx context.Context, owner provider.Ownership) (pr
 		result.State = "missing"
 		return result, nil
 	}
+	result.ProviderID = owned.ProviderID
 	switch owned.State {
 	case "running", "paused":
 		result.State = owned.State

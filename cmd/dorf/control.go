@@ -1257,6 +1257,10 @@ func (a controlAPIJobs) GetMessage(ctx context.Context, jobID, messageID string)
 	}
 	delivery := deliveries[index]
 	message, run := delivery.Message, delivery.AgentRun
+	waitReason, err := a.messageWaitReason(ctx, delivery)
+	if err != nil {
+		return controlapi.Message{}, err
+	}
 	deliveryState, err := publicMessageDeliveryState(run.State)
 	if err != nil {
 		return controlapi.Message{}, err
@@ -1272,6 +1276,7 @@ func (a controlAPIJobs) GetMessage(ctx context.Context, jobID, messageID string)
 	return controlapi.Message{
 		ID: message.ID, JobID: job.ID, Sequence: message.Sequence, Intent: string(message.Intent),
 		InterruptRequested: run.InterruptRequested,
+		WaitReason:         waitReason,
 		Delivery:           controlapi.State{State: deliveryState}, Result: result, Attention: attention, AdmittedAt: message.AdmittedAt,
 	}, nil
 }
@@ -1614,7 +1619,7 @@ func (a controlAPIJobs) projectDirect(ctx context.Context, job core.Job) (contro
 		}
 		attention = &controlapi.Attention{Code: code, Detail: "Job execution needs operator attention; inspect the deployment service logs."}
 	}
-	common, err := publicCommonJob(job, controlapi.JobKindDirect, executionState, attention, task, snapshot.Sandboxes)
+	common, err := a.projectCommonJob(ctx, job, controlapi.JobKindDirect, executionState, attention, task, snapshot.Sandboxes)
 	return controlapi.DirectJob{Job: common}, err
 }
 
@@ -1645,7 +1650,7 @@ func (a controlAPIJobs) projectCoding(ctx context.Context, job core.Job) (contro
 		executionState = "stopped"
 		attention = &controlapi.Attention{Code: "job_attention", Detail: "Job execution needs operator attention; inspect the deployment service logs."}
 	}
-	common, err := publicCommonJob(job, controlapi.JobKindCoding, executionState, attention, task, snapshot.Sandboxes)
+	common, err := a.projectCommonJob(ctx, job, controlapi.JobKindCoding, executionState, attention, task, snapshot.Sandboxes)
 	if err != nil {
 		return controlapi.CodingJob{}, err
 	}
@@ -1691,7 +1696,7 @@ func (a controlAPIJobs) projectInvestigation(ctx context.Context, job core.Job) 
 	case work.Kind == "":
 		executionState = "idle"
 	}
-	common, err := publicCommonJob(job, controlapi.JobKindInvestigation, executionState, attention, task,
+	common, err := a.projectCommonJob(ctx, job, controlapi.JobKindInvestigation, executionState, attention, task,
 		[]core.Sandbox{snapshot.MainSandbox})
 	if err != nil {
 		return controlapi.InvestigationJob{}, err
@@ -1744,7 +1749,7 @@ func publicCommonJob(job core.Job, kind, executionState string, attention *contr
 		if sandbox.ID == "" || sandbox.JobID != job.ID {
 			return controlapi.Job{}, fmt.Errorf("Job %s has a mismatched Sandbox projection", job.ID)
 		}
-		sandboxes = append(sandboxes, controlapi.Sandbox{ID: sandbox.ID, Name: sandbox.Name})
+		sandboxes = append(sandboxes, controlapi.Sandbox{ID: sandbox.ID, Name: sandbox.Name, ResourceID: sandbox.ResourceID, ProviderID: sandbox.ProviderID})
 	}
 	return controlapi.Job{
 		CreatedByClient: publicJobCreator(job.CreatedByClientID, job.CreatedByClientName), ClientReference: job.ClientReference,

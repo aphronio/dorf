@@ -11,20 +11,27 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 )
 
-const completeCleanup = `-- name: CompleteCleanup :execrows
-update dorf.jobs
-set cleanup_state='complete',cleanup_attention=null,
-    workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null,
-    cleaned_at=coalesce(cleaned_at,clock_timestamp())
-where id=$1 and cleanup_state='scheduled'
+const completeCleanup = `-- name: CompleteCleanup :one
+with completed as (
+    update dorf.jobs j0
+    set cleanup_state='complete',cleanup_attention=null,
+        workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null,
+        cleaned_at=coalesce(cleaned_at,clock_timestamp())
+    where j0.id=$1 and j0.cleanup_state='scheduled'
+    returning j0.id
+), released as (
+    update dorf.sandbox_delivery_holds h set released_at=clock_timestamp()
+    from dorf.sandboxes s join completed j on j.id=s.job_id
+    where h.sandbox_id=s.id and h.released_at is null
+)
+select count(*) from completed
 `
 
 func (q *Queries) CompleteCleanup(ctx context.Context, jobID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completeCleanup, jobID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+	row := q.db.QueryRowContext(ctx, completeCleanup, jobID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const countUnsettledSandboxCleanupActions = `-- name: CountUnsettledSandboxCleanupActions :one
