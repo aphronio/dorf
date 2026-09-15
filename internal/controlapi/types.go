@@ -246,7 +246,23 @@ type Sandbox struct {
 	ResourceID   string               `json:"resource_id,omitempty"`
 	ProviderID   string               `json:"provider_id,omitempty"`
 	Resources    []SandboxResource    `json:"resources,omitempty"`
+	Upgrades     []SandboxUpgrade     `json:"upgrades,omitempty"`
 	DeliveryHold *SandboxDeliveryHold `json:"delivery_hold,omitempty"`
+}
+
+type SandboxUpgrade struct {
+	ID                    string     `json:"id"`
+	Status                string     `json:"status"`
+	SourceResourceID      string     `json:"source_resource_id"`
+	DestinationResourceID string     `json:"destination_resource_id,omitempty"`
+	PackageVersion        string     `json:"package_version"`
+	PreviousVersion       string     `json:"previous_version,omitempty"`
+	RequestedAt           time.Time  `json:"requested_at"`
+	VerifiedAt            *time.Time `json:"verified_at,omitempty"`
+	FinishedAt            *time.Time `json:"finished_at,omitempty"`
+	Outcome               string     `json:"outcome,omitempty"`
+	FailureCode           string     `json:"failure_code,omitempty"`
+	CheckpointReference   string     `json:"checkpoint_reference,omitempty"`
 }
 
 type SandboxDeliveryHold struct {

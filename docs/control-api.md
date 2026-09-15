@@ -397,3 +397,14 @@ metadata without starting, connecting to, pausing, or reconciling the machine. R
 against cleanup. Job execution being idle does not imply that its machine is paused. A missing
 owned resource is reported explicitly; an unavailable provider check returns a retryable Problem.
 These observations are not stored and may change immediately after a response.
+
+### Package upgrade inspection
+
+Job Sandbox projections include retained `upgrades` alongside resource history. Upgrade records
+identify the requested package version, source and optional destination resource, checkpoint,
+verification time, terminal outcome, and failure code. Status is derived from recovery receipts and
+current upgrade attention. Accepted messages keep `wait_reason: workspace_upgrade` while held;
+upgrade success does not synthesize a Message result.
+
+Package admission is currently operator-only through `dorf upgrade request`. API clients can inspect
+progress but cannot install packages. `dorf upgrade show JOB` includes the detailed retained receipt.

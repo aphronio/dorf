@@ -78,3 +78,36 @@ Synthetic runner data lives under `/workspace/upgrade-proof`; production upgrade
 coverage for the actual runner state. This recipe proves package and provider behavior, not message
 queue holds, controller recovery, live provider routing, or Logfire ingestion. Those belong to the
 [active implementation plan](../../docs/implementation/runtime-package-upgrades.md).
+
+## Retained-worker coordinator recipe
+
+```bash
+mise run integration:upgrade-worker incus
+mise run integration:upgrade-worker e2b
+# Diagnose the exact retained synthetic VM without admitting input:
+mise run integration:upgrade-worker incus probe JOB
+# Delete a failed proof resource only when checkpoint custody is fully settled:
+mise run integration:upgrade-worker incus cleanup-unstarted JOB
+```
+
+The worker recipe uses the configured disposable PostgreSQL database, the provider artifacts and
+Incus project above, and a local-only Responses fixture. It starts a real native conversation through
+Core, stops the worker, admits an upgrade and queued message, and starts a new worker. It proves
+activation, then injects incompatible runner-local state after switching a second pinned version to
+force recovery. It checks the same native context, nonempty replies, exact request count, verified
+resource selection, and all resource/checkpoint cleanup. No AI account, user input, or real Provider
+Gateway is used. This is a package/custody proof, not a profile verification or Gateway routing proof.
+
+The positive coordinator case activates the already staged 0.154.0 closure; the recovery case switches
+to 0.147.0 and explicitly injects failure. The older adapter recipe separately proves version increase.
+Both versions can resume the fixture; the fault is intentional, not a claim that 0.147.0 is broken.
+
+Evidence is retained under `.dorf/runtime-upgrade/worker-upgrade-PROVIDER-TIMESTAMP/`. Events come
+from the actual coordinator telemetry sink and can be exported with the publisher above. A failed
+proof retains its VM for diagnosis; the probe restricts access to a synthetic proof Job and takes its
+Job fence. The cleanup probe refuses unsettled checkpoint custody. Use normal coordinated Job
+cleanup for an interrupted upgrade with retained recovery dependencies.
+
+Live loops found two real guest boundaries: older guest Python lacks pidfd wrappers, so exact
+process stopping uses Linux pidfd syscalls; and Incus start acknowledgement precedes guest-agent
+readiness, so activation waits for bounded command readiness instead of immediately rolling back.

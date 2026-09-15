@@ -22,6 +22,8 @@ where s.job_id=sqlc.arg(job_id)
   and (
     not exists(select 1 from dorf.actions a where a.job_id=s.job_id and a.kind='provider-route-revoke' and a.scope_key=s.id and a.state='succeeded')
     or not exists(select 1 from dorf.actions a where a.job_id=s.job_id and a.kind='sandbox-delete' and a.scope_key=s.id and a.state='succeeded')
+    or exists(select 1 from dorf.sandbox_resources r where r.sandbox_id=s.id and r.deleted_at is null)
+    or exists(select 1 from dorf.sandbox_upgrades u where u.sandbox_id=s.id and u.checkpoint_reference is not null and u.checkpoint_deleted_at is null)
   );
 
 -- name: CompleteCleanup :one

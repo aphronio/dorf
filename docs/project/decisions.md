@@ -152,6 +152,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D132: Profile revisions separate promotion from Job custody](decisions/D132-profile-revisions-separate-promotion-from-job-custody.md) (`current`). Updating a profile used by retained Jobs, promoting verified images, or resolving old runtime custody.
 - [D133: Logical Sandboxes retain provider resource identities](decisions/D133-logical-sandboxes-retain-provider-resource-identities.md) (`current`). Replacing a provider VM, implementing package upgrade rollback, or investigating which infrastructure served a Job.
 - [D134: Delivery holds survive executor restarts](decisions/D134-delivery-holds-survive-executor-restarts.md) (`current`). Coordinating a persistent Sandbox upgrade or explaining accepted input that is waiting during maintenance.
+- [D135: Package recovery releases verified resource custody](decisions/D135-package-recovery-releases-verified-resource-custody.md) (`current`). Executing package upgrades, recovering replacement VMs, or investigating held messages and upgrade failures.
 
 ## Harnesses
 
@@ -243,6 +244,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D105: Host-issued integration keys use ordinary revocable Clients](decisions/D105-host-issued-integration-keys-use-ordinary-revocable-clients.md) (`current`). Provisioning bearer credentials for unattended integrations.
 - [D132: Profile revisions separate promotion from Job custody](decisions/D132-profile-revisions-separate-promotion-from-job-custody.md) (`current`). Updating a profile used by retained Jobs, promoting verified images, or resolving old runtime custody.
 - [D133: Logical Sandboxes retain provider resource identities](decisions/D133-logical-sandboxes-retain-provider-resource-identities.md) (`current`). Replacing a provider VM, implementing package upgrade rollback, or investigating which infrastructure served a Job.
+- [D135: Package recovery releases verified resource custody](decisions/D135-package-recovery-releases-verified-resource-custody.md) (`current`). Executing package upgrades, recovering replacement VMs, or investigating held messages and upgrade failures.
 
 ## Persistence
 
@@ -277,6 +279,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D132: Profile revisions separate promotion from Job custody](decisions/D132-profile-revisions-separate-promotion-from-job-custody.md) (`current`). Updating a profile used by retained Jobs, promoting verified images, or resolving old runtime custody.
 - [D133: Logical Sandboxes retain provider resource identities](decisions/D133-logical-sandboxes-retain-provider-resource-identities.md) (`current`). Replacing a provider VM, implementing package upgrade rollback, or investigating which infrastructure served a Job.
 - [D134: Delivery holds survive executor restarts](decisions/D134-delivery-holds-survive-executor-restarts.md) (`current`). Coordinating a persistent Sandbox upgrade or explaining accepted input that is waiting during maintenance.
+- [D135: Package recovery releases verified resource custody](decisions/D135-package-recovery-releases-verified-resource-custody.md) (`current`). Executing package upgrades, recovering replacement VMs, or investigating held messages and upgrade failures.
 
 ## GitHub integration
 

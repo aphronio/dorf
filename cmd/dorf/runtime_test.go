@@ -25,7 +25,7 @@ func TestConfiguredObservationsSurviveUnavailableExport(t *testing.T) {
 			t.Setenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", test.endpoint)
 			t.Setenv("OTEL_RESOURCE_ATTRIBUTES", test.attributes)
 			var stderr bytes.Buffer
-			observations, close := configuredObservations(context.Background(), &stderr)
+			observations, _, close := configuredObservations(context.Background(), &stderr)
 			defer close()
 			if observations == nil {
 				t.Fatal("instruction tracking was disabled with diagnostic export")

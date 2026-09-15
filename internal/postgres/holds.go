@@ -50,6 +50,11 @@ func (s Store) HoldSandboxDelivery(ctx context.Context, queue, jobID, sandboxID,
 // that it is safe to resume; this method never infers success from empty output.
 func (s Store) ReleaseSandboxDelivery(ctx context.Context, queue, jobID, sandboxID, operationID string) error {
 	return s.withDeliveryHold(ctx, jobID, sandboxID, operationID, func(tx *sql.Tx, q *dbsql.Queries, _ dbsql.GetJobAdmissionForUpdateRow) error {
+		if _, err := q.GetSandboxUpgrade(ctx, operationID); err == nil {
+			return fmt.Errorf("package upgrade holds require verified atomic completion")
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
 		if err := expectOneRows(q.ReleaseSandboxDeliveryHold(ctx, dbsql.ReleaseSandboxDeliveryHoldParams{ID: operationID, SandboxID: sandboxID})); err != nil {
 			return err
 		}

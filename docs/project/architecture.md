@@ -477,3 +477,17 @@ preserving an implementation choice.
 If Dorf outgrows Absurd, completed Jobs remain historical domain records, active short-lived Jobs can
 drain, and new Jobs can begin on the replacement. Raw checkpoint history is not a portability
 format.
+
+### Persistent package recovery
+
+A direct Job's existing durable task also reconciles admitted package upgrades. PostgreSQL retains
+immutable package intent and observed effects; no second persisted phase counter or competing
+upgrade task owns the Job. The delivery hold allows earlier native work to settle while new input
+remains in FIFO. Every upgrade effect runs under the Job fence and current Absurd claim, with
+heartbeats across provider calls.
+
+Recovery reserves exact destination ownership before creating a replacement. Native verification
+resumes retained Threads and checks settled Turn history without starting new agent work. The
+verified binding, exact hold release, and execution wake commit together. Failed recovery retains
+input and exposes attention. Cleanup handles every reserved resource and retained checkpoint,
+including a lost checkpoint response and E2B's backing-snapshot dependency. D135 records the choice.

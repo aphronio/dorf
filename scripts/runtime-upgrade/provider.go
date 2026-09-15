@@ -94,22 +94,11 @@ func publish(path string) error {
 	count := 0
 	lines := bufio.NewScanner(file)
 	for lines.Scan() {
-		var event map[string]any
-		if err := json.Unmarshal(lines.Bytes(), &event); err != nil {
-			return err
-		}
-		phase, _ := event["phase"].(string)
-		stamp, _ := event["at"].(string)
-		at, err := time.Parse(time.RFC3339Nano, stamp)
+		event, err := proofEvent(lines.Bytes())
 		if err != nil {
 			return err
 		}
-		event["dorf.upgrade_id"] = event["upgrade_id"]
-		event["dorf.job_id"] = event["upgrade_id"]
-		event["dorf.sandbox_id"] = event["upgrade_id"]
-		event["dorf.provider_sandbox_id"] = event["provider_sandbox_id"]
-		event["dorf.synthetic_proof"] = true
-		publisher.Emit(telemetry.Event{Name: "dorf.upgrade." + phase, At: at, Attributes: event, Failed: strings.HasSuffix(phase, ".failed")})
+		publisher.Emit(event)
 		count++
 	}
 	if err := lines.Err(); err != nil {
@@ -126,4 +115,33 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func proofEvent(data []byte) (telemetry.Event, error) {
+	var native telemetry.Event
+	if err := json.Unmarshal(data, &native); err != nil {
+		return telemetry.Event{}, err
+	}
+	if native.Name != "" {
+		if !strings.HasPrefix(native.Name, "dorf.upgrade.") || native.Attributes["dorf.synthetic_proof"] != true {
+			return telemetry.Event{}, fmt.Errorf("expected a synthetic upgrade event")
+		}
+		return native, nil
+	}
+	var event map[string]any
+	if err := json.Unmarshal(data, &event); err != nil {
+		return telemetry.Event{}, err
+	}
+	phase, _ := event["phase"].(string)
+	stamp, _ := event["at"].(string)
+	at, err := time.Parse(time.RFC3339Nano, stamp)
+	if err != nil {
+		return telemetry.Event{}, err
+	}
+	event["dorf.upgrade_id"] = event["upgrade_id"]
+	event["dorf.job_id"] = event["upgrade_id"]
+	event["dorf.sandbox_id"] = event["upgrade_id"]
+	event["dorf.provider_sandbox_id"] = event["provider_sandbox_id"]
+	event["dorf.synthetic_proof"] = true
+	return telemetry.Event{Name: "dorf.upgrade." + phase, At: at, Attributes: event, Failed: strings.HasSuffix(phase, ".failed")}, nil
 }

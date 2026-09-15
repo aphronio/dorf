@@ -1515,6 +1515,7 @@
           "resource_id": { "type": "string", "minLength": 1 },
           "provider_id": { "type": "string", "minLength": 1 },
           "resources": { "type": "array", "items": { "$ref": "#/components/schemas/SandboxResource" } },
+          "upgrades": { "type": "array", "items": { "$ref": "#/components/schemas/SandboxUpgrade" } },
           "delivery_hold": { "$ref": "#/components/schemas/SandboxDeliveryHold" }
         }
       },
@@ -1526,6 +1527,24 @@
           "id": { "type": "string", "minLength": 1 },
           "reason": { "type": "string", "enum": ["workspace_upgrade"] },
           "requested_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "SandboxUpgrade": {
+        "type": "object",
+        "required": ["id", "status", "source_resource_id", "package_version", "requested_at"],
+        "properties": {
+          "id": { "type": "string" },
+          "status": { "type": "string", "enum": ["upgrading", "verifying", "rolling_back", "ready", "failed"] },
+          "source_resource_id": { "type": "string" },
+          "destination_resource_id": { "type": "string" },
+          "package_version": { "type": "string" },
+          "previous_version": { "type": "string" },
+          "requested_at": { "type": "string", "format": "date-time" },
+          "verified_at": { "type": "string", "format": "date-time" },
+          "finished_at": { "type": "string", "format": "date-time" },
+          "outcome": { "type": "string", "enum": ["upgraded", "rolled_back"] },
+          "failure_code": { "type": "string" },
+          "checkpoint_reference": { "type": "string" }
         }
       },
       "SandboxResource": {

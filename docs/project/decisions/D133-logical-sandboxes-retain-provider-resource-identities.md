@@ -15,9 +15,10 @@
   Existing records migrate without changing ownership tokens or inventing unknown provider IDs.
 - **Scope:** The resource foundation records new creation and exposes its binding and retained
   resource receipts through Job inspection. Delivery holds are covered by D134.
-  Replacement authorization, checkpoint recovery, and replacement
-  history are subsequent parts of the [active upgrade plan](../../implementation/runtime-package-upgrades.md).
+  D135 owns replacement authorization, checkpoint recovery, and verified resource switching.
 - **Proof:** PostgreSQL tests cover baseline migration with retained ownership, idempotent binding,
   rejection of locator redirection and foreign ownership, and stable logical Sandbox reads. The
   disposable package recipe separately proves native Codex conversation recovery on Incus restore
   and E2B replacement; it does not yet prove control-plane upgrade orchestration.
+
+- **Continuation:** D135 composes these foundations with package recovery, verified resource switching, and cleanup.

@@ -35,9 +35,10 @@ type profileRuntimeResolver struct {
 	client       *absurd.Client
 	barrier      core.FaultBarrier
 	observations *codex.Observations
+	emit         func(telemetry.Event)
 }
 
-func configuredObservations(ctx context.Context, stderr io.Writer, terminalWake ...func(context.Context, core.NativeTerminalWakeTarget) error) (*codex.Observations, func()) {
+func configuredObservations(ctx context.Context, stderr io.Writer, terminalWake ...func(context.Context, core.NativeTerminalWakeTarget) error) (*codex.Observations, func(telemetry.Event), func()) {
 	publisher, err := telemetry.FromEnv(ctx)
 	if err != nil {
 		fmt.Fprintln(stderr, "Execution diagnostics could not initialize; work remains enabled.")
@@ -47,7 +48,7 @@ func configuredObservations(ctx context.Context, stderr io.Writer, terminalWake 
 		emit = publisher.Emit
 	}
 	observations := codex.NewObservations(ctx, emit, terminalWake...)
-	return observations, func() {
+	return observations, emit, func() {
 		observations.Close()
 		if publisher == nil {
 			return
@@ -65,10 +66,15 @@ func (r profileRuntimeResolver) ResolveCleanup(ctx context.Context, ref core.San
 	if err != nil {
 		return core.CleanupRuntime{}, err
 	}
-	return core.CleanupRuntime{
-		Execution:      resolved.Execution,
-		SandboxProfile: resolved.SandboxProfile,
-	}, nil
+	profile, err := r.store.SandboxProfileRevision(ctx, ref)
+	if err != nil {
+		return core.CleanupRuntime{}, err
+	}
+	if profile.Harness != codex.Harness {
+		return core.CleanupRuntime{Execution: resolved.Execution, SandboxProfile: resolved.SandboxProfile}, nil
+	}
+	execution, err := r.upgradeExecution(ctx, resolved)
+	return core.CleanupRuntime{Execution: execution, SandboxProfile: resolved.SandboxProfile}, err
 }
 
 func (r profileRuntimeResolver) ResolveSandbox(ctx context.Context, ref core.SandboxProfileRef) (core.SandboxRuntime, error) {
@@ -136,7 +142,15 @@ func (r profileRuntimeResolver) ResolveDirect(ctx context.Context, ref core.Sand
 	if err != nil {
 		return direct.Runtime{}, err
 	}
-	return direct.Runtime{SandboxProfile: resolved.SandboxProfile, Execution: resolved.Execution}, nil
+	profile, err := r.store.SandboxProfileRevision(ctx, ref)
+	if err != nil {
+		return direct.Runtime{}, err
+	}
+	if profile.Harness != codex.Harness {
+		return direct.Runtime{SandboxProfile: resolved.SandboxProfile, Execution: resolved.Execution}, nil
+	}
+	execution, err := r.upgradeExecution(ctx, resolved)
+	return direct.Runtime{SandboxProfile: resolved.SandboxProfile, Execution: execution}, err
 }
 
 type resolvedBaseRuntime struct {

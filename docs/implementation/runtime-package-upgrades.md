@@ -20,8 +20,8 @@ profile revision and record the package upgrade separately so diagnostics explai
 ```text
 Upgrade requested
         |
-Finish current turn
 Hold delivery; keep saving incoming messages
+Finish current turn
         |
 Checkpoint VM
         |
@@ -134,12 +134,12 @@ Progress as of 2026-09-15:
   `mise run integration:delivery-hold` verifies storage, public waiting status, and an actual
   Absurd worker restart with exactly one native submission per queued Message.
 
-- Still pending: durable upgrade request/executor, native quiescence and recovery verification,
-  atomic replacement binding and history, cleanup of replacement resources/backing checkpoints,
-  upgrade-phase telemetry, and the combined control-plane/provider proof.
-  Production package delivery to restricted-network E2B guests also remains unimplemented; the
-  recipe stages downloads with Internet access and must not weaken a Job's network policy.
-  These facts do not claim that running user VMs can be upgraded yet.
+- Retained direct-task coordinator implemented for pre-staged Codex packages: operator admission,
+  checkpoint/recovery receipts, exact native quiescence and retained-Thread verification, atomic
+  replacement binding and release, replacement/backing-checkpoint cleanup, and correlated telemetry.
+- Distribution remains operator-managed. Production delivery of closures to restricted-network
+  guests and automatic fleet rollout remain unimplemented; no Job network policy is weakened.
+  The local Responses fixture does not prove a real Provider Gateway reconnection.
 
 ### Verified provider evidence
 
@@ -164,33 +164,46 @@ standalone cleanup recovery recipe. Logfire contains 23 events per probe, includ
 failure and completed cleanup recovery, in the 2026-09-15 12:12–12:18 UTC window. These prove
 recipe recovery and provider reconciliation, not restart recovery of a durable upgrade executor.
 
-### Next implementation boundary
+### Retained-worker coordinator evidence
 
-Ship the active-resource switch together with the durable delivery hold and cleanup coordination.
-Persist replacement ownership before the provider call; use a compare-and-set on the expected
-source binding after native recovery verification. Preserve source and destination records and
-link the replacement to its upgrade/checkpoint. A restarted executor must reconcile the same
-operation, and a stale executor must not reactivate a superseded resource. Until this boundary is
-implemented, checkpoint adapters are exercised by the disposable recipe only.
+The final 2026-09-15 worker recipes passed activation, explicit post-migration verification failure,
+rollback, original native context, substantive queued replies, exactly one model request per input,
+and coordinated resource/checkpoint cleanup:
 
-New automatic messages during the hold become FIFO follows. Continue observing pre-hold active
-turns and settling their steers; queued follows do not prevent reaching the quiet boundary. Release
-must atomically publish the verified binding and wake normal delivery. Job cleanup must fence the
-upgrade executor and account for every reserved resource and retained backing checkpoint.
+| Provider | Proof ID | Rollback provider resource before / after |
+| --- | --- | --- |
+| Incus | `worker-upgrade-incus-1789479802` | `dorf-182aa933cd365c023e38` on both sides |
+| E2B | `worker-upgrade-e2b-1789479809` | `imq3ffo9j33xsgz3eh601` / `i09gfudis44vshfpweu0a` |
 
-## Remaining sequence
+Logfire ingestion is confirmed in the 13:43–13:46 UTC window: 35 events for Incus and 37 for E2B.
+Each proof has one `upgraded` and one `rolled_back` terminal receipt, and the injected verification
+failure is present. Query `dorf.upgrade_id` using the proof ID plus `-0` or `-1` for each operation.
+The original quiescence failures are also retained in Logfire under
+`worker-upgrade-incus-1789478960-0` and `worker-upgrade-e2b-1789479008-0` (12 events each); those
+older events indicate errors by severity rather than a `.failed` name. All failed-proof VMs were
+subsequently removed after checking their retained checkpoint receipts.
 
-1. Compose the proven delivery hold with a durable upgrade executor, native quiescence checks,
-   package activation, recovery verification, and atomic resource switching.
-2. Extend the hold banner with verification and failed-recovery states derived from executor receipts.
-3. Verify the full flow with correlated Logfire events and update current architecture, support,
-   operator documentation, and the decision record when the implementation is established.
+The live loop corrected missing Python pidfd wrappers in the guest and Incus guest-agent readiness
+after VM start. The fixture does not prove real Provider Gateway routing. Package staging used an
+Internet-enabled disposable VM; activation and recovery do not change its network policy.
 
-Use short fault-injection loops: successful upgrade; checkpoint failure before mutation; failed
-installation; failed verification after modifying local state; successful rollback; failed rollback;
-and interruption during E2B replacement. Prove package version, retained conversation, resource
-identity, queue behavior, and terminal diagnostics at each relevant boundary. Local deployments are
-test-only and may start fresh. Use synthetic conversations before any retained user VM upgrade.
+### Current operator boundary and remaining work
+
+`dorf upgrade request` accepts an exact staged Nix closure and version for a direct Job. The same
+retained task owns native work and upgrade reconciliation. A restarted executor reloads receipts;
+stale claims or a changed source binding cannot select a replacement. The operator-facing receipt
+and Job projection retain source/destination resources, checkpoint, package versions, verification,
+terminal outcome, and failure codes. The profile revision remains unchanged.
+
+Next, add pinned Nix and the initial Codex generation to the shared guest recipe used by both the
+Incus image and E2B template builders, then build and verify both artifacts. The current shared
+recipe installs Codex through npm; only the disposable proofs bootstrap Nix. Existing VMs require
+a separate one-time bootstrap because profile promotion changes future VM creation only.
+
+Still to prove or implement: restricted-network package distribution, real Provider Gateway routing
+through replacement, automatic rollout policy, and a broader supported package catalog. The current
+operator path deliberately requires a staged closure. Do not interpret the disposable fixture as
+permission to upgrade a retained user VM or as a production deployment receipt.
 
 ## References
 

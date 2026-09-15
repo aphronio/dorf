@@ -14,9 +14,11 @@
   observations must still prove quiescence, and the coordinating operation owns upgrade and
   recovery verification. A hold by itself grants no VM mutation authority.
 - **Scope:** Direct Jobs only. Existing workflows have additional workspace mutations that must
-  honor a hold before support can expand. Upgrade task scheduling, package mutation, and verified
-  resource switching remain in the active implementation plan.
+  honor a hold before support can expand. D135 composes the hold with package mutation and verified
+  resource switching in the existing direct task.
 - **Proof:** PostgreSQL and an actual Absurd worker verify retained input, active-turn/steer drain,
   restart, FIFO release, exactly one native submission per queued input, stale-release rejection,
   wake rollback, idle-pause exclusion, and cleanup while held. API checks preserve accepted/waiting
   status without inventing a result.
+
+- **Continuation:** D135 composes these foundations with package recovery, verified resource switching, and cleanup.

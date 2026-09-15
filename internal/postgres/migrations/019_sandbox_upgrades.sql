@@ -1,0 +1,28 @@
+create table dorf.sandbox_upgrades (
+    id text primary key references dorf.sandbox_delivery_holds(id),
+    sandbox_id text not null references dorf.sandboxes(id),
+    source_resource_id text not null,
+    destination_resource_id text,
+    package_path text not null,
+    version text not null,
+    requested_at timestamptz not null default clock_timestamp(),
+    previous_version text,
+    quiesced_at timestamptz,
+    checkpoint_key text,
+    checkpoint_reference text,
+    checkpoint_source_id text,
+    activated_at timestamptz,
+    rollback_at timestamptz,
+    failure_code text,
+    restored_at timestamptz,
+    verified_at timestamptz,
+    checkpoint_deleted_at timestamptz,
+    finished_at timestamptz,
+    foreign key(sandbox_id,source_resource_id) references dorf.sandbox_resources(sandbox_id,id),
+    foreign key(sandbox_id,destination_resource_id) references dorf.sandbox_resources(sandbox_id,id),
+    check ((checkpoint_key is null)=(checkpoint_reference is null)),
+    check ((checkpoint_key is null)=(checkpoint_source_id is null)),
+    check (finished_at is null or verified_at is not null),
+    check (restored_at is null or rollback_at is not null)
+);
+insert into dorf.schema_migrations(name) values ('019_sandbox_upgrades.sql');

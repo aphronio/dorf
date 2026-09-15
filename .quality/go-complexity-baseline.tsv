@@ -11,7 +11,7 @@ cmd/dorf	profileCommand	23
 cmd/dorf	providerCommand	20
 cmd/dorf	publicCommonJob	17
 cmd/dorf	reconcileHostControlClient	19
-cmd/dorf	run	28
+cmd/dorf	run	25
 cmd/dorf	selectProviderGatewayBind	22
 cmd/dorf	setupAIConnection	18
 cmd/dorf	setupCommand	28

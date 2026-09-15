@@ -35,6 +35,7 @@ import (
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/proofbarrier"
 	releaseapp "github.com/aphronio/dorf/internal/release"
+	"github.com/aphronio/dorf/internal/telemetry"
 	"github.com/aphronio/dorf/internal/version"
 	"github.com/charmbracelet/x/term"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -84,7 +85,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	switch args[0] {
-	case "setup", "integration", "client", "migrate", "doctor", "provider", "profile", "release-manifest", "serve", "worker":
+	case "setup", "integration", "client", "migrate", "doctor", "provider", "profile", "release-manifest", "serve", "worker", "upgrade":
 	default:
 		return usage(stderr)
 	}
@@ -126,13 +127,19 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	defer client.Close()
+	return runTaskCommand(ctx, store, client, cfg, args, stdout, stderr)
+}
+
+func runTaskCommand(ctx context.Context, store postgres.Store, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
 	switch args[0] {
+	case "upgrade":
+		return upgradeCommand(ctx, store, client, cfg, args[1:], stdout, stderr)
 	case "serve":
 		return serveCommand(ctx, store, client, cfg, args[1:], stdout, stderr)
 	case "worker":
-		observations, closeObservations := configuredObservations(ctx, stderr, coreApplication(store, client).SignalNativeTerminalWake)
+		observations, emit, closeObservations := configuredObservations(ctx, stderr, coreApplication(store, client).SignalNativeTerminalWake)
 		defer closeObservations()
-		if err := registerWorkerTasks(store, client, cfg, observations); err != nil {
+		if err := registerWorkerTasks(store, client, cfg, observations, emit); err != nil {
 			return err
 		}
 		return worker(ctx, store, client, cfg, args[1:], stdout, stderr, observations)
@@ -163,12 +170,12 @@ func operationKey(kind, value string, source io.Reader) (string, bool, error) {
 	return kind + "-" + hex.EncodeToString(random), true, nil
 }
 
-func registerWorkerTasks(store postgres.Store, client *absurd.Client, cfg config.Config, observations *codex.Observations) error {
+func registerWorkerTasks(store postgres.Store, client *absurd.Client, cfg config.Config, observations *codex.Observations, emit func(telemetry.Event)) error {
 	barrier, err := proofbarrier.FromEnv()
 	if err != nil {
 		return err
 	}
-	runtimes := profileRuntimeResolver{cfg: cfg, store: store, client: client, barrier: barrier, observations: observations}
+	runtimes := profileRuntimeResolver{cfg: cfg, store: store, client: client, barrier: barrier, observations: observations, emit: emit}
 	core := coreApplication(store, client)
 	core.SandboxRuntimes = runtimes
 	core.CleanupRuntimes = runtimes
@@ -1392,6 +1399,6 @@ func boundedTaskError(raw json.RawMessage) string {
 }
 
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <version|update|setup|connect|auth|client|serve|integration|migrate|doctor|provider|profile|run|job|workflow|worker|sandbox> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|update|setup|connect|auth|client|serve|integration|migrate|doctor|provider|profile|upgrade|run|job|workflow|worker|sandbox> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

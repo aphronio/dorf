@@ -623,3 +623,24 @@ New E2B-backed Jobs pause their Sandboxes when idle. Add `--keep-running` to `do
 must continue between turns. The override is saved with the Job and must match on an explicit
 admission replay. It does not disable provider timeout limits. Other providers keep their
 existing lifecycle until their pause capability is supported.
+
+## Upgrade a retained Codex workspace
+
+For an existing direct Job, first stage a verified immutable Nix closure inside its Sandbox. The
+[upgrade recipe](../scripts/runtime-upgrade/README.md) owns package staging and verification steps.
+Staging must preserve the Sandbox's network policy. Then request activation with an exact reusable ID:
+
+```bash
+dorf upgrade request JOB --id upgrade-20260915-example --package /nix/store/HASH-codex-VERSION --version VERSION
+dorf upgrade show JOB
+```
+
+Replace the placeholders with the real Job ID, full staged store path, and exact package version.
+The retained worker saves incoming messages during the hold, checkpoints local state, activates the
+package, and verifies the retained conversation. Failed verification restores the checkpoint before
+resuming. A failed recovery retains the hold and exposes attention; retry the existing failed Job
+using its ordinary retry command after addressing the reported cause. Repeating the same upgrade ID
+never changes its package or reopens a completed hold.
+
+The Job and logical Sandbox IDs stay stable. E2B rollback can replace the underlying VM; Job
+inspection retains both resources. Automatic distribution and fleet rollout are not implemented.

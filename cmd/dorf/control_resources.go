@@ -38,6 +38,9 @@ func (a controlAPIJobs) projectCommonJob(ctx context.Context, job core.Job, kind
 			}
 		}
 	}
+	if err := a.projectUpgrades(ctx, job, &view); err != nil {
+		return controlapi.Job{}, err
+	}
 	return view, nil
 }
 
@@ -60,4 +63,29 @@ func (a controlAPIJobs) messageWaitReason(ctx context.Context, delivery core.Del
 		return "workspace_upgrade", nil
 	}
 	return "", nil
+}
+
+func (a controlAPIJobs) projectUpgrades(ctx context.Context, job core.Job, view *controlapi.Job) error {
+	receipts, err := a.store.JobUpgrades(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	for i := range view.Sandboxes {
+		for _, receipt := range receipts {
+			if receipt.SandboxID != view.Sandboxes[i].ID {
+				continue
+			}
+			status := receipt.Status()
+			if receipt.FinishedAt.IsZero() && job.WorkflowAttentionSource == "upgrade:"+receipt.ID && job.WorkflowAttention != "" {
+				status = "failed"
+			}
+			view.Sandboxes[i].Upgrades = append(view.Sandboxes[i].Upgrades, controlapi.SandboxUpgrade{
+				ID: receipt.ID, Status: status, SourceResourceID: receipt.SourceResourceID, DestinationResourceID: receipt.DestinationResourceID,
+				PackageVersion: receipt.Version, PreviousVersion: receipt.PreviousVersion, RequestedAt: receipt.RequestedAt,
+				VerifiedAt: optionalResourceTime(receipt.VerifiedAt), FinishedAt: optionalResourceTime(receipt.FinishedAt),
+				Outcome: receipt.Outcome(), FailureCode: receipt.FailureCode, CheckpointReference: receipt.Checkpoint.Reference,
+			})
+		}
+	}
+	return nil
 }
