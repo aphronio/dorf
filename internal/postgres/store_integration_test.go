@@ -3158,6 +3158,7 @@ type integrationExternals struct {
 	turnStatus      string
 	steerErr        error
 	terminalOnSteer bool
+	startOnSteer    bool
 }
 
 type reviewOperationIntegrationExternals struct {
@@ -3353,6 +3354,9 @@ func (e *integrationExternals) AgentSteer(_ context.Context, _ core.Job, deliver
 				e.turns[index].Status = "completed"
 			}
 		}
+	}
+	if e.startOnSteer {
+		e.turns = append(e.turns, core.HarnessTurn{ID: "event-follow", Status: "running", AcceptedMessageIDs: []string{delivery.AgentRun.ID}})
 	}
 	return delivery.Message.TargetTurnID, e.steerErr
 }

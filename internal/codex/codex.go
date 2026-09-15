@@ -1018,11 +1018,24 @@ func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRun
 }
 
 func (p *protocol) steerTurn(ctx context.Context, sessionID, turnID, agentRunID string, input core.HarnessInput) (string, error) {
-	if input.Observation {
-		return "", fmt.Errorf("observations require follow delivery")
-	}
 	if err := p.resumeThread(ctx, sessionID); err != nil {
 		return "", err
+	}
+	if input.Observation {
+		result, err := p.call(ctx, "turn/start", map[string]any{
+			"threadId": sessionID, "input": []any{}, "toolOutput": nativeObservation(agentRunID, input.Text),
+		})
+		if err != nil {
+			return "", err
+		}
+		turn, _ := result["turn"].(map[string]any)
+		if accepted := stringValue(turn["id"]); accepted == turnID {
+			return accepted, nil
+		}
+		// Native tool output can start a turn when the target finishes during
+		// submission. Core recovers the accepted output from retained history
+		// through Auto's existing fallback, without resubmitting the event.
+		return "", fmt.Errorf("automatic tool output did not join the selected turn")
 	}
 	result, err := p.call(ctx, "turn/steer", map[string]any{"threadId": sessionID, "expectedTurnId": turnID, "clientUserMessageId": agentRunID, "input": nativeUserInput(input)})
 	if err != nil {

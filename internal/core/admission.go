@@ -139,7 +139,8 @@ func SameDeveloperInstructions(left, right *string) bool {
 	return left == nil && right == nil || left != nil && right != nil && *left == *right
 }
 
-// ValidObservationDelivery keeps application observations on the text-only Follow path.
+// ValidObservationDelivery keeps application observations text-only. Auto may
+// join active work; explicit Steer still requires a native exact-turn precondition.
 func ValidObservationDelivery(observation bool, intent MessageDeliveryIntent, attachments int) bool {
-	return !observation || intent == MessageFollow && attachments == 0
+	return !observation || (intent == MessageFollow || intent == MessageAuto) && attachments == 0
 }

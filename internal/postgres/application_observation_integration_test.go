@@ -8,7 +8,7 @@ import (
 	"github.com/aphronio/dorf/internal/postgres"
 )
 
-func TestObservationAdmissionRetainsKindAndRequiresFollow(t *testing.T) {
+func TestObservationAdmissionRetainsKindAndSupportsAuto(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
 	job, _ := prepareTransportIntegrationJob(t, store, "observation")
@@ -31,7 +31,11 @@ func TestObservationAdmissionRetainsKindAndRequiresFollow(t *testing.T) {
 		t.Fatal("changed input kind replay accepted")
 	}
 	input.Observation = true
-	for _, intent := range []core.MessageDeliveryIntent{core.MessageAuto, core.MessageSteer} {
+	input.Intent, input.FromID = core.MessageAuto, "auto"
+	if receipt, err := restarted.AdmitCodingMessage(ctx, input); err != nil || !receipt.Message.Observation {
+		t.Fatalf("automatic observation: %+v %v", receipt, err)
+	}
+	for _, intent := range []core.MessageDeliveryIntent{core.MessageSteer} {
 		input.Intent = intent
 		input.FromID = string(intent)
 		if _, err := restarted.AdmitCodingMessage(ctx, input); err == nil {

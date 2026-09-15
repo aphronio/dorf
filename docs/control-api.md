@@ -117,12 +117,16 @@ clients send the desired complete snapshot with the next follow. Built-in Harnes
 remain intact. User-owned AGENTS.md and SOUL.md retain user authority.
 
 Codex Messages may set `observation: true` to deliver application-generated text rather than
-human input. Observations require explicit `intent: "follow"` and no attachments. They use the
-same durable FIFO queue and resume an idle Agent; active Turns finish before observation delivery.
+human input. Observations allow `intent: "auto"` or `"follow"` and no attachments. They use the
+same durable delivery queue. Auto resumes an idle Agent or joins its active Turn at the native input
+boundary; explicit Follow waits for active work to finish. Explicit Steer observations remain
+unsupported because native tool output has no exact-target precondition.
 Human steering retains its priority and exact-Turn semantics. Unsupported profiles reject the
 request before admission. The flag is immutable and included in idempotent replay equality.
 The Codex adapter uses native tool output and retains an input identity for completed Message
-attribution across cold reads. Raw timeline views omit observation payloads. Dorf does not decide
+attribution across cold reads. If an automatic observation starts a new native Turn while its
+selected target finishes, exact delivery attribution atomically adopts that accepted Follow; it is
+not submitted twice. Raw timeline views omit observation payloads. Dorf does not decide
 which application events to produce, how to interpret them, or whether to notify the user.
 
 Direct and workflow admission may select a named AI connection. Omission uses the deployment

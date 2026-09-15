@@ -558,10 +558,11 @@ with eligible as (
     select m.id
     from dorf.job_messages m
     join dorf.agent_runs ar on ar.message_id=m.id
-    where ar.id=$1
+    where ar.id=$2
       and m.requested_intent='auto' and m.delivery_intent='steer'
-      and m.steer_target_turn_id=$2
+      and m.steer_target_turn_id=$3
       and ar.turn_id is null and ar.state in ('pending','submitting','uncertain')
+      and ($1::text = '' or m.observation)
       and (ar.baseline_turn_id is null or ar.baseline_turn_id=m.steer_target_turn_id)
     for update of m,ar
 ), requeued_message as (
@@ -572,20 +573,23 @@ with eligible as (
     returning m.id
 )
 update dorf.agent_runs ar
-set state='pending',baseline_turn_id=null,attention=null
+set state=case when $1::text = '' then 'pending' else 'active' end,
+    baseline_turn_id=case when $1::text = '' then null else ar.baseline_turn_id end,
+    turn_id=nullif($1::text,''),attention=null
 from requeued_message m
-where ar.id=$1 and ar.message_id=m.id
+where ar.id=$2 and ar.message_id=m.id
   and ar.turn_id is null and ar.state in ('pending','submitting','uncertain')
-  and (ar.baseline_turn_id is null or ar.baseline_turn_id=$2)
+  and (ar.baseline_turn_id is null or ar.baseline_turn_id=$3)
 `
 
 type RequeueAutoMessageAsFollowParams struct {
-	RunID        string
-	TargetTurnID sql.NullString
+	AcceptedTurnID string
+	RunID          string
+	TargetTurnID   sql.NullString
 }
 
 func (q *Queries) RequeueAutoMessageAsFollow(ctx context.Context, arg RequeueAutoMessageAsFollowParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, requeueAutoMessageAsFollow, arg.RunID, arg.TargetTurnID)
+	result, err := q.db.ExecContext(ctx, requeueAutoMessageAsFollow, arg.AcceptedTurnID, arg.RunID, arg.TargetTurnID)
 	if err != nil {
 		return 0, err
 	}

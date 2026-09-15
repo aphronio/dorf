@@ -107,9 +107,11 @@ retain an optional immutable application developer instruction snapshot. The Cod
 Turn, preserving built-in model instructions. Recovery of an accepted Turn and steering do not
 apply snapshots. Client-owned application policy remains outside Dorf Core.
 Messages may also distinguish application observations from human input. Observations use the
-existing Follow queue and text storage. Codex submits them as native tool output with an embedded
-AgentRun identity for completed-input attribution after reconnect; the ordinary Follow recovery
-algorithm is unchanged. Client semantics and visibility remain outside Core. Other Harnesses must
+existing Auto/Follow delivery selection and text storage. Codex submits them as native tool output
+with an embedded AgentRun identity for completed-input attribution after reconnect. Auto joins
+active work or starts idle work. If its selected target finishes during native start-or-steer,
+exact acceptance in a later Turn is atomically adopted as Follow, including cleanup recovery.
+Explicit Steer remains unsupported for observations. Client semantics and visibility remain outside Core. Other Harnesses must
 support this input kind explicitly rather than translating it to a human message.
 
 Clients request skill refresh through durable Message input. Existing delivery selection decides

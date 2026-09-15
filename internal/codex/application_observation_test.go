@@ -52,8 +52,11 @@ func TestApplicationObservationNativeSubmissionAndColdAttribution(t *testing.T) 
 	if !reflect.DeepEqual(turn.AcceptedMessageIDs, []string{"delivery-1"}) {
 		t.Fatalf("accepted: %+v", turn)
 	}
-	if _, err := p.steerTurn(context.Background(), "thread", "active", "other", core.HarnessInput{Observation: true, Text: "update"}); err == nil {
-		t.Fatal("observation steered an active turn")
+	if accepted, err := p.steerTurn(context.Background(), "thread", "observed-turn", "other", core.HarnessInput{Observation: true, Text: "update"}); err != nil || accepted != "observed-turn" {
+		t.Fatalf("active tool output: %s %v", accepted, err)
+	}
+	if len(submitted["input"].([]any)) != 0 || submitted["clientUserMessageId"] != nil || submitted["toolOutput"] == nil {
+		t.Fatal("active observation became user input")
 	}
 	output["namespace"] = "external"
 	if observationDeliveryID(output) != "" {

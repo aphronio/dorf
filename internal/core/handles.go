@@ -245,7 +245,7 @@ func (h AgentHandle) Message(ctx context.Context, key string, input MessageInput
 		return MessageReceipt{}, err
 	}
 	if !ValidObservationDelivery(input.Observation, intent, len(input.Attachments)) {
-		return MessageReceipt{}, fmt.Errorf("observations require text-only follow delivery")
+		return MessageReceipt{}, fmt.Errorf("observations require text-only follow or auto delivery")
 	}
 	request := MessageAdmission{
 		JobID: h.jobID, SandboxID: h.sandboxID, FromKind: MessageFromHuman,

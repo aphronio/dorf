@@ -36,7 +36,7 @@ const (
 	AbsurdSchemaSHA256  = "d34309370c539f3a51f2b36b69b1f77551f8e4a14480a1c8def8bb8f40fd9aab"
 )
 
-var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql", "009_message_attachments.sql", "010_job_idle_policy.sql", "011_message_developer_instructions.sql", "012_sandbox_idle_grace.sql", "013_message_observation.sql", "014_job_execution_wakes.sql"}
+var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql", "009_message_attachments.sql", "010_job_idle_policy.sql", "011_message_developer_instructions.sql", "012_sandbox_idle_grace.sql", "013_message_observation.sql", "014_job_execution_wakes.sql", "015_observation_auto.sql"}
 
 type Store struct{ DB *sql.DB }
 
@@ -248,7 +248,7 @@ func normalizeMessage(input core.MessageAdmission) (core.MessageAdmission, error
 		return core.MessageAdmission{}, fmt.Errorf("message intent must be auto, follow, or steer")
 	}
 	if !core.ValidObservationDelivery(input.Observation, input.Intent, len(input.Attachments)) {
-		return core.MessageAdmission{}, fmt.Errorf("observations require text-only follow delivery")
+		return core.MessageAdmission{}, fmt.Errorf("observations require text-only follow or auto delivery")
 	}
 	if !core.ValidMessageInput(core.MessageInput{Text: input.Input, Attachments: input.Attachments, Observation: input.Observation, DeveloperInstructions: input.DeveloperInstructions}) {
 		return core.MessageAdmission{}, fmt.Errorf("message text or attachments are invalid")
@@ -1454,14 +1454,14 @@ func (s Store) BindSteer(ctx context.Context, runID, turnID, status string) erro
 	return tx.Commit()
 }
 
-func (s Store) RequeueAutoMessageAsFollow(ctx context.Context, runID, targetTurnID string) error {
+func (s Store) RequeueAutoMessageAsFollow(ctx context.Context, runID, targetTurnID, acceptedTurnID string) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	rows, err := dbsql.New(s.DB).WithTx(tx).RequeueAutoMessageAsFollow(ctx, dbsql.RequeueAutoMessageAsFollowParams{
-		RunID: runID, TargetTurnID: sql.NullString{String: targetTurnID, Valid: true},
+		RunID: runID, TargetTurnID: sql.NullString{String: targetTurnID, Valid: true}, AcceptedTurnID: acceptedTurnID,
 	})
 	if err := expectOneRows(rows, err); err != nil {
 		return err

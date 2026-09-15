@@ -28,7 +28,7 @@ type ExecutionStore interface {
 	PrepareAgentRun(context.Context, string, string, string) error
 	BindAgentRun(context.Context, string, string, string, string, string) error
 	BindSteer(context.Context, string, string, string) error
-	RequeueAutoMessageAsFollow(context.Context, string, string) error
+	RequeueAutoMessageAsFollow(context.Context, string, string, string) error
 	FailAgentRun(context.Context, string, string) error
 	UncertainAgentRun(context.Context, string, string) error
 	AgentRunAttention(context.Context, string, string) error
@@ -155,8 +155,8 @@ func (s ExecutionService) bindSteer(ctx context.Context, runID, turnID, outcome 
 	return s.recordAgentRun(ctx, func() error { return s.store.BindSteer(ctx, runID, turnID, outcome) })
 }
 
-func (s ExecutionService) requeueAutoMessageAsFollow(ctx context.Context, runID, targetTurnID string) error {
-	return s.recordAgentRun(ctx, func() error { return s.store.RequeueAutoMessageAsFollow(ctx, runID, targetTurnID) })
+func (s ExecutionService) requeueAutoMessageAsFollow(ctx context.Context, runID, targetTurnID, acceptedTurnID string) error {
+	return s.recordAgentRun(ctx, func() error { return s.store.RequeueAutoMessageAsFollow(ctx, runID, targetTurnID, acceptedTurnID) })
 }
 
 func (s ExecutionService) failAgentRun(ctx context.Context, runID, reason string) error {
@@ -404,7 +404,7 @@ func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery De
 		return s.bindSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciliation.Turn.Status)
 	}
 	if reconciliation.Classification == "target-terminal" {
-		return s.settleTerminalSteerTarget(ctx, delivery)
+		return s.settleTerminalSteerTarget(ctx, delivery, turns)
 	}
 	if reconciliation.Classification == "uncertain" {
 		return s.uncertainAgentRun(ctx, run.ID, reconciliation.Reason)
@@ -432,7 +432,7 @@ func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery De
 			return s.bindSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciled.Turn.Status)
 		}
 		if reconciled.Classification == "target-terminal" {
-			return s.settleTerminalSteerTarget(ctx, delivery)
+			return s.settleTerminalSteerTarget(ctx, delivery, observed)
 		}
 		if reconciled.Classification == "uncertain" {
 			return s.uncertainAgentRun(ctx, run.ID, reconciled.Reason)
@@ -448,11 +448,41 @@ func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery De
 	return s.bindSteer(ctx, run.ID, acceptedTurnID, reconciliation.Turn.Status)
 }
 
-func (s ExecutionService) settleTerminalSteerTarget(ctx context.Context, delivery Delivery) error {
+func (s ExecutionService) settleTerminalSteerTarget(ctx context.Context, delivery Delivery, turns []HarnessTurn) error {
 	if delivery.Message.RequestedIntent == MessageAuto {
-		return s.requeueAutoMessageAsFollow(ctx, delivery.AgentRun.ID, delivery.Message.TargetTurnID)
+		accepted, err := automaticObservationTurn(delivery, turns)
+		if err != nil {
+			return s.uncertainAgentRun(ctx, delivery.AgentRun.ID, err.Error())
+		}
+		return s.requeueAutoMessageAsFollow(ctx, delivery.AgentRun.ID, delivery.Message.TargetTurnID, accepted)
 	}
 	return s.failAgentRun(ctx, delivery.AgentRun.ID, "steer target became terminal before the exact Message was accepted")
+}
+
+// Standalone tool output uses a native start-or-steer operation. If the target
+// finished in flight, recover its exact accepted delivery in a later turn.
+func automaticObservationTurn(delivery Delivery, turns []HarnessTurn) (string, error) {
+	if !delivery.Message.Observation {
+		return "", nil
+	}
+	accepted := ""
+	afterTarget := false
+	for _, turn := range turns {
+		if turn.ID == delivery.Message.TargetTurnID {
+			afterTarget = true
+			continue
+		}
+		for _, id := range turn.AcceptedMessageIDs {
+			if id != delivery.AgentRun.ID {
+				continue
+			}
+			if !afterTarget || accepted != "" {
+				return "", fmt.Errorf("automatic observation has conflicting native attribution")
+			}
+			accepted = turn.ID
+		}
+	}
+	return accepted, nil
 }
 
 func (s ExecutionService) reach(ctx context.Context, point string, delivery Delivery) error {
@@ -612,7 +642,7 @@ func (s ExecutionService) reconcileCleanupMessage(ctx context.Context, execution
 		case "no-submit":
 			return s.failAgentRun(ctx, run.ID, "cleanup closed steer after exact Harness history proved it was not accepted")
 		case "target-terminal":
-			return s.failAgentRun(ctx, run.ID, "steer target became terminal before the exact Message was accepted")
+			return s.cleanupTerminalSteerTarget(ctx, delivery, observed.Turns)
 		case "uncertain":
 			return s.retainCleanupMutation(ctx, delivery, steer.Reason)
 		default:
@@ -650,6 +680,20 @@ func (s ExecutionService) reconcileCleanupMessage(ctx context.Context, execution
 		return cleanupStillActive{MessageID: delivery.Message.ID, Reason: "accepted Harness mutation remains active"}
 	}
 	return nil
+}
+
+func (s ExecutionService) cleanupTerminalSteerTarget(ctx context.Context, delivery Delivery, turns []HarnessTurn) error {
+	accepted, err := automaticObservationTurn(delivery, turns)
+	if err != nil {
+		return s.retainCleanupMutation(ctx, delivery, err.Error())
+	}
+	if delivery.Message.RequestedIntent == MessageAuto && accepted != "" {
+		if err := s.requeueAutoMessageAsFollow(ctx, delivery.AgentRun.ID, delivery.Message.TargetTurnID, accepted); err != nil {
+			return err
+		}
+		return cleanupStillActive{MessageID: delivery.Message.ID, Reason: "accepted observation follow requires settlement"}
+	}
+	return s.failAgentRun(ctx, delivery.AgentRun.ID, "steer target became terminal before the exact Message was accepted")
 }
 
 type agentRunHistoryOperation struct {

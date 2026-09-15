@@ -1,9 +1,9 @@
 # D125: Messages distinguish application observations
 
-- **Applicability:** current
+- **Applicability:** partial
 - **Areas:** client-api, harnesses, interaction
 - **Read when:** Delivering asynchronous application updates without impersonating human input.
-- **Decision history:** Accepted application observation input, 2026-09-14
+- **Decision history:** Accepted application observation input, 2026-09-14; D131 extends delivery to Auto, 2026-09-15.
 - **Decision:** One immutable observation flag distinguishes application-generated text on existing
   Message admission. It requires explicit Follow, no attachments, and a supporting Harness.
   Scheduling, custody, replay, and user steering retain their existing semantics.
