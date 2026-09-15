@@ -35,3 +35,20 @@ func TestMessageWakeTimeoutReloadsAndForeignPayloadIsRejected(t *testing.T) {
 		t.Fatalf("await failure=%v, want %v", err, want)
 	}
 }
+
+func TestJobExecutionWakeContractUsesFreshRevisionAndRejectsForeignPayload(t *testing.T) {
+	if got := JobExecutionWakeEvent("job-1", 9); got != "dorf.job-execution:v1:job-1:00000000000000000009" {
+		t.Fatalf("execution wake event=%q", got)
+	}
+	encoded, err := json.Marshal(JobExecutionWakeV1{JobID: "job-1", Revision: 9, CauseKey: "message:message-1"})
+	if err != nil || string(encoded) != `{"job_id":"job-1","revision":9,"cause_key":"message:message-1"}` {
+		t.Fatalf("persisted execution wake JSON=%s err=%v", encoded, err)
+	}
+	if err := resolveJobExecutionWake("job-1", 9, JobExecutionWakeV1{}, &absurd.TimeoutError{}); err != nil {
+		t.Fatalf("execution wake timeout did not request reload: %v", err)
+	}
+	foreign := JobExecutionWakeV1{JobID: "job-2", Revision: 9, CauseKey: "stop:run-1"}
+	if err := resolveJobExecutionWake("job-1", 9, foreign, nil); err == nil || !strings.Contains(err.Error(), "conflicts with Job job-1 revision 9") {
+		t.Fatalf("foreign execution wake error=%v", err)
+	}
+}

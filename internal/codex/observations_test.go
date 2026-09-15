@@ -3,6 +3,7 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -145,4 +146,55 @@ func TestObservationsRecoverOnlyDurablyBoundTurn(t *testing.T) {
 	if len(events) != 0 {
 		t.Fatalf("got %d events", len(events))
 	}
+}
+
+func TestTerminalWakeIsAsynchronousExactAndCoalesced(t *testing.T) {
+	wakes := make(chan core.NativeTerminalWakeTarget, 2)
+	release := make(chan struct{})
+	observations := NewObservations(context.Background(), nil, func(_ context.Context, target core.NativeTerminalWakeTarget) error {
+		<-release
+		wakes <- target
+		return nil
+	})
+	p := &protocol{observations: observations, observed: &observedTurn{
+		run:      core.AgentRun{ID: "run", JobID: "job", SandboxID: "sandbox"},
+		threadID: "thread", turnID: "turn", complete: true,
+	}}
+	p.signalTerminalWake()
+	p.signalTerminalWake()
+	close(release)
+	select {
+	case target := <-wakes:
+		want := (core.NativeTerminalWakeTarget{JobID: "job", SandboxID: "sandbox", AgentRunID: "run", ThreadID: "thread", TurnID: "turn"})
+		if target != want {
+			t.Fatalf("terminal wake target=%+v want=%+v", target, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing terminal wake")
+	}
+	observations.Close()
+	if len(wakes) != 0 {
+		t.Fatal("duplicate terminal wake")
+	}
+}
+
+func TestTerminalWakeFailureEmitsBoundedDiagnostic(t *testing.T) {
+	events := make(chan telemetry.Event, 1)
+	observations := NewObservations(context.Background(), func(event telemetry.Event) { events <- event }, func(context.Context, core.NativeTerminalWakeTarget) error {
+		return errors.New("database unavailable")
+	})
+	p := &protocol{observations: observations, observed: &observedTurn{
+		run:      core.AgentRun{ID: "run", JobID: "job", SandboxID: "sandbox"},
+		threadID: "thread", turnID: "turn", complete: true,
+	}}
+	p.signalTerminalWake()
+	select {
+	case event := <-events:
+		if event.Name != "codex.native-terminal-wake.failed" || !event.Failed || event.Attributes["dorf.agent_run_id"] != "run" || event.Attributes["native.turn_id"] != "turn" {
+			t.Fatalf("terminal wake diagnostic=%+v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing terminal wake diagnostic")
+	}
+	observations.Close()
 }

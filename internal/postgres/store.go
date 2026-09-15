@@ -36,7 +36,7 @@ const (
 	AbsurdSchemaSHA256  = "d34309370c539f3a51f2b36b69b1f77551f8e4a14480a1c8def8bb8f40fd9aab"
 )
 
-var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql", "009_message_attachments.sql", "010_job_idle_policy.sql", "011_message_developer_instructions.sql", "012_sandbox_idle_grace.sql", "013_message_observation.sql"}
+var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql", "009_message_attachments.sql", "010_job_idle_policy.sql", "011_message_developer_instructions.sql", "012_sandbox_idle_grace.sql", "013_message_observation.sql", "014_job_execution_wakes.sql"}
 
 type Store struct{ DB *sql.DB }
 
@@ -1306,6 +1306,22 @@ func (s Store) AgentMessage(ctx context.Context, jobID string) (*core.AgentMessa
 		return nil, err
 	}
 	return &core.AgentMessageWork{MessageID: message.ID, SandboxID: run.SandboxID}, nil
+}
+
+func (s Store) HasImmediatelyEligibleAgentMessage(ctx context.Context, jobID string) (bool, error) {
+	q := dbsql.New(s.DB)
+	selected, err := q.NextAgentMessage(ctx, jobID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	run, err := q.GetAgentRunByMessage(ctx, selected.ID)
+	if err != nil {
+		return false, err
+	}
+	return run.State == core.AgentRunPending, nil
 }
 
 // ValidateCodingAgentMessage validates only the static coding execution

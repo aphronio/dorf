@@ -92,6 +92,10 @@ type ExecutionService struct {
 	agents     AgentExecutionResolver
 }
 
+type immediatelyEligibleAgentMessageStore interface {
+	HasImmediatelyEligibleAgentMessage(context.Context, string) (bool, error)
+}
+
 func (s ExecutionService) WithAgentExecution(agents AgentExecutionResolver) ExecutionService {
 	s.agents = agents
 	return s
@@ -248,7 +252,22 @@ func (s ExecutionService) ReconcileJobAgent(ctx context.Context, jobID string) (
 			return nil
 		})
 	})
-	return progress, err
+	return s.classifyAgentReconciliation(ctx, jobID, progress, err)
+}
+
+func (s ExecutionService) classifyAgentReconciliation(ctx context.Context, jobID string, progress AgentReconciliationProgress, reconcileErr error) (AgentReconciliationProgress, error) {
+	if reconcileErr != nil || progress != AgentReconciliationPending {
+		return progress, reconcileErr
+	}
+	store, ok := s.store.(immediatelyEligibleAgentMessageStore)
+	if !ok {
+		return progress, nil
+	}
+	ready, err := store.HasImmediatelyEligibleAgentMessage(ctx, jobID)
+	if err != nil || !ready {
+		return progress, err
+	}
+	return AgentReconciliationReady, nil
 }
 
 // ObserveSettledAgentMessage reads the exact Harness Turn needed by typed

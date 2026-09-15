@@ -8,7 +8,6 @@ import (
 
 type Store interface {
 	Job(context.Context, string) (core.Job, error)
-	NextWakeSequence(context.Context, string) (int64, error)
 	CodebaseInvestigationSource(context.Context, string) (Source, error)
 	Sandboxes(context.Context, string) ([]core.Sandbox, error)
 	Actions(context.Context, string) ([]core.Action, error)

@@ -19,15 +19,20 @@ type Observations struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	emit         func(telemetry.Event)
+	terminalWake func(context.Context, core.NativeTerminalWakeTarget) error
 	mu           sync.Mutex
 	active       map[observationKey]bool
 	instructions map[instructionScope]instructionHashes
 	wg           sync.WaitGroup
 }
 
-func NewObservations(ctx context.Context, emit func(telemetry.Event)) *Observations {
+func NewObservations(ctx context.Context, emit func(telemetry.Event), terminalWake ...func(context.Context, core.NativeTerminalWakeTarget) error) *Observations {
 	ctx, cancel := context.WithCancel(ctx)
-	return &Observations{Replies: NewReplyFeed(), ctx: ctx, cancel: cancel, emit: emit, active: make(map[observationKey]bool), instructions: make(map[instructionScope]instructionHashes)}
+	var wake func(context.Context, core.NativeTerminalWakeTarget) error
+	if len(terminalWake) > 0 {
+		wake = terminalWake[0]
+	}
+	return &Observations{Replies: NewReplyFeed(), ctx: ctx, cancel: cancel, emit: emit, terminalWake: wake, active: make(map[observationKey]bool), instructions: make(map[instructionScope]instructionHashes)}
 }
 
 type instructionScope struct {
@@ -64,6 +69,7 @@ type observedTurn struct {
 	replyOverflow  bool
 	replyRefresh   bool
 	replySettled   bool
+	wakeStarted    bool
 }
 
 func (p *protocol) bindObservation(threadID, turnID string, subscribed bool) bool {
@@ -137,6 +143,7 @@ func (p *protocol) observeUntilSettled() {
 		for _, turn := range turns {
 			if turn.ID == p.observed.turnID && turn.Terminal() {
 				p.observed.complete = true
+				p.signalTerminalWake()
 				if p.observations.emit != nil {
 					p.emitObservation("codex.turn.snapshot", time.Now(), map[string]any{"status": turn.Status}, false)
 				}
@@ -207,6 +214,7 @@ func (p *protocol) observeNotification(message map[string]any) {
 	p.observeReply(method, params)
 	if method == "turn/completed" {
 		p.observed.complete = true
+		p.signalTerminalWake()
 	}
 	if compaction {
 		p.forgetWorkspaceInstructions(threadID)
@@ -321,6 +329,41 @@ func (p *protocol) refreshReplyPrefix() bool {
 	if complete {
 		p.observed.complete = true
 		p.observed.replySettled = true
+		p.signalTerminalWake()
 	}
 	return true
+}
+
+func (p *protocol) signalTerminalWake() {
+	if p.observed == nil || !p.observed.complete || p.observed.wakeStarted || p.observations == nil || p.observations.terminalWake == nil {
+		return
+	}
+	p.observed.wakeStarted = true
+	target := core.NativeTerminalWakeTarget{
+		JobID: p.observed.run.JobID, SandboxID: p.observed.run.SandboxID,
+		AgentRunID: p.observed.run.ID, ThreadID: p.observed.threadID, TurnID: p.observed.turnID,
+	}
+	o := p.observations
+	o.mu.Lock()
+	if o.ctx.Err() != nil {
+		o.mu.Unlock()
+		return
+	}
+	o.wg.Add(1)
+	wake := o.terminalWake
+	o.mu.Unlock()
+	go func() {
+		defer o.wg.Done()
+		ctx, cancel := context.WithTimeout(o.ctx, 5*time.Second)
+		defer cancel()
+		if err := wake(ctx, target); err != nil && o.emit != nil {
+			o.emit(telemetry.Event{
+				Name: "codex.native-terminal-wake.failed", At: time.Now(), Failed: true,
+				Attributes: map[string]any{
+					"dorf.job_id": target.JobID, "dorf.agent_run_id": target.AgentRunID,
+					"native.thread_id": target.ThreadID, "native.turn_id": target.TurnID,
+				},
+			})
+		}
+	}()
 }

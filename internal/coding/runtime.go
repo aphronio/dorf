@@ -49,18 +49,19 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 			proposal.PollInterval = 30 * time.Second
 		}
 		for {
-			work, err := RunJob(ctx, jobHandle, runtime.Coding, store, proposal, params.JobID)
+			revision, work, err := runJobAtWakeRevision(ctx, application, jobHandle, runtime.Coding, store, proposal, params.JobID)
 			if err != nil {
 				if result, stopped, stopErr := application.StopForUnavailableSandboxProfile(ctx, params.JobID, work.FactID, err); stopped {
 					return result, stopErr
 				}
 				return core.TaskResultV1{}, err
 			}
+			progress := core.AgentReconciliationIdle
 			if work.Kind == WorkWaitAgent {
 				if runtime.Agent == nil {
 					return core.TaskResultV1{}, fmt.Errorf("Agent reconciliation is not configured")
 				}
-				if _, err := runtime.Agent.ReconcileJobAgent(ctx, params.JobID); err != nil {
+				if progress, err = runtime.Agent.ReconcileJobAgent(ctx, params.JobID); err != nil {
 					if result, stopped, stopErr := application.StopForUnavailableSandboxProfile(ctx, params.JobID, work.FactID, err); stopped {
 						return result, stopErr
 					}
@@ -80,17 +81,26 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 				}
 				return core.TaskResultV1{JobID: params.JobID, Outcome: "admission-closed"}, nil
 			}
-			core.ReconcileIdle(ctx, runtime.Agent, params.JobID)
-			sequence, err := store.NextWakeSequence(ctx, params.JobID)
-			if err != nil {
-				return core.TaskResultV1{}, err
+			if progress == core.AgentReconciliationReady {
+				continue
 			}
-			stepName, timeout := wakeOptions(work, sequence, proposal.PollInterval)
-			if err := application.AwaitMessageWake(ctx, params.JobID, sequence, stepName, timeout); err != nil {
+			core.ReconcileIdle(ctx, runtime.Agent, params.JobID)
+			expectedRevision := revision + 1
+			stepName, timeout := wakeOptions(work, expectedRevision, proposal.PollInterval)
+			if err := application.AwaitJobExecutionWake(ctx, params.JobID, expectedRevision, stepName, timeout); err != nil {
 				return core.TaskResultV1{}, err
 			}
 		}
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
+}
+
+func runJobAtWakeRevision(ctx context.Context, application core.Application, job core.JobHandle, execution CodingExecution, store Store, proposal ProposalRuntime, jobID string) (int64, Work, error) {
+	revision, err := application.JobExecutionWakeRevision(ctx, jobID)
+	if err != nil {
+		return 0, Work{}, err
+	}
+	work, err := RunJob(ctx, job, execution, store, proposal, jobID)
+	return revision, work, err
 }
 
 func runtimeForJob(ctx context.Context, store Store, runtimes RuntimeResolver, jobID string) (Runtime, error) {
@@ -123,13 +133,13 @@ func recordRuntimeAttention(ctx context.Context, store Store, jobID, source, det
 	return errors.New(detail)
 }
 
-func wakeOptions(work Work, sequence int64, proposalPollInterval time.Duration) (string, time.Duration) {
-	stepName, timeout := fmt.Sprintf("dorf/message-wake/v1/%020d", sequence), idleMessagePollInterval
+func wakeOptions(work Work, revision int64, proposalPollInterval time.Duration) (string, time.Duration) {
+	stepName, timeout := fmt.Sprintf("dorf/job-execution-wake/v1/%020d", revision), idleMessagePollInterval
 	switch work.Kind {
 	case WorkObserveProposal:
-		stepName, timeout = fmt.Sprintf("dorf/proposal-wake/v2/%s/%020d", work.Revision, sequence), proposalPollInterval
+		stepName, timeout = fmt.Sprintf("dorf/proposal-wake/v3/%s/%020d", work.Revision, revision), proposalPollInterval
 	case WorkWaitAgent:
-		stepName, timeout = fmt.Sprintf("dorf/agent-run-wake/v1/%s/%020d", work.FactID, sequence), activeAgentPollInterval
+		stepName, timeout = fmt.Sprintf("dorf/agent-run-wake/v2/%s/%020d", work.FactID, revision), activeAgentPollInterval
 	}
 	return stepName, timeout
 }

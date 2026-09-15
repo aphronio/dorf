@@ -180,7 +180,7 @@ where m.job_id=sqlc.arg(job_id)
 order by m.sequence,ar.id;
 
 -- name: GetMessageInterruptTarget :one
-select source.id,source.state,source.interrupt_requested
+select source.id,source.job_id,source.state,source.interrupt_requested
 from dorf.agent_runs requested
 join dorf.agent_runs source on source.job_id=requested.job_id
     and source.sandbox_id=requested.sandbox_id and source.harness=requested.harness

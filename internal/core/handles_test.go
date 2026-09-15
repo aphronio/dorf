@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/aphronio/dorf/internal/sandbox"
 )
 
 type handleTestFileReader struct {
@@ -58,6 +60,36 @@ func TestSandboxHandleReadFileReturnsExactRepeatedBytesAndEnforcesOwnership(t *t
 	cleaningApplication := Application{Store: cleaning, SandboxRuntimes: handleTestRuntimeResolver{files: reader}}
 	if _, err := cleaningApplication.jobHandle(job.ID).sandboxHandle(owned.ID).ReadFile(context.Background(), "result.txt"); !errors.Is(err, ErrSandboxFileCleanupFenced) {
 		t.Fatalf("cleanup read error=%v", err)
+	}
+}
+
+func TestSandboxHandleReadFileRejectsOversizeCustomRuntimeResult(t *testing.T) {
+	job := Job{ID: "job-files", SandboxProfile: "profile", AdmissionOpen: true, CleanupState: CleanupPending}
+	owned := Sandbox{ID: "sandbox-files", JobID: job.ID}
+	contents := make([]byte, sandbox.MaxFileReadBytes)
+	var runtimeErr error
+	reader := handleTestFileReader{read: func(context.Context, Job, Sandbox, string) ([]byte, error) {
+		return contents, runtimeErr
+	}}
+	application := Application{
+		Store:           handleTestStore{job: job, sandbox: owned},
+		SandboxRuntimes: handleTestRuntimeResolver{files: reader},
+	}
+	handle := application.jobHandle(job.ID).sandboxHandle(owned.ID)
+	got, err := handle.ReadFile(context.Background(), "result.txt")
+	if err != nil || len(got) != sandbox.MaxFileReadBytes {
+		t.Fatalf("exact-limit custom runtime bytes=%d err=%v", len(got), err)
+	}
+	contents = append(contents, 1)
+	got, err = handle.ReadFile(context.Background(), "result.txt")
+	if got != nil || !errors.Is(err, sandbox.ErrFileTooLarge) {
+		t.Fatalf("oversize custom runtime bytes=%d err=%v", len(got), err)
+	}
+	originalErr := errors.New("runtime ownership failure")
+	runtimeErr = originalErr
+	got, err = handle.ReadFile(context.Background(), "result.txt")
+	if got != nil || !errors.Is(err, originalErr) || errors.Is(err, sandbox.ErrFileTooLarge) {
+		t.Fatalf("oversize partial runtime bytes=%d err=%v", len(got), err)
 	}
 }
 

@@ -1328,7 +1328,7 @@ func (a controlAPIJobs) InterruptMessage(ctx context.Context, jobID, messageID s
 	if execution.AgentRun.Harness != codex.Harness {
 		return controlapi.Message{}, controlapi.ErrInterruptUnavailable
 	}
-	if err := a.store.RequestMessageInterrupt(ctx, job.ID, messageID); err != nil {
+	if _, err := a.application().RequestMessageInterrupt(ctx, job.ID, messageID); err != nil {
 		if errors.Is(err, core.ErrMessageInterruptUnavailable) || errors.Is(err, core.ErrMessageAdmissionClosed) {
 			return controlapi.Message{}, controlapi.ErrInterruptUnavailable
 		}

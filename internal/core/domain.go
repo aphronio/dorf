@@ -267,6 +267,13 @@ type AgentRun struct {
 	FinishedAt      time.Time `json:"finished_at,omitempty"`
 }
 
+// MessageInterruptTarget is the original Turn-starting run selected by Stop.
+type MessageInterruptTarget struct {
+	AgentRunID         string
+	JobID              string
+	InterruptRequested bool
+}
+
 type Delivery struct {
 	Message  Message  `json:"message"`
 	AgentRun AgentRun `json:"agent_run"`

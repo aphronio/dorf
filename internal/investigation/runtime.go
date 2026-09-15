@@ -45,18 +45,19 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 			return core.TaskResultV1{}, err
 		}
 		for {
-			work, err := Run(ctx, jobHandle, runtime.Investigation, store, params.JobID)
+			revision, work, err := runAtWakeRevision(ctx, application, jobHandle, runtime.Investigation, store, params.JobID)
 			if err != nil {
 				if result, stopped, stopErr := application.StopForUnavailableSandboxProfile(ctx, params.JobID, work.FactID, err); stopped {
 					return result, stopErr
 				}
 				return core.TaskResultV1{}, err
 			}
+			progress := core.AgentReconciliationIdle
 			if work.Kind == WorkWaitAgent {
 				if runtime.Agent == nil {
 					return core.TaskResultV1{}, fmt.Errorf("Agent reconciliation is not configured")
 				}
-				if _, err := runtime.Agent.ReconcileJobAgent(ctx, params.JobID); err != nil {
+				if progress, err = runtime.Agent.ReconcileJobAgent(ctx, params.JobID); err != nil {
 					if result, stopped, stopErr := application.StopForUnavailableSandboxProfile(ctx, params.JobID, work.FactID, err); stopped {
 						return result, stopErr
 					}
@@ -66,23 +67,32 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 			if work.Kind == WorkComplete {
 				return core.TaskResultV1{JobID: params.JobID, Outcome: "admission-closed"}, nil
 			}
-			core.ReconcileIdle(ctx, runtime.Agent, params.JobID)
-			sequence, err := store.NextWakeSequence(ctx, params.JobID)
-			if err != nil {
-				return core.TaskResultV1{}, err
+			if progress == core.AgentReconciliationReady {
+				continue
 			}
-			stepName, timeout := wakeOptions(work, sequence)
-			if err := application.AwaitMessageWake(ctx, params.JobID, sequence, stepName, timeout); err != nil {
+			core.ReconcileIdle(ctx, runtime.Agent, params.JobID)
+			expectedRevision := revision + 1
+			stepName, timeout := wakeOptions(work, expectedRevision)
+			if err := application.AwaitJobExecutionWake(ctx, params.JobID, expectedRevision, stepName, timeout); err != nil {
 				return core.TaskResultV1{}, err
 			}
 		}
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
 }
 
-func wakeOptions(work Work, sequence int64) (string, time.Duration) {
-	stepName, timeout := fmt.Sprintf("dorf/investigation-wake/v2/%020d", sequence), idleMessagePollInterval
+func runAtWakeRevision(ctx context.Context, application core.Application, job core.JobHandle, execution gitworkspace.Execution, store Store, jobID string) (int64, Work, error) {
+	revision, err := application.JobExecutionWakeRevision(ctx, jobID)
+	if err != nil {
+		return 0, Work{}, err
+	}
+	work, err := Run(ctx, job, execution, store, jobID)
+	return revision, work, err
+}
+
+func wakeOptions(work Work, revision int64) (string, time.Duration) {
+	stepName, timeout := fmt.Sprintf("dorf/investigation-wake/v3/%020d", revision), idleMessagePollInterval
 	if work.Kind == WorkWaitAgent {
-		stepName, timeout = fmt.Sprintf("dorf/investigation-agent-wake/v2/%s/%020d", work.FactID, sequence), activeAgentPollInterval
+		stepName, timeout = fmt.Sprintf("dorf/investigation-agent-wake/v3/%s/%020d", work.FactID, revision), activeAgentPollInterval
 	}
 	return stepName, timeout
 }

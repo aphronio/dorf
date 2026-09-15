@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -16,8 +17,42 @@ type MessageWakeV1 struct {
 	Sequence int64  `json:"sequence"`
 }
 
+// JobExecutionWakeV1 is a disposable hint that asks a Job's current task to
+// reload authoritative workflow and Harness state.
+type JobExecutionWakeV1 struct {
+	JobID    string `json:"job_id"`
+	Revision int64  `json:"revision"`
+	CauseKey string `json:"cause_key"`
+}
+
+// NativeTerminalWakeTarget carries the exact native coordinates already
+// authenticated by a Harness observer. It authorizes only a wake hint.
+type NativeTerminalWakeTarget struct {
+	JobID      string
+	SandboxID  string
+	AgentRunID string
+	ThreadID   string
+	TurnID     string
+}
+
+type jobExecutionWakeRevisionStore interface {
+	JobExecutionWakeRevision(context.Context, string) (int64, error)
+}
+
+type jobExecutionWakeSignalStore interface {
+	SignalJobExecutionWake(context.Context, string, string, string) (int64, error)
+}
+
+type nativeTerminalWakeStore interface {
+	SignalNativeTerminalWake(context.Context, string, NativeTerminalWakeTarget) (bool, error)
+}
+
 func MessageWakeEvent(jobID string, sequence int64) string {
 	return fmt.Sprintf("dorf.job-message:%s:%020d", jobID, sequence)
+}
+
+func JobExecutionWakeEvent(jobID string, revision int64) string {
+	return fmt.Sprintf("dorf.job-execution:v1:%s:%020d", jobID, revision)
 }
 
 // ScheduleJobTask reconciles one consumer-owned task with the Job's durable
@@ -37,6 +72,64 @@ func (a Application) ScheduleJobTask(ctx context.Context, job Job, taskName, tas
 func (a Application) EmitMessageWake(ctx context.Context, message Message) error {
 	if err := a.Tasks.EmitEvent(ctx, a.Tasks.QueueName(), MessageWakeEvent(message.JobID, message.Sequence), MessageWakeV1{JobID: message.JobID, Sequence: message.Sequence}); err != nil {
 		return fmt.Errorf("message %s sequence %d was accepted, but its wake hint failed; retry the same send key and complete Message request: %w", message.ID, message.Sequence, err)
+	}
+	if _, err := a.signalJobExecutionWake(ctx, message.JobID, "message:"+message.ID); err != nil {
+		return fmt.Errorf("message %s sequence %d was accepted and its FIFO wake emitted, but its execution wake hint failed; retry the same send key and complete Message request: %w", message.ID, message.Sequence, err)
+	}
+	return nil
+}
+
+func (a Application) JobExecutionWakeRevision(ctx context.Context, jobID string) (int64, error) {
+	wakes, ok := a.Store.(jobExecutionWakeRevisionStore)
+	if !ok {
+		return 0, fmt.Errorf("Job execution wake storage is not configured")
+	}
+	revision, err := wakes.JobExecutionWakeRevision(ctx, jobID)
+	if err != nil {
+		return 0, err
+	}
+	if revision < 0 || revision == math.MaxInt64 {
+		return 0, fmt.Errorf("Job %s execution wake revision cannot advance", jobID)
+	}
+	return revision, nil
+}
+
+func (a Application) signalJobExecutionWake(ctx context.Context, jobID, causeKey string) (int64, error) {
+	wakes, ok := a.Store.(jobExecutionWakeSignalStore)
+	if !ok || a.Tasks == nil {
+		return 0, fmt.Errorf("Job execution wake is not configured")
+	}
+	return wakes.SignalJobExecutionWake(ctx, a.Tasks.QueueName(), jobID, causeKey)
+}
+
+// SignalNativeTerminalWake turns one exact observer binding into a wake hint.
+// PostgreSQL and the Harness remain authoritative for AgentRun settlement.
+func (a Application) SignalNativeTerminalWake(ctx context.Context, target NativeTerminalWakeTarget) error {
+	wakes, ok := a.Store.(nativeTerminalWakeStore)
+	if !ok || a.Tasks == nil {
+		return fmt.Errorf("native terminal wake is not configured")
+	}
+	_, err := wakes.SignalNativeTerminalWake(ctx, a.Tasks.QueueName(), target)
+	return err
+}
+
+// AwaitJobExecutionWake waits for one fresh per-Job revision. Timeout asks the
+// consumer to reload authority without checkpointing a stale emitted event.
+func (a Application) AwaitJobExecutionWake(ctx context.Context, jobID string, expectedRevision int64, stepName string, timeout time.Duration) error {
+	wake, err := absurd.AwaitEvent[JobExecutionWakeV1](ctx, JobExecutionWakeEvent(jobID, expectedRevision), absurd.AwaitEventOptions{StepName: stepName, Timeout: timeout})
+	return resolveJobExecutionWake(jobID, expectedRevision, wake, err)
+}
+
+func resolveJobExecutionWake(jobID string, revision int64, wake JobExecutionWakeV1, err error) error {
+	if err != nil {
+		var timeout *absurd.TimeoutError
+		if errors.As(err, &timeout) {
+			return nil
+		}
+		return err
+	}
+	if wake.JobID != jobID || wake.Revision != revision || wake.CauseKey == "" {
+		return fmt.Errorf("execution wake payload conflicts with Job %s revision %d", jobID, revision)
 	}
 	return nil
 }

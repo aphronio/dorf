@@ -47,11 +47,11 @@ func TestTaskAndWakeIdentitiesRemainStable(t *testing.T) {
 		t.Fatalf("task identity changed: name=%q key=%q", TaskName, TaskKey("job-1"))
 	}
 	stepName, timeout := wakeOptions(Work{Kind: WorkWaitAgent, FactID: "message-1"}, 2)
-	if timeout != time.Second || stepName != "dorf/investigation-agent-wake/v2/message-1/00000000000000000002" {
+	if timeout != time.Second || stepName != "dorf/investigation-agent-wake/v3/message-1/00000000000000000002" {
 		t.Fatalf("active investigator wake=%q %s", stepName, timeout)
 	}
 	stepName, timeout = wakeOptions(Work{}, 3)
-	if timeout != 30*time.Second || stepName != "dorf/investigation-wake/v2/00000000000000000003" {
+	if timeout != 30*time.Second || stepName != "dorf/investigation-wake/v3/00000000000000000003" {
 		t.Fatalf("open-idle Message wake=%q %s", stepName, timeout)
 	}
 }

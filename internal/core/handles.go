@@ -72,9 +72,10 @@ func (h SandboxHandle) Agent() AgentHandle {
 	return AgentHandle{jobID: h.jobID, sandboxID: h.id, application: h.application}
 }
 
-// ReadFile returns the exact bytes of one regular Sandbox file
-// while holding the Job resource fence. Core does not discover, interpret, or
-// retain the file; callers must read what they need before requesting cleanup.
+// ReadFile returns at most sandbox.MaxFileReadBytes exact bytes of one regular
+// Sandbox file while holding the Job resource fence. Core does not discover,
+// interpret, or retain the file; callers must read what they need before
+// requesting cleanup.
 func (h SandboxHandle) ReadFile(ctx context.Context, relativePath string) ([]byte, error) {
 	if h.application == nil || h.application.Store == nil || h.application.SandboxRuntimes == nil || h.jobID == "" || h.id == "" {
 		return nil, fmt.Errorf("Sandbox handle is not bound to Core file access")
@@ -105,10 +106,24 @@ func (h SandboxHandle) ReadFile(ctx context.Context, relativePath string) ([]byt
 		if runtime.SandboxProfile != job.SandboxProfile || runtime.Files == nil {
 			return fmt.Errorf("Sandbox runtime does not provide file access for Job profile %q", job.SandboxProfile)
 		}
-		return WithSandboxActivity(ctx, h.application.Store, job.ID, func() error {
-			contents, err = runtime.Files.ReadSandboxFile(ctx, job, owned, relativePath)
+		contents, err = readBoundedSandboxFile(ctx, h.application.Store, runtime.Files, job, owned, relativePath)
+		return err
+	})
+	return contents, err
+}
+
+func readBoundedSandboxFile(ctx context.Context, store SandboxActivityStore, files SandboxFileReader, job Job, owned Sandbox, relativePath string) (contents []byte, err error) {
+	err = WithSandboxActivity(ctx, store, job.ID, func() error {
+		contents, err = files.ReadSandboxFile(ctx, job, owned, relativePath)
+		if err != nil {
+			contents = nil
 			return err
-		})
+		}
+		if len(contents) > provider.MaxFileReadBytes {
+			contents = nil
+			return provider.ErrFileTooLarge
+		}
+		return nil
 	})
 	return contents, err
 }

@@ -25,7 +25,6 @@ type Store interface {
 	core.SandboxActivityStore
 	WithJobFence(context.Context, string, func() error) error
 	Job(context.Context, string) (core.Job, error)
-	NextWakeSequence(context.Context, string) (int64, error)
 	CodingJob(context.Context, string) (Job, error)
 	Sandboxes(context.Context, string) ([]core.Sandbox, error)
 	CodingMessages(context.Context, string) ([]MessageRecord, []ReviewRunView, error)

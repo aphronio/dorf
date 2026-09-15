@@ -130,7 +130,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	case "serve":
 		return serveCommand(ctx, store, client, cfg, args[1:], stdout, stderr)
 	case "worker":
-		observations, closeObservations := configuredObservations(ctx, stderr)
+		observations, closeObservations := configuredObservations(ctx, stderr, coreApplication(store, client).SignalNativeTerminalWake)
 		defer closeObservations()
 		if err := registerWorkerTasks(store, client, cfg, observations); err != nil {
 			return err

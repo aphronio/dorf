@@ -12,6 +12,9 @@ const (
 	// AgentReconciliationPending means one Message was selected, so the runtime
 	// should keep its active poll cadence until a later reconciliation is idle.
 	AgentReconciliationPending
+	// AgentReconciliationReady means one Message was selected and the next
+	// authoritative selection is immediately eligible for reconciliation.
+	AgentReconciliationReady
 )
 
 // AgentReconciliation is the runtime-only Core contract for advancing at most

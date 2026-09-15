@@ -55,8 +55,12 @@ func TestDirectAutomaticMessagesAndExactInterruptReconciliation(t *testing.T) {
 		t.Fatalf("changed requested intent did not conflict: %v", err)
 	}
 	// The latest user message may still be an undelivered Steer when Stop arrives.
-	if err := store.RequestMessageInterrupt(ctx, job.ID, steer.Message.ID); err != nil {
+	target, err := store.RequestMessageInterrupt(ctx, job.ID, steer.Message.ID)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if target.AgentRunID != initial.AgentRun.ID || target.JobID != job.ID || !target.InterruptRequested {
+		t.Fatalf("interrupt target=%+v", target)
 	}
 	selected, err := store.AgentMessage(ctx, job.ID)
 	if err != nil || selected == nil || selected.MessageID != initial.Message.ID {
@@ -128,8 +132,12 @@ func TestDirectAutomaticMessagesAndExactInterruptReconciliation(t *testing.T) {
 	if err := store.BindAgentRun(ctx, next.AgentRun.ID, "codex", "assistant-thread", "second-turn", "inProgress"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RequestMessageInterrupt(ctx, job.ID, steer.Message.ID); err != nil {
+	replayedTarget, err := store.RequestMessageInterrupt(ctx, job.ID, steer.Message.ID)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(replayedTarget, target) {
+		t.Fatalf("interrupt replay target=%+v want=%+v", replayedTarget, target)
 	}
 	observed, err = store.AgentMessageExecution(ctx, next.Message.ID)
 	if err != nil || observed.AgentRun.InterruptRequested {
@@ -138,8 +146,57 @@ func TestDirectAutomaticMessagesAndExactInterruptReconciliation(t *testing.T) {
 	if replay, err := store.AdmitDirectMessage(ctx, activeInput); err != nil || replay.Created || !reflect.DeepEqual(replay.Message, steer.Message) {
 		t.Fatalf("auto replay retargeted successor: %+v %v", replay, err)
 	}
-	if err := store.RequestMessageInterrupt(ctx, "foreign-job", steer.Message.ID); !errors.Is(err, core.ErrMessageInterruptUnavailable) {
+	if _, err := store.RequestMessageInterrupt(ctx, "foreign-job", steer.Message.ID); !errors.Is(err, core.ErrMessageInterruptUnavailable) {
 		t.Fatalf("foreign Job accepted interrupt: %v", err)
+	}
+}
+
+func TestDeliveriesDeduplicatesInterruptedRunsForOneTurn(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, threadID := prepareTransportIntegrationJob(t, store, "duplicate-interrupted-turn")
+	target, err := codingDelivery(ctx, store, job.ID)
+	if err != nil || target == nil {
+		t.Fatalf("target delivery=%+v err=%v", target, err)
+	}
+	if err := store.PrepareAgentRun(ctx, target.AgentRun.ID, "codex", ""); err != nil {
+		t.Fatal(err)
+	}
+	turnID := "shared-interrupted-turn-" + job.ID
+	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, turnID, "running"); err != nil {
+		t.Fatal(err)
+	}
+	steer, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{
+		JobID: job.ID, SandboxID: target.AgentRun.SandboxID, FromKind: core.MessageFromHuman,
+		FromID: "shared-interrupted-steer", Input: "apply this correction", Intent: core.MessageSteer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	steerDelivery, err := codingDelivery(ctx, store, job.ID)
+	if err != nil || steerDelivery == nil || steerDelivery.Message.ID != steer.Message.ID {
+		t.Fatalf("steer delivery=%+v err=%v", steerDelivery, err)
+	}
+	if err := store.PrepareAgentRun(ctx, steerDelivery.AgentRun.ID, "codex", turnID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindSteer(ctx, steerDelivery.AgentRun.ID, turnID, "inProgress"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.ExecContext(ctx, `
+		update dorf.agent_runs set interrupt_requested=true where id in ($1,$2)`,
+		target.AgentRun.ID, steerDelivery.AgentRun.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	deliveries, err := store.Deliveries(ctx, job.ID)
+	if err != nil || len(deliveries) != 2 {
+		t.Fatalf("deliveries=%+v err=%v, want exactly two retained Messages", deliveries, err)
+	}
+	for _, delivery := range deliveries {
+		if !delivery.AgentRun.InterruptRequested || delivery.AgentRun.TurnID != turnID {
+			t.Fatalf("shared interrupted Turn projection=%+v", delivery)
+		}
 	}
 }
 

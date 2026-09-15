@@ -296,7 +296,7 @@ func (q *Queries) GetLatestAgentThreadBinding(ctx context.Context, arg GetLatest
 }
 
 const getMessageInterruptTarget = `-- name: GetMessageInterruptTarget :one
-select source.id,source.state,source.interrupt_requested
+select source.id,source.job_id,source.state,source.interrupt_requested
 from dorf.agent_runs requested
 join dorf.agent_runs source on source.job_id=requested.job_id
     and source.sandbox_id=requested.sandbox_id and source.harness=requested.harness
@@ -315,6 +315,7 @@ type GetMessageInterruptTargetParams struct {
 
 type GetMessageInterruptTargetRow struct {
 	ID                 string
+	JobID              string
 	State              core.AgentRunState
 	InterruptRequested bool
 }
@@ -322,7 +323,12 @@ type GetMessageInterruptTargetRow struct {
 func (q *Queries) GetMessageInterruptTarget(ctx context.Context, arg GetMessageInterruptTargetParams) (GetMessageInterruptTargetRow, error) {
 	row := q.db.QueryRowContext(ctx, getMessageInterruptTarget, arg.JobID, arg.MessageID)
 	var i GetMessageInterruptTargetRow
-	err := row.Scan(&i.ID, &i.State, &i.InterruptRequested)
+	err := row.Scan(
+		&i.ID,
+		&i.JobID,
+		&i.State,
+		&i.InterruptRequested,
+	)
 	return i, err
 }
 

@@ -37,7 +37,7 @@ type profileRuntimeResolver struct {
 	observations *codex.Observations
 }
 
-func configuredObservations(ctx context.Context, stderr io.Writer) (*codex.Observations, func()) {
+func configuredObservations(ctx context.Context, stderr io.Writer, terminalWake ...func(context.Context, core.NativeTerminalWakeTarget) error) (*codex.Observations, func()) {
 	publisher, err := telemetry.FromEnv(ctx)
 	if err != nil {
 		fmt.Fprintln(stderr, "Execution diagnostics could not initialize; work remains enabled.")
@@ -46,7 +46,7 @@ func configuredObservations(ctx context.Context, stderr io.Writer) (*codex.Obser
 	if publisher != nil {
 		emit = publisher.Emit
 	}
-	observations := codex.NewObservations(ctx, emit)
+	observations := codex.NewObservations(ctx, emit, terminalWake...)
 	return observations, func() {
 		observations.Close()
 		if publisher == nil {
