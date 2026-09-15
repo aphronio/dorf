@@ -408,6 +408,21 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	if released.WaitReason != "" {
 		t.Fatal("released Message retained a queue wait reason")
 	}
+	recoveryHoldID := committed.ID + ":recovery"
+	if _, err := store.DB.ExecContext(ctx, `insert into dorf.sandbox_delivery_holds(id,sandbox_id,reason) values($1,$2,'checkpoint_recovery')`, recoveryHoldID, owned.ID); err != nil {
+		t.Fatal(err)
+	}
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID+"/messages/"+pending.ID, credential, "", nil), http.StatusOK, &pending)
+	if pending.WaitReason != "checkpoint_recovery" {
+		t.Fatalf("recovery-held Message wait reason=%q", pending.WaitReason)
+	}
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID, credential, "", nil), http.StatusOK, &withReply)
+	if len(withReply.Sandboxes) != 1 || withReply.Sandboxes[0].DeliveryHold == nil || withReply.Sandboxes[0].DeliveryHold.Reason != "checkpoint_recovery" {
+		t.Fatal("Job inspection omitted the checkpoint recovery hold reason")
+	}
+	if err := store.ReleaseSandboxDelivery(ctx, restartedTasks.QueueName(), committed.ID, owned.ID, recoveryHoldID); err != nil {
+		t.Fatal(err)
+	}
 
 	cleanup := controlTestRequest(t, restarted, http.MethodPut, "/v1/jobs/"+committed.ID+"/cleanup", credential, "", nil)
 	var cleaning controlapi.DirectJob

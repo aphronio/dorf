@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -16,9 +17,12 @@ import (
 const (
 	AbsurdVersion = "0.5.0"
 	QueueName     = "dorf_jobs"
+
+	persistenceFileName = "persistence.json"
 )
 
 type Config struct {
+	PersistenceFile       string
 	DatabaseURL           string
 	DatabaseExternal      bool
 	DeploymentPath        string
@@ -99,6 +103,7 @@ func Load() (Config, error) {
 	deploymentPath := filepath.Join(paths.ConfigDir, "deployment.json")
 	cfg := Config{
 		DeploymentPath:        deploymentPath,
+		PersistenceFile:       optionalPersistenceFile(paths.ConfigDir),
 		GatewayStatePath:      filepath.Join(paths.DataDir, "provider-gateway"),
 		GatewayInternalOrigin: strings.TrimSpace(os.Getenv("DORF_PROVIDER_GATEWAY_INTERNAL_ORIGIN")),
 		Workspace:             "/workspace/job",
@@ -167,6 +172,19 @@ func Load() (Config, error) {
 		cfg.AppServerPort = port
 	}
 	return cfg, nil
+}
+
+func optionalPersistenceFile(configDir string) string {
+	if explicit := strings.TrimSpace(os.Getenv("DORF_PERSISTENCE_CONFIG")); explicit != "" {
+		return explicit
+	}
+	candidate := filepath.Join(configDir, persistenceFileName)
+	if _, err := os.Lstat(candidate); errors.Is(err, os.ErrNotExist) {
+		return ""
+	}
+	// Only confirmed absence disables persistence. Other filesystem failures
+	// retain the path so the strict configuration reader reports them.
+	return candidate
 }
 
 func configHome(home string) string {

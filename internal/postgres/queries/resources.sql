@@ -41,3 +41,23 @@ where s.id=r.sandbox_id and s.id=sqlc.arg(sandbox_id) and s.job_id=sqlc.arg(job_
 update dorf.sandbox_resources
 set deleted_at=coalesce(deleted_at,clock_timestamp())
 where id=sqlc.arg(resource_id) and sandbox_id=sqlc.arg(sandbox_id);
+
+-- name: ReserveSandboxResource :exec
+insert into dorf.sandbox_resources(id,sandbox_id,ownership_nonce)
+values(sqlc.arg(id),sqlc.arg(sandbox_id),sqlc.arg(ownership_nonce));
+
+
+-- name: BindRecoveredResource :execrows
+update dorf.sandbox_resources set provider_id=sqlc.arg(provider_id)::text,observed_at=coalesce(observed_at,clock_timestamp())
+where id=sqlc.arg(resource_id) and deleted_at is null and (provider_id is null or provider_id=sqlc.arg(provider_id)::text);
+
+
+-- name: SwitchSandboxResource :execrows
+update dorf.sandboxes set active_resource_id=sqlc.arg(destination_resource_id)
+where id=sqlc.arg(sandbox_id) and active_resource_id=sqlc.arg(source_resource_id);
+
+
+-- name: GetSandboxResource :one
+select s.id,s.job_id,s.name,r.id as resource_id,r.ownership_nonce,coalesce(r.provider_id,'') as provider_id
+from dorf.sandboxes s join dorf.sandbox_resources r on r.sandbox_id=s.id
+where s.job_id=sqlc.arg(job_id) and s.id=sqlc.arg(sandbox_id) and r.id=sqlc.arg(resource_id);

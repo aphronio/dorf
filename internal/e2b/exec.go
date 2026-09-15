@@ -355,6 +355,7 @@ type startStream interface {
 
 type envdProcessClient interface {
 	Start(context.Context, *connect.Request[process.StartRequest]) (startStream, error)
+	List(context.Context, *connect.Request[process.ListRequest]) (*connect.Response[process.ListResponse], error)
 	SendInput(context.Context, *connect.Request[process.SendInputRequest]) (*connect.Response[process.SendInputResponse], error)
 	SendSignal(context.Context, *connect.Request[process.SendSignalRequest]) (*connect.Response[process.SendSignalResponse], error)
 	CloseStdin(context.Context, *connect.Request[process.CloseStdinRequest]) (*connect.Response[process.CloseStdinResponse], error)

@@ -8,36 +8,56 @@ import (
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
-// VerifyUpgrade resumes only retained Threads and reads their exact settled
-// Turns. It never asks the model to produce a new Turn or execute tools.
-func (a Agent) VerifyUpgrade(ctx context.Context, owner provider.Ownership, runs []core.AgentRun) error {
+// VerifyRetainedThreads reads the exact settled Turns without resuming a
+// Thread. It never asks the model to produce a new Turn or execute tools.
+func (a Agent) VerifyRetainedThreads(ctx context.Context, owner provider.Ownership, runs []core.AgentRun) error {
+	return a.verifyRetainedThreads(ctx, owner, runs, false)
+}
+
+func (a Agent) verifyRetainedThreads(ctx context.Context, owner provider.Ownership, runs []core.AgentRun, resume bool) error {
 	return a.withSandboxAccess(ctx, owner, func(a Agent) error {
 		return a.withServer(ctx, owner, func(p *protocol) error {
-			threads := make(map[string][]core.AgentRun)
-			for _, run := range runs {
-				threads[run.ThreadID] = append(threads[run.ThreadID], run)
-			}
-			for thread, expected := range threads {
-				if thread == "" {
-					return fmt.Errorf("upgrade verification requires exact native Thread identity")
-				}
-				if err := p.resumeThread(ctx, thread); err != nil {
-					return err
-				}
-				turns, err := p.readTurns(ctx, thread)
-				if err != nil {
-					return err
-				}
-				if err := verifyUpgradeTurns(expected, turns); err != nil {
-					return err
-				}
-			}
-			return nil
+			return verifyRetainedHistory(ctx, p, runs, resume)
 		})
 	})
 }
 
-func verifyUpgradeTurns(expected []core.AgentRun, turns []TurnOutcome) error {
+func verifyRetainedHistory(ctx context.Context, p *protocol, runs []core.AgentRun, resume bool) error {
+	threads := make(map[string][]core.AgentRun)
+	for _, run := range runs {
+		threads[run.ThreadID] = append(threads[run.ThreadID], run)
+	}
+	for thread, expected := range threads {
+		if thread == "" {
+			return fmt.Errorf("native verification requires exact Thread identity")
+		}
+		if err := verifyRetainedThread(ctx, p, thread, expected, resume); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// VerifyUpgrade resumes each Thread and checks its exact native history to
+// prove compatibility with an activated replacement package.
+func (a Agent) VerifyUpgrade(ctx context.Context, owner provider.Ownership, runs []core.AgentRun) error {
+	return a.verifyRetainedThreads(ctx, owner, runs, true)
+}
+
+func verifyRetainedThread(ctx context.Context, p *protocol, thread string, expected []core.AgentRun, resume bool) error {
+	if resume {
+		if err := p.resumeThread(ctx, thread); err != nil {
+			return err
+		}
+	}
+	turns, err := p.readTurns(ctx, thread)
+	if err != nil {
+		return err
+	}
+	return verifyRetainedTurns(expected, turns)
+}
+
+func verifyRetainedTurns(expected []core.AgentRun, turns []TurnOutcome) error {
 	observed := make(map[string]string, len(turns))
 	for _, turn := range turns {
 		switch turn.Status {
@@ -49,18 +69,16 @@ func verifyUpgradeTurns(expected []core.AgentRun, turns []TurnOutcome) error {
 	}
 	for _, run := range expected {
 		if run.TurnID != "" && (observed[run.TurnID] == "" || observed[run.TurnID] != run.TurnOutcome) {
-			return fmt.Errorf("upgrade did not retain exact settled Turn history")
+			return fmt.Errorf("native verification did not retain exact settled Turn history")
 		}
 	}
 	return nil
 }
 
-// QuiesceUpgrade stops only the authenticated process already owned by Dorf.
+// Quiesce stops only the authenticated process already owned by Dorf.
+// An absent server is already quiescent; this never starts or resumes one.
 // Unknown or unauthenticated app-server processes are attention, not kill targets.
-func (a Agent) QuiesceUpgrade(ctx context.Context, owner provider.Ownership, runs []core.AgentRun) error {
-	if err := a.VerifyUpgrade(ctx, owner, runs); err != nil {
-		return err
-	}
+func (a Agent) Quiesce(ctx context.Context, owner provider.Ownership, runs []core.AgentRun) error {
 	return a.withSandboxAccess(ctx, owner, func(a Agent) error {
 		endpoint, err := a.Sandbox.Endpoint(ctx, owner, a.Port)
 		if err != nil {
@@ -74,7 +92,16 @@ func (a Agent) QuiesceUpgrade(ctx context.Context, owner provider.Ownership, run
 			return nil
 		}
 		if !probe.tracked || probe.token == "" {
-			return fmt.Errorf("upgrade cannot stop an unproven app-server")
+			return fmt.Errorf("cannot stop an unproven app-server")
+		}
+		p, err := dialProtocol(ctx, endpoint.DialURL, probe.token, endpoint.Headers(), endpoint.DialContext())
+		if err != nil {
+			return err
+		}
+		p.configureObservations(ctx, a.Observations, owner)
+		defer a.finishProtocol(p)
+		if err := verifyRetainedHistory(ctx, p, runs, false); err != nil {
+			return err
 		}
 		// Recheck the token digest and exact tracked command in the guest before
 		// signalling. Avoid PID reuse by opening a pidfd before inspecting /proc.

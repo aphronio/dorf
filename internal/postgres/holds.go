@@ -55,6 +55,11 @@ func (s Store) ReleaseSandboxDelivery(ctx context.Context, queue, jobID, sandbox
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
+		if _, err := q.GetCheckpointRecovery(ctx, operationID); err == nil {
+			return fmt.Errorf("checkpoint recovery holds require verified atomic completion")
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
 		if err := expectOneRows(q.ReleaseSandboxDeliveryHold(ctx, dbsql.ReleaseSandboxDeliveryHoldParams{ID: operationID, SandboxID: sandboxID})); err != nil {
 			return err
 		}
@@ -113,4 +118,17 @@ func (s Store) JobDeliveryHolds(ctx context.Context, jobID string) ([]core.Sandb
 
 func deliveryHold(row dbsql.DorfSandboxDeliveryHold) core.SandboxDeliveryHold {
 	return core.SandboxDeliveryHold{ID: row.ID, SandboxID: row.SandboxID, Reason: row.Reason, RequestedAt: row.RequestedAt, ReleasedAt: timeValue(row.ReleasedAt)}
+}
+
+// Typed maintenance releases its hold only at atomic completion or after Job
+// admission closes for cleanup. The hold is the existing exclusion authority.
+func requireSandboxDeliveryUnheld(ctx context.Context, q *dbsql.Queries, sandboxID string) error {
+	held, err := q.SandboxDeliveryHeld(ctx, sandboxID)
+	if err != nil {
+		return err
+	}
+	if held {
+		return fmt.Errorf("Sandbox already has an unfinished maintenance operation")
+	}
+	return nil
 }

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Local-only deterministic model fixture for the retained-worker upgrade proof."""
 import json
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-root = Path('/workspace/upgrade-worker-proof')
+root = Path(os.environ.get('DORF_RESPONSES_FIXTURE_ROOT', '/workspace/upgrade-worker-proof'))
 root.mkdir(parents=True, exist_ok=True)
 
 class Handler(BaseHTTPRequestHandler):
@@ -37,4 +38,5 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-ThreadingHTTPServer(('127.0.0.1', 18997), Handler).serve_forever()
+port = int(os.environ.get('DORF_RESPONSES_FIXTURE_PORT', '18997'))
+ThreadingHTTPServer(('127.0.0.1', port), Handler).serve_forever()

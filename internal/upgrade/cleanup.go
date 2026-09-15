@@ -39,7 +39,7 @@ func (s Service) PrepareCleanup(ctx context.Context, jobID string) error {
 			if deleted {
 				continue
 			}
-			owned, err := s.Store.UpgradeResource(ctx, jobID, r.SandboxID, id)
+			owned, err := s.Store.SandboxResource(ctx, jobID, r.SandboxID, id)
 			if err != nil {
 				return err
 			}
@@ -81,7 +81,7 @@ func (s Service) cleanup(ctx context.Context, jobID string, fn func(Receipt, cor
 			return err
 		}
 		for _, r := range receipts {
-			source, err := s.Store.UpgradeResource(ctx, jobID, r.SandboxID, r.SourceResourceID)
+			source, err := s.Store.SandboxResource(ctx, jobID, r.SandboxID, r.SourceResourceID)
 			if err != nil {
 				return err
 			}

@@ -10,7 +10,8 @@ import (
 
 // WithAccess resolves one exact provider resource and its scoped capabilities
 // for a synchronous operation. It never caches across callbacks or retries a
-// command after an ambiguous response. The caller owns the surrounding Job fence.
+// command after an ambiguous response. The caller owns authorization and any
+// required Job fence; this capability scope does not serialize operations.
 func (a Adapter) WithAccess(ctx context.Context, owner provider.Ownership, fn func(provider.Sandbox) error) error {
 	owned, err := a.Client.FindOwned(ctx, e2bOwnership(owner))
 	if err != nil {

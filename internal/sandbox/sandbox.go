@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"time"
 )
 
 // Ownership is Dorf's durable identity for one provider Sandbox. A provider's
@@ -33,6 +34,26 @@ type Result struct {
 	Stdout   string
 	Stderr   string
 	ExitCode int
+}
+
+// CommandRunner executes a bounded command and attempts remote termination on
+// cancellation or lost observation. Stopped reports confirmed termination, not
+// merely a successful signal request. An unknown start may remain alive until
+// Timeout; callers must not assume an error makes replay safe.
+type CommandRunner interface {
+	Run(context.Context, Ownership, RunRequest) (RunResult, error)
+}
+
+type RunRequest struct {
+	Args    []string
+	Env     map[string]string
+	Timeout time.Duration
+}
+
+type RunResult struct {
+	Result
+	Stopped      bool
+	StopDuration time.Duration
 }
 
 // Endpoint separates the address a process binds inside a Sandbox from the

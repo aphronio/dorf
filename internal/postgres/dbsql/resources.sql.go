@@ -11,6 +11,24 @@ import (
 	"time"
 )
 
+const bindRecoveredResource = `-- name: BindRecoveredResource :execrows
+update dorf.sandbox_resources set provider_id=$1::text,observed_at=coalesce(observed_at,clock_timestamp())
+where id=$2 and deleted_at is null and (provider_id is null or provider_id=$1::text)
+`
+
+type BindRecoveredResourceParams struct {
+	ProviderID string
+	ResourceID string
+}
+
+func (q *Queries) BindRecoveredResource(ctx context.Context, arg BindRecoveredResourceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindRecoveredResource, arg.ProviderID, arg.ResourceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const bindSandboxResource = `-- name: BindSandboxResource :execrows
 update dorf.sandbox_resources r
 set provider_id=$1::text,observed_at=coalesce(r.observed_at,clock_timestamp())
@@ -137,6 +155,41 @@ func (q *Queries) GetSandboxForUpdate(ctx context.Context, id string) (GetSandbo
 	return i, err
 }
 
+const getSandboxResource = `-- name: GetSandboxResource :one
+select s.id,s.job_id,s.name,r.id as resource_id,r.ownership_nonce,coalesce(r.provider_id,'') as provider_id
+from dorf.sandboxes s join dorf.sandbox_resources r on r.sandbox_id=s.id
+where s.job_id=$1 and s.id=$2 and r.id=$3
+`
+
+type GetSandboxResourceParams struct {
+	JobID      string
+	SandboxID  string
+	ResourceID string
+}
+
+type GetSandboxResourceRow struct {
+	ID             string
+	JobID          string
+	Name           string
+	ResourceID     string
+	OwnershipNonce string
+	ProviderID     string
+}
+
+func (q *Queries) GetSandboxResource(ctx context.Context, arg GetSandboxResourceParams) (GetSandboxResourceRow, error) {
+	row := q.db.QueryRowContext(ctx, getSandboxResource, arg.JobID, arg.SandboxID, arg.ResourceID)
+	var i GetSandboxResourceRow
+	err := row.Scan(
+		&i.ID,
+		&i.JobID,
+		&i.Name,
+		&i.ResourceID,
+		&i.OwnershipNonce,
+		&i.ProviderID,
+	)
+	return i, err
+}
+
 const listJobSandboxes = `-- name: ListJobSandboxes :many
 select s.id,s.job_id,s.name,r.ownership_nonce,s.active_resource_id,coalesce(r.provider_id,'') as provider_id
 from dorf.sandboxes s join dorf.sandbox_resources r on r.id=s.active_resource_id
@@ -245,6 +298,41 @@ type RecordSandboxResourceDeletedParams struct {
 
 func (q *Queries) RecordSandboxResourceDeleted(ctx context.Context, arg RecordSandboxResourceDeletedParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, recordSandboxResourceDeleted, arg.ResourceID, arg.SandboxID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const reserveSandboxResource = `-- name: ReserveSandboxResource :exec
+insert into dorf.sandbox_resources(id,sandbox_id,ownership_nonce)
+values($1,$2,$3)
+`
+
+type ReserveSandboxResourceParams struct {
+	ID             string
+	SandboxID      string
+	OwnershipNonce string
+}
+
+func (q *Queries) ReserveSandboxResource(ctx context.Context, arg ReserveSandboxResourceParams) error {
+	_, err := q.db.ExecContext(ctx, reserveSandboxResource, arg.ID, arg.SandboxID, arg.OwnershipNonce)
+	return err
+}
+
+const switchSandboxResource = `-- name: SwitchSandboxResource :execrows
+update dorf.sandboxes set active_resource_id=$1
+where id=$2 and active_resource_id=$3
+`
+
+type SwitchSandboxResourceParams struct {
+	DestinationResourceID string
+	SandboxID             string
+	SourceResourceID      string
+}
+
+func (q *Queries) SwitchSandboxResource(ctx context.Context, arg SwitchSandboxResourceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, switchSandboxResource, arg.DestinationResourceID, arg.SandboxID, arg.SourceResourceID)
 	if err != nil {
 		return 0, err
 	}

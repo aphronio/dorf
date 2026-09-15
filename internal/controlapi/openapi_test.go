@@ -115,6 +115,16 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 	if !reflect.DeepEqual(mapping, wantMapping) {
 		t.Fatalf("Job discriminator=%#v, want %#v", mapping, wantMapping)
 	}
+	wantHoldReasons := []any{"workspace_upgrade", "checkpoint_recovery"}
+	for _, path := range [][]string{
+		{"components", "schemas", "SandboxDeliveryHold", "properties", "reason"},
+		{"components", "schemas", "Message", "properties", "wait_reason"},
+	} {
+		reasons := arrayAt(t, objectAt(t, document, path...), "enum")
+		if !reflect.DeepEqual(reasons, wantHoldReasons) {
+			t.Fatalf("%s enum=%#v, want %#v", strings.Join(path, "."), reasons, wantHoldReasons)
+		}
+	}
 
 	assertRef(t, document, "#/components/schemas/JobList", "paths", "/v1/jobs", "get", "responses", "200", "content", "application/json", "schema", "$ref")
 	assertRef(t, document, "#/components/schemas/ProfileList", "paths", "/v1/profiles", "get", "responses", "200", "content", "application/json", "schema", "$ref")

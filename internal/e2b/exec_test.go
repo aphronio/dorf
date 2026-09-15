@@ -274,3 +274,7 @@ func endEvent(exitCode int32, exited bool, status, remoteError string) *process.
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) Do(request *http.Request) (*http.Response, error) { return f(request) }
+
+func (c *fakeProcessClient) List(context.Context, *connect.Request[process.ListRequest]) (*connect.Response[process.ListResponse], error) {
+	return connect.NewResponse(&process.ListResponse{}), nil
+}

@@ -74,7 +74,17 @@ func (r profileRuntimeResolver) ResolveCleanup(ctx context.Context, ref core.San
 		return core.CleanupRuntime{Execution: resolved.Execution, SandboxProfile: resolved.SandboxProfile}, nil
 	}
 	execution, err := r.upgradeExecution(ctx, resolved)
-	return core.CleanupRuntime{Execution: execution, SandboxProfile: resolved.SandboxProfile}, err
+	if err != nil {
+		return core.CleanupRuntime{}, err
+	}
+	checkpoint, err := readCheckpointConfig(r.cfg.PersistenceFile)
+	if err != nil {
+		return core.CleanupRuntime{}, err
+	}
+	if checkpoint != nil && checkpoint.enabled(ref) {
+		return core.CleanupRuntime{Execution: checkpointExecution{Execution: execution, resolver: r}, SandboxProfile: resolved.SandboxProfile}, nil
+	}
+	return core.CleanupRuntime{Execution: execution, SandboxProfile: resolved.SandboxProfile}, nil
 }
 
 func (r profileRuntimeResolver) ResolveSandbox(ctx context.Context, ref core.SandboxProfileRef) (core.SandboxRuntime, error) {
@@ -150,7 +160,17 @@ func (r profileRuntimeResolver) ResolveDirect(ctx context.Context, ref core.Sand
 		return direct.Runtime{SandboxProfile: resolved.SandboxProfile, Execution: resolved.Execution}, nil
 	}
 	execution, err := r.upgradeExecution(ctx, resolved)
-	return direct.Runtime{SandboxProfile: resolved.SandboxProfile, Execution: execution}, err
+	if err != nil {
+		return direct.Runtime{}, err
+	}
+	checkpoint, err := readCheckpointConfig(r.cfg.PersistenceFile)
+	if err != nil {
+		return direct.Runtime{}, err
+	}
+	if checkpoint != nil && checkpoint.enabled(ref) {
+		return direct.Runtime{SandboxProfile: resolved.SandboxProfile, Execution: checkpointExecution{Execution: execution, resolver: r}}, nil
+	}
+	return direct.Runtime{SandboxProfile: resolved.SandboxProfile, Execution: execution}, nil
 }
 
 type resolvedBaseRuntime struct {

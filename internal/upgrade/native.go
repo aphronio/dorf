@@ -43,7 +43,7 @@ func (d NativeDriver) InspectPackage(ctx context.Context, s core.Sandbox, r Requ
 	return version, nil
 }
 func (d NativeDriver) Quiesce(ctx context.Context, s core.Sandbox, runs []core.AgentRun) error {
-	return d.Agent.QuiesceUpgrade(ctx, upgradeOwner(s), runs)
+	return d.Agent.Quiesce(ctx, upgradeOwner(s), runs)
 }
 func (d NativeDriver) Capture(ctx context.Context, s core.Sandbox, key string) (provider.Checkpoint, error) {
 	return d.Checkpointer.CaptureCheckpoint(ctx, upgradeOwner(s), key)

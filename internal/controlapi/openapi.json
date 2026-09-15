@@ -1525,7 +1525,7 @@
         "required": ["id", "reason", "requested_at"],
         "properties": {
           "id": { "type": "string", "minLength": 1 },
-          "reason": { "type": "string", "enum": ["workspace_upgrade"] },
+          "reason": { "type": "string", "enum": ["workspace_upgrade", "checkpoint_recovery"] },
           "requested_at": { "type": "string", "format": "date-time" }
         }
       },
@@ -1619,7 +1619,7 @@
           "job_id": { "type": "string", "minLength": 1 },
           "sequence": { "type": "integer", "minimum": 1 },
           "interrupt_requested": { "type": "boolean", "description": "Stop was accepted for this exact Turn; the result reports its observed outcome." },
-          "wait_reason": { "type": "string", "enum": ["workspace_upgrade"], "description": "Accepted input is waiting for a durable workspace delivery hold to be released." },
+          "wait_reason": { "type": "string", "enum": ["workspace_upgrade", "checkpoint_recovery"], "description": "Accepted input is waiting for a durable workspace delivery hold to be released." },
           "intent": { "type": "string", "enum": ["follow", "steer"] },
           "delivery": { "$ref": "#/components/schemas/MessageDeliveryState" },
           "result": {

@@ -67,13 +67,13 @@ func TestLiveUpgradeQuiesceProbe(t *testing.T) {
 			if err := s.DeleteOwned(ctx, owner); err != nil {
 				return err
 			}
-			return store.RecordUpgradeResourceDeleted(ctx, owned)
+			return store.RecordSandboxResourceDeleted(ctx, owned)
 		}
 		if err := a.VerifyUpgrade(ctx, owner, runs); err != nil {
 			return fmt.Errorf("native verification: %w", err)
 		}
 		t.Log("exact native history verified")
-		return a.QuiesceUpgrade(ctx, owner, runs)
+		return a.Quiesce(ctx, owner, runs)
 	}); err != nil {
 		t.Fatal(err)
 	}

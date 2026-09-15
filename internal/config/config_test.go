@@ -68,6 +68,48 @@ func TestLoadKeepsOnlyE2BCredentialInHostConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoadDiscoversPersistenceConfigurationOnlyWhenPresent(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("DORF_DATABASE_URL", "postgres://dorf-test")
+	t.Setenv("DORF_PERSISTENCE_CONFIG", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PersistenceFile != "" {
+		t.Fatalf("missing optional persistence configuration enabled %q", cfg.PersistenceFile)
+	}
+
+	defaultFile := filepath.Join(configHome, "dorf", persistenceFileName)
+	if err := os.MkdirAll(filepath.Dir(defaultFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(defaultFile, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PersistenceFile != defaultFile {
+		t.Fatalf("discovered persistence configuration=%q want=%q", cfg.PersistenceFile, defaultFile)
+	}
+
+	explicit := filepath.Join(t.TempDir(), "checkpoint.json")
+	t.Setenv("DORF_PERSISTENCE_CONFIG", explicit)
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PersistenceFile != explicit {
+		t.Fatalf("explicit persistence configuration=%q want=%q", cfg.PersistenceFile, explicit)
+	}
+}
+
 func TestLoadUsesPersistedE2BCredentialForManagedDeployment(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configHome)

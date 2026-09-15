@@ -86,11 +86,12 @@ Ownership tokens are never included. A deletion receipt records confirmed cleanu
 receipt does not establish that the provider VM still exists.
 
 An active Sandbox delivery hold is included in Job inspection. Pending follows remain `accepted`
-and carry `wait_reason: workspace_upgrade`; they have no fabricated completion result. New automatic
-input queues as a follow while held. Explicit steering is unavailable, while already-admitted
-steers and active turns may finish. Workspace file, command, and native-history access can return
-their existing unavailable Problems during maintenance. Passive Job inspection remains available.
-The hold primitive does not expose a public upgrade request or authorize package mutations.
+and carry the exact hold reason, `workspace_upgrade` or `checkpoint_recovery`; they have no
+fabricated completion result. New automatic input queues as a follow while held. Explicit steering
+is unavailable, while already-admitted steers and active turns may finish. Workspace file, command,
+and native-history access can return their existing unavailable Problems during maintenance.
+Passive Job inspection remains available. The hold primitive does not expose a public upgrade
+request or authorize package mutations.
 
 Job admission defaults `keep_running` to false for direct, coding, and investigation Jobs.
 E2B Sandboxes become eligible for pause after one minute without native activity, when no AgentRun

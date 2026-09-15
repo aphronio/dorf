@@ -12,6 +12,7 @@ readonly INPUTS=(
   scripts/sandbox/packages/packages.json
   scripts/sandbox/packages/nixpkgs.nix
   scripts/sandbox/packages/workstation.nix
+  scripts/sandbox/packages/restic.nix
   scripts/sandbox/packages/pi.nix
   scripts/sandbox/packages/pi/package.json
   scripts/sandbox/packages/pi/package-lock.json

@@ -37,18 +37,10 @@ where id=sqlc.arg(id) and checkpoint_reference is not null and rollback_at is nu
 update dorf.sandbox_upgrades set rollback_at=coalesce(rollback_at,clock_timestamp()),failure_code=coalesce(failure_code,sqlc.arg(failure_code)::text)
 where id=sqlc.arg(id) and checkpoint_reference is not null and verified_at is null;
 
--- name: ReserveUpgradeResource :exec
-insert into dorf.sandbox_resources(id,sandbox_id,ownership_nonce)
-values(sqlc.arg(id),sqlc.arg(sandbox_id),sqlc.arg(ownership_nonce));
-
 -- name: BindUpgradeDestination :execrows
 update dorf.sandbox_upgrades set destination_resource_id=sqlc.arg(resource_id)::text
 where id=sqlc.arg(id) and rollback_at is not null and
 (destination_resource_id is null or destination_resource_id=sqlc.arg(resource_id)::text);
-
--- name: BindRecoveredResource :execrows
-update dorf.sandbox_resources set provider_id=sqlc.arg(provider_id)::text,observed_at=coalesce(observed_at,clock_timestamp())
-where id=sqlc.arg(resource_id) and deleted_at is null and (provider_id is null or provider_id=sqlc.arg(provider_id)::text);
 
 -- name: RecordUpgradeRestored :execrows
 update dorf.sandbox_upgrades set restored_at=coalesce(restored_at,clock_timestamp())
@@ -62,10 +54,6 @@ and (rollback_at is null or restored_at is not null);
 -- name: RecordUpgradeCheckpointDeleted :execrows
 update dorf.sandbox_upgrades set checkpoint_deleted_at=coalesce(checkpoint_deleted_at,clock_timestamp())
 where id=sqlc.arg(id) and checkpoint_reference is not null;
-
--- name: SwitchUpgradeResource :execrows
-update dorf.sandboxes set active_resource_id=sqlc.arg(destination_resource_id)
-where id=sqlc.arg(sandbox_id) and active_resource_id=sqlc.arg(source_resource_id);
 
 -- name: RecordUpgradeFinished :execrows
 update dorf.sandbox_upgrades set finished_at=coalesce(finished_at,clock_timestamp())

@@ -37,6 +37,9 @@ func (s Store) RequestSandboxUpgrade(ctx context.Context, queue string, request 
 		if !job.AdmissionOpen || job.CleanupState != core.CleanupPending || job.WorkflowName != "" || job.WorkflowRevision != "" {
 			return fmt.Errorf("upgrade requires an open direct Job")
 		}
+		if err := requireSandboxDeliveryUnheld(ctx, q, request.SandboxID); err != nil {
+			return err
+		}
 		owned, err := q.GetSandbox(ctx, request.SandboxID)
 		if err != nil {
 			return err
@@ -87,27 +90,6 @@ func (s Store) UpgradeQuiescent(ctx context.Context, sandboxID string) (bool, er
 	return dbsql.New(s.DB).UpgradeQuiescent(ctx, sandboxID)
 }
 
-func (s Store) UpgradeResource(ctx context.Context, jobID, sandboxID, resourceID string) (core.Sandbox, error) {
-	owned, err := s.Sandbox(ctx, sandboxID)
-	if err != nil {
-		return core.Sandbox{}, err
-	}
-	if owned.JobID != jobID {
-		return core.Sandbox{}, fmt.Errorf("upgrade resource belongs to another Job")
-	}
-	resources, err := s.SandboxResources(ctx, jobID)
-	if err != nil {
-		return core.Sandbox{}, err
-	}
-	for _, resource := range resources {
-		if resource.ID == resourceID && resource.SandboxID == sandboxID {
-			owned.ResourceID, owned.OwnershipNonce, owned.ProviderID = resource.ID, resource.OwnershipNonce, resource.ProviderID
-			return owned, nil
-		}
-	}
-	return core.Sandbox{}, ErrNotFound
-}
-
 // Upgrade receipt writers run only under the executor's Job fence and current
 // claim. They never take another fence on a different database connection.
 func (s Store) RecordUpgradePreparation(ctx context.Context, id, version string) error {
@@ -149,7 +131,7 @@ func (s Store) ReserveUpgradeDestination(ctx context.Context, receipt upgrade.Re
 		if _, err := rand.Read(nonce[:]); err != nil {
 			return err
 		}
-		if err := q.ReserveUpgradeResource(ctx, dbsql.ReserveUpgradeResourceParams{ID: resourceID, SandboxID: receipt.SandboxID, OwnershipNonce: hex.EncodeToString(nonce[:])}); err != nil {
+		if err := q.ReserveSandboxResource(ctx, dbsql.ReserveSandboxResourceParams{ID: resourceID, SandboxID: receipt.SandboxID, OwnershipNonce: hex.EncodeToString(nonce[:])}); err != nil {
 			return err
 		}
 	}
@@ -178,9 +160,6 @@ func (s Store) RecordUpgradeRestored(ctx context.Context, receipt upgrade.Receip
 }
 func (s Store) RecordUpgradeVerified(ctx context.Context, id string) error {
 	return expectOneRows(dbsql.New(s.DB).RecordUpgradeVerified(ctx, id))
-}
-func (s Store) RecordUpgradeResourceDeleted(ctx context.Context, owned core.Sandbox) error {
-	return expectOneRows(dbsql.New(s.DB).RecordSandboxResourceDeleted(ctx, dbsql.RecordSandboxResourceDeletedParams{ResourceID: owned.ResourceID, SandboxID: owned.ID}))
 }
 func (s Store) RecordUpgradeCheckpointDeleted(ctx context.Context, id string) error {
 	return expectOneRows(dbsql.New(s.DB).RecordUpgradeCheckpointDeleted(ctx, id))
@@ -250,7 +229,7 @@ func switchAndReleaseUpgrade(ctx context.Context, tx *sql.Tx, q *dbsql.Queries, 
 	if destination == "" {
 		destination = receipt.SourceResourceID
 	}
-	if err := expectOneRows(q.SwitchUpgradeResource(ctx, dbsql.SwitchUpgradeResourceParams{SandboxID: receipt.SandboxID, SourceResourceID: receipt.SourceResourceID, DestinationResourceID: destination})); err != nil {
+	if err := expectOneRows(q.SwitchSandboxResource(ctx, dbsql.SwitchSandboxResourceParams{SandboxID: receipt.SandboxID, SourceResourceID: receipt.SourceResourceID, DestinationResourceID: destination})); err != nil {
 		return err
 	}
 	if err := expectOneRows(q.RecordUpgradeFinished(ctx, receipt.ID)); err != nil {

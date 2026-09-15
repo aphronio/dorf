@@ -85,7 +85,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	switch args[0] {
-	case "setup", "integration", "client", "migrate", "doctor", "provider", "profile", "release-manifest", "serve", "worker", "upgrade":
+	case "setup", "integration", "client", "migrate", "doctor", "provider", "profile", "release-manifest", "serve", "worker", "upgrade", "checkpoint":
 	default:
 		return usage(stderr)
 	}
@@ -132,6 +132,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 
 func runTaskCommand(ctx context.Context, store postgres.Store, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
 	switch args[0] {
+	case "checkpoint":
+		return checkpointCommand(ctx, store, client, cfg, args[1:], stdout, stderr)
 	case "upgrade":
 		return upgradeCommand(ctx, store, client, cfg, args[1:], stdout, stderr)
 	case "serve":
@@ -142,7 +144,7 @@ func runTaskCommand(ctx context.Context, store postgres.Store, client *absurd.Cl
 		if err := registerWorkerTasks(store, client, cfg, observations, emit); err != nil {
 			return err
 		}
-		return worker(ctx, store, client, cfg, args[1:], stdout, stderr, observations)
+		return worker(ctx, store, client, cfg, args[1:], stdout, stderr, observations, emit)
 	default:
 		return usage(stderr)
 	}
@@ -1262,7 +1264,7 @@ func runDoctor(ctx context.Context, db *sql.DB, cfg config.Config, args []string
 	return nil
 }
 
-func worker(ctx context.Context, store postgres.Store, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer, observationFeeds ...*codex.Observations) error {
+func worker(ctx context.Context, store postgres.Store, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer, observations *codex.Observations, emit func(telemetry.Event)) error {
 	set := flag.NewFlagSet("worker", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	once := set.Bool("once", false, "claim at most one batch and return")
@@ -1285,9 +1287,10 @@ func worker(ctx context.Context, store postgres.Store, client *absurd.Client, cf
 		return err
 	}
 	readerService := controlReaderService(store, client, cfg)
-	if len(observationFeeds) > 0 && observationFeeds[0] != nil {
-		readerService.Replies = observationFeeds[0].Replies
-		readerService.Runtimes = profileRuntimeResolver{cfg: cfg, store: store, client: client, observations: observationFeeds[0]}
+	runtimes := profileRuntimeResolver{cfg: cfg, store: store, client: client, observations: observations, emit: emit}
+	if observations != nil {
+		readerService.Replies = observations.Replies
+		readerService.Runtimes = runtimes
 	}
 	reader, err := newWorkerControlReader(strings.TrimSpace(os.Getenv("DORF_CONTROL_READER_TOKEN")), readerService)
 	if err != nil {
@@ -1297,7 +1300,9 @@ func worker(ctx context.Context, store postgres.Store, client *absurd.Client, cf
 	defer stop()
 	return runWorkerProcesses(workerCtx, reader,
 		func(runCtx context.Context) error {
-			return client.RunWorker(runCtx, absurd.WorkerOptions{WorkerID: workerID(), ClaimTimeout: claimTimeout, BatchSize: *concurrency, Concurrency: *concurrency})
+			return runWithCheckpoints(runCtx, runtimes, func(foregroundCtx context.Context) error {
+				return client.RunWorker(foregroundCtx, absurd.WorkerOptions{WorkerID: workerID(), ClaimTimeout: claimTimeout, BatchSize: *concurrency, Concurrency: *concurrency})
+			})
 		},
 		func(runCtx context.Context) error {
 			return coreApplication(store, client).ReconcileCleanupRequests(runCtx, time.Second)
@@ -1399,6 +1404,6 @@ func boundedTaskError(raw json.RawMessage) string {
 }
 
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <version|update|setup|connect|auth|client|serve|integration|migrate|doctor|provider|profile|upgrade|run|job|workflow|worker|sandbox> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|update|setup|connect|auth|client|serve|integration|migrate|doctor|provider|profile|upgrade|checkpoint|run|job|workflow|worker|sandbox> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

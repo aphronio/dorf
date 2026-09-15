@@ -20,7 +20,7 @@ type Store interface {
 	Deliveries(context.Context, string) ([]core.Delivery, error)
 	JobUpgrades(context.Context, string) ([]Receipt, error)
 	UpgradeQuiescent(context.Context, string) (bool, error)
-	UpgradeResource(context.Context, string, string, string) (core.Sandbox, error)
+	SandboxResource(context.Context, string, string, string) (core.Sandbox, error)
 	RecordUpgradePreparation(context.Context, string, string) error
 	RecordUpgradeQuiesced(context.Context, string) error
 	RecordUpgradeCheckpoint(context.Context, string, provider.Checkpoint) error
@@ -29,7 +29,7 @@ type Store interface {
 	ReserveUpgradeDestination(context.Context, Receipt, bool) error
 	RecordUpgradeRestored(context.Context, Receipt, string) error
 	RecordUpgradeVerified(context.Context, string) error
-	RecordUpgradeResourceDeleted(context.Context, core.Sandbox) error
+	RecordSandboxResourceDeleted(context.Context, core.Sandbox) error
 	RecordUpgradeCheckpointDeleted(context.Context, string) error
 	FinishSandboxUpgrade(context.Context, string, Receipt) error
 	SetWorkflowAttention(context.Context, string, string, string) error
@@ -109,7 +109,7 @@ func (s Service) authorize(ctx context.Context, r Receipt) error {
 }
 
 func (s Service) step(ctx context.Context, r Receipt) error {
-	source, err := s.Store.UpgradeResource(ctx, r.JobID, r.SandboxID, r.SourceResourceID)
+	source, err := s.Store.SandboxResource(ctx, r.JobID, r.SandboxID, r.SourceResourceID)
 	if err != nil {
 		return err
 	}
@@ -165,7 +165,7 @@ func (s Service) restore(ctx context.Context, r Receipt, source core.Sandbox) er
 			return s.record(ctx, func() error { return s.Store.ReserveUpgradeDestination(ctx, r, s.Driver.ReplacesResource()) })
 		})
 	}
-	destination, err := s.Store.UpgradeResource(ctx, r.JobID, r.SandboxID, r.DestinationResourceID)
+	destination, err := s.Store.SandboxResource(ctx, r.JobID, r.SandboxID, r.DestinationResourceID)
 	if err != nil {
 		return err
 	}
@@ -182,7 +182,7 @@ func (s Service) verify(ctx context.Context, r Receipt, source core.Sandbox) err
 	destination, version := source, r.Version
 	if !r.RollbackAt.IsZero() {
 		var err error
-		destination, err = s.Store.UpgradeResource(ctx, r.JobID, r.SandboxID, r.DestinationResourceID)
+		destination, err = s.Store.SandboxResource(ctx, r.JobID, r.SandboxID, r.DestinationResourceID)
 		if err != nil {
 			return err
 		}
@@ -254,7 +254,7 @@ func (s Service) deleteResource(ctx context.Context, r Receipt, owned core.Sandb
 		if err := s.Driver.DeleteResource(ctx, owned); err != nil {
 			return err
 		}
-		return s.record(ctx, func() error { return s.Store.RecordUpgradeResourceDeleted(ctx, owned) })
+		return s.record(ctx, func() error { return s.Store.RecordSandboxResourceDeleted(ctx, owned) })
 	})
 }
 func (s Service) deleteCheckpoint(ctx context.Context, r Receipt, source core.Sandbox) error {

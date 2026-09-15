@@ -55,12 +55,14 @@ func (a controlAPIJobs) messageWaitReason(ctx context.Context, delivery core.Del
 	if delivery.AgentRun.State != core.AgentRunPending || delivery.Message.Intent != core.MessageFollow {
 		return "", nil
 	}
-	held, err := a.store.SandboxDeliveryHeld(ctx, delivery.AgentRun.SandboxID)
+	holds, err := a.store.JobDeliveryHolds(ctx, delivery.Message.JobID)
 	if err != nil {
 		return "", err
 	}
-	if held {
-		return "workspace_upgrade", nil
+	for _, hold := range holds {
+		if hold.SandboxID == delivery.AgentRun.SandboxID {
+			return hold.Reason, nil
+		}
 	}
 	return "", nil
 }

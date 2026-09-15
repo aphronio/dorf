@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// SandboxIdleGracePeriod is the existing provider pause grace after activity.
+const SandboxIdleGracePeriod = time.Minute
+
 // SandboxIdleReconciliation applies the admitted idle policy. It never changes
 // Turn outcomes or requests cleanup. The provider remains the power-state authority.
 type SandboxIdleReconciliation interface {
@@ -49,7 +52,7 @@ func (s ExecutionService) ReconcileIdleSandboxes(ctx context.Context, jobID stri
 		if job.KeepRunning || !job.AdmissionOpen || job.CleanupState != CleanupPending {
 			return nil
 		}
-		idle, err := s.store.SandboxIdleFor(ctx, jobID, time.Minute)
+		idle, err := s.store.SandboxIdleFor(ctx, jobID, SandboxIdleGracePeriod)
 		if err != nil || !idle {
 			return err
 		}

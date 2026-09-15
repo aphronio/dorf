@@ -2,6 +2,8 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -34,4 +36,22 @@ func (s Store) SandboxResources(ctx context.Context, jobID string) ([]core.Sandb
 		})
 	}
 	return resources, nil
+}
+
+func (s Store) SandboxResource(ctx context.Context, jobID, sandboxID, resourceID string) (core.Sandbox, error) {
+	row, err := dbsql.New(s.DB).GetSandboxResource(ctx, dbsql.GetSandboxResourceParams{
+		JobID: jobID, SandboxID: sandboxID, ResourceID: resourceID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return core.Sandbox{}, ErrNotFound
+	}
+	if err != nil {
+		return core.Sandbox{}, err
+	}
+	return core.Sandbox{ID: row.ID, JobID: row.JobID, Name: row.Name,
+		ResourceID: row.ResourceID, OwnershipNonce: row.OwnershipNonce, ProviderID: row.ProviderID}, nil
+}
+
+func (s Store) RecordSandboxResourceDeleted(ctx context.Context, owned core.Sandbox) error {
+	return expectOneRows(dbsql.New(s.DB).RecordSandboxResourceDeleted(ctx, dbsql.RecordSandboxResourceDeletedParams{ResourceID: owned.ResourceID, SandboxID: owned.ID}))
 }

@@ -11,24 +11,6 @@ import (
 	"time"
 )
 
-const bindRecoveredResource = `-- name: BindRecoveredResource :execrows
-update dorf.sandbox_resources set provider_id=$1::text,observed_at=coalesce(observed_at,clock_timestamp())
-where id=$2 and deleted_at is null and (provider_id is null or provider_id=$1::text)
-`
-
-type BindRecoveredResourceParams struct {
-	ProviderID string
-	ResourceID string
-}
-
-func (q *Queries) BindRecoveredResource(ctx context.Context, arg BindRecoveredResourceParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, bindRecoveredResource, arg.ProviderID, arg.ResourceID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const bindUpgradeDestination = `-- name: BindUpgradeDestination :execrows
 update dorf.sandbox_upgrades set destination_resource_id=$1::text
 where id=$2 and rollback_at is not null and
@@ -344,41 +326,6 @@ type RequestUpgradeRollbackParams struct {
 
 func (q *Queries) RequestUpgradeRollback(ctx context.Context, arg RequestUpgradeRollbackParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, requestUpgradeRollback, arg.FailureCode, arg.ID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const reserveUpgradeResource = `-- name: ReserveUpgradeResource :exec
-insert into dorf.sandbox_resources(id,sandbox_id,ownership_nonce)
-values($1,$2,$3)
-`
-
-type ReserveUpgradeResourceParams struct {
-	ID             string
-	SandboxID      string
-	OwnershipNonce string
-}
-
-func (q *Queries) ReserveUpgradeResource(ctx context.Context, arg ReserveUpgradeResourceParams) error {
-	_, err := q.db.ExecContext(ctx, reserveUpgradeResource, arg.ID, arg.SandboxID, arg.OwnershipNonce)
-	return err
-}
-
-const switchUpgradeResource = `-- name: SwitchUpgradeResource :execrows
-update dorf.sandboxes set active_resource_id=$1
-where id=$2 and active_resource_id=$3
-`
-
-type SwitchUpgradeResourceParams struct {
-	DestinationResourceID string
-	SandboxID             string
-	SourceResourceID      string
-}
-
-func (q *Queries) SwitchUpgradeResource(ctx context.Context, arg SwitchUpgradeResourceParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, switchUpgradeResource, arg.DestinationResourceID, arg.SandboxID, arg.SourceResourceID)
 	if err != nil {
 		return 0, err
 	}

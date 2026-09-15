@@ -34,6 +34,9 @@ in its owner and replace the other copies with links or stable summaries.
 
 ## Active implementation
 
+- [Session checkpoints](implementation/session-checkpoints.md): provider-independent native state
+  recovery, currently under implementation and verification.
+
 - [Package upgrades in persistent Sandboxes](implementation/runtime-package-upgrades.md): agreed
   implementation after the profile-revision slice; planned scope, not current supported behavior.
 

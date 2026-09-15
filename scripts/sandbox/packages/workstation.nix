@@ -3,6 +3,7 @@ let
   pins = builtins.fromJSON (builtins.readFile ./packages.json);
   pi = import ./pi.nix { inherit pkgs; };
   browser = import ./browser.nix { inherit pkgs; };
+  restic = import ./restic.nix { inherit pkgs; };
   python = pkgs.python314.withPackages (ps: [ ps.pip ps.setuptools ]);
   uv = pkgs.stdenvNoCC.mkDerivation {
     pname = "uv";
@@ -21,7 +22,8 @@ let
       node = pkgs.nodejs_24.version; pip = pkgs.python314Packages.pip.version;
       "pkg-config" = pkgs.pkg-config.version; python = pkgs.python314.version;
       ripgrep = pkgs.ripgrep.version; tar = pkgs.gnutar.version;
-      unzip = pkgs.unzip.version; uv = uv.version; wget = pkgs.wget.version;
+      restic = restic.version; unzip = pkgs.unzip.version; uv = uv.version;
+      wget = pkgs.wget.version;
       "browser-use" = pins.browser.version; "browser-harness" = pins.browser.harness_version;
       "browser-python" = pkgs.python312.version;
       chromium = pins.browser.chromium_version;
@@ -37,7 +39,7 @@ let
 in pkgs.buildEnv {
   name = "dorf-workstation";
   paths = [
-    (pkgs.hiPrio python) pkgs.nodejs_24 pkgs.go uv pi browser
+    (pkgs.hiPrio python) pkgs.nodejs_24 pkgs.go uv restic pi browser
     pkgs.bashInteractive pkgs.cacert pkgs.curl pkgs.git pkgs.jq pkgs.gcc
     pkgs.gnumake pkgs.pkg-config pkgs.ripgrep pkgs.gnutar pkgs.unzip pkgs.wget
     pkgs.xz pkgs.coreutils pkgs.findutils pkgs.gnugrep pkgs.gnused pkgs.gzip
