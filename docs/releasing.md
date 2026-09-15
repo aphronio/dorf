@@ -113,3 +113,10 @@ Verify that build with `DORF_E2B_PROFILE_LIVE=1`, `E2B_API_KEY`, and
 `DORF_E2B_PROFILE_MANIFEST` pointing to the manifest, using
 `mise exec -- go test ./internal/e2b -run '^TestLiveCombinedHarnessProfile$' -count=1`.
 The Go test requires the key in its environment; it does not load `.env` itself.
+
+Private templates are scoped to the E2B team used for the build. Build with the target
+deployment team's credentials, or explicitly authorize public release of a reviewed clean
+template. A successful local build does not establish that another team can use it. Verify the
+exact reference using the deployment credentials before promoting the profile; failed verification
+must leave the previously active revision available. Keep credentials in the build client,
+never in template commands or copied build inputs.

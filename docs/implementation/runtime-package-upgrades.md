@@ -1,8 +1,10 @@
-# Plan: Package upgrades in persistent Sandboxes
+# Package upgrades in persistent Sandboxes
 
-Status: in progress, started on 2026-09-15 after the profile-revision slice in
+Status: the scoped Codex upgrade and shared workstation slices shipped in v0.16.0 on
+2026-09-15, following the profile-revision slice in
 [D132](../project/decisions/D132-profile-revisions-separate-promotion-from-job-custody.md).
-This plan records implementation scope; it does not describe shipped behavior.
+The sections below preserve implementation decisions and intermediate verification evidence.
+The release verification section records the final artifacts; earlier candidates are historical.
 
 ## Goal and scope
 
@@ -189,7 +191,7 @@ The live loop corrected missing Python pidfd wrappers in the guest and Incus gue
 after VM start. The fixture does not prove real Provider Gateway routing. Package staging used an
 Internet-enabled disposable VM; activation and recovery do not change its network policy.
 
-### Current operator boundary and remaining work
+### Operator boundary and historical candidate verification
 
 The Nix image slice passed both candidate builds and live verification on 2026-09-15. These are
 disposable local/test artifacts from an explicitly recorded dirty tree, with exact input hashes;
@@ -314,6 +316,26 @@ Gateway connectivity across recovery.
 
 The public repository contains generic recipes and synthetic verification behavior only.
 Deployment-specific configuration and operational evidence stay outside tracked files.
+
+### Release verification
+
+The immutable [v0.16.0 release](https://github.com/aphronio/dorf/releases/tag/v0.16.0)
+was built from clean source. Both final provider artifacts passed the real Gateway recipe:
+package activation, forced rollback, original conversation context, substantive queued replies,
+and owned resource/checkpoint cleanup. Correlated telemetry ingestion was verified, including
+the injected failure and recovery. The full deterministic gate and exact-source CI passed.
+
+Both images report the same workstation
+`/nix/store/5fzd1f3093nzvia98xmfdkhivpvxvjxf-dorf-workstation` and preinstalled Nix-managed
+Codex 0.154.0. The release Incus archive is 1,369,788,167 bytes, below the unchanged release
+size limit. The E2B release template is public after explicit publication authorization and was
+verified using credentials from a different deployment team.
+
+Deployed profile verification and synthetic initial/follow-up checks passed on both providers.
+Each follow-up recalled its original marker; image metadata matched the release, and test Jobs
+completed cleanup. Deployment-specific identities and consuming-application checks remain in
+private operational records. Automatic fleet rollout, offline delivery, old-image bootstrap,
+and live updates of packages other than Codex remain deferred.
 
 ## References
 
