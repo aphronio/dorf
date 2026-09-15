@@ -127,3 +127,25 @@ cleanup for an interrupted upgrade with retained recovery dependencies.
 Live loops found two real guest boundaries: older guest Python lacks pidfd wrappers, so exact
 process stopping uses Linux pidfd syscalls; and Incus start acknowledgement precedes guest-agent
 readiness, so activation waits for bounded command readiness instead of immediately rolling back.
+
+## Real Provider Gateway proof
+
+Run `mise run integration:upgrade-gateway incus /absolute/build.json` and then the same command
+for `e2b`, each with its exact candidate receipt. Set `DORF_UPGRADE_GATEWAY_HOST` to the configured
+deployment host's SSH name and `DORF_UPGRADE_GATEWAY_URL` to its existing guest-reachable HTTPS
+Gateway URL. The operator on that host must already have a verified default AI connection.
+This explicitly uses the AI account and disposable provider resources. Keep deployment values
+outside tracked files.
+
+The recipe builds a small host helper from this checkout and copies that credential-free binary
+through SSH. It creates only `upgrade-proof:` consumer routes, using Dorf's Gateway authority.
+Scoped keys pass directly from SSH stdout into the native runner's route installer; they are never
+printed or saved in proof receipts. Upstream credentials remain on the Gateway host. The test asks
+for a synthetic marker, then requires the native conversation to recall it after successful package
+activation and after forced rollback. The E2B check requires a changed provider binding. The local
+Responses fixture remains the separate deterministic oracle for exact model-request counts.
+
+Coordinated cleanup revokes the exact proof route and removes provider resources/checkpoints.
+The wrapper removes its host helper after success. A failure retains database custody, local proof
+receipts, and the helper for investigation and cleanup; do not blindly create a second proof or
+revoke unrelated routes. No user tools or external application mutations are requested.

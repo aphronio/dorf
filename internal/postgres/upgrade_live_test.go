@@ -1,11 +1,14 @@
 package postgres_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -26,7 +29,8 @@ import (
 )
 
 // This opts into real disposable provider resources. The provider gateway is a
-// local deterministic Responses fixture; no AI account or user tools are used.
+// local deterministic Responses fixture unless an explicit Gateway host is supplied.
+// Live Gateway mode uses synthetic prompts and no user tools.
 func TestLiveUpgradeRetainedWorker(t *testing.T) {
 	selected := os.Getenv("DORF_LIVE_UPGRADE_PROVIDER")
 	if selected == "" {
@@ -50,6 +54,7 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 	var eventLock sync.Mutex
 	emit := func(event telemetry.Event) {
 		event.Attributes["dorf.synthetic_proof"] = true
+		event.Attributes["dorf.proof.real_gateway"] = os.Getenv("DORF_UPGRADE_GATEWAY_HOST") != ""
 		eventLock.Lock()
 		defer eventLock.Unlock()
 		_ = json.NewEncoder(events).Encode(event)
@@ -135,7 +140,7 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 		current, err := store.Sandbox(ctx, id)
 		return provider.Ownership{JobID: current.JobID, SandboxID: current.ID, OwnershipNonce: current.OwnershipNonce}, err
 	}}}
-	driver := liveUpgradeDriver{NativeDriver: upgrade.NativeDriver{Sandbox: sandbox, Checkpointer: checkpoints, Agent: agent, Replace: selected == "e2b"}}
+	driver := liveUpgradeDriver{LiveGateway: os.Getenv("DORF_UPGRADE_GATEWAY_HOST") != "", NativeDriver: upgrade.NativeDriver{Sandbox: sandbox, Checkpointer: checkpoints, Agent: agent, Replace: selected == "e2b"}}
 	configure := func(tasks *absurd.Client) {
 		base := core.NewExecutionService(store, external, nil, absurdruntime.RequireClaim).WithAgentExecution(liveUpgradeAgent{external.Externals})
 		execution := upgrade.Execution{ExecutionService: base, Upgrades: upgrade.Service{Store: store, Driver: driver, Queue: tasks.QueueName(), Provider: selected, Claim: absurdruntime.RequireClaim, Emit: emit}}
@@ -169,7 +174,7 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 			return err == nil && execution.AgentRun.State == core.AgentRunCompleted
 		})
 	}
-	first := admit("initial", "Remember this synthetic marker: DORF_UPGRADE_WORKER_CONTEXT_732")
+	first := admit("initial", "Remember this synthetic marker: DORF_UPGRADE_WORKER_CONTEXT_732. Reply with only the marker. Do not use tools.")
 	stop := start(client)
 	waitMessage(first)
 	stop()
@@ -183,7 +188,7 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 		if _, err := store.RequestSandboxUpgrade(ctx, client.QueueName(), request); err != nil {
 			t.Fatal(err)
 		}
-		queued := admit(fmt.Sprintf("queued-%d", index), "Continue with the original synthetic context")
+		queued := admit(fmt.Sprintf("queued-%d", index), "Reply with only the synthetic marker from my first message. Do not use tools.")
 		restarted, err := absurd.New(absurd.Options{DB: store.DB, QueueName: client.QueueName()})
 		if err != nil {
 			t.Fatal(err)
@@ -210,12 +215,14 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 		if index == 1 && selected == "e2b" && (current.ResourceID == owned.ResourceID || current.ProviderID == receipt.SourceProviderID) {
 			t.Fatal("E2B did not switch provider binding")
 		}
-		data, err := sandbox.ReadFile(ctx, provider.Ownership{JobID: job.ID, SandboxID: current.ID, OwnershipNonce: current.OwnershipNonce}, "/workspace/upgrade-worker-proof/requests.jsonl")
-		if err != nil || !strings.Contains(string(data), "DORF_UPGRADE_WORKER_CONTEXT_732") {
-			t.Fatal("resumed model request lost original context")
-		}
-		if count := len(strings.Split(strings.TrimSpace(string(data)), "\n")); count != index+2 {
-			t.Fatalf("native model requests=%d want %d", count, index+2)
+		if !driver.LiveGateway {
+			data, err := sandbox.ReadFile(ctx, provider.Ownership{JobID: job.ID, SandboxID: current.ID, OwnershipNonce: current.OwnershipNonce}, "/workspace/upgrade-worker-proof/requests.jsonl")
+			if err != nil || !strings.Contains(string(data), "DORF_UPGRADE_WORKER_CONTEXT_732") {
+				t.Fatal("resumed model request lost original context")
+			}
+			if count := len(strings.Split(strings.TrimSpace(string(data)), "\n")); count != index+2 {
+				t.Fatalf("native model requests=%d want %d", count, index+2)
+			}
 		}
 		execution, err := store.AgentMessageExecution(ctx, queued.ID)
 		if err != nil {
@@ -228,7 +235,7 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 		substantive := false
 		for _, turn := range history.Turns {
 			if turn.ID == execution.AgentRun.TurnID && strings.TrimSpace(turn.Output) != "" {
-				substantive = true
+				substantive = !driver.LiveGateway || strings.Contains(turn.Output, "DORF_UPGRADE_WORKER_CONTEXT_732")
 			}
 		}
 		if !substantive {
@@ -314,7 +321,14 @@ func liveUpgradeSandbox(t *testing.T, selected string) provider.Sandbox {
 
 type liveUpgradeExternals struct{ terminal.Externals }
 
-func (e liveUpgradeExternals) RouteCreate(ctx context.Context, _ core.Job, s core.Sandbox, _ core.Route) error {
+func (e liveUpgradeExternals) RouteCreate(ctx context.Context, job core.Job, s core.Sandbox, route core.Route) error {
+	if os.Getenv("DORF_UPGRADE_GATEWAY_HOST") != "" {
+		key, err := liveUpgradeGateway(ctx, "create", s, route, job.Model)
+		if err != nil {
+			return err
+		}
+		return e.Agent.InstallRoute(ctx, provider.Ownership{JobID: s.JobID, SandboxID: s.ID, OwnershipNonce: s.OwnershipNonce}, os.Getenv("DORF_UPGRADE_GATEWAY_URL"), key, job.Model)
+	}
 	owner := provider.Ownership{JobID: s.JobID, SandboxID: s.ID, OwnershipNonce: s.OwnershipNonce}
 	if err := e.Sandbox.PutFile(ctx, owner, "/root/.codex/config.toml", []byte("model_provider = \"proof\"\n[model_providers.proof]\nname = \"proof\"\nbase_url = \"http://127.0.0.1:18997/v1\"\nwire_api = \"responses\"\n")); err != nil {
 		return err
@@ -324,7 +338,12 @@ func (e liveUpgradeExternals) RouteCreate(ctx context.Context, _ core.Job, s cor
 	}
 	return liveUpgradeFixture(ctx, e.Sandbox, owner)
 }
-func (e liveUpgradeExternals) RouteRevoke(ctx context.Context, _ core.Job, s core.Sandbox, _ core.Route) error {
+func (e liveUpgradeExternals) RouteRevoke(ctx context.Context, _ core.Job, s core.Sandbox, route core.Route) error {
+	if os.Getenv("DORF_UPGRADE_GATEWAY_HOST") != "" {
+		if _, err := liveUpgradeGateway(ctx, "revoke", s, route, ""); err != nil {
+			return err
+		}
+	}
 	return e.Agent.RemoveRoute(ctx, provider.Ownership{JobID: s.JobID, SandboxID: s.ID, OwnershipNonce: s.OwnershipNonce})
 }
 
@@ -337,11 +356,16 @@ func (e liveUpgradeAgent) ResolveAgentRunOperation(_ context.Context, execution 
 	return terminal.NewAgentRunOperation(e.Externals, execution)
 }
 
-type liveUpgradeDriver struct{ upgrade.NativeDriver }
+type liveUpgradeDriver struct {
+	upgrade.NativeDriver
+	LiveGateway bool
+}
 
 func (d liveUpgradeDriver) Verify(ctx context.Context, s core.Sandbox, version string, runs []core.AgentRun) error {
-	if err := liveUpgradeFixture(ctx, d.Sandbox, provider.Ownership{JobID: s.JobID, SandboxID: s.ID, OwnershipNonce: s.OwnershipNonce}); err != nil {
-		return err
+	if !d.LiveGateway {
+		if err := liveUpgradeFixture(ctx, d.Sandbox, provider.Ownership{JobID: s.JobID, SandboxID: s.ID, OwnershipNonce: s.OwnershipNonce}); err != nil {
+			return err
+		}
 	}
 	if err := d.NativeDriver.Verify(ctx, s, version, runs); err != nil {
 		return err
@@ -371,3 +395,33 @@ func liveUpgradeFixture(ctx context.Context, sandbox provider.Sandbox, owner pro
 }
 
 var _ upgrade.Store = postgres.Store{}
+
+// SSH stdout is consumed directly; route credentials never enter proof logs or receipts.
+func liveUpgradeGateway(ctx context.Context, operation string, sandbox core.Sandbox, route core.Route, model string) (string, error) {
+	host := os.Getenv("DORF_UPGRADE_GATEWAY_HOST")
+	helper := os.Getenv("DORF_UPGRADE_GATEWAY_HELPER")
+	if !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.@-]*$`).MatchString(host) || !regexp.MustCompile(`^/[a-zA-Z0-9_./-]+$`).MatchString(helper) {
+		return "", fmt.Errorf("invalid explicit Gateway host/helper")
+	}
+	input, err := json.Marshal(map[string]string{"operation": operation, "sandbox_id": sandbox.ID, "route_id": route.ID, "url": os.Getenv("DORF_UPGRADE_GATEWAY_URL"), "model": model})
+	if err != nil {
+		return "", err
+	}
+	command := exec.CommandContext(ctx, "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "RemoteCommand=none", host, helper)
+	command.Stdin = bytes.NewReader(input)
+	output, err := command.Output()
+	if err != nil {
+		return "", fmt.Errorf("Gateway proof %s failed: %w", operation, err)
+	}
+	var result struct {
+		Key     string `json:"key"`
+		Revoked bool   `json:"revoked"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		return "", fmt.Errorf("Gateway proof returned invalid receipt")
+	}
+	if operation == "create" && result.Key == "" || operation == "revoke" && !result.Revoked {
+		return "", fmt.Errorf("Gateway proof omitted expected receipt")
+	}
+	return result.Key, nil
+}

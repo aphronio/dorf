@@ -233,8 +233,8 @@ holding delivery and activating an upgrade. No controller-side package relay or 
 is needed for this slice. If a deployment's network policy blocks package downloads, report the
 staging failure without changing that policy. Defer offline delivery until a concrete need appears.
 
-Still to prove: real Provider Gateway routing through replacement. Automatic rollout policy and a broader supported package
-catalog are deferred; they are not prerequisites for this Codex slice. The current
+Real Provider Gateway routing through replacement is verified by the repeatable Gateway recipe.
+Automatic rollout policy and a broader supported package catalog are deferred; they are not prerequisites for this Codex slice. The current
 operator path deliberately requires a staged closure. Do not interpret the disposable fixture as
 permission to upgrade a retained user VM or as a production deployment receipt.
 
@@ -300,6 +300,20 @@ context, substantive replies, and complete cleanup. Its fingerprint is
 `/nix/store/5fzd1f3093nzvia98xmfdkhivpvxvjxf-dorf-workstation` and identical tool inventories.
 These results supersede the initial workstation candidates above. The repository gate passed;
 the candidates remain test-only pending clean release construction and profile promotion.
+
+### Real Gateway verification
+
+The repeatable `integration:upgrade-gateway` recipe passed on both providers on 2026-09-15.
+It used an existing authenticated Gateway with temporary synthetic consumer routes. A native
+conversation recalled its original marker after activation and after forced rollback; E2B changed
+its provider resource while preserving that conversation. Both runs completed scoped route,
+resource, and checkpoint cleanup. Incus completed in approximately 74 seconds and E2B in 121
+seconds. Exact synthetic receipts remain local and in correlated telemetry. The deterministic
+fixture remains the oracle for exact model-request counts; these live checks establish actual
+Gateway connectivity across recovery.
+
+The public repository contains generic recipes and synthetic verification behavior only.
+Deployment-specific configuration and operational evidence stay outside tracked files.
 
 ## References
 

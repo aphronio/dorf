@@ -116,3 +116,7 @@ run = "bun scripts/e2b/runtime-upgrade-worker.ts"
 [tasks."integration:nix-image"]
 description = "Build or verify a disposable Nix-managed Codex image on Incus or E2B"
 run = "bun scripts/e2b/nix-image.ts"
+
+[tasks."integration:upgrade-gateway"]
+description = "Prove upgrades and replacement through an existing real Gateway using synthetic conversations"
+run = "scripts/runtime-upgrade/gateway-proof.sh"
