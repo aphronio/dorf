@@ -48,6 +48,23 @@ func TestReadCheckpointConfigDefaultsAndMatchesExactProfile(t *testing.T) {
 	}
 }
 
+func TestReadCheckpointConfigWildcardKeepsProfileScope(t *testing.T) {
+	cfg := validCheckpointConfig()
+	cfg.ProfileRevision = "*"
+	loaded, err := readCheckpointConfig(writeCheckpointConfig(t, cfg, 0o600))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, revision := range []string{strings.Repeat("a", 64), strings.Repeat("b", 64)} {
+		if !loaded.enabled(core.SandboxProfileRef{Name: cfg.ProfileName, Revision: revision}) {
+			t.Fatal("wildcard did not enable a revision of the configured profile")
+		}
+		if loaded.enabled(core.SandboxProfileRef{Name: "other-profile", Revision: revision}) {
+			t.Fatal("wildcard enabled an unrelated profile")
+		}
+	}
+}
+
 func TestReadCheckpointConfigRejectsUnsafeInputWithoutLeakingSecrets(t *testing.T) {
 	const secret = "private-secret-material-that-must-not-appear"
 	tests := []struct {
@@ -57,6 +74,8 @@ func TestReadCheckpointConfigRejectsUnsafeInputWithoutLeakingSecrets(t *testing.
 	}{
 		{name: "group-readable file", mode: 0o640},
 		{name: "non-hex profile revision", mode: 0o600, mutate: func(cfg *checkpointConfig) { cfg.ProfileRevision = strings.Repeat("z", 64) }},
+		{name: "empty profile revision", mode: 0o600, mutate: func(cfg *checkpointConfig) { cfg.ProfileRevision = "" }},
+		{name: "partial wildcard", mode: 0o600, mutate: func(cfg *checkpointConfig) { cfg.ProfileRevision = "a*" }},
 		{name: "incomplete R2 repository", mode: 0o600, mutate: func(cfg *checkpointConfig) { cfg.Bucket = "" }},
 		{name: "invalid timing", mode: 0o600, mutate: func(cfg *checkpointConfig) { cfg.IdleDelaySeconds = 301 }},
 	}

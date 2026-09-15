@@ -101,7 +101,7 @@ func (c *checkpointConfig) validate() error {
 }
 
 func (c checkpointConfig) enabled(ref core.SandboxProfileRef) bool {
-	return ref.Name == c.ProfileName && ref.Revision == c.ProfileRevision
+	return ref.Name == c.ProfileName && (c.ProfileRevision == "*" || ref.Revision == c.ProfileRevision)
 }
 func (c checkpointConfig) repository() persistence.R2Repository {
 	return persistence.R2Repository{Endpoint: c.Endpoint, AccountID: c.AccountID, Bucket: c.Bucket, Prefix: c.Prefix,
@@ -109,11 +109,13 @@ func (c checkpointConfig) repository() persistence.R2Repository {
 }
 
 func (c checkpointConfig) validateIdentity() error {
-	if c.ID == "" || strings.ContainsAny(c.ID, "/\\ \t\n") || len(c.ID) > 128 || c.ProfileName == "" || len(c.ProfileRevision) != 64 || len(c.PasswordKey) < 32 {
-		return fmt.Errorf("checkpoint configuration requires a logical repository ID, exact profile revision and durable encryption key")
+	if c.ID == "" || strings.ContainsAny(c.ID, "/\\ \t\n") || len(c.ID) > 128 || c.ProfileName == "" || len(c.PasswordKey) < 32 {
+		return fmt.Errorf("checkpoint configuration requires a logical repository ID, profile name and durable encryption key")
 	}
-	if _, err := hex.DecodeString(c.ProfileRevision); err != nil {
-		return fmt.Errorf("checkpoint profile revision must be a SHA-256 digest")
+	if c.ProfileRevision != "*" {
+		if _, err := hex.DecodeString(c.ProfileRevision); err != nil || len(c.ProfileRevision) != 64 {
+			return fmt.Errorf("checkpoint profile revision must be a SHA-256 digest or *")
+		}
 	}
 
 	return nil

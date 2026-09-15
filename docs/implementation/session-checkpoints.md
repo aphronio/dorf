@@ -67,7 +67,7 @@ Jobs use the configured backup timeout instead.
 
 ## Operator configuration
 
-This is opt-in for one exact direct Codex 0.154.0 E2B profile. Its pinned image must include upstream
+This is opt-in for one named direct Codex 0.154.0 E2B profile. Its pinned image must include upstream
 restic 0.19.1 at `/nix/var/nix/profiles/dorf-tools/bin/restic`; the shared workstation recipe installs it.
 
 Place the private configuration at
@@ -81,7 +81,8 @@ outside the repository and back it up independently of sandbox disks. It contain
 | Field | Meaning |
 | --- | --- |
 | `id` | Stable logical repository identity retained in PostgreSQL |
-| `profile_name`, `profile_revision` | Exact profile name and its 64-character revision digest |
+| `profile_name` | Exact profile name |
+| `profile_revision` | A 64-character revision digest, or `"*"` for all revisions of that named profile |
 | `endpoint`, `account_id`, `bucket`, `prefix` | Private R2 destination and session namespace |
 | `access_key_id`, `secret_access_key` | Parent credential scoped to the selected bucket |
 | `password_key` | Base64 encoding of at least 32 random bytes; durable repository encryption custody |
@@ -89,6 +90,10 @@ outside the repository and back it up independently of sandbox disks. It contain
 | `additional_paths` | Optional disjoint absolute directories beyond the supported native inventory |
 | `idle_delay_seconds` | Defaults to five; supported range 1–300 |
 | `backup_timeout_seconds` | Defaults to 120; supported range 1–1800 |
+
+The revision wildcard keeps checkpoints enabled across image updates without editing this file.
+Each checkpoint still records its actual profile revision, and native compatibility checks still
+apply. A wildcard does not upgrade existing VMs or make images without restic support backups.
 
 Before enabling the worker, verify that delegated credentials cannot read, write or delete another
 session's objects, and that stock backup, cancellation and exact restore work in the chosen prefix.
