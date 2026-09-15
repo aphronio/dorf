@@ -870,16 +870,11 @@ func (s Store) CodingMessages(ctx context.Context, jobID string) ([]coding.Messa
 	if err != nil {
 		return nil, nil, err
 	}
-	sandboxes, err := s.Sandboxes(ctx, jobID)
-	if err != nil {
-		return nil, nil, err
-	}
-	owned := make(map[string]core.Sandbox, len(sandboxes))
-	for _, sandbox := range sandboxes {
-		owned[sandbox.ID] = sandbox
-	}
 	messages := make([]coding.MessageRecord, 0, len(deliveries))
 	reviews := make([]coding.ReviewRunView, 0)
+	// Only review projections expose full Sandbox custody. Load it from durable
+	// state when first needed so implementation-only history avoids the query.
+	var owned map[string]core.Sandbox
 	for _, delivery := range deliveries {
 		run, message := delivery.AgentRun, delivery.Message
 		outcome := agentRunOutcome(run.State, run.TurnOutcome)
@@ -890,6 +885,16 @@ func (s Store) CodingMessages(ctx context.Context, jobID string) ([]coding.Messa
 				StartsTurn: message.Intent == core.MessageFollow,
 			})
 			continue
+		}
+		if owned == nil {
+			sandboxes, err := s.Sandboxes(ctx, jobID)
+			if err != nil {
+				return nil, nil, err
+			}
+			owned = make(map[string]core.Sandbox, len(sandboxes))
+			for _, sandbox := range sandboxes {
+				owned[sandbox.ID] = sandbox
+			}
 		}
 		sandbox, ok := owned[run.SandboxID]
 		if !ok || sandbox.JobID != run.JobID {

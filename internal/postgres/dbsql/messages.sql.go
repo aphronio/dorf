@@ -352,13 +352,17 @@ select m.id as message_id,m.job_id as message_job_id,m.from_kind,m.from_id,m.seq
        coalesce(ar.attention,'') as attention,coalesce(ar.role,'') as role,coalesce(ar.input_revision,'') as input_revision,
        coalesce(ar.capability,'') as capability,coalesce(ar.sandbox_id,'') as sandbox_id,
        coalesce(ar.submission_nonce,'') as submission_nonce,ar.started_at,ar.finished_at,
-       exists (
-           select 1 from dorf.agent_runs source
-           where source.job_id=ar.job_id and source.sandbox_id=ar.sandbox_id
-             and source.harness=ar.harness and source.thread_id=ar.thread_id
-             and source.turn_id=coalesce(ar.turn_id,m.steer_target_turn_id)
-             and source.interrupt_requested
-       ) as interrupt_requested
+       -- Uncorrelated membership lets generic prepared plans hash identities once
+       -- instead of scanning the Job's runs again for every Delivery.
+       case when ar.harness is not null and ar.thread_id is not null
+         and coalesce(ar.turn_id,m.steer_target_turn_id) is not null then
+           (ar.job_id,ar.sandbox_id,ar.harness,ar.thread_id,coalesce(ar.turn_id,m.steer_target_turn_id)) in (
+               select source.job_id,source.sandbox_id,source.harness,source.thread_id,source.turn_id
+               from dorf.agent_runs source
+               where source.job_id=$1 and source.interrupt_requested
+           )
+         else false
+       end as interrupt_requested
 from dorf.job_messages m
 left join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=$1
