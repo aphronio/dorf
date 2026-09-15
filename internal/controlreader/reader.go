@@ -50,6 +50,7 @@ var (
 	ErrSandboxNotFound  = errors.New("control reader Sandbox not found")
 	ErrInvalidFilePath  = errors.New("control reader file path is invalid")
 	ErrFileNotFound     = errors.New("control reader file is unavailable")
+	ErrFileTooLarge     = errors.New("control reader file exceeds read limit")
 	ErrUnavailable      = errors.New("control reader observation is unavailable")
 	ErrResponseTooLarge = errors.New("control reader response exceeds its bound")
 )
@@ -103,6 +104,13 @@ func (s Service) ReadFile(ctx context.Context, sandboxID, relativePath string) (
 		}
 		var err error
 		contents, err = runtime.Files.ReadSandboxFile(ctx, job, owned, relativePath)
+		if err != nil {
+			contents = nil
+		}
+		if err == nil && len(contents) > provider.MaxFileReadBytes {
+			contents = nil
+			return ErrFileTooLarge
+		}
 		return err
 	})
 	return contents, err
@@ -152,6 +160,8 @@ func (s Service) accessSandbox(ctx context.Context, sandboxID string, reconcileI
 			return ErrInvalidFilePath
 		case errors.Is(err, provider.ErrFileUnavailable):
 			return ErrFileNotFound
+		case errors.Is(err, provider.ErrFileTooLarge):
+			return ErrFileTooLarge
 		default:
 			return err
 		}
@@ -412,6 +422,7 @@ func NewHandler(token string, service Service) (http.Handler, error) {
 	if !validToken(token) {
 		return nil, fmt.Errorf("control reader token must be one 256-bit lowercase hex value")
 	}
+	fileTransfers := make(chan struct{}, provider.MaxConcurrentFileReads)
 	routes := map[string]http.HandlerFunc{
 		CoherentObservationPath: jsonEndpoint(MaxObservationBytes, func(ctx context.Context, input observationRequest) (MessageObservation, error) {
 			return service.ReadMessageObservation(ctx, input.JobID, input.MessageID, input.Cursor)
@@ -420,7 +431,7 @@ func NewHandler(token string, service Service) (http.Handler, error) {
 		HealthPath: jsonEndpoint(0, func(context.Context, struct{}) (healthResponse, error) {
 			return healthResponse{Ready: true}, nil
 		}),
-		FileReadPath:  fileReadEndpoint(service),
+		FileReadPath:  fileReadEndpoint(service, fileTransfers),
 		FileWritePath: fileWriteEndpoint(service),
 		CommandPath:   commandEndpoint(service),
 		StatusPath:    statusEndpoint(service),
@@ -520,10 +531,16 @@ func jsonEndpoint[Input, Output any](maxResponseBytes int, call func(context.Con
 	}
 }
 
-func fileReadEndpoint(service Service) http.HandlerFunc {
+func fileReadEndpoint(service Service, transfers chan struct{}) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var input fileReadRequest
 		if !decodeRequest(w, r, &input) {
+			return
+		}
+		select {
+		case transfers <- struct{}{}:
+			defer func() { <-transfers }()
+		case <-r.Context().Done():
 			return
 		}
 		contents, err := service.ReadFile(r.Context(), input.SandboxID, input.Path)
@@ -598,6 +615,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		writeProblem(w, http.StatusUnprocessableEntity, "invalid_file_path")
 	case errors.Is(err, ErrFileNotFound):
 		writeProblem(w, http.StatusNotFound, "file_not_found")
+	case errors.Is(err, ErrFileTooLarge):
+		writeProblem(w, http.StatusConflict, "file_too_large")
 	case errors.Is(err, ErrUnavailable):
 		writeProblem(w, http.StatusConflict, "unavailable")
 	case errors.Is(err, ErrResponseTooLarge):
@@ -710,9 +729,15 @@ func (c Client) ReadFile(ctx context.Context, sandboxID, relativePath string) ([
 	if response.Header.Get("Content-Type") != "application/octet-stream" {
 		return nil, fmt.Errorf("control reader returned an invalid file content type")
 	}
-	contents, err := io.ReadAll(response.Body)
+	if response.ContentLength > provider.MaxFileReadBytes {
+		return nil, ErrFileTooLarge
+	}
+	contents, err := io.ReadAll(io.LimitReader(response.Body, provider.MaxFileReadBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read control reader response: %w", err)
+	}
+	if len(contents) > provider.MaxFileReadBytes {
+		return nil, ErrFileTooLarge
 	}
 	if response.ContentLength >= 0 && response.ContentLength != int64(len(contents)) {
 		return nil, fmt.Errorf("control reader returned a conflicting file length")
@@ -897,6 +922,8 @@ func decodeProblem(response *http.Response) error {
 		return ErrInvalidFilePath
 	case "file_not_found":
 		return ErrFileNotFound
+	case "file_too_large":
+		return ErrFileTooLarge
 	case "unavailable":
 		return ErrUnavailable
 	case "response_too_large":
@@ -916,7 +943,7 @@ func problemMatchesStatus(code string, status int) bool {
 		return status == http.StatusNotFound
 	case "invalid_file_path":
 		return status == http.StatusUnprocessableEntity
-	case "unavailable", "response_too_large", "timeline_unavailable":
+	case "unavailable", "response_too_large", "timeline_unavailable", "file_too_large":
 		return status == http.StatusConflict
 	default:
 		return false

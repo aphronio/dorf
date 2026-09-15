@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/controlauth"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
 const (
@@ -38,13 +39,15 @@ type handler struct {
 	profiles  Profiles
 	mux       *http.ServeMux
 	redeem    redemptionLimiter
+	fileReads chan struct{}
 	shutdown  context.Context
 }
 
 type authenticatedRoute func(http.ResponseWriter, *http.Request, controlauth.Client)
 
 func newHandlerContext(discovery Discovery, auth Auth, jobs Jobs, profiles Profiles, shutdown context.Context) http.Handler {
-	h := &handler{discovery: discovery, auth: auth, jobs: jobs, profiles: profiles, mux: http.NewServeMux(), shutdown: shutdown}
+	h := &handler{discovery: discovery, auth: auth, jobs: jobs, profiles: profiles, mux: http.NewServeMux(),
+		fileReads: make(chan struct{}, provider.MaxConcurrentFileReads), shutdown: shutdown}
 	h.mux.HandleFunc("/v1", h.discoveryRoute)
 	h.mux.HandleFunc(OpenAPIPath, h.openAPIRoute)
 	h.mux.HandleFunc("/v1/auth/enrollments/redeem", h.redeemRoute)
@@ -626,9 +629,23 @@ func (h *handler) fileRoute(w http.ResponseWriter, r *http.Request, _ controlaut
 		h.writeFile(w, r, paths[0])
 		return
 	}
-	contents, err := h.jobs.ReadSandboxFile(r.Context(), r.PathValue("sandbox"), paths[0])
+	h.readFile(w, r, paths[0])
+}
+
+func (h *handler) readFile(w http.ResponseWriter, r *http.Request, name string) {
+	select {
+	case h.fileReads <- struct{}{}:
+		defer func() { <-h.fileReads }()
+	case <-r.Context().Done():
+		return
+	}
+	contents, err := h.jobs.ReadSandboxFile(r.Context(), r.PathValue("sandbox"), name)
 	if err != nil {
 		h.serviceError(w, r, err)
+		return
+	}
+	if len(contents) > provider.MaxFileReadBytes {
+		h.serviceError(w, r, ErrFileTooLarge)
 		return
 	}
 	digest := sha256.Sum256(contents)
@@ -740,6 +757,7 @@ var serviceProblems = []struct {
 	{ErrSandboxNotFound, "sandbox_not_found"},
 	{ErrInvalidFilePath, "invalid_file_path"},
 	{ErrFileNotFound, "file_not_found"},
+	{ErrFileTooLarge, "file_too_large"},
 	{ErrFileUnavailable, "file_unavailable"},
 	{ErrRetryUnavailable, "retry_unavailable"},
 	{ErrAbandonUnavailable, "abandon_unavailable"},

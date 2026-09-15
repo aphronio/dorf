@@ -692,7 +692,7 @@
       "get": {
         "operationId": "getSandboxFile",
         "summary": "Read exact bytes from one Job-owned Sandbox",
-        "description": "Reads one regular file inside the Sandbox using an absolute, home-relative (~/), or workspace-relative path while Job cleanup still permits reads. Rejects symlinks and non-canonical paths. The client must verify Content-Digest before using or writing the bytes.",
+        "description": "Reads up to 8 MiB from one regular file inside the Sandbox using an absolute, home-relative (~/), or workspace-relative path while Job cleanup still permits reads. Rejects symlinks and non-canonical paths. The client must verify Content-Digest before using or writing the bytes.",
         "tags": ["Sandboxes"],
         "parameters": [
           {
@@ -724,7 +724,15 @@
             },
             "content": {
               "application/octet-stream": {
-                "schema": { "type": "string", "format": "binary" }
+                "schema": { "type": "string", "format": "binary", "maxLength": 8388608 }
+              }
+            }
+          },
+          "409": {
+            "description": "The file exceeds the 8 MiB read limit",
+            "content": {
+              "application/problem+json": {
+                "schema": { "$ref": "#/components/schemas/Problem" }
               }
             }
           },

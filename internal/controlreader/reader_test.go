@@ -16,6 +16,7 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/postgres"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
 func TestAuthenticatedClientReadsExactOwnedFile(t *testing.T) {
@@ -54,10 +55,10 @@ func TestAuthenticatedClientReadsExactOwnedFile(t *testing.T) {
 	}
 }
 
-func TestAuthenticatedClientPreservesWholeFileBeyondMessageObservationBound(t *testing.T) {
+func TestAuthenticatedClientPreservesWholeFileAtReadLimit(t *testing.T) {
 	job := core.Job{ID: "job-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
 	owned := core.Sandbox{ID: "sandbox-1", JobID: job.ID, OwnershipNonce: strings.Repeat("a", 64)}
-	want := bytes.Repeat([]byte{0xa5}, MaxObservationBytes+1)
+	want := bytes.Repeat([]byte{0xa5}, provider.MaxFileReadBytes)
 	handler, err := NewHandler(strings.Repeat("b", 64), Service{
 		Store:    &readerTestStore{job: job, sandbox: owned},
 		Runtimes: readerTestRuntimes{profile: job.SandboxProfile, files: &readerTestFiles{contents: want}},

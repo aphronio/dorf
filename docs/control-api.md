@@ -282,7 +282,12 @@ Sandbox files are exact, caller-selected regular files inside a Job-owned Sandbo
 absolute, relative to the workspace, or start with `~/` for the Sandbox execution user's home.
 Paths never refer to the deployment host. Symlinks and non-canonical paths are rejected.
 The server enforces Job custody and the cleanup fence; the response includes exact bytes, length, and
-digest. A bounded write can atomically replace one regular file, creating missing parent directories.
+digest. Reads have an explicit byte limit enforced during capture; an oversized file returns HTTP
+409 with Problem code `file_too_large`, without partial file contents. The OpenAPI document owns
+the public size limit. Each HTTP listener has a separate bounded transfer budget, including slow
+response delivery, while the Job cleanup fence protects only capture. Waiting file downloads do
+not consume capacity reserved for other control operations. A bounded write can atomically replace
+one regular file, creating missing parent directories.
 Files use mode 0600 and new directories use mode 0700. Create-only
 writes preserve an existing file, including an intentionally empty file. The same custody and
 cleanup fence apply. There is no listing, glob, archive, or directory API. Evidence responses

@@ -25,6 +25,7 @@ var problemCatalog = []ProblemDescriptor{
 	describeProblem(500, "evidence_unverified", "Retained Evidence could not be verified", false),
 	describeProblem(404, "file_not_found", "Sandbox file not found", false),
 	describeProblem(400, "file_path_required", "Exactly one path query parameter is required", false),
+	describeProblem(409, "file_too_large", "Sandbox file exceeds the read limit", false),
 	describeProblem(409, "file_unavailable", "Sandbox file is unavailable", false),
 	describeProblem(409, "idempotency_conflict", "Idempotency-Key is bound to different input", false),
 	describeProblem(400, "idempotency_key_required", "Exactly one valid Idempotency-Key is required", false),

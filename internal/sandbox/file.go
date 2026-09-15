@@ -15,6 +15,14 @@ import (
 var (
 	ErrInvalidFilePath = errors.New("invalid Sandbox file path")
 	ErrFileUnavailable = errors.New("Sandbox file is unavailable")
+	ErrFileTooLarge    = errors.New("Sandbox file exceeds read limit")
+)
+
+const (
+	// MaxFileReadBytes is the per-call size contract for Sandbox file reads.
+	MaxFileReadBytes = 8 << 20
+	// MaxConcurrentFileReads bounds retained file-response buffers at each HTTP hop.
+	MaxConcurrentFileReads = 4
 )
 
 // ValidateFilePath accepts an exact absolute, home-relative, or workspace-relative
@@ -85,7 +93,8 @@ for name do read_one "$root_workspace" "$name"; done`
 }
 
 func decodeFileBatch(output string, names []string, maxBytes int) (map[string][]byte, error) {
-	if len(output) > len(names)*(base64.StdEncoding.EncodedLen(maxBytes+1)+2) {
+	maxEncodedBytes := base64.StdEncoding.EncodedLen(maxBytes + 1)
+	if len(output) > len(names)*(maxEncodedBytes+2) {
 		return nil, fmt.Errorf("Sandbox file batch response exceeds limit")
 	}
 	lines := strings.Split(strings.TrimSuffix(output, "\n"), "\n")
@@ -100,52 +109,32 @@ func decodeFileBatch(output string, names []string, maxBytes int) (map[string][]
 		if !strings.HasPrefix(line, "D") {
 			return nil, fmt.Errorf("invalid Sandbox file batch entry")
 		}
-		contents, err := base64.StdEncoding.Strict().DecodeString(line[1:])
-		if err != nil || len(contents) > maxBytes {
-			return nil, fmt.Errorf("Sandbox file %q exceeds limit or has invalid encoding", names[i])
+		encoded := line[1:]
+		if len(encoded) > maxEncodedBytes {
+			return nil, fmt.Errorf("Sandbox file %q response exceeds encoded limit", names[i])
+		}
+		contents, err := base64.StdEncoding.Strict().DecodeString(encoded)
+		if err != nil {
+			return nil, fmt.Errorf("decode exact Sandbox file %q: %w", names[i], err)
+		}
+		if len(contents) > maxBytes {
+			return nil, fmt.Errorf("%w: %q", ErrFileTooLarge, names[i])
 		}
 		files[names[i]] = contents
 	}
 	return files, nil
 }
 
-// ReadFileViaExec returns exact regular-file bytes while refusing symlinks.
+// ReadFileViaExec returns at most MaxFileReadBytes exact regular-file bytes
+// while refusing symlinks.
 func ReadFileViaExec(ctx context.Context, owner Ownership, workspace, relativePath string, exec ExecFunc) ([]byte, error) {
-	workspace = strings.TrimSpace(workspace)
-	if workspace == "" || !path.IsAbs(workspace) || path.Clean(workspace) != workspace || workspace == "/" {
-		return nil, fmt.Errorf("Sandbox workspace must be a clean absolute path")
-	}
-	if err := ValidateFilePath(relativePath); err != nil {
-		return nil, err
-	}
-	if exec == nil {
-		return nil, fmt.Errorf("Sandbox file transport is not configured")
-	}
-	script := "set -eu\n" + resolveFilePath + `
-if test ! -e "$target" && test ! -L "$target"; then exit 44; fi
-test -f "$target" && test ! -L "$target"
-exec 3< "$target"
-test -f /proc/self/fd/3
-resolved=$(realpath -e -- /proc/self/fd/3)
-test "$resolved" = "$target"
-base64 -w0 <&3`
-	result, err := exec(ctx, owner, nil, "bash", "-c", script, "dorf-read-file", workspace, relativePath)
+	files, err := ReadFilesViaExec(ctx, owner, strings.TrimSpace(workspace), []string{relativePath}, MaxFileReadBytes, exec)
 	if err != nil {
 		return nil, err
 	}
-	if result.ExitCode != 0 {
-		if result.ExitCode == 44 {
-			return nil, fmt.Errorf("%w: %w: %s", ErrFileUnavailable, os.ErrNotExist, relativePath)
-		}
-		detail := strings.TrimSpace(result.Stderr)
-		if detail == "" {
-			detail = fmt.Sprintf("exit %d", result.ExitCode)
-		}
-		return nil, fmt.Errorf("%w: read regular Sandbox file %q: %s", ErrFileUnavailable, relativePath, detail)
-	}
-	contents, err := base64.StdEncoding.Strict().DecodeString(result.Stdout)
-	if err != nil {
-		return nil, fmt.Errorf("decode exact Sandbox file %q: %w", relativePath, err)
+	contents, ok := files[relativePath]
+	if !ok {
+		return nil, fmt.Errorf("%w: %w: %s", ErrFileUnavailable, os.ErrNotExist, relativePath)
 	}
 	return contents, nil
 }

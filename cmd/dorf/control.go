@@ -1406,6 +1406,8 @@ func (a controlAPIJobs) ReadSandboxFile(ctx context.Context, sandboxID, relative
 	switch {
 	case errors.Is(err, controlreader.ErrUnavailable):
 		return nil, controlapi.ErrFileUnavailable
+	case errors.Is(err, controlreader.ErrFileTooLarge):
+		return nil, controlapi.ErrFileTooLarge
 	case errors.Is(err, controlreader.ErrInvalidFilePath):
 		return nil, controlapi.ErrInvalidFilePath
 	case errors.Is(err, controlreader.ErrFileNotFound):

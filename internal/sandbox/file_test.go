@@ -24,6 +24,9 @@ func TestReadFileViaExecReturnsExactBytesAndRefusesSymlinks(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "nested", "second.bin"), wantBinary, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(workspace, "empty"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	outside := filepath.Join(t.TempDir(), "outside")
 	if err := os.WriteFile(outside, []byte("private"), 0o600); err != nil {
 		t.Fatal(err)
@@ -31,7 +34,7 @@ func TestReadFileViaExecReturnsExactBytesAndRefusesSymlinks(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(workspace, "escape")); err != nil {
 		t.Fatal(err)
 	}
-	for relativePath, want := range map[string][]byte{"first.txt": wantText, "nested/second.bin": wantBinary} {
+	for relativePath, want := range map[string][]byte{"first.txt": wantText, "nested/second.bin": wantBinary, "empty": {}} {
 		got, err := ReadFileViaExec(context.Background(), Ownership{}, workspace, relativePath, localExec(t, nil))
 		if err != nil || !bytes.Equal(got, want) {
 			t.Fatalf("ReadFileViaExec(%q)=%v want=%v err=%v", relativePath, got, want, err)
@@ -64,10 +67,33 @@ func TestReadFileViaExecReturnsExactBytesAndRefusesSymlinks(t *testing.T) {
 			t.Fatalf("ReadFileViaExec invalid path %q error=%v", relativePath, err)
 		}
 	}
-	for _, relativePath := range []string{"escape", "nested", "missing"} {
+	for _, relativePath := range []string{"escape", "nested"} {
 		if _, err := ReadFileViaExec(context.Background(), Ownership{}, workspace, relativePath, localExec(t, nil)); !errors.Is(err, ErrFileUnavailable) {
 			t.Fatalf("ReadFileViaExec unavailable path %q error=%v", relativePath, err)
 		}
+	}
+	if got, err := ReadFileViaExec(context.Background(), Ownership{}, workspace, "missing", localExec(t, nil)); got != nil || !errors.Is(err, ErrFileUnavailable) || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ReadFileViaExec missing bytes=%v error=%v", got, err)
+	}
+}
+
+func TestReadFileViaExecEnforcesReadLimit(t *testing.T) {
+	workspace := t.TempDir()
+	exact := bytes.Repeat([]byte{0, 1, 0xff, '\n'}, MaxFileReadBytes/4)
+	if err := os.WriteFile(filepath.Join(workspace, "exact.bin"), exact, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "oversize.bin"), append(append([]byte(nil), exact...), 1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := localExec(t, nil)
+	got, err := ReadFileViaExec(context.Background(), Ownership{}, workspace, "exact.bin", runner)
+	if err != nil || !bytes.Equal(got, exact) {
+		t.Fatalf("exact-limit read bytes=%d err=%v", len(got), err)
+	}
+	got, err = ReadFileViaExec(context.Background(), Ownership{}, workspace, "oversize.bin", runner)
+	if got != nil || !errors.Is(err, ErrFileTooLarge) {
+		t.Fatalf("oversize read bytes=%d err=%v", len(got), err)
 	}
 }
 

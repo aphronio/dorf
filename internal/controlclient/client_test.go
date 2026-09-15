@@ -18,6 +18,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/hostclientconfig"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
 func TestLoopbackClientCannotLeakBearerToProxyRedirectOrAlternateOrigin(t *testing.T) {
@@ -248,9 +249,9 @@ func TestListJobsEncodesOneOpaquePageRequest(t *testing.T) {
 	}
 }
 
-func TestSandboxFileReturnsExactVerifiedBytesWithoutJSONLimit(t *testing.T) {
+func TestSandboxFileReturnsExactVerifiedBytesAtReadLimit(t *testing.T) {
 	const credential = "file-credential"
-	contents := append(bytes.Repeat([]byte{0, 0xff, '\n', '\r'}, maxResponseBytes/4+1), []byte("exact tail")...)
+	contents := bytes.Repeat([]byte{0, 0xff, '\n', '\r'}, provider.MaxFileReadBytes/4)
 	digest := sha256.Sum256(contents)
 	requests := 0
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -271,7 +272,7 @@ func TestSandboxFileReturnsExactVerifiedBytesWithoutJSONLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := client.SandboxFile(context.Background(), "sandbox-1", "results/report #1.bin")
-	if err != nil || !bytes.Equal(got, contents) || len(got) <= maxResponseBytes {
+	if err != nil || !bytes.Equal(got, contents) || len(got) != provider.MaxFileReadBytes {
 		t.Fatalf("Sandbox file bytes=%d exact=%t err=%v", len(got), bytes.Equal(got, contents), err)
 	}
 	_, err = client.SandboxFile(context.Background(), "sandbox-1", "results/report #1.bin")

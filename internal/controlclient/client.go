@@ -68,6 +68,10 @@ func (e *ProblemError) Error() string {
 	return fmt.Sprintf("Dorf API request failed with HTTP %d", e.Problem.Status)
 }
 
+func (e *ProblemError) Is(target error) bool {
+	return e != nil && target == controlapi.ErrFileTooLarge && e.Problem.Status == http.StatusConflict && e.Problem.Code == "file_too_large"
+}
+
 // New constructs a client. A nil transport uses http.DefaultTransport.
 func New(deploymentURL, credential string, transport http.RoundTripper) (*Client, error) {
 	normalized, err := clientconfig.NormalizeDeploymentURL(deploymentURL)
@@ -411,25 +415,36 @@ func (c *Client) SandboxFile(ctx context.Context, sandboxID, path string) ([]byt
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, asServiceError(responseProblem(response))
 	}
+	contents, err := readSandboxFileResponse(response)
+	return contents, asServiceError(err)
+}
+
+func readSandboxFileResponse(response *http.Response) ([]byte, error) {
 	if response.StatusCode != http.StatusOK {
 		if response.Body != nil {
 			response.Body.Close()
 		}
-		return nil, asServiceError(fmt.Errorf("Dorf API file response has unexpected HTTP %d", response.StatusCode))
+		return nil, fmt.Errorf("Dorf API file response has unexpected HTTP %d", response.StatusCode)
 	}
 	if response.Body == nil {
-		return nil, asServiceError(fmt.Errorf("Dorf API response has no body"))
+		return nil, fmt.Errorf("Dorf API response has no body")
 	}
 	defer response.Body.Close()
-	contents, err := io.ReadAll(response.Body)
+	if response.ContentLength > provider.MaxFileReadBytes {
+		return nil, controlapi.ErrFileTooLarge
+	}
+	contents, err := io.ReadAll(io.LimitReader(response.Body, provider.MaxFileReadBytes+1))
 	if err != nil {
-		return nil, asServiceError(fmt.Errorf("read Dorf API file response"))
+		return nil, fmt.Errorf("read Dorf API file response")
+	}
+	if len(contents) > provider.MaxFileReadBytes {
+		return nil, controlapi.ErrFileTooLarge
 	}
 	if response.ContentLength >= 0 && response.ContentLength != int64(len(contents)) {
-		return nil, asServiceError(fmt.Errorf("Dorf API file response length does not match Content-Length"))
+		return nil, fmt.Errorf("Dorf API file response length does not match Content-Length")
 	}
 	if err := verifyContentDigest(response.Header.Values("Content-Digest"), contents); err != nil {
-		return nil, asServiceError(err)
+		return nil, err
 	}
 	return contents, nil
 }

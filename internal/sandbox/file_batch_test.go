@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -83,5 +84,87 @@ func TestReadFilesViaExecRejectsTruncatedOrUnboundedTransportOutput(t *testing.T
 		if _, err := ReadFilesViaExec(context.Background(), Ownership{}, "/workspace/job", []string{"file"}, 4, runner); err == nil {
 			t.Fatal("accepted malformed or unbounded response")
 		}
+	}
+}
+
+func TestDecodeFileBatchDistinguishesOversizeFromMalformedOutput(t *testing.T) {
+	const maxBytes = 4
+	encode := func(contents []byte) string { return "D" + base64.StdEncoding.EncodeToString(contents) + "\n" }
+
+	files, err := decodeFileBatch(encode([]byte("1234")), []string{"file"}, maxBytes)
+	if err != nil || string(files["file"]) != "1234" {
+		t.Fatalf("exact-limit decode=%q err=%v", files["file"], err)
+	}
+	if files, err := decodeFileBatch(encode([]byte("12345")), []string{"file"}, maxBytes); files != nil || !errors.Is(err, ErrFileTooLarge) {
+		t.Fatalf("valid oversize decode=%v err=%v", files, err)
+	}
+
+	tooLong := "D" + strings.Repeat("A", base64.StdEncoding.EncodedLen(maxBytes+1)+1) + "\n"
+	for _, output := range []string{
+		"D!!!!\n",
+		encode([]byte("1234"))[:len(encode([]byte("1234")))-1],
+		"M\nM\n",
+		tooLong,
+	} {
+		if files, err := decodeFileBatch(output, []string{"file"}, maxBytes); files != nil || err == nil || errors.Is(err, ErrFileTooLarge) {
+			t.Fatalf("malformed output files=%v err=%v", files, err)
+		}
+	}
+}
+
+func TestReadFilesViaExecBoundsGrowingOpenedDescriptor(t *testing.T) {
+	workspace := t.TempDir()
+	filePath := filepath.Join(workspace, "growing")
+	if err := os.WriteFile(filePath, []byte("start"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	realHead, err := exec.LookPath("head")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	started := filepath.Join(bin, "started")
+	release := filepath.Join(bin, "release")
+	observed := filepath.Join(bin, "observed")
+	wrapper := fmt.Sprintf("#!/bin/sh\n: > %q\nwhile test ! -e %q; do sleep 0.01; done\n%q \"$@\" | tee %q\n", started, release, realHead, observed)
+	if err := os.WriteFile(filepath.Join(bin, "head"), []byte(wrapper), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	const maxBytes = 64
+	type readResult struct {
+		files map[string][]byte
+		err   error
+	}
+	runner := localExec(t, nil)
+	done := make(chan readResult, 1)
+	go func() {
+		files, err := ReadFilesViaExec(context.Background(), Ownership{}, workspace, []string{"growing"}, maxBytes, runner)
+		done <- readResult{files: files, err: err}
+	}()
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filePath, bytes.Repeat([]byte("x"), maxBytes+20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(release, []byte("release"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := <-done
+	if result.files != nil || !errors.Is(result.err, ErrFileTooLarge) {
+		t.Fatalf("growing file result=%v err=%v", result.files, result.err)
+	}
+	readBytes, err := os.ReadFile(observed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(readBytes) != maxBytes+1 {
+		t.Fatalf("source bytes read=%d want=%d", len(readBytes), maxBytes+1)
 	}
 }

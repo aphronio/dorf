@@ -217,7 +217,10 @@ An interrupt is a monotonic request on the original Turn-starting AgentRun. A cl
 steer Message, but the request binds its original Turn rather than the latest run. Acceptance and
 native execution share the Job effect fence with cleanup. The existing execution task services Stop
 before pending messages, observes the exact native Turn, and records its actual outcome. A lost
-acknowledgement causes observation of that same Turn, never interruption of a successor.
+acknowledgement causes observation of that same Turn, never interruption of a successor. The Codex
+adapter relies on native exact-Turn validation for the interrupt request, then reads the exact
+outcome. A native rejection still requires that read. A transport failure after the attempt uses
+fresh authenticated history without replaying the mutation in the operation.
 
 Consumers and workflows choose a typed execution envelope, including Role, capability, and any input
 Revision, but do not authorize message intent, reorder accepted input, or choose Thread semantics.
@@ -243,16 +246,21 @@ Message attachments are accepted user input. Their explicit filenames and bounde
 durable Message custody before execution. They do not authorize generic output discovery or
 retention.
 
-`SandboxHandle.ReadFile` returns the exact bytes of one caller-named, clean workspace-relative
-regular file from that exact Job-owned Sandbox. Core checks Job and Sandbox ownership, executes the
-read under the Job cleanup fence, and rejects traversal, symlinks, and resolved paths outside the
-workspace. It does not add listing, discovery, stat, glob, archive, batch, or directory-download
+`SandboxHandle.ReadFile` returns the exact bytes of one caller-named regular file from that exact
+Job-owned Sandbox. Paths may be absolute, workspace-relative, or relative to the Sandbox user's
+home through `~/`. Core checks Job and Sandbox ownership, executes the read under the Job cleanup
+fence, and rejects traversal and symlinks. It does not add listing, discovery, stat, glob, archive, batch, or directory-download
 APIs; a workflow that needs discovery may compose the existing Sandbox command operation before
 requesting exact files. Core does not interpret, discover, or retain agent-authored files. A caller
 or workflow must read any files it needs before requesting cleanup; the request closes reads and
-Sandbox deletion makes those files unavailable. The current operation returns the whole file in
-memory without an invented size policy; a streaming contract remains unearned. Durable typed
-results remain owned by the workflow that understands them.
+Sandbox deletion makes those files unavailable. Reads enforce `sandbox.MaxFileReadBytes` while
+reading the opened file, including files that grow during the operation. Oversized reads return
+`ErrFileTooLarge` without partial bytes. Each HTTP handler admits at most
+`sandbox.MaxConcurrentFileReads` transfers, acquiring capacity before file access and retaining it
+through response delivery. The Job fence ends after capture, before a slow client receives the
+bytes. HTTP clients independently bound response materialization and verify exact length and digest.
+Direct Go callers own the lifetime of returned bytes. Durable typed results remain owned by the
+workflow that understands them.
 
 Evidence is immutable observed proof linked to the supported fact it proves, currently an AgentRun,
 Action, or Revision. Its validity follows the claim it supports: a coding Revision change may

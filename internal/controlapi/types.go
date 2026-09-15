@@ -26,6 +26,7 @@ var (
 	ErrSandboxNotFound                = errors.New("control API Sandbox not found")
 	ErrInvalidFilePath                = errors.New("control API Sandbox file path invalid")
 	ErrFileNotFound                   = errors.New("control API Sandbox file not found")
+	ErrFileTooLarge                   = errors.New("control API Sandbox file exceeds read limit")
 	ErrFileUnavailable                = errors.New("control API Sandbox file unavailable")
 	ErrMessageUnavailable             = errors.New("control API Message cannot be accepted")
 	ErrSteerUnavailable               = errors.New("control API steer cannot be accepted")
