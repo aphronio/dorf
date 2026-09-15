@@ -55,6 +55,9 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D121: Messages retain application developer instructions](decisions/D121-messages-retain-application-developer-instructions.md) (`current`). Changing application instruction custody or Harness prompt authority.
 - [D122: Sandbox activity delays idle pause](decisions/D122-sandbox-activity-delays-idle-pause.md) (`current`). Changing idle pause timing, managed Sandbox access, or cancellation fences.
 - [D126: Automatic messages preserve eventual delivery](decisions/D126-automatic-messages-preserve-eventual-delivery.md) (`current`). Changing automatic message resolution, steer reconciliation, or message replay.
+- [D128: Execution changes wake the attached task](decisions/D128-execution-changes-wake-the-attached-task.md) (`current`). Changing execution wake hints, native completion delivery, or durable wait ordering.
+- [D129: Controls reuse native resources and exact target validation](decisions/D129-controls-reuse-native-resources-and-exact-target-validation.md) (`current`). Changing Steer connection ownership or exact native interruption recovery.
+- [D130: Exact file reads have source and transfer bounds](decisions/D130-exact-file-reads-have-source-and-transfer-bounds.md) (`current`). Changing Sandbox file capture, HTTP file transport, or cleanup protection.
 
 ## Workflows
 
@@ -110,6 +113,9 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D123: Message timelines project completed native replies](decisions/D123-message-timelines-project-completed-native-replies.md) (`current`). Changing live assistant reply delivery, retained item identity, or input attribution.
 - [D125: Messages distinguish application observations](decisions/D125-messages-distinguish-application-observations.md) (`current`). Delivering asynchronous application updates without impersonating human input.
 - [D127: Message observations deliver completed prefix deltas](decisions/D127-message-observations-deliver-completed-prefix-deltas.md) (`current`). Changing Message observation, native connection reuse, stream replay, or idle behavior.
+- [D128: Execution changes wake the attached task](decisions/D128-execution-changes-wake-the-attached-task.md) (`current`). Changing execution wake hints, native completion delivery, or durable wait ordering.
+- [D129: Controls reuse native resources and exact target validation](decisions/D129-controls-reuse-native-resources-and-exact-target-validation.md) (`current`). Changing Steer connection ownership or exact native interruption recovery.
+- [D130: Exact file reads have source and transfer bounds](decisions/D130-exact-file-reads-have-source-and-transfer-bounds.md) (`current`). Changing Sandbox file capture, HTTP file transport, or cleanup protection.
 
 ## Sandboxes and profiles
 
@@ -259,6 +265,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D117: Clients request skill refresh at fresh Turn boundaries](decisions/D117-client-requested-skill-refresh-at-fresh-turn-boundaries.md) (`current`). Changing skill discovery after client-managed Sandbox updates.
 - [D118: Messages retain ordered input attachments and immutable bytes](decisions/D118-messages-retain-ordered-input-attachments-and-immutable-bytes.md) (`current`). Changing Message attachments, input blob custody, native image delivery, or attachment replay.
 - [D126: Automatic messages preserve eventual delivery](decisions/D126-automatic-messages-preserve-eventual-delivery.md) (`current`). Changing automatic message resolution, steer reconciliation, or message replay.
+- [D128: Execution changes wake the attached task](decisions/D128-execution-changes-wake-the-attached-task.md) (`current`). Changing execution wake hints, native completion delivery, or durable wait ordering.
 
 ## GitHub integration
 

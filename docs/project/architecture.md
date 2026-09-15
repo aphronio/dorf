@@ -161,8 +161,14 @@ mode whose exact active Turn target is captured atomically at admission. It may 
 follows, never falls back to a new Turn, and fails honestly if reconciliation observes that its
 target became terminal. Wake events make work eligible; they do not replace durable delivery facts.
 A later Message wakes the Job's existing execution task rather than attaching a task for that
-Message. A bounded reload of durable Message facts covers a missing wake hint, and an executor
-restart reclaims the same task attachment.
+Message. Stop requests and exact native completion observations also signal that task. Each
+reconciliation pass reads a Job-local wake revision before inspecting execution facts, drains
+immediately eligible work through the existing priority selector, then waits for the next revision.
+PostgreSQL records each distinct wake cause, advances the revision, and emits its immutable Absurd
+event in one transaction. Wake recording uses a dedicated row lock rather than the external-effect
+fence. A bounded reload covers a missing hint, and an executor restart reclaims the same task
+attachment. Each Core reconciliation advances at most one Message, so consumer policy runs between
+eligible deliveries. Wake metadata remains with the retained Job and carries no execution authority.
 
 Each accepted attachment has immutable bytes in the content-addressed blob store and an ordered
 Message manifest with its kind, filename, media type, digest, and byte size. The delivery adapter
@@ -194,7 +200,7 @@ history reconciliation supplies a completion watermark, while Core remains the o
 Subscribers do not own Sandbox activity, and missing replay after a restart does not implicitly
 resume an idle Sandbox. Explicit timeline inspection remains a separate operation.
 
-An ordinary existing-thread follow may hold one authenticated native protocol across the existing
+An existing-thread follow or Steer may hold one authenticated native protocol across its existing
 history, durable baseline, and submission sequence. This is an operation resource scope, not a new
 execution state or a cross-claim session cache. Failed mutations reconcile over fresh authenticated
 history. Accepted observation can retain the protocol until settlement; it does not retain the
@@ -203,7 +209,8 @@ submission scope or the Job effect fence.
 Once a Turn is durably bound as active, Core's read-only Harness observation remains separate from
 Message delivery. Internal delivery reconciliation alternates observation with an interruptible
 durable wait, so an accepted steer can wake and overtake polling without another controller path or
-duplicate Turn.
+duplicate Turn. The native observer sends a bounded asynchronous completion hint before final reply
+prefix hydration. Core still reconciles the exact native Turn before recording its outcome.
 
 The remote message default initially resolves automatic intent at admission: steer an active Turn,
 otherwise follow. The accepted request intent and current effective delivery intent are different
