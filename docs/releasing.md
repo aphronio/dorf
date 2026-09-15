@@ -70,7 +70,9 @@ separate admission requirement. Use the repository release command for both path
 
 Both builders consume the shared Debian guest recipe and
 [`scripts/sandbox/packages`](../scripts/sandbox/packages). That directory pins Nix, Nixpkgs, and
-the official prebuilt Codex archives. Codex uses the `dorf-runner` Nix profile; the remaining tools,
+the official prebuilt Codex archives. Preserve the complete upstream platform directory, including
+companion executables and runtime resources; a successful `codex --version` does not prove native
+tools can start. Codex uses the `dorf-runner` Nix profile; the remaining tools,
 Pi, and browser environment share `dorf-tools`. Their separation allows the verified Codex update
 to preserve the rest of the workstation. The guest includes `dorf-packages` for staging supported
 pinned Codex versions with Internet access. Image metadata retains actual tool versions, Harness

@@ -15,8 +15,8 @@ in pkgs.stdenvNoCC.mkDerivation {
   dontFixup = true;
   installPhase = ''
     runHook preInstall
-    mkdir -p "$out/bin"
-    install -m755 vendor/x86_64-unknown-linux-musl/bin/codex "$out/bin/codex"
+    mkdir -p "$out"
+    cp -a vendor/x86_64-unknown-linux-musl/. "$out/"
     runHook postInstall
   '';
 }
