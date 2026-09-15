@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -228,6 +229,9 @@ func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspac
 }
 
 func (a Agent) SteerTurn(ctx context.Context, owner provider.Ownership, sessionID, turnID, agentRunID string, input core.HarnessInput) (string, error) {
+	if a.operation != nil && sessionID != a.operation.threadID {
+		return "", fmt.Errorf("native operation requires its exact Thread")
+	}
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	var acceptedTurnID string
@@ -240,29 +244,65 @@ func (a Agent) SteerTurn(ctx context.Context, owner provider.Ownership, sessionI
 }
 
 func (a Agent) InterruptTurn(ctx context.Context, owner provider.Ownership, threadID, turnID string) (core.HarnessBinding, error) {
+	if a.operation != nil && threadID != a.operation.threadID {
+		return core.HarnessBinding{}, fmt.Errorf("native operation requires its exact Thread")
+	}
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	binding := core.HarnessBinding{Harness: Harness, ThreadID: threadID}
+	mutationAttempted := false
 	err := a.withServer(ctx, owner, func(p *protocol) error {
 		var err error
-		binding.Turn, err = p.interruptTurn(ctx, threadID, turnID)
+		binding.Turn, mutationAttempted, err = p.interruptTurn(ctx, threadID, turnID)
 		return err
 	})
+	var rejected *RejectedError
+	var attention *attentionError
+	if err == nil || !mutationAttempted || errors.As(err, &rejected) || errors.As(err, &attention) || ctx.Err() != nil {
+		return binding, err
+	}
+	// The interrupt may have taken effect before its acknowledgement was lost.
+	// Reconcile on a fresh authenticated transport without replaying the mutation.
+	recovery := a
+	if a.operation != nil {
+		recovery = a.operation.original
+	}
+	recovery.operation = nil
+	if recoveryErr := recovery.openServer(ctx, owner, func(p *protocol) error {
+		if err := p.resumeThread(ctx, threadID); err != nil {
+			return err
+		}
+		turn, err := p.exactTurn(ctx, threadID, turnID)
+		if err == nil {
+			binding.Turn = turn
+		}
+		return err
+	}); recoveryErr == nil && binding.Turn.Terminal() {
+		return binding, nil
+	}
 	return binding, err
 }
 
-func (p *protocol) interruptTurn(ctx context.Context, threadID, turnID string) (TurnOutcome, error) {
+func (p *protocol) interruptTurn(ctx context.Context, threadID, turnID string) (TurnOutcome, bool, error) {
 	if err := p.resumeThread(ctx, threadID); err != nil {
-		return TurnOutcome{}, err
+		return TurnOutcome{}, false, err
 	}
-	turn, err := p.exactTurn(ctx, threadID, turnID)
-	if err != nil || turn.Terminal() {
-		return turn, err
+	_, interruptErr := p.call(ctx, "turn/interrupt", map[string]any{"threadId": threadID, "turnId": turnID})
+	var rejected *RejectedError
+	if interruptErr != nil && !errors.As(interruptErr, &rejected) {
+		return TurnOutcome{}, true, interruptErr
 	}
-	if _, err := p.call(ctx, "turn/interrupt", map[string]any{"threadId": threadID, "turnId": turnID}); err != nil {
-		return TurnOutcome{}, err
+	turn, readErr := p.exactTurn(ctx, threadID, turnID)
+	if readErr != nil {
+		return turn, true, readErr
 	}
-	return p.exactTurn(ctx, threadID, turnID)
+	if turn.Terminal() {
+		return turn, true, nil
+	}
+	if interruptErr != nil {
+		return turn, true, interruptErr
+	}
+	return turn, true, nil
 }
 
 func (p *protocol) exactTurn(ctx context.Context, threadID, turnID string) (TurnOutcome, error) {

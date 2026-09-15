@@ -38,13 +38,24 @@ type ExecutionStore interface {
 	SetCleanupAttention(context.Context, string, string) error
 }
 
-type Externals interface {
-	SandboxCreate(context.Context, Job, Sandbox) error
-	RouteCreate(context.Context, Job, Sandbox, Route) error
+type SteerExternals interface {
 	SteerHistory(context.Context, Job, string, string) (HarnessHistory, error)
 	AgentSteer(context.Context, Job, Delivery) (string, error)
+}
+
+type Externals interface {
+	SteerExternals
+	SandboxCreate(context.Context, Job, Sandbox) error
+	RouteCreate(context.Context, Job, Sandbox, Route) error
 	RouteRevoke(context.Context, Job, Sandbox, Route) error
 	SandboxDelete(context.Context, Job, Sandbox) error
+}
+
+// ScopedSteerExternals optionally retains adapter resources only while Core
+// executes one Steer's existing history, durable baseline, mutation, and
+// recovery sequence.
+type ScopedSteerExternals interface {
+	WithSteerScope(context.Context, Job, Delivery, func(context.Context, SteerExternals) error) error
 }
 
 type FaultBarrier interface {
@@ -369,15 +380,20 @@ func (s ExecutionService) executeAgentRun(ctx context.Context, delivery Delivery
 
 func (s ExecutionService) deliver(ctx context.Context, job Job, delivery Delivery, operation AgentRunOperation, input string) error {
 	if delivery.Message.Intent == MessageSteer && (delivery.AgentRun.TurnID == "" || delivery.AgentRun.TurnID == delivery.Message.TargetTurnID) {
-		return s.deliverSteer(ctx, job, delivery)
+		if scoped, ok := s.externals.(ScopedSteerExternals); ok {
+			return scoped.WithSteerScope(ctx, job, delivery, func(ctx context.Context, bound SteerExternals) error {
+				return s.deliverSteer(ctx, job, delivery, bound)
+			})
+		}
+		return s.deliverSteer(ctx, job, delivery, s.externals)
 	}
 	_, err := s.executeAgentRun(ctx, delivery, operation, input)
 	return err
 }
 
-func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery Delivery) error {
+func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery Delivery, externals SteerExternals) error {
 	run := delivery.AgentRun
-	history, err := s.externals.SteerHistory(ctx, job, run.SandboxID, run.ThreadID)
+	history, err := externals.SteerHistory(ctx, job, run.SandboxID, run.ThreadID)
 	if err != nil {
 		_ = s.agentRunAttention(ctx, run.ID, "harness thread history is currently unavailable: "+err.Error())
 		return err
@@ -403,9 +419,9 @@ func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery De
 	if err := s.reach(ctx, BarrierBeforeSubmit, delivery); err != nil {
 		return err
 	}
-	acceptedTurnID, err := s.externals.AgentSteer(ctx, job, delivery)
+	acceptedTurnID, err := externals.AgentSteer(ctx, job, delivery)
 	if err != nil {
-		observedHistory, inspectErr := s.externals.SteerHistory(ctx, job, run.SandboxID, run.ThreadID)
+		observedHistory, inspectErr := externals.SteerHistory(ctx, job, run.SandboxID, run.ThreadID)
 		if inspectErr != nil {
 			reason := "harness steer acknowledgement is genuinely uncertain: " + err.Error() + "; history inspection failed: " + inspectErr.Error()
 			return s.uncertainAgentRun(ctx, run.ID, reason)

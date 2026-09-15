@@ -100,6 +100,35 @@ func (e Externals) AgentSteer(ctx context.Context, job core.Job, delivery core.D
 	return e.Agent.SteerTurn(ctx, owner, delivery.AgentRun.ThreadID, delivery.Message.TargetTurnID, delivery.AgentRun.ID, input)
 }
 
+func (e Externals) WithSteerScope(ctx context.Context, job core.Job, delivery core.Delivery, fn func(context.Context, core.SteerExternals) error) error {
+	scoped, ok := e.Agent.(ScopedHarness)
+	run := delivery.AgentRun
+	if !ok || delivery.Message.Intent != core.MessageSteer || run.ThreadID == "" || delivery.Message.TargetTurnID == "" ||
+		run.JobID != job.ID || run.MessageID != delivery.Message.ID || run.SandboxID == "" {
+		return fn(ctx, e)
+	}
+	if run.Harness != "" && run.Harness != e.Agent.Name() {
+		return fn(ctx, e)
+	}
+	owner, err := e.owner(ctx, run.SandboxID)
+	if err != nil {
+		return err
+	}
+	if owner.JobID != job.ID || owner.SandboxID != run.SandboxID {
+		return fn(ctx, e)
+	}
+	return scoped.WithOperation(ctx, owner, run.ThreadID, func(ctx context.Context, harness Harness) error {
+		e.Agent = harness
+		e.Ownership = func(_ context.Context, sandboxID string) (provider.Ownership, error) {
+			if sandboxID != owner.SandboxID {
+				return provider.Ownership{}, fmt.Errorf("scoped steer requires its exact Sandbox")
+			}
+			return owner, nil
+		}
+		return fn(ctx, e)
+	})
+}
+
 func (e Externals) RouteRevoke(ctx context.Context, job core.Job, sandbox core.Sandbox, route core.Route) error {
 	if sandbox.JobID != job.ID || route.SandboxID != sandbox.ID || route.ID == "" {
 		return fmt.Errorf("Route cleanup has no exact Job-owned identity")
@@ -136,7 +165,8 @@ func (e Externals) owner(ctx context.Context, sandboxID string) (provider.Owners
 }
 
 var (
-	_ core.Externals = Externals{}
+	_ core.Externals            = Externals{}
+	_ core.ScopedSteerExternals = Externals{}
 )
 
 func (e Externals) WriteSandboxFile(ctx context.Context, job core.Job, owned core.Sandbox, name string, contents []byte, ifAbsent bool) error {
