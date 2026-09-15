@@ -27,11 +27,11 @@ type TaskResultV1 struct {
 // durably pinned Sandbox profile after cleanup has been requested.
 type CleanupRuntime struct {
 	Execution      CleanupExecution
-	SandboxProfile string
+	SandboxProfile SandboxProfileRef
 }
 
 type CleanupRuntimeResolver interface {
-	ResolveCleanup(context.Context, string) (CleanupRuntime, error)
+	ResolveCleanup(context.Context, SandboxProfileRef) (CleanupRuntime, error)
 }
 
 type SandboxStatusReader interface {
@@ -44,7 +44,7 @@ type SandboxRuntime struct {
 	Execution      Execution
 	Files          SandboxFileReader
 	Commands       SandboxCommandExecutor
-	SandboxProfile string
+	SandboxProfile SandboxProfileRef
 }
 
 type SandboxFileReader interface {
@@ -60,7 +60,7 @@ type SandboxCommandExecutor interface {
 }
 
 type SandboxRuntimeResolver interface {
-	ResolveSandbox(context.Context, string) (SandboxRuntime, error)
+	ResolveSandbox(context.Context, SandboxProfileRef) (SandboxRuntime, error)
 }
 
 // ApplicationStore is the durable Core custody required by the application boundary.

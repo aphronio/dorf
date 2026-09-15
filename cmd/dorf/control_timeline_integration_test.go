@@ -25,8 +25,8 @@ type timelineControlRuntime struct {
 	sourceRun       string
 }
 
-func (r *timelineControlRuntime) ResolveSandbox(_ context.Context, profile string) (core.SandboxRuntime, error) {
-	if profile != r.profile {
+func (r *timelineControlRuntime) ResolveSandbox(_ context.Context, profile core.SandboxProfileRef) (core.SandboxRuntime, error) {
+	if profile.Name != r.profile {
 		return core.SandboxRuntime{}, fmt.Errorf("foreign profile")
 	}
 	return core.SandboxRuntime{SandboxProfile: profile, Timeline: r}, nil

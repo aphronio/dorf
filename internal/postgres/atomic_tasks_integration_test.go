@@ -152,8 +152,8 @@ func TestAdmissionPrimaryKeyConflictDoesNotAdoptForeignJob(t *testing.T) {
 	if _, err := store.DB.ExecContext(ctx, `
 insert into dorf.jobs(
     id,admission_key,workflow_name,workflow_revision,agents_md,
-    sandbox_profile,provider_connection,model,reasoning_effort,keep_running
-) values($1,$2,'','','',$3,$4,$5,$6,false)
+    sandbox_profile,sandbox_profile_revision,provider_connection,model,reasoning_effort,keep_running
+) values($1,$2,'','','',$3,(select active_revision from dorf.sandbox_profiles where name=$3),$4,$5,$6,false)
 `, jobID, foreignAdmissionKey, input.SandboxProfile, input.ProviderConnection, input.Model, input.ReasoningEffort); err != nil {
 		t.Fatal(err)
 	}

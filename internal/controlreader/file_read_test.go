@@ -223,8 +223,8 @@ type boundedRuntimes struct {
 	files   core.SandboxFileReader
 }
 
-func (r boundedRuntimes) ResolveSandbox(_ context.Context, profile string) (core.SandboxRuntime, error) {
-	if profile != r.profile {
+func (r boundedRuntimes) ResolveSandbox(_ context.Context, profile core.SandboxProfileRef) (core.SandboxRuntime, error) {
+	if profile.Name != r.profile {
 		return core.SandboxRuntime{}, errors.New("foreign profile")
 	}
 	return core.SandboxRuntime{SandboxProfile: profile, Files: r.files}, nil

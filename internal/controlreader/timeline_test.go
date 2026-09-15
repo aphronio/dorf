@@ -30,8 +30,8 @@ type timelineTestRuntime struct {
 	err    error
 }
 
-func (r *timelineTestRuntime) ResolveSandbox(context.Context, string) (core.SandboxRuntime, error) {
-	return core.SandboxRuntime{SandboxProfile: r.store.job.SandboxProfile, Timeline: r}, nil
+func (r *timelineTestRuntime) ResolveSandbox(context.Context, core.SandboxProfileRef) (core.SandboxRuntime, error) {
+	return core.SandboxRuntime{SandboxProfile: r.store.job.ProfileRef(), Timeline: r}, nil
 }
 func (r *timelineTestRuntime) ReadTimeline(_ context.Context, job core.Job, owned core.Sandbox, threadID, turnID string) (core.HarnessTimeline, error) {
 	r.calls++

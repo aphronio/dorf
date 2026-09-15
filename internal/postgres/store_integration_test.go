@@ -131,39 +131,43 @@ type integrationRuntimeResolver struct {
 	investigationRuntime investigation.Runtime
 }
 
-func (r integrationRuntimeResolver) ResolveDirect(_ context.Context, name string) (direct.Runtime, error) {
-	if name != r.profile {
+func (r integrationRuntimeResolver) ResolveDirect(_ context.Context, name core.SandboxProfileRef) (direct.Runtime, error) {
+	if name.Name != r.profile {
 		return direct.Runtime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
 	}
-	return direct.Runtime{SandboxProfile: r.profile, Execution: r.execution}, nil
+	return direct.Runtime{SandboxProfile: name, Execution: r.execution}, nil
 }
 
-func (r integrationRuntimeResolver) ResolveSandbox(_ context.Context, name string) (core.SandboxRuntime, error) {
-	if name != r.profile {
+func (r integrationRuntimeResolver) ResolveSandbox(_ context.Context, name core.SandboxProfileRef) (core.SandboxRuntime, error) {
+	if name.Name != r.profile {
 		return core.SandboxRuntime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
 	}
-	return core.SandboxRuntime{Execution: r.execution, Files: r.files, SandboxProfile: r.profile}, nil
+	return core.SandboxRuntime{Execution: r.execution, Files: r.files, SandboxProfile: name}, nil
 }
 
-func (r integrationRuntimeResolver) ResolveCleanup(_ context.Context, name string) (core.CleanupRuntime, error) {
-	if name != r.profile {
+func (r integrationRuntimeResolver) ResolveCleanup(_ context.Context, name core.SandboxProfileRef) (core.CleanupRuntime, error) {
+	if name.Name != r.profile {
 		return core.CleanupRuntime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
 	}
-	return core.CleanupRuntime{Execution: r.execution, SandboxProfile: r.profile}, nil
+	return core.CleanupRuntime{Execution: r.execution, SandboxProfile: name}, nil
 }
 
-func (r integrationRuntimeResolver) ResolveCoding(_ context.Context, name string) (coding.Runtime, error) {
-	if name != r.codingRuntime.SandboxProfile {
+func (r integrationRuntimeResolver) ResolveCoding(_ context.Context, name core.SandboxProfileRef) (coding.Runtime, error) {
+	if name.Name != r.codingRuntime.SandboxProfile.Name {
 		return coding.Runtime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
 	}
-	return r.codingRuntime, nil
+	result := r.codingRuntime
+	result.SandboxProfile = name
+	return result, nil
 }
 
-func (r integrationRuntimeResolver) ResolveInvestigation(_ context.Context, name string) (investigation.Runtime, error) {
-	if name != r.investigationRuntime.SandboxProfile {
+func (r integrationRuntimeResolver) ResolveInvestigation(_ context.Context, name core.SandboxProfileRef) (investigation.Runtime, error) {
+	if name.Name != r.investigationRuntime.SandboxProfile.Name {
 		return investigation.Runtime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
 	}
-	return r.investigationRuntime, nil
+	result := r.investigationRuntime
+	result.SandboxProfile = name
+	return result, nil
 }
 
 func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
@@ -219,8 +223,8 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 	resolver := integrationRuntimeResolver{
 		execution:            execution,
 		profile:              runtimeProfile,
-		codingRuntime:        coding.Runtime{SandboxProfile: runtimeProfile, Agent: execution, Coding: codingService},
-		investigationRuntime: investigation.Runtime{SandboxProfile: runtimeProfile, Agent: execution, Investigation: workspaceExecutor},
+		codingRuntime:        coding.Runtime{SandboxProfile: core.SandboxProfileRef{Name: runtimeProfile}, Agent: execution, Coding: codingService},
+		investigationRuntime: investigation.Runtime{SandboxProfile: core.SandboxProfileRef{Name: runtimeProfile}, Agent: execution, Investigation: workspaceExecutor},
 	}
 	application := core.Application{Store: store, Tasks: client, SandboxRuntimes: resolver, CleanupRuntimes: resolver}
 	application.RegisterCleanup()
@@ -317,7 +321,7 @@ func TestWorkflowEnsureAndCleanupSerializeBothWinnerOrders(t *testing.T) {
 	profile := "incus"
 	resolver := integrationRuntimeResolver{
 		execution: execution, profile: profile,
-		codingRuntime: coding.Runtime{SandboxProfile: profile, Agent: execution, Coding: service},
+		codingRuntime: coding.Runtime{SandboxProfile: core.SandboxProfileRef{Name: profile}, Agent: execution, Coding: service},
 	}
 	client := newFaultClient(t, store, fmt.Sprintf("dorf_workflow_cleanup_race_%d", time.Now().UnixNano()))
 	application := core.Application{Store: store, Tasks: client, SandboxRuntimes: resolver, CleanupRuntimes: resolver}
@@ -382,7 +386,7 @@ func TestWorkflowEnsureAndCleanupSerializeBothWinnerOrders(t *testing.T) {
 	loserService := coding.NewService(loserWorkspace, store, loserExternals, blob.Store{}, absurdruntime.RequireClaim)
 	loserResolver := integrationRuntimeResolver{
 		execution: loserExecution, profile: profile,
-		codingRuntime: coding.Runtime{SandboxProfile: profile, Agent: loserExecution, Coding: loserService},
+		codingRuntime: coding.Runtime{SandboxProfile: core.SandboxProfileRef{Name: profile}, Agent: loserExecution, Coding: loserService},
 	}
 	loserClient := newFaultClient(t, store, fmt.Sprintf("dorf_cleanup_wins_%d", time.Now().UnixNano()))
 	loserApplication := core.Application{Store: store, Tasks: loserClient, SandboxRuntimes: loserResolver, CleanupRuntimes: loserResolver}
@@ -906,7 +910,7 @@ func TestSandboxProfileVerificationTransitionSerializesNewAdmission(t *testing.T
 	nonce := fmt.Sprintf("%x", sha256.Sum256([]byte(name)))
 	if _, err := transition.ExecContext(ctx, `
 insert into dorf.sandbox_profile_verifications(profile_name,contract_version,definition_hash,sandbox_id,ownership_nonce)
-select name,$2,definition_hash,$3,$4 from dorf.sandbox_profiles where name=$1
+select name,$2,candidate_revision,$3,$4 from dorf.sandbox_profiles where name=$1
 `, name, core.BaseProfileContract, "transition-"+name, nonce); err != nil {
 		t.Fatal(err)
 	}
@@ -919,7 +923,7 @@ select name,$2,definition_hash,$3,$4 from dorf.sandbox_profiles where name=$1
 	}
 }
 
-func TestSandboxProfilesAreVerifiedDefaultedAndImmutableWhileInUse(t *testing.T) {
+func TestSandboxProfilesPromoteVerifiedRevisionsWhileJobsRemainInUse(t *testing.T) {
 	db, store, _ := testDatabase(t)
 	ctx := context.Background()
 	name := fmt.Sprintf("managed-%d", time.Now().UnixNano())
@@ -1011,37 +1015,94 @@ func TestSandboxProfilesAreVerifiedDefaultedAndImmutableWhileInUse(t *testing.T)
 		t.Fatalf("no-op patch changed verified default profile: updated=%v profile=%#v err=%v", updated, unchanged, err)
 	}
 	changedGateway := "https://replacement.example/v1"
-	if _, _, err := store.UpdateSandboxProfile(ctx, name, postgres.SandboxProfilePatch{E2BGatewayURL: &changedGateway}); err == nil || !strings.Contains(err.Error(), "immutable") {
-		t.Fatalf("in-use profile update error=%v", err)
+	changed, updated, err := store.UpdateSandboxProfile(ctx, name, postgres.SandboxProfilePatch{E2BGatewayURL: &changedGateway})
+	if err != nil || !updated || changed.BaseVerified() || !changed.Default {
+		t.Fatalf("stage: %+v %v", changed, err)
 	}
-	result, err := db.ExecContext(ctx, `update dorf.jobs set admission_open=false,cleanup_state='complete',cleaned_at=clock_timestamp() where id in ($1,$2)`, job.ID, admittedAfterRetry.ID)
+	active, err := store.ActiveSandboxProfile(ctx, name)
+	if err != nil || active.DefinitionHash != job.SandboxProfileRevision || !active.BaseVerified() {
+		t.Fatalf("staging replaced active revision: %+v %v", active, err)
+	}
+	pinned, err := store.SandboxProfileRevision(ctx, job.ProfileRef())
+	if err != nil || pinned.E2BGatewayURL != profile.E2BGatewayURL {
+		t.Fatalf("existing Job changed: %+v %v", pinned, err)
+	}
+	during := input
+	during.AdmissionKey += "-while-staged"
+	during.Branch += "-while-staged"
+	duringJob, _, err := admitCodingFixture(t, store, ctx, during)
+	if err != nil || duringJob.SandboxProfileRevision != job.SandboxProfileRevision {
+		t.Fatalf("staged admission: %+v %v", duringJob, err)
+	}
+	_, candidateProof, err := store.BeginSandboxProfileVerification(ctx, name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rows, err := result.RowsAffected(); err != nil || rows != 2 {
-		t.Fatalf("complete profile Jobs rows=%d err=%v", rows, err)
-	}
-	changed, updated, err := store.UpdateSandboxProfile(ctx, name, postgres.SandboxProfilePatch{E2BGatewayURL: &changedGateway})
-	if err != nil || !updated {
+	if err := store.RecordSandboxProfileVerificationError(ctx, candidateProof, errors.New("candidate probe failed")); err != nil {
 		t.Fatal(err)
 	}
-	if changed.E2BGatewayURL != changedGateway || changed.Artifact != profile.Artifact || changed.Harness != profile.Harness ||
-		changed.E2BSandboxTimeout != profile.E2BSandboxTimeout || changed.E2BAllowInternet != profile.E2BAllowInternet || changed.Default || changed.Verification != nil {
-		t.Fatalf("patch changed omitted fields or retained verification: %#v", changed)
+	if err := store.RecordSandboxProfileVerificationCleanup(ctx, candidateProof); err != nil {
+		t.Fatal(err)
 	}
-	if !changed.CreatedAt.Equal(stored.CreatedAt) {
-		t.Fatalf("patch changed profile creation time: got=%s want=%s", changed.CreatedAt, stored.CreatedAt)
+	active, err = store.ActiveSandboxProfile(ctx, name)
+	if err != nil || active.DefinitionHash != job.SandboxProfileRevision || !active.BaseVerified() {
+		t.Fatalf("failed candidate replaced active: %+v %v", active, err)
 	}
-	repeated, created, err := admitCodingFixture(t, store, ctx, input)
-	if err != nil || created || repeated.ID != job.ID {
-		t.Fatalf("completed Job idempotency depended on updated profile verification: Job=%#v created=%v err=%v", repeated, created, err)
+	_, candidateProof, err = store.BeginSandboxProfileVerification(ctx, name)
+	if err != nil {
+		t.Fatal(err)
 	}
-	unverified := input
-	unverified.AdmissionKey += "-new"
-	unverified.Branch += "-new"
-	if _, _, err := admitCodingFixture(t, store, ctx, unverified); err == nil || !strings.Contains(err.Error(), core.BaseProfileContract) {
-		t.Fatalf("new Job admitted through updated unverified profile: %v", err)
+	if err := store.RecordSandboxProfileProbe(ctx, candidateProof, "pi upgraded"); err != nil {
+		t.Fatal(err)
 	}
+	active, err = store.ActiveSandboxProfile(ctx, name)
+	if err != nil || active.DefinitionHash != job.SandboxProfileRevision {
+		t.Fatalf("promoted before cleanup: %+v %v", active, err)
+	}
+	if err := store.RecordSandboxProfileVerificationError(ctx, candidateProof, errors.New("cleanup temporarily unavailable")); err != nil {
+		t.Fatal(err)
+	}
+	_, resumedProof, err := store.BeginSandboxProfileVerification(ctx, name)
+	if err != nil || resumedProof.OwnershipNonce != candidateProof.OwnershipNonce || resumedProof.ProbeCompletedAt.IsZero() {
+		t.Fatalf("cleanup retry=%+v err=%v", resumedProof, err)
+	}
+	if err := store.RecordSandboxProfileVerificationCleanup(ctx, resumedProof); err != nil {
+		t.Fatal(err)
+	}
+	active, err = store.DefaultSandboxProfile(ctx)
+	if err != nil || active.DefinitionHash != changed.DefinitionHash || !active.Default || !active.BaseVerified() {
+		t.Fatalf("promotion/default: %+v %v", active, err)
+	}
+	after := input
+	after.AdmissionKey += "-after-promotion"
+	after.Branch += "-after-promotion"
+	newJob, _, err := admitCodingFixture(t, store, ctx, after)
+	if err != nil || newJob.SandboxProfileRevision != changed.DefinitionHash {
+		t.Fatalf("new admission: %+v %v", newJob, err)
+	}
+	replay, created, err := admitCodingFixture(t, store, ctx, input)
+	if err != nil || created || replay.ProfileRef() != job.ProfileRef() {
+		t.Fatalf("replay rebound old Job: %+v %v", replay, err)
+	}
+	if err := store.RecordSandboxProfileUnavailable(ctx, job.ID, name, job.ID, errors.New("old artifact unavailable")); err != nil {
+		t.Fatal(err)
+	}
+	active, err = store.ActiveSandboxProfile(ctx, name)
+	if err != nil || !active.BaseVerified() {
+		t.Fatalf("old failure invalidated new revision: %+v %v", active, err)
+	}
+	if _, err := db.ExecContext(ctx, `update dorf.jobs set sandbox_profile_revision=$2 where id=$1`, job.ID, changed.DefinitionHash); err == nil {
+		t.Fatal("accepted rewriting a Job binding")
+	}
+	if _, err := db.ExecContext(ctx, `update dorf.sandbox_profile_revisions set artifact='changed' where name=$1`, name); err == nil {
+		t.Fatal("accepted mutating an immutable revision")
+	}
+	// No Job cleanup was required to stage, verify, promote, admit, or replay.
+	persisted, err := store.Job(ctx, job.ID)
+	if err != nil || persisted.CleanupState != core.CleanupPending {
+		t.Fatalf("old Job was cleaned: %+v %v", persisted, err)
+	}
+
 }
 
 func TestSandboxProfileUpdateInvalidatesActiveVerification(t *testing.T) {
@@ -1142,8 +1203,8 @@ func TestSandboxProfileSchemaRejectsNullRequiredFacts(t *testing.T) {
 	db, store, _ := testDatabase(t)
 	ctx := context.Background()
 	for _, statement := range []string{
-		`insert into dorf.sandbox_profiles(name,provider,harness,artifact,incus_disk_size) values('invalid-incus-null','incus','codex',repeat('d',64),'40GiB')`,
-		`insert into dorf.sandbox_profiles(name,provider,harness,artifact,e2b_sandbox_timeout_seconds,e2b_allow_internet) values('invalid-e2b-null','e2b','codex','dorf:build',3300,false)`,
+		`insert into dorf.sandbox_profile_revisions(name,provider,harness,artifact,incus_disk_size) values('invalid-incus-null','incus','codex',repeat('d',64),'40GiB')`,
+		`insert into dorf.sandbox_profile_revisions(name,provider,harness,artifact,e2b_sandbox_timeout_seconds,e2b_allow_internet) values('invalid-e2b-null','e2b','codex','dorf:build',3300,false)`,
 	} {
 		if _, err := db.ExecContext(ctx, statement); err == nil {
 			t.Fatalf("schema accepted incomplete profile: %s", statement)
@@ -1157,7 +1218,7 @@ func TestSandboxProfileSchemaRejectsNullRequiredFacts(t *testing.T) {
 			insert into dorf.sandbox_profile_verifications(
 				profile_name,contract_version,definition_hash,sandbox_id,ownership_nonce,probe_completed_at
 			)
-			select name,'base-1',definition_hash,$2,$3,clock_timestamp()
+			select name,'base-1',candidate_revision,$2,$3,clock_timestamp()
 			from dorf.sandbox_profiles where name=$1`, name, "sandbox-"+name, strings.Repeat("f", 64)); err == nil {
 		t.Fatal("schema accepted a completed profile probe without a Harness version")
 	}

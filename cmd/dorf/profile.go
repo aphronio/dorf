@@ -177,6 +177,7 @@ func reconcileOfficialIncusProfileDefinition(ctx context.Context, store postgres
 }
 
 type sandboxProfileView struct {
+	ActiveRevision    string                   `json:"active_revision,omitempty"`
 	Name              string                   `json:"name"`
 	Provider          core.SandboxProvider     `json:"provider"`
 	Harness           string                   `json:"harness"`
@@ -209,7 +210,7 @@ type profileVerificationView struct {
 
 func profileView(profile core.SandboxProfile) sandboxProfileView {
 	view := sandboxProfileView{
-		Name: profile.Name, Provider: profile.Provider, Harness: profile.Harness, Artifact: profile.Artifact,
+		Name: profile.Name, Provider: profile.Provider, Harness: profile.Harness, Artifact: profile.Artifact, ActiveRevision: profile.ActiveRevision,
 		DefinitionHash: profile.DefinitionHash, IncusAuthority: profile.IncusEndpointAuthorityHash,
 		IncusProject: profile.IncusProject, IncusStoragePool: profile.IncusStoragePool,
 		IncusNetwork: profile.IncusNetwork, IncusDiskSize: profile.IncusDiskSize, IncusGatewayURL: profile.IncusGatewayURL,
@@ -417,7 +418,7 @@ func sandboxProfileByNameOrDefault(ctx context.Context, store postgres.Store, na
 	if strings.TrimSpace(name) == "" {
 		profile, err = store.DefaultSandboxProfile(ctx)
 	} else {
-		profile, err = store.SandboxProfile(ctx, name)
+		profile, err = store.ActiveSandboxProfile(ctx, name)
 	}
 	if err != nil {
 		return core.SandboxProfile{}, err

@@ -3,7 +3,6 @@ package direct
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/aphronio/dorf/internal/core"
@@ -24,12 +23,12 @@ type Execution interface {
 }
 
 type Runtime struct {
-	SandboxProfile string
+	SandboxProfile core.SandboxProfileRef
 	Execution      Execution
 }
 
 type RuntimeResolver interface {
-	ResolveDirect(context.Context, string) (Runtime, error)
+	ResolveDirect(context.Context, core.SandboxProfileRef) (Runtime, error)
 }
 
 type Store interface {
@@ -58,11 +57,11 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 		if runtimes == nil {
 			return core.TaskResultV1{}, fmt.Errorf("Sandbox runtime resolution is not configured")
 		}
-		runtime, err := runtimes.ResolveDirect(ctx, job.SandboxProfile)
+		runtime, err := runtimes.ResolveDirect(ctx, job.ProfileRef())
 		if err != nil {
 			return core.TaskResultV1{}, fmt.Errorf("resolve Sandbox profile %q: %w", job.SandboxProfile, err)
 		}
-		if strings.TrimSpace(runtime.SandboxProfile) != job.SandboxProfile {
+		if runtime.SandboxProfile != job.ProfileRef() {
 			return core.TaskResultV1{}, fmt.Errorf("Job requires Sandbox profile %q, but this worker resolved %q", job.SandboxProfile, runtime.SandboxProfile)
 		}
 		if runtime.Execution == nil {

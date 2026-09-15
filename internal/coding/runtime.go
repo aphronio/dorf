@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/aphronio/dorf/internal/core"
@@ -20,14 +19,14 @@ const (
 func TaskKey(jobID string) string { return "coding-job:v3:" + jobID }
 
 type Runtime struct {
-	SandboxProfile string
+	SandboxProfile core.SandboxProfileRef
 	Agent          core.AgentReconciliation
 	Coding         CodingExecution
 	Proposal       ProposalRuntime
 }
 
 type RuntimeResolver interface {
-	ResolveCoding(context.Context, string) (Runtime, error)
+	ResolveCoding(context.Context, core.SandboxProfileRef) (Runtime, error)
 }
 
 // Register installs the coding workflow's task and recovery loop.
@@ -115,11 +114,11 @@ func runtimeForJob(ctx context.Context, store Store, runtimes RuntimeResolver, j
 	if runtimes == nil {
 		return Runtime{}, fmt.Errorf("Sandbox runtime resolution is not configured")
 	}
-	runtime, err := runtimes.ResolveCoding(ctx, job.SandboxProfile)
+	runtime, err := runtimes.ResolveCoding(ctx, job.ProfileRef())
 	if err != nil {
 		return Runtime{}, fmt.Errorf("resolve Sandbox profile %q: %w", job.SandboxProfile, err)
 	}
-	if configured := strings.TrimSpace(runtime.SandboxProfile); configured != job.SandboxProfile {
+	if configured := runtime.SandboxProfile; configured != job.ProfileRef() {
 		detail := fmt.Sprintf("Job requires Sandbox profile %q, but this worker resolved %q", job.SandboxProfile, configured)
 		return Runtime{}, recordRuntimeAttention(ctx, store, job.ID, "sandbox-profile", detail)
 	}

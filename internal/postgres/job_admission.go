@@ -45,17 +45,15 @@ func admitJob(ctx context.Context, store Store, coreInput core.JobAdmission, que
 	storedRow, err := queries.GetAdmittedJobForUpdate(ctx, coreInput.AdmissionKey)
 	var rows int64
 	if errors.Is(err, sql.ErrNoRows) {
-		if _, err := queries.LockVerifiedSandboxProfileForAdmission(ctx, dbsql.LockVerifiedSandboxProfileForAdmissionParams{
-			Name: coreInput.SandboxProfile, ContractVersion: core.BaseProfileContract,
-		}); errors.Is(err, sql.ErrNoRows) {
-			return core.Job{}, false, fmt.Errorf("Sandbox profile %q has not completed Dorf %s verification and cleanup", coreInput.SandboxProfile, core.BaseProfileContract)
-		} else if err != nil {
+		var revision string
+		revision, err = lockAdmissionProfileRevision(ctx, queries, coreInput.SandboxProfile)
+		if err != nil {
 			return core.Job{}, false, err
 		}
 		rows, err = queries.InsertAdmittedJob(ctx, dbsql.InsertAdmittedJobParams{
 			CreatedByClientID: coreInput.CreatedByClientID, ClientReference: coreInput.ClientReference,
 			ID: id, AdmissionKey: coreInput.AdmissionKey, WorkflowName: coreInput.Workflow, WorkflowRevision: coreInput.WorkflowRevision,
-			AgentsMd: coreInput.AgentsMD, SandboxProfile: coreInput.SandboxProfile, ProviderConnection: coreInput.ProviderConnection,
+			AgentsMd: coreInput.AgentsMD, SandboxProfile: coreInput.SandboxProfile, SandboxProfileRevision: revision, ProviderConnection: coreInput.ProviderConnection,
 			KeepRunning: coreInput.KeepRunning, Model: coreInput.Model, ReasoningEffort: coreInput.ReasoningEffort,
 		})
 		if err != nil {
@@ -112,4 +110,19 @@ func reserveAdmittedSandbox(ctx context.Context, queries *dbsql.Queries, id, san
 		}
 	}
 	return nil
+}
+
+// Lock the name before reading its receipt. A single joined SELECT FOR SHARE
+// can retain the old receipt in its snapshot while waiting for promotion, then
+// reject the newly active revision during PostgreSQL's row recheck.
+func lockAdmissionProfileRevision(ctx context.Context, queries *dbsql.Queries, name string) (string, error) {
+	_, err := queries.LockSandboxProfileNameForAdmission(ctx, name)
+	var revision string
+	if err == nil {
+		revision, err = queries.LockVerifiedSandboxProfileForAdmission(ctx, dbsql.LockVerifiedSandboxProfileForAdmissionParams{Name: name, ContractVersion: core.BaseProfileContract})
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("Sandbox profile %q has not completed Dorf %s verification and cleanup", name, core.BaseProfileContract)
+	}
+	return revision, err
 }

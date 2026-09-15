@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
@@ -30,12 +29,12 @@ func (a Application) RegisterCleanup() {
 		if a.CleanupRuntimes == nil {
 			return TaskResultV1{}, fmt.Errorf("Sandbox runtime resolution is not configured")
 		}
-		runtime, err := a.CleanupRuntimes.ResolveCleanup(ctx, job.SandboxProfile)
+		runtime, err := a.CleanupRuntimes.ResolveCleanup(ctx, job.ProfileRef())
 		if err != nil {
 			return TaskResultV1{}, fmt.Errorf("resolve Sandbox profile %q: %w", job.SandboxProfile, err)
 		}
-		if strings.TrimSpace(runtime.SandboxProfile) != job.SandboxProfile {
-			detail := fmt.Sprintf("Job requires Sandbox profile %q, but this worker resolved %q", job.SandboxProfile, strings.TrimSpace(runtime.SandboxProfile))
+		if runtime.SandboxProfile != job.ProfileRef() {
+			detail := fmt.Sprintf("Job requires Sandbox profile %q, but this worker resolved %q", job.SandboxProfile, runtime.SandboxProfile)
 			if attentionErr := a.Store.SetCleanupAttention(ctx, job.ID, detail); attentionErr != nil {
 				return TaskResultV1{}, fmt.Errorf("%s; record profile mismatch attention: %w", detail, attentionErr)
 			}

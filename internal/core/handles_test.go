@@ -21,7 +21,7 @@ func (r handleTestFileReader) ReadSandboxFile(ctx context.Context, job Job, sand
 
 type handleTestRuntimeResolver struct{ files SandboxFileReader }
 
-func (r handleTestRuntimeResolver) ResolveSandbox(_ context.Context, profile string) (SandboxRuntime, error) {
+func (r handleTestRuntimeResolver) ResolveSandbox(_ context.Context, profile SandboxProfileRef) (SandboxRuntime, error) {
 	return SandboxRuntime{Files: r.files, SandboxProfile: profile}, nil
 }
 

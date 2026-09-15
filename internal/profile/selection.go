@@ -8,7 +8,7 @@ import (
 )
 
 type SelectionStore interface {
-	SandboxProfile(context.Context, string) (core.SandboxProfile, error)
+	ActiveSandboxProfile(context.Context, string) (core.SandboxProfile, error)
 	DefaultSandboxProfile(context.Context) (core.SandboxProfile, error)
 }
 
@@ -20,7 +20,7 @@ func SelectVerified(ctx context.Context, store SelectionStore, name string) (cor
 	if name == "" {
 		selected, err = store.DefaultSandboxProfile(ctx)
 	} else {
-		selected, err = store.SandboxProfile(ctx, name)
+		selected, err = store.ActiveSandboxProfile(ctx, name)
 	}
 	if err != nil {
 		return core.SandboxProfile{}, err

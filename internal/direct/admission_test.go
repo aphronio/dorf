@@ -25,7 +25,7 @@ func (s *admissionServiceStore) JobExists(context.Context, string) (bool, error)
 
 func (s *admissionServiceStore) Job(context.Context, string) (core.Job, error) { return s.job, nil }
 
-func (s *admissionServiceStore) SandboxProfile(context.Context, string) (core.SandboxProfile, error) {
+func (s *admissionServiceStore) ActiveSandboxProfile(context.Context, string) (core.SandboxProfile, error) {
 	return s.profile, s.profileErr
 }
 

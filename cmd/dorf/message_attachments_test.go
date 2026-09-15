@@ -24,7 +24,7 @@ type fixedMessageImageCapability struct {
 	calls     int
 }
 
-func (c *fixedMessageImageCapability) SupportsMessageImages(context.Context, string) (bool, error) {
+func (c *fixedMessageImageCapability) SupportsMessageImages(context.Context, core.SandboxProfileRef) (bool, error) {
 	c.calls++
 	return c.supported, nil
 }
@@ -91,7 +91,7 @@ func TestRetainMessageAttachmentsChecksProfileBeforePublishingVerifiedBlobs(t *t
 	unsupported := &fixedMessageImageCapability{}
 	root := t.TempDir()
 	jobs := controlAPIJobs{blobs: blob.Store{Root: root}, messageImages: unsupported}
-	if _, err := jobs.retainMessageAttachments(context.Background(), "pi", []controlapi.SendMessageAttachment{{Filename: "image.png", Contents: contents}}); !errors.Is(err, controlapi.ErrMessageImageUnsupported) {
+	if _, err := jobs.retainMessageAttachments(context.Background(), core.SandboxProfileRef{Name: "pi"}, []controlapi.SendMessageAttachment{{Filename: "image.png", Contents: contents}}); !errors.Is(err, controlapi.ErrMessageImageUnsupported) {
 		t.Fatalf("unsupported image error=%v", err)
 	}
 	if unsupported.calls != 1 {
@@ -104,7 +104,7 @@ func TestRetainMessageAttachmentsChecksProfileBeforePublishingVerifiedBlobs(t *t
 
 	supported := &fixedMessageImageCapability{supported: true}
 	jobs.messageImages = supported
-	attachments, err := jobs.retainMessageAttachments(context.Background(), "codex", []controlapi.SendMessageAttachment{
+	attachments, err := jobs.retainMessageAttachments(context.Background(), core.SandboxProfileRef{Name: "codex"}, []controlapi.SendMessageAttachment{
 		{Filename: "image.png", Contents: contents},
 		{Filename: "notes.txt", Contents: []byte("notes")},
 	})

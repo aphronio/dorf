@@ -350,14 +350,29 @@ the combinations currently proved.
 Deployment configuration owns host locations and credentials. Durable Jobs retain stable logical
 connection and provider identities, not controller filesystem paths or copied secrets.
 
-PostgreSQL owns each named Sandbox profile's provider, exact artifact, Harness, provider settings,
-default selection, and Dorf functional-verification receipt. A Job pins the selected profile name.
-The composition root resolves that durable name into one provider-neutral runtime bundle whenever
-the Job runs or cleans up. A current successful receipt gates default selection and new admission;
-it is not a runtime lease for already-admitted Jobs. Explicit re-verification may replace that
-receipt while Jobs continue against the unchanged definition, fencing new admission until the new
-attempt settles successfully. Profiles are immutable while a referencing Job has incomplete
-cleanup; an update clears verification and default status. Credentials remain host configuration.
+PostgreSQL owns immutable Sandbox profile revisions: provider, exact artifact, Harness, and provider
+settings. A profile name holds a candidate revision, an optional active revision, and default
+selection. `profile update` stages a candidate without changing the active revision or default.
+Successful functional verification and confirmed proof-Sandbox cleanup atomically promote that
+candidate. A failed candidate leaves the active revision eligible for new Jobs. An unsettled
+verification Sandbox must still be cleaned up before staging another candidate.
+
+Admission locks the profile name, reads its current successful verification, and pins the exact
+revision in the same transaction as the Job. Promotion affects only future admissions. Execution,
+recovery, inspection, capabilities, and cleanup resolve the Job's retained revision; they never
+follow the name's current pointer. Admission replay retains the original binding. Revision
+records remain available after Job cleanup, and a failure of an old artifact invalidates only its
+own verification. Credentials remain host configuration.
+
+Verification receipts belong to exact revisions. A current successful receipt gates default
+selection and new admission; it is not a runtime lease for already-admitted Jobs. Explicitly
+re-verifying the active revision fences new admission until its new probe and cleanup settle,
+while Jobs continue against their pinned definition. To roll back future admissions, stage the
+old exact settings and verify them again. This does not upgrade packages or restart processes in
+existing VMs.
+
+The profile-revision migration pins existing Jobs to the definition retained at migration time.
+Definitions overwritten before this migration cannot be reconstructed from a profile name alone.
 
 Provider adapters own their endpoint identity, topology, transport, and credentials. A Profile
 retains only the exact provider and route configuration required to reproduce its verified behavior.

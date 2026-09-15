@@ -99,11 +99,11 @@ func (h SandboxHandle) ReadFile(ctx context.Context, relativePath string) ([]byt
 		if owned.JobID != job.ID || owned.ID != h.id {
 			return fmt.Errorf("Sandbox %s does not belong to Job %s", h.id, job.ID)
 		}
-		runtime, err := h.application.SandboxRuntimes.ResolveSandbox(ctx, job.SandboxProfile)
+		runtime, err := h.application.SandboxRuntimes.ResolveSandbox(ctx, job.ProfileRef())
 		if err != nil {
 			return fmt.Errorf("resolve Sandbox profile %q for file read: %w", job.SandboxProfile, err)
 		}
-		if runtime.SandboxProfile != job.SandboxProfile || runtime.Files == nil {
+		if runtime.SandboxProfile != job.ProfileRef() || runtime.Files == nil {
 			return fmt.Errorf("Sandbox runtime does not provide file access for Job profile %q", job.SandboxProfile)
 		}
 		contents, err = readBoundedSandboxFile(ctx, h.application.Store, runtime.Files, job, owned, relativePath)
@@ -331,11 +331,11 @@ func (h JobHandle) executeSandboxEnsure(ctx context.Context, job Job, owned Sand
 	if h.application.SandboxRuntimes == nil {
 		return fmt.Errorf("Sandbox runtime resolution is not configured")
 	}
-	runtime, err := h.application.SandboxRuntimes.ResolveSandbox(ctx, job.SandboxProfile)
+	runtime, err := h.application.SandboxRuntimes.ResolveSandbox(ctx, job.ProfileRef())
 	if err != nil {
 		return fmt.Errorf("resolve Sandbox profile %q: %w", job.SandboxProfile, err)
 	}
-	if strings.TrimSpace(runtime.SandboxProfile) != job.SandboxProfile || runtime.Execution == nil {
+	if runtime.SandboxProfile != job.ProfileRef() || runtime.Execution == nil {
 		return fmt.Errorf("Sandbox runtime does not match Job profile %q", job.SandboxProfile)
 	}
 	actionID := ScopedActionID(job.ID, ActionSandboxCreate, owned.ID)

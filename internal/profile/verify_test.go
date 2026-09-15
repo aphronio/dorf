@@ -84,7 +84,7 @@ func (s *verificationStore) RecordSandboxProfileVerificationError(_ context.Cont
 	s.errorDetail = err.Error()
 	return nil
 }
-func (s *verificationStore) SandboxProfile(context.Context, string) (core.SandboxProfile, error) {
+func (s *verificationStore) SandboxProfileRevision(context.Context, core.SandboxProfileRef) (core.SandboxProfile, error) {
 	s.profile.Verification = &s.verification
 	return s.profile, nil
 }

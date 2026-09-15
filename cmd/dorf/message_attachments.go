@@ -20,7 +20,7 @@ import (
 )
 
 type messageImageCapability interface {
-	SupportsMessageImages(context.Context, string) (bool, error)
+	SupportsMessageImages(context.Context, core.SandboxProfileRef) (bool, error)
 }
 
 type classifiedMessageAttachment struct {
@@ -30,7 +30,7 @@ type classifiedMessageAttachment struct {
 	mediaType string
 }
 
-func (a controlAPIJobs) retainMessageAttachments(ctx context.Context, profile string, raw []controlapi.SendMessageAttachment) ([]core.MessageAttachment, error) {
+func (a controlAPIJobs) retainMessageAttachments(ctx context.Context, profile core.SandboxProfileRef, raw []controlapi.SendMessageAttachment) ([]core.MessageAttachment, error) {
 	classified, hasImage, err := classifyMessageAttachments(raw)
 	if err != nil {
 		return nil, err

@@ -238,8 +238,14 @@ dorf profile add --sandbox-provider e2b --harness codex
 ```
 
 Use `profile create` to adopt an exact existing provider artifact, `profile install` for an exact
-official Incus release, `profile update` for an existing definition, and `profile verify` when only
-verification must be rerun. Those precise commands remain the automation and custom-artifact path.
+official Incus release, and `profile update` to stage a replacement definition. `profile verify`
+checks that candidate and promotes it only after the probe and its Sandbox cleanup succeed. The
+previous active revision and default selection remain usable during a replacement's verification;
+running Jobs keep their original revision. No Job cleanup is required to update a profile.
+`profile show` reports the candidate definition and `active_revision`; `profile list` reports the
+active definition where one exists. Rerunning `profile verify` on an unchanged active revision
+refreshes its proof and temporarily fences new admissions. These commands remain the automation
+and custom-artifact path.
 
 The Provider Gateway joins the static Compose project when an AI connection is configured. Setup
 publishes that profile into the protected `.env`, reapplies the project, and continues to verify and

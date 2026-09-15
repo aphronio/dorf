@@ -141,7 +141,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D070: Named Sandbox profiles pin exact artifacts and require Dorf verification](decisions/D070-named-sandbox-profiles-pin-exact-artifacts-and-require-dorf-verification.md) (`partial`). Changing named Sandbox profile definitions, selection, verification, or provider artifact custody.
 - [D083: Git and coding behavior are workflow modules, not Core](decisions/D083-git-and-coding-behavior-are-workflow-modules-not-core.md) (`partial`). Changing ownership of Git workspace or coding behavior across Core and workflow modules.
 - [D089: Core reads exact Sandbox files but does not retain generic deliverables](decisions/D089-core-reads-exact-sandbox-files-but-does-not-retain-generic-deliverables.md) (`partial`). Changing Sandbox file reads, deliverable retention, or cleanup-time file access.
-- [D091: Profile verification gates admission, not admitted runtime](decisions/D091-profile-verification-gates-admission-not-admitted-runtime.md) (`current`). Changing profile verification, concurrent admission, or admitted runtime resolution.
+- [D091: Profile verification gates admission, not admitted runtime](decisions/D091-profile-verification-gates-admission-not-admitted-runtime.md) (`partial`). Changing profile verification, concurrent admission, or admitted runtime resolution.
 - [D092: Investigation reports remain Sandbox files](decisions/D092-investigation-reports-remain-sandbox-files.md) (`current`). Changing how investigation reports are produced, accessed, or retained.
 - [D101: Compose owns deployment lifecycle; bootstrap privilege stays explicit](decisions/D101-compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit.md) (`current`). Changing Compose topology, setup-applied lifecycle, bootstrap, or release images.
 - [D106: Remove unused workflow capability declarations](decisions/D106-remove-unused-workflow-capability-declarations.md) (`current`). Adding optional provider requirements or workflow runtime metadata.
@@ -149,6 +149,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D120: Default idle pause with an admitted keep-running override](decisions/D120-default-idle-pause-with-an-admitted-keep-running-override.md) (`partial`). Changing Sandbox idle policy, E2B retention, or admission defaults.
 - [D122: Sandbox activity delays idle pause](decisions/D122-sandbox-activity-delays-idle-pause.md) (`current`). Changing idle pause timing, managed Sandbox access, or cancellation fences.
 - [D124: Image publication does not require live coding proofs](decisions/D124-image-publication-does-not-require-live-coding-proofs.md) (`current`). Changing Incus image publication prerequisites or release verification.
+- [D132: Profile revisions separate promotion from Job custody](decisions/D132-profile-revisions-separate-promotion-from-job-custody.md) (`current`). Updating a profile used by retained Jobs, promoting verified images, or resolving old runtime custody.
 
 ## Harnesses
 
@@ -165,7 +166,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D070: Named Sandbox profiles pin exact artifacts and require Dorf verification](decisions/D070-named-sandbox-profiles-pin-exact-artifacts-and-require-dorf-verification.md) (`partial`). Changing named Sandbox profile definitions, selection, verification, or provider artifact custody.
 - [D074: Investigation drafts wait for exact human disposition](decisions/D074-investigation-drafts-wait-for-exact-human-disposition.md) (`partial`). Changing investigation draft revision loops, Harness Thread reuse, or disposition policy.
 - [D090: Open Jobs may have no current workflow operation](decisions/D090-open-jobs-may-have-no-current-workflow-operation.md) (`current`). Changing how an open Job waits when no workflow operation is eligible.
-- [D091: Profile verification gates admission, not admitted runtime](decisions/D091-profile-verification-gates-admission-not-admitted-runtime.md) (`current`). Changing profile verification, concurrent admission, or admitted runtime resolution.
+- [D091: Profile verification gates admission, not admitted runtime](decisions/D091-profile-verification-gates-admission-not-admitted-runtime.md) (`partial`). Changing profile verification, concurrent admission, or admitted runtime resolution.
 - [D109: Export diagnostics through the existing native Turn binding](decisions/D109-exact-turn-execution-diagnostics.md) (`current`). Changing native execution diagnostics, attribution, or exporter custody.
 - [D114: Incus guests include an isolated browser](decisions/D114-incus-guests-include-an-isolated-browser.md) (`partial`). Changing browser tooling, guest browser persistence, or Incus image proof.
 - [D117: Clients request skill refresh at fresh Turn boundaries](decisions/D117-client-requested-skill-refresh-at-fresh-turn-boundaries.md) (`current`). Changing skill discovery after client-managed Sandbox updates.
@@ -238,6 +239,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D102: One guided Dorf domain publishes two distinct public origins](decisions/D102-one-guided-dorf-domain-publishes-two-distinct-public-origins.md) (`current`). Changing guided Cloudflare ingress or either public Dorf origin.
 - [D103: Every ordinary CLI Job operation uses the authenticated control API](decisions/D103-every-ordinary-cli-job-operation-uses-the-authenticated-control-api.md) (`partial`). Changing how CLI Job operations reach deployment authority.
 - [D105: Host-issued integration keys use ordinary revocable Clients](decisions/D105-host-issued-integration-keys-use-ordinary-revocable-clients.md) (`current`). Provisioning bearer credentials for unattended integrations.
+- [D132: Profile revisions separate promotion from Job custody](decisions/D132-profile-revisions-separate-promotion-from-job-custody.md) (`current`). Updating a profile used by retained Jobs, promoting verified images, or resolving old runtime custody.
 
 ## Persistence
 
@@ -259,7 +261,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D076: Core Jobs and workflow inputs have separate durable types](decisions/D076-core-jobs-and-workflow-inputs-have-separate-durable-types.md) (`partial`). Changing Core Job fields or durable workflow-specific input types.
 - [D085: Workflow records live with the workflow that defines them](decisions/D085-workflow-records-live-with-the-workflow-that-defines-them.md) (`partial`). Changing package ownership or persistence of workflow-defined records.
 - [D089: Core reads exact Sandbox files but does not retain generic deliverables](decisions/D089-core-reads-exact-sandbox-files-but-does-not-retain-generic-deliverables.md) (`partial`). Changing Sandbox file reads, deliverable retention, or cleanup-time file access.
-- [D091: Profile verification gates admission, not admitted runtime](decisions/D091-profile-verification-gates-admission-not-admitted-runtime.md) (`current`). Changing profile verification, concurrent admission, or admitted runtime resolution.
+- [D091: Profile verification gates admission, not admitted runtime](decisions/D091-profile-verification-gates-admission-not-admitted-runtime.md) (`partial`). Changing profile verification, concurrent admission, or admitted runtime resolution.
 - [D092: Investigation reports remain Sandbox files](decisions/D092-investigation-reports-remain-sandbox-files.md) (`current`). Changing how investigation reports are produced, accessed, or retained.
 - [D094: Published PostgreSQL migrations are immutable and append-only](decisions/D094-published-postgresql-migrations-are-immutable-and-append-only.md) (`current`). Changing a published PostgreSQL schema or the migration runner.
 - [D107: Commit Job task scheduling and attachment together](decisions/D107-commit-job-task-scheduling-and-attachment-together.md) (`current`). Changing admission, task handoffs, cleanup scheduling, or recovery across Absurd and Dorf.
@@ -269,6 +271,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D118: Messages retain ordered input attachments and immutable bytes](decisions/D118-messages-retain-ordered-input-attachments-and-immutable-bytes.md) (`current`). Changing Message attachments, input blob custody, native image delivery, or attachment replay.
 - [D126: Automatic messages preserve eventual delivery](decisions/D126-automatic-messages-preserve-eventual-delivery.md) (`current`). Changing automatic message resolution, steer reconciliation, or message replay.
 - [D128: Execution changes wake the attached task](decisions/D128-execution-changes-wake-the-attached-task.md) (`current`). Changing execution wake hints, native completion delivery, or durable wait ordering.
+- [D132: Profile revisions separate promotion from Job custody](decisions/D132-profile-revisions-separate-promotion-from-job-custody.md) (`current`). Updating a profile used by retained Jobs, promoting verified images, or resolving old runtime custody.
 
 ## GitHub integration
 

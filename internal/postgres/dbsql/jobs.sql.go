@@ -98,7 +98,7 @@ select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(cre
        j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        c.repository,c.starting_revision,c.revision,c.branch,
        c.github_repository,c.github_installation_id,c.base_branch,
-       j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.keep_running,j.admission_open,
+       j.sandbox_profile,j.sandbox_profile_revision,j.provider_connection,j.model,j.reasoning_effort,j.keep_running,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(j.workflow_attention,'') as workflow_attention,
        coalesce(j.workflow_attention_source,'') as workflow_attention_source,
@@ -130,6 +130,7 @@ type GetCodingJobRow struct {
 	GithubInstallationID    string
 	BaseBranch              string
 	SandboxProfile          string
+	SandboxProfileRevision  string
 	ProviderConnection      string
 	Model                   string
 	ReasoningEffort         string
@@ -165,6 +166,7 @@ func (q *Queries) GetCodingJob(ctx context.Context, jobID string) (GetCodingJobR
 		&i.GithubInstallationID,
 		&i.BaseBranch,
 		&i.SandboxProfile,
+		&i.SandboxProfileRevision,
 		&i.ProviderConnection,
 		&i.Model,
 		&i.ReasoningEffort,
@@ -254,7 +256,7 @@ func (q *Queries) GetCurrentJobTaskForUpdate(ctx context.Context, jobID string) 
 const getJob = `-- name: GetJob :one
 select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(creator.name,'') as created_by_client_name,j.client_reference,
        j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
-       j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.keep_running,j.admission_open,
+       j.sandbox_profile,j.sandbox_profile_revision,j.provider_connection,j.model,j.reasoning_effort,j.keep_running,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(j.workflow_attention,'') as workflow_attention,
        coalesce(j.workflow_attention_source,'') as workflow_attention_source,
@@ -278,6 +280,7 @@ type GetJobRow struct {
 	WorkflowRevision        string
 	AgentsMd                string
 	SandboxProfile          string
+	SandboxProfileRevision  string
 	ProviderConnection      string
 	Model                   string
 	ReasoningEffort         string
@@ -306,6 +309,7 @@ func (q *Queries) GetJob(ctx context.Context, jobID string) (GetJobRow, error) {
 		&i.WorkflowRevision,
 		&i.AgentsMd,
 		&i.SandboxProfile,
+		&i.SandboxProfileRevision,
 		&i.ProviderConnection,
 		&i.Model,
 		&i.ReasoningEffort,
@@ -355,7 +359,7 @@ func (q *Queries) GetJobAdmissionForUpdate(ctx context.Context, jobID string) (G
 const getJobForSandboxActionAuthorization = `-- name: GetJobForSandboxActionAuthorization :one
 select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(creator.name,'') as created_by_client_name,j.client_reference,
        j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
-       j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.keep_running,j.admission_open,
+       j.sandbox_profile,j.sandbox_profile_revision,j.provider_connection,j.model,j.reasoning_effort,j.keep_running,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(current_task.task_name,'') as current_task_name,
        coalesce(j.workflow_attention,'') as workflow_attention,
@@ -381,6 +385,7 @@ type GetJobForSandboxActionAuthorizationRow struct {
 	WorkflowRevision        string
 	AgentsMd                string
 	SandboxProfile          string
+	SandboxProfileRevision  string
 	ProviderConnection      string
 	Model                   string
 	ReasoningEffort         string
@@ -410,6 +415,7 @@ func (q *Queries) GetJobForSandboxActionAuthorization(ctx context.Context, jobID
 		&i.WorkflowRevision,
 		&i.AgentsMd,
 		&i.SandboxProfile,
+		&i.SandboxProfileRevision,
 		&i.ProviderConnection,
 		&i.Model,
 		&i.ReasoningEffort,
@@ -492,30 +498,31 @@ func (q *Queries) GetRevisionJobForUpdate(ctx context.Context, jobID string) (Ge
 const insertAdmittedJob = `-- name: InsertAdmittedJob :execrows
 insert into dorf.jobs(
     id,admission_key,workflow_name,workflow_revision,agents_md,created_by_client_id,client_reference,
-    sandbox_profile,provider_connection,model,reasoning_effort,keep_running
+    sandbox_profile,sandbox_profile_revision,provider_connection,model,reasoning_effort,keep_running
 )
 values(
     $1,$2,$3,$4,
     $5,nullif($6::text,''),$7,
-    $8,$9,$10,
-    $11,$12
+    $8,$9,$10,$11,
+    $12,$13
 )
 on conflict do nothing
 `
 
 type InsertAdmittedJobParams struct {
-	ID                 string
-	AdmissionKey       string
-	WorkflowName       core.WorkflowName
-	WorkflowRevision   string
-	AgentsMd           string
-	CreatedByClientID  string
-	ClientReference    string
-	SandboxProfile     string
-	ProviderConnection string
-	Model              string
-	ReasoningEffort    string
-	KeepRunning        bool
+	ID                     string
+	AdmissionKey           string
+	WorkflowName           core.WorkflowName
+	WorkflowRevision       string
+	AgentsMd               string
+	CreatedByClientID      string
+	ClientReference        string
+	SandboxProfile         string
+	SandboxProfileRevision string
+	ProviderConnection     string
+	Model                  string
+	ReasoningEffort        string
+	KeepRunning            bool
 }
 
 func (q *Queries) InsertAdmittedJob(ctx context.Context, arg InsertAdmittedJobParams) (int64, error) {
@@ -528,6 +535,7 @@ func (q *Queries) InsertAdmittedJob(ctx context.Context, arg InsertAdmittedJobPa
 		arg.CreatedByClientID,
 		arg.ClientReference,
 		arg.SandboxProfile,
+		arg.SandboxProfileRevision,
 		arg.ProviderConnection,
 		arg.Model,
 		arg.ReasoningEffort,

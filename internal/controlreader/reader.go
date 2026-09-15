@@ -190,11 +190,11 @@ func (s Service) sandboxAuthority(ctx context.Context, owned core.Sandbox) (core
 	if current != owned {
 		return core.SandboxRuntime{}, core.Job{}, ErrUnavailable
 	}
-	runtime, err := s.Runtimes.ResolveSandbox(ctx, job.SandboxProfile)
+	runtime, err := s.Runtimes.ResolveSandbox(ctx, job.ProfileRef())
 	if err != nil {
 		return core.SandboxRuntime{}, core.Job{}, fmt.Errorf("resolve Sandbox profile for file read: %w", err)
 	}
-	if runtime.SandboxProfile != job.SandboxProfile {
+	if runtime.SandboxProfile != job.ProfileRef() {
 		return core.SandboxRuntime{}, core.Job{}, fmt.Errorf("resolved Sandbox runtime has a different profile")
 	}
 	return runtime, job, nil
@@ -228,11 +228,11 @@ func (s Service) ObserveMessage(ctx context.Context, jobID, messageID string) (c
 			!validIdentity(authoritative.Sandbox.OwnershipNonce) || authoritative.AgentRun.SandboxID != authoritative.Sandbox.ID {
 			return ErrUnavailable
 		}
-		runtime, err := s.Runtimes.ResolveSandbox(ctx, job.SandboxProfile)
+		runtime, err := s.Runtimes.ResolveSandbox(ctx, job.ProfileRef())
 		if err != nil {
 			return fmt.Errorf("resolve Sandbox profile for Message observation: %w", err)
 		}
-		if runtime.SandboxProfile != job.SandboxProfile || runtime.Execution == nil {
+		if runtime.SandboxProfile != job.ProfileRef() || runtime.Execution == nil {
 			return fmt.Errorf("resolved Sandbox runtime has no exact Message observation authority")
 		}
 		idleRuntime = runtime.Execution

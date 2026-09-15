@@ -5,7 +5,8 @@
 - **Read when:** Changing named Sandbox profile definitions, selection, verification, or provider artifact custody.
 - **Decision history:** Accepted incremental profile-management slice; base file contract refined by D089 and
   online re-verification refined by D091; Incus endpoint custody refined by D101 — 2026-08-26;
-  remote Incus profile terminal proved — 2026-08-27
+  remote Incus profile terminal proved — 2026-08-27; online revision promotion replaces the
+  immutable-while-in-use limit in D132 — 2026-09-15
 - **Decision:** PostgreSQL owns named Sandbox profiles. A profile binds one provider, exact provider
   artifact, Harness, provider networking and lifecycle settings, and Dorf verification receipt.
   Provider credentials and host paths remain deployment configuration and never enter the profile.

@@ -18,7 +18,7 @@ type Store interface {
 	RecordSandboxProfileProbe(context.Context, core.ProfileVerification, string) error
 	RecordSandboxProfileVerificationCleanup(context.Context, core.ProfileVerification) error
 	RecordSandboxProfileVerificationError(context.Context, core.ProfileVerification, error) error
-	SandboxProfile(context.Context, string) (core.SandboxProfile, error)
+	SandboxProfileRevision(context.Context, core.SandboxProfileRef) (core.SandboxProfile, error)
 }
 
 type RuntimeFactory func(core.SandboxProfile) (provider.Sandbox, error)
@@ -95,7 +95,7 @@ func verifyBaseExclusive(ctx context.Context, store Store, runtimeForProfile Run
 	if err := store.RecordSandboxProfileVerificationCleanup(ctx, verification); err != nil {
 		return core.SandboxProfile{}, fmt.Errorf("record profile verification cleanup: %w", err)
 	}
-	return store.SandboxProfile(ctx, profile.Name)
+	return store.SandboxProfileRevision(ctx, profile.Ref())
 }
 
 func runBaseProbe(ctx context.Context, runtime provider.Sandbox, owner provider.Ownership, harness, putProbe, readProbe string) (string, error) {

@@ -578,8 +578,8 @@ type readerTestRuntimes struct {
 	status    core.SandboxStatusReader
 }
 
-func (r readerTestRuntimes) ResolveSandbox(_ context.Context, profile string) (core.SandboxRuntime, error) {
-	if profile != r.profile {
+func (r readerTestRuntimes) ResolveSandbox(_ context.Context, profile core.SandboxProfileRef) (core.SandboxRuntime, error) {
+	if profile.Name != r.profile {
 		return core.SandboxRuntime{}, errors.New("foreign profile")
 	}
 	return core.SandboxRuntime{SandboxProfile: profile, Files: r.files, Execution: r.execution, Commands: r.commands, Status: r.status}, nil

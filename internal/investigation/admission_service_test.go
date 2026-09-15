@@ -34,7 +34,7 @@ func (s *admissionServiceStore) CodebaseInvestigationSource(_ context.Context, _
 	return s.source, nil
 }
 
-func (s *admissionServiceStore) SandboxProfile(_ context.Context, _ string) (core.SandboxProfile, error) {
+func (s *admissionServiceStore) ActiveSandboxProfile(_ context.Context, _ string) (core.SandboxProfile, error) {
 	return s.profile, s.profileErr
 }
 

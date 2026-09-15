@@ -96,7 +96,7 @@ func TestIncusProfileRequiresCanonicalCompleteProviderDefinition(t *testing.T) {
 	}
 }
 
-func TestAdmissionRequiresVerificationHashToMatchCurrentProfileDefinition(t *testing.T) {
+func TestVerificationCannotReferenceAnUnknownProfileRevision(t *testing.T) {
 	db, store, _ := testDatabase(t)
 	ctx := context.Background()
 	name := fmt.Sprintf("hash-fence-%d", time.Now().UnixNano())
@@ -114,21 +114,14 @@ func TestAdmissionRequiresVerificationHashToMatchCurrentProfileDefinition(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `update dorf.sandbox_profile_verifications set definition_hash=$2 where profile_name=$1`, name, strings.Repeat("0", 64)); err != nil {
-		t.Fatal(err)
+	if _, err := db.ExecContext(ctx, `update dorf.sandbox_profile_verifications set definition_hash=$2 where profile_name=$1`, name, strings.Repeat("0", 64)); err == nil {
+		t.Fatal("verification accepted an unknown revision")
 	}
-	profile, err = store.SandboxProfile(ctx, name)
-	if err != nil || profile.BaseVerified() {
-		t.Fatalf("mismatched profile=%#v err=%v", profile, err)
+	profile, err = store.ActiveSandboxProfile(ctx, name)
+	if err != nil || !profile.BaseVerified() {
+		t.Fatalf("rejected mutation changed verification: %+v %v", profile, err)
 	}
-	_, _, err = admitDirectFixture(t, store, ctx, core.JobAdmission{
-		AdmissionKey:   fmt.Sprintf("hash-fence-admission-%d", time.Now().UnixNano()),
-		SandboxProfile: name, ProviderConnection: "primary",
-		Model: "gpt-5.6-sol", ReasoningEffort: "high",
-	})
-	if err == nil || !strings.Contains(err.Error(), core.BaseProfileContract) {
-		t.Fatalf("admission error=%v", err)
-	}
+
 }
 
 func completeIncusProfile(name, harness, artifact string) core.SandboxProfile {

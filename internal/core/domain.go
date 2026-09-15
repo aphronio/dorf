@@ -70,10 +70,24 @@ const (
 	BaseProfileContract                  = "base-2"
 )
 
-// SandboxProfile is one named provider, artifact, and Harness definition
-// selected by name at Job admission. It is immutable while referenced by an
-// incompletely cleaned Job. Provider credentials remain deployment secrets.
+// SandboxProfileRef identifies the exact immutable definition selected at admission.
+type SandboxProfileRef struct {
+	Name     string
+	Revision string
+}
+
+func (p SandboxProfile) Ref() SandboxProfileRef {
+	return SandboxProfileRef{Name: p.Name, Revision: p.DefinitionHash}
+}
+
+func (j Job) ProfileRef() SandboxProfileRef {
+	return SandboxProfileRef{Name: j.SandboxProfile, Revision: j.SandboxProfileRevision}
+}
+
+// SandboxProfile is an exact provider, artifact, and Harness definition.
+// ActiveRevision projects its name's current selection; credentials stay in deployment configuration.
 type SandboxProfile struct {
+	ActiveRevision             string               `json:"active_revision,omitempty"`
 	Name                       string               `json:"name"`
 	Provider                   SandboxProvider      `json:"provider"`
 	Harness                    string               `json:"harness"`
@@ -154,6 +168,7 @@ type Job struct {
 	WorkflowRevision        string       `json:"workflow_revision"`
 	AgentsMD                string       `json:"agents_md,omitempty"`
 	SandboxProfile          string       `json:"sandbox_profile"`
+	SandboxProfileRevision  string       `json:"sandbox_profile_revision"`
 	ProviderConnection      string       `json:"provider_connection"`
 	Model                   string       `json:"model"`
 	ReasoningEffort         string       `json:"reasoning_effort"`

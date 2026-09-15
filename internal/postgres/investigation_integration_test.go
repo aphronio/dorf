@@ -196,7 +196,7 @@ func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *test
 	runtimeProfile := "incus"
 	resolver := integrationRuntimeResolver{
 		execution: execution, files: externals, profile: runtimeProfile,
-		investigationRuntime: investigation.Runtime{SandboxProfile: runtimeProfile, Agent: execution, Investigation: workspaceExecutor},
+		investigationRuntime: investigation.Runtime{SandboxProfile: core.SandboxProfileRef{Name: runtimeProfile}, Agent: execution, Investigation: workspaceExecutor},
 	}
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	client := newFaultClient(t, store, "dorf_investigation_idle_"+suffix)

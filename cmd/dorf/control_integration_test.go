@@ -558,8 +558,8 @@ func TestControlAPIJobListKeepsKeysetContinuity(t *testing.T) {
 		_, err := store.DB.ExecContext(ctx, `
 insert into dorf.jobs(
     id,admission_key,workflow_name,workflow_revision,
-    sandbox_profile,provider_connection,model,reasoning_effort,admitted_at
-) values($1,$2,$3,$4,$5,'primary','model-test','high',$6)
+    sandbox_profile,sandbox_profile_revision,provider_connection,model,reasoning_effort,admitted_at
+) values($1,$2,$3,$4,$5,(select candidate_revision from dorf.sandbox_profiles where name=$5),'primary','model-test','high',$6)
 `, fixture.id, "admission-"+fixture.id, fixture.workflow, fixture.revision, profileName, fixture.at)
 		if err != nil {
 			t.Fatalf("insert Job list fixture %s: %v", fixture.id, err)
@@ -771,15 +771,15 @@ type controlTestRuntimes struct {
 	contents []byte
 }
 
-func (r controlTestRuntimes) ResolveSandbox(_ context.Context, profile string) (core.SandboxRuntime, error) {
-	if profile != r.profile {
+func (r controlTestRuntimes) ResolveSandbox(_ context.Context, profile core.SandboxProfileRef) (core.SandboxRuntime, error) {
+	if profile.Name != r.profile {
 		return core.SandboxRuntime{}, fmt.Errorf("unexpected Sandbox profile %q", profile)
 	}
-	return core.SandboxRuntime{SandboxProfile: r.profile, Files: r}, nil
+	return core.SandboxRuntime{SandboxProfile: profile, Files: r}, nil
 }
 
-func (r controlTestRuntimes) SupportsMessageImages(_ context.Context, profile string) (bool, error) {
-	return profile == r.profile, nil
+func (r controlTestRuntimes) SupportsMessageImages(_ context.Context, profile core.SandboxProfileRef) (bool, error) {
+	return profile.Name == r.profile, nil
 }
 
 func (r controlTestRuntimes) ReadSandboxFile(context.Context, core.Job, core.Sandbox, string) ([]byte, error) {

@@ -56,7 +56,7 @@ func TestGuidedLocalIncusRejectsPublicGatewayBeforeAuthorityRetention(t *testing
 	}
 }
 
-func TestGuidedSetupRetargetsAndInvalidatesTheExistingE2BProfile(t *testing.T) {
+func TestGuidedSetupStagesE2BProfileAndPreservesActiveDefault(t *testing.T) {
 	dsn := os.Getenv("DORF_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("DORF_TEST_DATABASE_URL is not configured")
@@ -106,8 +106,12 @@ func TestGuidedSetupRetargetsAndInvalidatesTheExistingE2BProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.E2BGatewayURL != "https://models.dorf.example.test/v1" || profile.BaseVerified() || profile.Default {
+	if profile.E2BGatewayURL != "https://models.dorf.example.test/v1" || profile.BaseVerified() || !profile.Default {
 		t.Fatalf("retargeted profile=%#v", profile)
+	}
+	active, err := store.ActiveSandboxProfile(ctx, name)
+	if err != nil || !active.BaseVerified() || !active.Default || active.E2BGatewayURL != "https://dorf.example.test/v1" {
+		t.Fatalf("retarget changed active default: %#v err=%v", active, err)
 	}
 }
 
@@ -180,12 +184,12 @@ func TestAdmittedJobRuntimeIgnoresLaterVerificationReceiptState(t *testing.T) {
 	}
 	assertRuntime := func(state string) {
 		t.Helper()
-		sandbox, err := resolver.ResolveSandbox(ctx, job.SandboxProfile)
-		if err != nil || sandbox.SandboxProfile != name || sandbox.Execution == nil {
+		sandbox, err := resolver.ResolveSandbox(ctx, job.ProfileRef())
+		if err != nil || sandbox.SandboxProfile != job.ProfileRef() || sandbox.Execution == nil {
 			t.Fatalf("%s Sandbox runtime=%#v err=%v", state, sandbox, err)
 		}
-		workflow, err := resolver.ResolveCoding(ctx, job.SandboxProfile)
-		if err != nil || workflow.SandboxProfile != name || workflow.Agent == nil || workflow.Coding == nil {
+		workflow, err := resolver.ResolveCoding(ctx, job.ProfileRef())
+		if err != nil || workflow.SandboxProfile != job.ProfileRef() || workflow.Agent == nil || workflow.Coding == nil {
 			t.Fatalf("%s coding runtime=%#v err=%v", state, workflow, err)
 		}
 	}
@@ -198,4 +202,53 @@ func TestAdmittedJobRuntimeIgnoresLaterVerificationReceiptState(t *testing.T) {
 		t.Fatalf("failed verification profile=%#v err=%v", profile, err)
 	}
 	assertRuntime("failed verification")
+	if err := store.RecordSandboxProfileVerificationCleanup(ctx, refreshing); err != nil {
+		t.Fatal(err)
+	}
+	image, harness := strings.Repeat("f", 64), "pi"
+	if _, _, err := store.UpdateSandboxProfile(ctx, name, postgres.SandboxProfilePatch{IncusArtifact: &image, Harness: &harness}); err != nil {
+		t.Fatal(err)
+	}
+	_, next, err := store.BeginSandboxProfileVerification(ctx, name)
+	if err == nil {
+		err = store.RecordSandboxProfileProbe(ctx, next, "pi runtime")
+	}
+	if err == nil {
+		err = store.RecordSandboxProfileVerificationCleanup(ctx, next)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Reload after promotion, as recovery does, rather than retaining an in-memory definition.
+	job, err = store.Job(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRuntime("promoted replacement")
+	cleanup, err := resolver.ResolveCleanup(ctx, job.ProfileRef())
+	if err != nil || cleanup.SandboxProfile != job.ProfileRef() {
+		t.Fatalf("cleanup=%#v err=%v", cleanup, err)
+	}
+	direct, err := resolver.ResolveDirect(ctx, job.ProfileRef())
+	if err != nil || direct.SandboxProfile != job.ProfileRef() {
+		t.Fatalf("direct=%#v err=%v", direct, err)
+	}
+	investigation, err := resolver.ResolveInvestigation(ctx, job.ProfileRef())
+	if err != nil || investigation.SandboxProfile != job.ProfileRef() {
+		t.Fatalf("investigation=%#v err=%v", investigation, err)
+	}
+	input.AdmissionKey += "-new"
+	newJob, created, err := store.AdmitCoding(ctx, input, queue)
+	if err != nil || !created || newJob.SandboxProfileRevision != next.DefinitionHash || newJob.ProfileRef() == job.ProfileRef() {
+		t.Fatalf("new admission=%#v created=%v err=%v", newJob, created, err)
+	}
+	for _, check := range []struct {
+		ref    core.SandboxProfileRef
+		images bool
+	}{{job.ProfileRef(), true}, {newJob.ProfileRef(), false}} {
+		images, err := resolver.SupportsMessageImages(ctx, check.ref)
+		if err != nil || images != check.images {
+			t.Fatalf("images for %v=%v err=%v", check.ref, images, err)
+		}
+	}
 }

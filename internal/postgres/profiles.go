@@ -72,17 +72,31 @@ func (s Store) CreateSandboxProfile(ctx context.Context, profile core.SandboxPro
 	if err != nil {
 		return core.SandboxProfile{}, false, err
 	}
-	rows, err := dbsql.New(s.DB).InsertSandboxProfile(ctx, insertProfileParams(profile))
+	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return core.SandboxProfile{}, false, err
 	}
-	stored, err := s.SandboxProfile(ctx, profile.Name)
+	defer tx.Rollback()
+	queries := dbsql.New(tx)
+	if _, err := queries.InsertSandboxProfile(ctx, insertProfileParams(profile)); err != nil {
+		return core.SandboxProfile{}, false, err
+	}
+	rows, err := queries.InsertSandboxProfileName(ctx, dbsql.InsertSandboxProfileNameParams{Name: profile.Name, DefinitionHash: profile.DefinitionHash})
 	if err != nil {
 		return core.SandboxProfile{}, false, err
 	}
+	row, err := queries.GetSandboxProfile(ctx, profile.Name)
+	if err != nil {
+		return core.SandboxProfile{}, false, err
+	}
+	stored := profileFromGetRow(row)
 	if !sameProfileDefinition(stored, profile) {
-		return core.SandboxProfile{}, false, fmt.Errorf("Sandbox profile %q already exists with a different immutable definition; update it only after all of its Jobs complete cleanup", profile.Name)
+		return core.SandboxProfile{}, false, fmt.Errorf("Sandbox profile %q already exists with a different candidate definition; use profile update", profile.Name)
 	}
+	if err := tx.Commit(); err != nil {
+		return core.SandboxProfile{}, false, err
+	}
+
 	return stored, rows == 1, nil
 }
 
@@ -94,13 +108,10 @@ func (s Store) UpdateSandboxProfile(ctx context.Context, name string, patch Sand
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(tx)
-	locked, err := queries.LockSandboxProfile(ctx, name)
-	if errors.Is(err, sql.ErrNoRows) {
-		return core.SandboxProfile{}, false, ErrProfileNotFound
-	} else if err != nil {
+	current, err := lockCandidateSandboxProfile(ctx, queries, name)
+	if err != nil {
 		return core.SandboxProfile{}, false, err
 	}
-	current := profileFromLockRow(locked)
 	profile, err := applySandboxProfilePatch(current, patch)
 	if err != nil {
 		return core.SandboxProfile{}, false, err
@@ -120,13 +131,6 @@ func (s Store) UpdateSandboxProfile(ctx context.Context, name string, patch Sand
 		}
 		return stored, false, nil
 	}
-	inUse, err := queries.ProfileHasIncompleteJobs(ctx, name)
-	if err != nil {
-		return core.SandboxProfile{}, false, err
-	}
-	if inUse {
-		return core.SandboxProfile{}, false, fmt.Errorf("Sandbox profile %q is immutable while a Job using it has incomplete cleanup", name)
-	}
 	needsCleanup, err := queries.ProfileVerificationNeedsCleanup(ctx, name)
 	if err != nil {
 		return core.SandboxProfile{}, false, err
@@ -134,10 +138,10 @@ func (s Store) UpdateSandboxProfile(ctx context.Context, name string, patch Sand
 	if needsCleanup {
 		return core.SandboxProfile{}, false, fmt.Errorf("Sandbox profile %q cannot be updated while its verification Sandbox cleanup is incomplete; rerun dorf profile verify %s", name, name)
 	}
-	if err := queries.DeleteProfileVerification(ctx, name); err != nil {
+	if _, err := queries.InsertSandboxProfile(ctx, insertProfileParams(profile)); err != nil {
 		return core.SandboxProfile{}, false, err
 	}
-	rows, err := queries.UpdateSandboxProfile(ctx, updateProfileParams(profile))
+	rows, err := queries.UpdateSandboxProfile(ctx, dbsql.UpdateSandboxProfileParams{Name: profile.Name, DefinitionHash: profile.DefinitionHash})
 	if err != nil {
 		return core.SandboxProfile{}, false, err
 	}
@@ -219,6 +223,34 @@ func (s Store) SandboxProfile(ctx context.Context, name string) (core.SandboxPro
 	return profileFromGetRow(row), nil
 }
 
+func (s Store) ActiveSandboxProfile(ctx context.Context, name string) (core.SandboxProfile, error) {
+	row, err := dbsql.New(s.DB).GetActiveSandboxProfile(ctx, strings.TrimSpace(name))
+	if errors.Is(err, sql.ErrNoRows) {
+		if _, lookupErr := s.SandboxProfile(ctx, name); lookupErr != nil {
+			return core.SandboxProfile{}, lookupErr
+		}
+		return core.SandboxProfile{}, fmt.Errorf("Sandbox profile %q has no active verified revision; run dorf profile verify %s", name, name)
+	}
+	if err != nil {
+		return core.SandboxProfile{}, err
+	}
+	return profileFromGetRow(dbsql.GetSandboxProfileRow(row)), nil
+}
+
+func (s Store) SandboxProfileRevision(ctx context.Context, ref core.SandboxProfileRef) (core.SandboxProfile, error) {
+	if ref.Name == "" || ref.Revision == "" {
+		return core.SandboxProfile{}, fmt.Errorf("Job requires an exact Sandbox profile revision")
+	}
+	row, err := dbsql.New(s.DB).GetSandboxProfileRevision(ctx, dbsql.GetSandboxProfileRevisionParams{Name: ref.Name, DefinitionHash: ref.Revision})
+	if errors.Is(err, sql.ErrNoRows) {
+		return core.SandboxProfile{}, ErrProfileNotFound
+	}
+	if err != nil {
+		return core.SandboxProfile{}, err
+	}
+	return profileFromGetRow(dbsql.GetSandboxProfileRow(row)), nil
+}
+
 func (s Store) SandboxProfiles(ctx context.Context) ([]core.SandboxProfile, error) {
 	rows, err := dbsql.New(s.DB).ListSandboxProfiles(ctx)
 	if err != nil {
@@ -239,7 +271,7 @@ func (s Store) DefaultSandboxProfile(ctx context.Context) (core.SandboxProfile, 
 	if err != nil {
 		return core.SandboxProfile{}, err
 	}
-	return s.SandboxProfile(ctx, name)
+	return s.ActiveSandboxProfile(ctx, name)
 }
 
 func (s Store) SetDefaultSandboxProfile(ctx context.Context, name string) (core.SandboxProfile, error) {
@@ -255,11 +287,14 @@ func (s Store) SetDefaultSandboxProfile(ctx context.Context, name string) (core.
 	} else if err != nil {
 		return core.SandboxProfile{}, err
 	}
-	row, err := queries.GetSandboxProfile(ctx, name)
+	row, err := queries.GetActiveSandboxProfile(ctx, name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return core.SandboxProfile{}, fmt.Errorf("Sandbox profile %q has not completed Dorf %s verification and cleanup", name, core.BaseProfileContract)
+	}
 	if err != nil {
 		return core.SandboxProfile{}, err
 	}
-	profile := profileFromGetRow(row)
+	profile := profileFromGetRow(dbsql.GetSandboxProfileRow(row))
 	if profile.DefinitionHash != profile.CurrentDefinitionHash() {
 		return core.SandboxProfile{}, fmt.Errorf("Sandbox profile %q definition does not match its retained hash; update it explicitly before verification", name)
 	}
@@ -279,7 +314,7 @@ func (s Store) SetDefaultSandboxProfile(ctx context.Context, name string) (core.
 	if err := tx.Commit(); err != nil {
 		return core.SandboxProfile{}, err
 	}
-	return s.SandboxProfile(ctx, name)
+	return s.ActiveSandboxProfile(ctx, name)
 }
 
 func (s Store) BeginSandboxProfileVerification(ctx context.Context, name string) (core.SandboxProfile, core.ProfileVerification, error) {
@@ -294,16 +329,10 @@ func (s Store) BeginSandboxProfileVerification(ctx context.Context, name string)
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(tx)
-	if _, err := queries.LockSandboxProfile(ctx, name); errors.Is(err, sql.ErrNoRows) {
-		return core.SandboxProfile{}, core.ProfileVerification{}, ErrProfileNotFound
-	} else if err != nil {
-		return core.SandboxProfile{}, core.ProfileVerification{}, err
-	}
-	row, err := queries.GetSandboxProfile(ctx, name)
+	profile, err := lockCandidateSandboxProfile(ctx, queries, name)
 	if err != nil {
 		return core.SandboxProfile{}, core.ProfileVerification{}, err
 	}
-	profile := profileFromGetRow(row)
 	if profile.DefinitionHash != profile.CurrentDefinitionHash() {
 		return core.SandboxProfile{}, core.ProfileVerification{}, fmt.Errorf("Sandbox profile %q definition does not match its retained hash; update it explicitly before verification", name)
 	}
@@ -314,12 +343,12 @@ func (s Store) BeginSandboxProfileVerification(ctx context.Context, name string)
 		return profile, *profile.Verification, nil
 	}
 	if profile.Verification != nil && !profile.Verification.ProbeCompletedAt.IsZero() {
-		if err := queries.DeleteProfileVerification(ctx, name); err != nil {
+		if err := queries.DeleteProfileVerification(ctx, dbsql.DeleteProfileVerificationParams{ProfileName: name, DefinitionHash: profile.DefinitionHash}); err != nil {
 			return core.SandboxProfile{}, core.ProfileVerification{}, err
 		}
 		profile.Verification = nil
 	}
-	digest := sha256.Sum256([]byte(name))
+	digest := sha256.Sum256([]byte(name + ":" + profile.DefinitionHash))
 	sandboxID := fmt.Sprintf("dorf-profile-%x", digest[:10])
 	verificationRow, err := queries.BeginSandboxProfileVerification(ctx, dbsql.BeginSandboxProfileVerificationParams{
 		ProfileName: profile.Name, ContractVersion: core.BaseProfileContract, DefinitionHash: profile.DefinitionHash,
@@ -349,11 +378,28 @@ func (s Store) RecordSandboxProfileProbe(ctx context.Context, verification core.
 }
 
 func (s Store) RecordSandboxProfileVerificationCleanup(ctx context.Context, verification core.ProfileVerification) error {
-	rows, err := dbsql.New(s.DB).RecordSandboxProfileVerificationCleanup(ctx, dbsql.RecordSandboxProfileVerificationCleanupParams{
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	queries := dbsql.New(tx)
+	// Serialize promotion with staging and admission; always lock the name first.
+	if _, err := queries.LockSandboxProfile(ctx, verification.ProfileName); err != nil {
+		return err
+	}
+	if err := expectOneRows(queries.RecordSandboxProfileVerificationCleanup(ctx, dbsql.RecordSandboxProfileVerificationCleanupParams{
 		ProfileName: verification.ProfileName, ContractVersion: verification.ContractVersion, DefinitionHash: verification.DefinitionHash,
 		SandboxID: verification.SandboxID, OwnershipNonce: verification.OwnershipNonce,
-	})
-	return expectOneRows(rows, err)
+	})); err != nil {
+		return err
+	}
+	if _, err := queries.PromoteVerifiedSandboxProfile(ctx, dbsql.PromoteVerifiedSandboxProfileParams{
+		ProfileName: verification.ProfileName, DefinitionHash: nullableString(verification.DefinitionHash), ContractVersion: core.BaseProfileContract,
+	}); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s Store) RecordSandboxProfileVerificationError(ctx context.Context, verification core.ProfileVerification, failure error) error {
@@ -406,7 +452,7 @@ func (s Store) RecordSandboxProfileUnavailable(ctx context.Context, jobID, profi
 		return fmt.Errorf("Job %s pins Sandbox profile %q, not %q", jobID, jobProfile, profileName)
 	}
 	rows, err := queries.MarkSandboxProfileUnavailable(ctx, dbsql.MarkSandboxProfileUnavailableParams{
-		LastError: nullableString(detail), ProfileName: profileName, ContractVersion: core.BaseProfileContract,
+		LastError: nullableString(detail), ProfileName: profileName, JobID: jobID, ContractVersion: core.BaseProfileContract,
 	})
 	if err != nil {
 		return err
@@ -437,7 +483,7 @@ func normalizeSandboxProfile(profile core.SandboxProfile) (core.SandboxProfile, 
 	profile.IncusDiskSize = strings.TrimSpace(profile.IncusDiskSize)
 	profile.IncusGatewayURL = strings.TrimSpace(profile.IncusGatewayURL)
 	profile.E2BGatewayURL = strings.TrimSpace(profile.E2BGatewayURL)
-	profile.DefinitionHash, profile.Default, profile.CreatedAt, profile.Verification = "", false, time.Time{}, nil
+	profile.DefinitionHash, profile.ActiveRevision, profile.Default, profile.CreatedAt, profile.Verification = "", "", false, time.Time{}, nil
 	if err := ValidateSandboxProfileIdentity(profile.Name, profile.Harness); err != nil {
 		return core.SandboxProfile{}, err
 	}
@@ -554,19 +600,6 @@ func insertProfileParams(profile core.SandboxProfile) dbsql.InsertSandboxProfile
 	}
 }
 
-func updateProfileParams(profile core.SandboxProfile) dbsql.UpdateSandboxProfileParams {
-	insert := insertProfileParams(profile)
-	return dbsql.UpdateSandboxProfileParams{
-		Provider: insert.Provider, Harness: insert.Harness, Artifact: insert.Artifact,
-		DefinitionHash: insert.DefinitionHash, IncusEndpointAuthorityHash: insert.IncusEndpointAuthorityHash,
-		IncusProject: insert.IncusProject, IncusStoragePool: insert.IncusStoragePool,
-		IncusNetwork: insert.IncusNetwork, IncusDiskSize: insert.IncusDiskSize,
-		IncusGatewayURL: insert.IncusGatewayURL,
-		E2bGatewayURL:   insert.E2bGatewayURL, E2bSandboxTimeoutSeconds: insert.E2bSandboxTimeoutSeconds,
-		E2bAllowInternet: insert.E2bAllowInternet, Name: profile.Name,
-	}
-}
-
 func nullableInt64(value int64) sql.NullInt64 {
 	if value == 0 {
 		return sql.NullInt64{}
@@ -578,37 +611,45 @@ func nullableBool(valid, value bool) sql.NullBool { return sql.NullBool{Bool: va
 
 func sameProfileDefinition(left, right core.SandboxProfile) bool {
 	left.Default, right.Default = false, false
+	left.ActiveRevision, right.ActiveRevision = "", ""
 	left.CreatedAt, right.CreatedAt = time.Time{}, time.Time{}
 	left.Verification, right.Verification = nil, nil
 	return left == right
 }
 
 func profileFromGetRow(row dbsql.GetSandboxProfileRow) core.SandboxProfile {
-	return profileFromColumns(row.Name, row.Provider, row.Harness, row.Artifact, row.DefinitionHash,
+	profile := profileFromColumns(row.Name, row.Provider, row.Harness, row.Artifact, row.DefinitionHash,
 		row.IncusEndpointAuthorityHash, row.IncusProject, row.IncusStoragePool, row.IncusNetwork, row.IncusDiskSize, row.IncusGatewayURL,
 		row.E2bGatewayURL, row.E2bSandboxTimeoutSeconds, row.E2bAllowInternet, row.IsDefault, row.CreatedAt,
 		row.VerificationContract, row.VerificationDefinitionHash, row.VerificationSandboxID, row.VerificationOwnershipNonce, row.VerificationHarnessVersion,
 		row.AttemptedAt, row.ProbeCompletedAt, row.CleanedAt, row.VerificationLastError)
+	profile.ActiveRevision = row.ActiveRevision
+	return profile
 }
 
 func profileFromListRow(row dbsql.ListSandboxProfilesRow) core.SandboxProfile {
-	return profileFromColumns(row.Name, row.Provider, row.Harness, row.Artifact, row.DefinitionHash,
+	profile := profileFromColumns(row.Name, row.Provider, row.Harness, row.Artifact, row.DefinitionHash,
 		row.IncusEndpointAuthorityHash, row.IncusProject, row.IncusStoragePool, row.IncusNetwork, row.IncusDiskSize, row.IncusGatewayURL,
 		row.E2bGatewayURL, row.E2bSandboxTimeoutSeconds, row.E2bAllowInternet, row.IsDefault, row.CreatedAt,
 		row.VerificationContract, row.VerificationDefinitionHash, row.VerificationSandboxID, row.VerificationOwnershipNonce, row.VerificationHarnessVersion,
 		row.AttemptedAt, row.ProbeCompletedAt, row.CleanedAt, row.VerificationLastError)
+	profile.ActiveRevision = row.ActiveRevision
+	return profile
 }
 
-func profileFromLockRow(row dbsql.LockSandboxProfileRow) core.SandboxProfile {
-	return core.SandboxProfile{
-		Name: row.Name, Provider: core.SandboxProvider(row.Provider), Harness: row.Harness, Artifact: row.Artifact,
-		DefinitionHash: row.DefinitionHash, IncusEndpointAuthorityHash: row.IncusEndpointAuthorityHash,
-		IncusProject: row.IncusProject, IncusStoragePool: row.IncusStoragePool,
-		IncusNetwork: row.IncusNetwork, IncusDiskSize: row.IncusDiskSize,
-		IncusGatewayURL: row.IncusGatewayURL,
-		E2BGatewayURL:   row.E2bGatewayURL, E2BSandboxTimeout: time.Duration(row.E2bSandboxTimeoutSeconds) * time.Second,
-		E2BAllowInternet: row.E2bAllowInternet, Default: row.IsDefault, CreatedAt: row.CreatedAt,
+// Read the candidate only after locking its name so concurrent staging cannot
+// leave a joined definition from the pre-lock statement snapshot.
+func lockCandidateSandboxProfile(ctx context.Context, queries *dbsql.Queries, name string) (core.SandboxProfile, error) {
+	if _, err := queries.LockSandboxProfile(ctx, name); errors.Is(err, sql.ErrNoRows) {
+		return core.SandboxProfile{}, ErrProfileNotFound
+	} else if err != nil {
+		return core.SandboxProfile{}, err
 	}
+	row, err := queries.GetSandboxProfile(ctx, name)
+	if err != nil {
+		return core.SandboxProfile{}, err
+	}
+	return profileFromGetRow(row), nil
 }
 
 func profileFromColumns(name, provider, harness, artifact, definitionHash, incusAuthorityHash, incusProject, incusStoragePool, network, disk, incusGatewayURL, e2bGatewayURL string,

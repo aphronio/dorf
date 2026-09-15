@@ -193,7 +193,7 @@ func (a composedMessageAdmissions) AdmitAgentMessage(ctx context.Context, input 
 		return core.MessageAdmissionResult{}, err
 	}
 	if input.Observation || input.RefreshSkills || input.DeveloperInstructions != nil {
-		profile, err := a.store.SandboxProfile(ctx, job.SandboxProfile)
+		profile, err := a.store.SandboxProfileRevision(ctx, job.ProfileRef())
 		if err != nil {
 			return core.MessageAdmissionResult{}, err
 		}

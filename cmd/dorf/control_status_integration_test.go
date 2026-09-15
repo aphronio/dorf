@@ -20,8 +20,8 @@ type statusControlRuntime struct {
 	owned   core.Sandbox
 }
 
-func (r *statusControlRuntime) ResolveSandbox(_ context.Context, profile string) (core.SandboxRuntime, error) {
-	if profile != r.profile {
+func (r *statusControlRuntime) ResolveSandbox(_ context.Context, profile core.SandboxProfileRef) (core.SandboxRuntime, error) {
+	if profile.Name != r.profile {
 		return core.SandboxRuntime{}, fmt.Errorf("foreign profile")
 	}
 	return core.SandboxRuntime{SandboxProfile: profile, Status: r}, nil

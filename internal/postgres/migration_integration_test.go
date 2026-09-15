@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -109,6 +110,14 @@ insert into dorf.agent_runs(id,job_id,message_id,role,state,sandbox_id) values('
 	}
 	if err := migrateDorf(ctx, tx); err != nil {
 		t.Fatalf("baseline replay: %v", err)
+	}
+	var jobRevision, candidateRevision, artifact string
+	var activeRevision sql.NullString
+	if err := tx.QueryRowContext(ctx, `select j.sandbox_profile_revision,p.candidate_revision,p.active_revision,r.artifact
+ from dorf.jobs j join dorf.sandbox_profiles p on p.name=j.sandbox_profile
+ join dorf.sandbox_profile_revisions r on (r.name,r.definition_hash)=(j.sandbox_profile,j.sandbox_profile_revision)
+ where j.id='job-current'`).Scan(&jobRevision, &candidateRevision, &activeRevision, &artifact); err != nil || jobRevision != strings.Repeat("b", 64) || candidateRevision != jobRevision || activeRevision.Valid || artifact != strings.Repeat("a", 64) {
+		t.Fatalf("migrated binding=%q candidate=%q active=%v artifact=%q err=%v", jobRevision, candidateRevision, activeRevision, artifact, err)
 	}
 	var creatorID sql.NullString
 	var reference string

@@ -1,9 +1,9 @@
 # D091: Profile verification gates admission, not admitted runtime
 
-- **Applicability:** current
+- **Applicability:** partial
 - **Areas:** sandboxes, harnesses, persistence
 - **Read when:** Changing profile verification, concurrent admission, or admitted runtime resolution.
-- **Decision history:** Accepted profile concurrency correction — 2026-08-22
+- **Decision history:** Accepted profile concurrency correction — 2026-08-22; immutable revision pinning and online promotion replace the mutation fence in D132 — 2026-09-15
 - **Decision:** A successful current verification receipt gates default selection and brand-new Job
   admission. It is not a lease held by a Job and it is not rechecked when an already-admitted Job
   resolves its pinned runtime. Any number of Jobs may concurrently use one verified profile and own

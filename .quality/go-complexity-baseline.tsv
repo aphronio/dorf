@@ -71,7 +71,6 @@ internal/outcome	(Service).recordFenced	31
 internal/pi	parseSession	26
 internal/postgres	(Store).AgentMessage	30
 internal/postgres	(Store).BeginPublication	30
-internal/postgres	(Store).BeginSandboxProfileVerification	16
 internal/postgres	(Store).BindAgentRun	34
 internal/postgres	(Store).CompleteCleanup	24
 internal/postgres	(Store).EnsureSandbox	21
@@ -83,7 +82,6 @@ internal/postgres	(Store).RecordRevisionObservation	31
 internal/postgres	(Store).RecordSandboxProfileUnavailable	16
 internal/postgres	(Store).RedeemEnrollment	19
 internal/postgres	(Store).RetryFailedJob	23
-internal/postgres	(Store).UpdateSandboxProfile	18
 internal/postgres	admitMessageTx	19
 internal/postgres	applySandboxProfilePatch	26
 internal/postgres	authorizeSandboxActionTx	27

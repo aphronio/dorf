@@ -34,7 +34,7 @@ func (s *admissionServiceStore) CodingJob(_ context.Context, _ string) (Job, err
 	return s.typed, nil
 }
 
-func (s *admissionServiceStore) SandboxProfile(_ context.Context, _ string) (core.SandboxProfile, error) {
+func (s *admissionServiceStore) ActiveSandboxProfile(_ context.Context, _ string) (core.SandboxProfile, error) {
 	return s.profile, s.profileErr
 }
 

@@ -1206,7 +1206,7 @@ func (a controlAPIJobs) SendMessage(ctx context.Context, jobID, key string, inpu
 		!core.ValidDeveloperInstructions(&input.Text) || !core.ValidDeveloperInstructions(input.DeveloperInstructions) {
 		return controlapi.Message{}, false, controlapi.ErrInvalidInput
 	}
-	attachments, err := a.retainMessageAttachments(ctx, job.SandboxProfile, input.Attachments)
+	attachments, err := a.retainMessageAttachments(ctx, job.ProfileRef(), input.Attachments)
 	if err != nil {
 		return controlapi.Message{}, false, err
 	}

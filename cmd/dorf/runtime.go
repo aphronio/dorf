@@ -60,8 +60,8 @@ func configuredObservations(ctx context.Context, stderr io.Writer, terminalWake 
 	}
 }
 
-func (r profileRuntimeResolver) ResolveCleanup(ctx context.Context, name string) (core.CleanupRuntime, error) {
-	resolved, err := r.resolveBase(ctx, name)
+func (r profileRuntimeResolver) ResolveCleanup(ctx context.Context, ref core.SandboxProfileRef) (core.CleanupRuntime, error) {
+	resolved, err := r.resolveBase(ctx, ref)
 	if err != nil {
 		return core.CleanupRuntime{}, err
 	}
@@ -71,8 +71,8 @@ func (r profileRuntimeResolver) ResolveCleanup(ctx context.Context, name string)
 	}, nil
 }
 
-func (r profileRuntimeResolver) ResolveSandbox(ctx context.Context, name string) (core.SandboxRuntime, error) {
-	resolved, err := r.resolveBase(ctx, name)
+func (r profileRuntimeResolver) ResolveSandbox(ctx context.Context, ref core.SandboxProfileRef) (core.SandboxRuntime, error) {
+	resolved, err := r.resolveBase(ctx, ref)
 	if err != nil {
 		return core.SandboxRuntime{}, err
 	}
@@ -86,8 +86,8 @@ func (r profileRuntimeResolver) ResolveSandbox(ctx context.Context, name string)
 	}, nil
 }
 
-func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) (coding.Runtime, error) {
-	resolved, err := r.resolveBase(ctx, name)
+func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, ref core.SandboxProfileRef) (coding.Runtime, error) {
+	resolved, err := r.resolveBase(ctx, ref)
 	if err != nil {
 		return coding.Runtime{}, err
 	}
@@ -122,8 +122,8 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 	}, nil
 }
 
-func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, name string) (investigation.Runtime, error) {
-	resolved, err := r.resolveBase(ctx, name)
+func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, ref core.SandboxProfileRef) (investigation.Runtime, error) {
+	resolved, err := r.resolveBase(ctx, ref)
 	if err != nil {
 		return investigation.Runtime{}, err
 	}
@@ -131,8 +131,8 @@ func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, name s
 	return investigation.Runtime{SandboxProfile: resolved.SandboxProfile, Agent: resolved.Execution, Investigation: workspaceExecutor}, nil
 }
 
-func (r profileRuntimeResolver) ResolveDirect(ctx context.Context, name string) (direct.Runtime, error) {
-	resolved, err := r.resolveBase(ctx, name)
+func (r profileRuntimeResolver) ResolveDirect(ctx context.Context, ref core.SandboxProfileRef) (direct.Runtime, error) {
+	resolved, err := r.resolveBase(ctx, ref)
 	if err != nil {
 		return direct.Runtime{}, err
 	}
@@ -140,7 +140,7 @@ func (r profileRuntimeResolver) ResolveDirect(ctx context.Context, name string) 
 }
 
 type resolvedBaseRuntime struct {
-	SandboxProfile string
+	SandboxProfile core.SandboxProfileRef
 	Execution      core.ExecutionService
 	Externals      terminal.Externals
 	Review         coding.ReviewExecution
@@ -148,8 +148,8 @@ type resolvedBaseRuntime struct {
 	Ownership      func(context.Context, string) (provider.Ownership, error)
 }
 
-func (r profileRuntimeResolver) SupportsMessageImages(ctx context.Context, name string) (bool, error) {
-	profile, err := r.store.SandboxProfile(ctx, name)
+func (r profileRuntimeResolver) SupportsMessageImages(ctx context.Context, ref core.SandboxProfileRef) (bool, error) {
+	profile, err := r.store.SandboxProfileRevision(ctx, ref)
 	if err != nil {
 		return false, err
 	}
@@ -160,8 +160,8 @@ func (r profileRuntimeResolver) SupportsMessageImages(ctx context.Context, name 
 // reference to this definition remains usable while a later verification
 // receipt is unsettled or failed; only new admission and default selection
 // consult that live eligibility receipt.
-func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (resolvedBaseRuntime, error) {
-	profile, err := r.store.SandboxProfile(ctx, name)
+func (r profileRuntimeResolver) resolveBase(ctx context.Context, ref core.SandboxProfileRef) (resolvedBaseRuntime, error) {
+	profile, err := r.store.SandboxProfileRevision(ctx, ref)
 	if err != nil {
 		return resolvedBaseRuntime{}, err
 	}
@@ -194,7 +194,7 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (r
 	execution := core.NewExecutionService(r.store, externals, r.barrier, absurdruntime.RequireClaim).
 		WithAgentExecution(composedAgentExecution{store: r.store, externals: externals, review: review})
 	return resolvedBaseRuntime{
-		SandboxProfile: profile.Name,
+		SandboxProfile: profile.Ref(),
 		Execution:      execution,
 		Externals:      externals, Review: review, Sandbox: sandbox, Ownership: ownership,
 	}, nil
