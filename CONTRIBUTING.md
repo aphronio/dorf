@@ -26,9 +26,10 @@ Use the [documentation map](docs/README.md) to find the authority for a product,
 storage, provider, setup, image, or release boundary before changing it. Coding agents must also
 follow [AGENTS.md](AGENTS.md).
 
-Run `mise run docs:check` for focused documentation validation. It checks decision records and
-generated indexes, then validates repository-local paths and heading anchors in Markdown. It makes
-no network requests and does not decide whether prose still describes the product correctly.
+`mise run check` is the local and CI code gate; documentation validation is separate. Run
+`mise run docs:check` for documentation changes. It checks decision records, generated indexes,
+and repository-local Markdown paths and heading anchors without network requests. It does not
+decide whether prose still describes the product correctly and does not block CI publication.
 
 ## Record a decision
 
@@ -48,29 +49,8 @@ new decision ID to its `Decision history`. Then regenerate both indexes.
 Edit an existing record without adding a new one only to clarify its wording, correct an error, or
 append evidence that does not change the choice.
 
-## DCO sign-off
-
-Dorf uses the [Developer Certificate of Origin](https://developercertificate.org/) (DCO) instead of
-a Contributor License Agreement. By adding a `Signed-off-by` line to each commit, you certify that
-you wrote the contribution or otherwise have the right to submit it under the project's Apache 2.0
-license.
-
-Sign off every commit with:
-
-```bash
-git commit -s
-```
-
-The trailer must match your repository-local author identity:
-
-```text
-Signed-off-by: Jane Doe <jane@example.com>
-```
-
-Pull requests with unsigned commits fail the DCO check. Amend one with
-`git commit --amend --signoff --no-edit`; use an interactive rebase for several commits.
 
 ## Licensing
 
 Contributions are submitted under the Apache 2.0 license. Contributors retain copyright in their
-contributions.
+contributions and must have the right to submit them. A `Signed-off-by` trailer is not required.

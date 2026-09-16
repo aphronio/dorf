@@ -137,14 +137,13 @@ verify_release_attestation() {
   local tag="$1"
   local deadline=$((SECONDS + 600))
 
-  until gh release verify "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; do
+  until gh release verify "$tag" --repo "$GITHUB_REPOSITORY"; do
     if ((SECONDS >= deadline)); then
       echo "Timed out waiting for GitHub's signed release attestation for $tag." >&2
       return 1
     fi
     sleep 5
   done
-  gh release verify "$tag" --repo "$GITHUB_REPOSITORY"
 }
 
 notes_path="$(mktemp)"

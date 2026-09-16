@@ -26,10 +26,18 @@ jobs:
         run: docker compose -f compose.dev.yaml up --detach --wait postgres
       - name: Initialize the development database
         run: mise run db:init
-      - name: Check SQL generation and live behavior
-        run: mise run check
-      - name: Build and prove supported release artifacts
-        run: mise exec -- scripts/build-release.sh dist/release
+      - name: Check source and prove release artifacts
+        shell: bash
+        run: |
+          mise run check &
+          checks_pid=$!
+          mise exec -- scripts/build-release.sh dist/release &
+          build_pid=$!
+          # Reap both commands: a failed check must never leave an unobserved build.
+          status=0
+          wait "$checks_pid" || status=1
+          wait "$build_pid" || status=1
+          exit "$status"
       - name: Test release installer
         run: bash scripts/install-test.sh dist/release/install.sh dist/release
       - name: Test release authority

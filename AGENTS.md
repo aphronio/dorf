@@ -4,7 +4,7 @@
 
 Start with the [documentation map](docs/README.md). Read the owner of the boundary you are changing
 and update it when its documented behavior changes. Follow
-[CONTRIBUTING.md](CONTRIBUTING.md) for setup, verification, DCO sign-off, and consequential decisions.
+[CONTRIBUTING.md](CONTRIBUTING.md) for setup, verification, contribution licensing, and consequential decisions.
 
 Before changing Dorf Core or product direction, apply the
 [North Star product boundary](docs/project/north-star.md#product-boundary). Push back on violations,

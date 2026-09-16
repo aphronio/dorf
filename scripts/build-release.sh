@@ -91,7 +91,11 @@ if ! source_is_exact_and_clean; then
   exit 1
 fi
 
-readonly VERSION="$("$MISE" -C "$PROJECT_ROOT" exec -- go run ./cmd/dorf version | awk '{print $2}')"
+readonly VERSION="$(sed -n 's/^const Version = "\(.*\)"$/\1/p' "$PROJECT_ROOT/internal/version/version.go")"
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Release version must be MAJOR.MINOR.PATCH." >&2
+  exit 1
+fi
 readonly ARTIFACT_BASENAME="dorf_${VERSION}_linux_x86_64"
 readonly ARCHIVE="${ARTIFACT_BASENAME}.tar.gz"
 readonly CONTAINER_IMAGE="${CONTAINER_REPOSITORY}:${VERSION}"

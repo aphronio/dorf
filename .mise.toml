@@ -88,7 +88,6 @@ run = "scripts/check-go-complexity.sh update"
 
 [tasks.check]
 description = "Run the repository's deterministic SQL and Go checks"
-depends = ["docs:check"]
 run = """
 sqlc diff
 sqlc vet
@@ -120,3 +119,7 @@ run = "bun scripts/e2b/nix-image.ts"
 [tasks."integration:upgrade-gateway"]
 description = "Prove upgrades and replacement through an existing real Gateway using synthetic conversations"
 run = "scripts/runtime-upgrade/gateway-proof.sh"
+
+[tasks."release:benchmark"]
+description = "Time local cold and warm release builds and proofs without publishing"
+run = "bash scripts/benchmark-release.sh"

@@ -24,12 +24,14 @@ mkdir -p \
   "$FIXTURE_ROOT/deploy" \
   "$FIXTURE_ROOT/internal/release/container" \
   "$FIXTURE_ROOT/internal/release" \
+  "$FIXTURE_ROOT/internal/version" \
   "$FIXTURE_ROOT/scripts/bootstrap" \
   "$FIXTURE_ROOT/scripts/incus" \
   "$SHIM_DIR" \
   "$TEST_STATE"
 cp "$PROJECT_ROOT/scripts/release.sh" "$FIXTURE_ROOT/scripts/release.sh"
 cp "$PROJECT_ROOT/scripts/build-release.sh" "$FIXTURE_ROOT/scripts/build-release.sh"
+printf 'package version\n\nconst Version = "%s"\n' "$VERSION" >"$FIXTURE_ROOT/internal/version/version.go"
 printf 'license\n' >"$FIXTURE_ROOT/LICENSE"
 printf '@DORF_VERSION@\n' >"$FIXTURE_ROOT/scripts/install.sh"
 printf '#!/bin/sh\nprintf "docker helper\\n"\n' >"$FIXTURE_ROOT/scripts/bootstrap/docker.sh"

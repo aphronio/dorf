@@ -13,9 +13,12 @@ no GitHub release with that tag exists. Unchanged, already released versions are
 CI reruns. Failed CI and pull-request CI cannot publish. A draft release also prevents automatic
 republication; inspect and resolve an interrupted publication before retrying.
 
-CI owns the full repository and PostgreSQL-backed checks. Publication is serialized, installs only
-the locked Go toolchain, and requires successful push CI for the exact selected commit. Manual
-dispatch remains available for retries from a clean commit on `main` already available on GitHub:
+CI owns the blocking SQL, Go, and PostgreSQL-backed checks; documentation validation remains an
+explicit local check. After database initialization, code checks and release artifact construction
+run concurrently; both must succeed before installer and
+artifact smoke checks proceed. Publication remains serialized, installs only the locked Go
+toolchain, and requires successful push CI for the exact selected commit. Manual dispatch remains
+available for retries from a clean commit on `main` already available on GitHub:
 
 ```bash
 gh workflow run release.yml --ref main
@@ -76,6 +79,54 @@ GitHub and GHCR publication credentials are still required.
 Browser packages and Chromium live in the shared Nix workstation recipe. Image metadata records
 their versions and immutable workstation identity. Deployment profile verification remains a
 separate admission requirement. Use the repository release command for both paths.
+
+## Local release benchmark
+
+Run the real release builder and existing installer/authority proofs without publishing or
+triggering GitHub Actions:
+
+```bash
+mise run release:benchmark -- --runs 3 --output .dorf/release-benchmarks/baseline
+# Compare only explicitly selected tracked working-tree changes against the same base.
+mise run release:benchmark -- --runs 3 --output .dorf/release-benchmarks/candidate \
+  --overlay scripts/build-release.sh --overlay scripts/release-test.sh
+```
+
+Direct invocation is `bash scripts/benchmark-release.sh` with the same arguments. The default is
+three runs from `HEAD`; `--ref REVISION` selects another local commit. `--output` must be a new
+directory beneath this repository's ignored `.dorf/`; omitting it creates a timestamped directory
+under `.dorf/release-benchmarks/`. Use the same explicit `--ref` for both comparisons if HEAD may
+change between them. `--runs 1` measures cold only.
+
+The driver clones committed source without hard links and trusts the clone's Mise configuration,
+then installs its locked Go toolchain. It never snapshots unrelated working-tree changes. Repeat
+`--overlay` for existing tracked regular files to copy into a clean, signed-off synthetic local
+commit **only in the disposable clone**. Overlay paths must also exist in the selected revision;
+new files, deletions, symlinks and directory overlays are unsupported. The original checkout and
+its index are unchanged, and the retained clone has no remote. Normal release source-cleanliness
+and binary-provenance checks remain enabled.
+
+Run 1 starts with empty receipt-local `GOCACHE`, `GOMODCACHE` and external Buildx layer caches.
+Later runs reuse those caches, but every run creates and bootstraps a new uniquely named
+`docker-container` builder, importing the previous exported cache rather than retaining a builder's
+internal state. Each run builds real local artifacts, passes the generated installer and archive
+to `scripts/install-test.sh`, and runs `scripts/release-test.sh`. The authority test retains its
+existing fixture-based design; it does not replace the real build. Builders are removed on success,
+failure or a handled interrupt; no shared Docker builders, images or caches are pruned.
+
+Receipts retain `steps.tsv` (monotonic wall elapsed seconds and exit status per step),
+`cache-sizes.tsv`, source commit and overlay patch, host/tool/environment metadata, cache contents,
+per-run logs and artifacts under `runs/`, and `result.json`. Failures stop the loop, return nonzero
+and preserve the receipt and failing log. Tool installation and builder setup are timed separately
+from the build and proofs. The existing installer proof requires Python 3 and curl in addition to
+Linux Bash, Git, Mise, Docker/Buildx, jq and the usual release command-line tools.
+
+This is a local performance comparison, not a hosted-runner latency prediction: host resources,
+contention and filesystem differ, Mise and Docker daemon downloads can already be cached, and
+local cache access does not measure GitHub cache transfer. The no-publish builder exports/loads
+an image and verifies it locally instead of pushing to a registry. Its semantic-version image is
+left in the local Docker daemon and can replace that local tag; do not run concurrent comparisons
+against the same daemon. No GitHub or registry publication credentials are needed.
 
 ## Shared guest packages
 

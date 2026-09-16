@@ -313,6 +313,8 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D124: Image publication does not require live coding proofs](decisions/D124-image-publication-does-not-require-live-coding-proofs.md) (`current`). Changing Incus image publication prerequisites or release verification.
 - [D136: Shared images install Codex through pinned Nix](decisions/D136-shared-images-install-codex-through-pinned-nix.md) (`partial`). Building guest images or changing how persistent Sandboxes obtain Codex packages.
 - [D137: Provider images share one Nix workstation](decisions/D137-provider-images-share-one-nix-workstation.md) (`current`). Changing shared guest tools, browser installation, or package parity between Incus and E2B.
+- [D140: Solo development drops DCO sign-off](decisions/D140-solo-development-drops-dco-sign-off.md) (`current`). Changing contribution certification or commit requirements.
+- [D141: Documentation validation is local, not release-blocking](decisions/D141-documentation-validation-is-local-not-release-blocking.md) (`current`). Changing the CI validation gate or contributor verification commands.
 
 ## Historical decisions
 
