@@ -323,13 +323,14 @@ transport failure, inspect the effect or repeat only an operation the caller kno
 Clients own installed software and configuration. Exec does not admit a Message or start an
 AgentRun.
 
-E2B Sandbox exec uses the same cancellation-aware provider runner as checkpoint commands. It starts
-the requested process directly, preserves stdin and partial output, and attempts remote termination
-when the request is cancelled or observation is lost. A provider process deadline becomes exit code
+Sandbox exec and internal commands use the same mandatory cancellation-aware provider runner.
+E2B starts the requested process directly, preserves stdin and partial output, and attempts remote
+termination when the request is cancelled or observation is lost. Incus uses its exec control socket
+to signal cancellation and waits for the operation's exit status; a provider-local process deadline
+also bounds commands whose start or observation is lost. A provider process deadline becomes exit code
 124 only after termination is confirmed. Unconfirmed termination remains an ambiguous command
 failure. Cancellation does not make replay safe, and the process deadline remains the fallback if
-the process identity or stop acknowledgement is unavailable. Other providers retain their bounded
-exec transport; this is not a cross-provider process-tree termination guarantee.
+the process identity or stop acknowledgement is unavailable. This is not a cross-provider process-tree termination guarantee.
 
 Dorf-origin failures use RFC 9457 Problem Details. Stable `code`, `retryable`, and `details` fields
 let automation avoid parsing prose. The same central catalog constructs runtime responses and is

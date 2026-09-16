@@ -145,6 +145,9 @@ func (s *verificationSandbox) ReadFile(ctx context.Context, owner provider.Owner
 func (s *verificationSandbox) Exec(context.Context, provider.Ownership, []byte, ...string) (provider.Result, error) {
 	return s.execResult, s.execErr
 }
+func (s *verificationSandbox) Run(context.Context, provider.Ownership, provider.RunRequest) (provider.RunResult, error) {
+	return provider.RunResult{Result: s.execResult, Stopped: s.execErr == nil}, s.execErr
+}
 func (*verificationSandbox) Endpoint(context.Context, provider.Ownership, int) (provider.Endpoint, error) {
 	return provider.NewEndpoint("", "", http.Header{}), nil
 }

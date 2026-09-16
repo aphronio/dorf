@@ -16,7 +16,7 @@ const commandStopTimeout = 5 * time.Second
 
 func (a Adapter) Run(ctx context.Context, owner provider.Ownership, command provider.RunRequest) (result provider.RunResult, err error) {
 	err = a.WithAccess(ctx, owner, func(s provider.Sandbox) error {
-		result, err = s.(provider.CommandRunner).Run(ctx, owner, command)
+		result, err = s.Run(ctx, owner, command)
 		return err
 	})
 	return result, err

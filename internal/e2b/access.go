@@ -1,7 +1,6 @@
 package e2b
 
 import (
-	"bytes"
 	"context"
 	"sync"
 
@@ -80,15 +79,14 @@ func (s *scopedAccess) operation(ctx context.Context, owner provider.Ownership) 
 	return ctx, func() { stop(); cancel(); s.active.Done() }, nil
 }
 
+// Exec is the convenience form of Run; all commands share cancellation and stop confirmation.
 func (s *scopedAccess) Exec(ctx context.Context, owner provider.Ownership, input []byte, args ...string) (provider.Result, error) {
-	ctx, done, err := s.operation(ctx, owner)
-	if err != nil {
-		return provider.Result{}, err
+	timeout := s.adapter.Config.ProcessTimeout
+	if timeout <= 0 {
+		timeout = provider.DefaultCommandTimeout
 	}
-	defer done()
-	var stdout, stderr bytes.Buffer
-	result, execErr := s.executor.Exec(ctx, ExecRequest{Argv: append([]string(nil), args...), Stdin: input, ProcessTimeout: s.adapter.Config.ProcessTimeout, Stdout: &stdout, Stderr: &stderr})
-	return providerExecResult(result, stdout.String(), stderr.String(), execErr)
+	result, err := s.Run(ctx, owner, provider.RunRequest{Args: args, Stdin: input, Timeout: timeout})
+	return result.Result, err
 }
 
 func (s *scopedAccess) Endpoint(ctx context.Context, owner provider.Ownership, port int) (provider.Endpoint, error) {

@@ -3,6 +3,7 @@ package incus
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gorilla/websocket"
 	incusclient "github.com/lxc/incus/v7/client"
 	"github.com/lxc/incus/v7/shared/api"
 )
@@ -265,34 +267,95 @@ func attestRequiredConfig(actual, required map[string]string) error {
 	return nil
 }
 
+// commandStoppedError preserves cancellation while reporting observed process exit.
+type commandStoppedError struct{ error }
+
+func (e *commandStoppedError) Unwrap() error { return e.error }
+
 func (c *sdkClient) Exec(ctx context.Context, name string, input []byte, command ...string) (Result, error) {
 	if len(command) == 0 {
 		return Result{}, fmt.Errorf("Incus exec command is required")
 	}
+	if err := ctx.Err(); err != nil {
+		return Result{}, &commandStoppedError{err}
+	}
+	// Keep the transport alive long enough to signal and observe termination.
+	// A lost start/control connection still returns within the cleanup bound.
+	execCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancel()
+	stopCtx, requestStop := context.WithCancel(ctx)
+	defer requestStop()
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-stopCtx.Done():
+		case <-done:
+			return
+		}
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			cancel()
+		case <-done:
+		}
+	}()
 	var stdout, stderr bytes.Buffer
 	dataDone := make(chan bool)
-	op, err := c.serverFor(ctx).ExecInstance(name, api.InstanceExecPost{Command: command, WaitForWS: true}, &incusclient.InstanceExecArgs{
+	op, err := c.serverFor(execCtx).ExecInstance(name, api.InstanceExecPost{Command: command, WaitForWS: true}, &incusclient.InstanceExecArgs{
 		Stdin: bytes.NewReader(input), Stdout: &stdout, Stderr: &stderr, DataDone: dataDone,
+		Control: func(conn *websocket.Conn) {
+			defer conn.Close()
+			select {
+			case <-stopCtx.Done():
+			case <-done:
+				return
+			}
+			_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
+			_ = conn.WriteJSON(api.InstanceExecControl{Command: "signal", Signal: 15})
+			// Closing this socket kills Incus's top-level process immediately.
+			// Keep the deadline supervisor alive to reap its process group first.
+			<-done
+		},
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("execute in Incus instance %s: %w", name, err)
 	}
-	waitErr := op.WaitContext(ctx)
-	if waitErr != nil {
-		return Result{}, fmt.Errorf("execute in Incus instance %s: %w", name, waitErr)
+	exitCode, err := waitCommandExit(ctx, execCtx, requestStop, op)
+	if err != nil {
+		return Result{ExitCode: exitCode}, err
 	}
+
 	select {
 	case <-dataDone:
 	case <-ctx.Done():
-		return Result{}, ctx.Err()
+		return Result{ExitCode: exitCode}, &commandStoppedError{ctx.Err()}
 	}
-	result := Result{Stdout: stdout.String(), Stderr: stderr.String()}
+	return Result{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: exitCode}, nil
+}
+
+// waitCommandExit distinguishes a signal request from an observed remote exit.
+func waitCommandExit(ctx, execCtx context.Context, requestStop context.CancelFunc, op incusclient.Operation) (int, error) {
+	if err := op.WaitContext(execCtx); err != nil {
+		// Lost observation with a known operation uses the same stop-and-confirm path.
+		requestStop()
+		original := errors.Join(ctx.Err(), err)
+		if op.WaitContext(execCtx) == nil {
+			if code, ok := operationExitCode(op.Get().Metadata); ok {
+				return code, &commandStoppedError{original}
+			}
+		}
+		return 0, fmt.Errorf("Incus command termination is unconfirmed: %w", original)
+	}
 	exitCode, hasExitCode := operationExitCode(op.Get().Metadata)
-	if hasExitCode {
-		result.ExitCode = exitCode
-		return result, nil
+	if !hasExitCode {
+		return 0, fmt.Errorf("Incus operation omitted process exit status")
 	}
-	return Result{}, fmt.Errorf("execute in Incus instance %s: operation omitted process exit status", name)
+	if err := ctx.Err(); err != nil {
+		return exitCode, &commandStoppedError{err}
+	}
+	return exitCode, nil
 }
 
 func operationExitCode(metadata map[string]any) (int, bool) {

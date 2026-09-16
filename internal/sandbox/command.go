@@ -10,6 +10,7 @@ const (
 	MaxCommandBytes         = 64 << 10
 	MaxCommandOutputBytes   = 64 << 10
 	MaxCommandSeconds       = 120
+	DefaultCommandTimeout   = 30 * time.Second
 	CommandTransportTimeout = (MaxCommandSeconds + 5) * time.Second
 )
 
@@ -43,7 +44,7 @@ func (c Command) Validate() error {
 
 func (c Command) Timeout() time.Duration {
 	if c.TimeoutSeconds == 0 {
-		return 30 * time.Second
+		return DefaultCommandTimeout
 	}
 	return time.Duration(c.TimeoutSeconds) * time.Second
 }

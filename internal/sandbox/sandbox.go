@@ -98,6 +98,7 @@ func (e Endpoint) GoString() string { return e.String() }
 // proofs. Implementations own provider discovery, opaque locators, lifecycle
 // APIs, command transports, endpoint routing, and topology validation.
 type Sandbox interface {
+	CommandRunner
 	Workspace() string
 	ReconcileOwnedCreate(context.Context, Ownership) error
 	AttestOwnership(context.Context, Ownership) error

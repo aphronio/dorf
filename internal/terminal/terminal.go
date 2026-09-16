@@ -195,22 +195,15 @@ func (e Externals) ExecSandbox(ctx context.Context, job core.Job, owned core.San
 	}
 	ctx, cancel := context.WithTimeout(ctx, command.Timeout()+2*time.Second)
 	defer cancel()
-	var result provider.Result
-	var err error
-	if runner, ok := e.Sandbox.(provider.CommandRunner); ok {
-		// Start the actual command so cancellation targets its process, not a
-		// timeout wrapper that could leave the command behind when killed.
-		observed, runErr := runner.Run(ctx, ownershipMetadata(owned), provider.RunRequest{
-			Args: command.Argv, Stdin: []byte(command.Stdin), Timeout: command.Timeout(),
-		})
-		result, err = observed.Result, runErr
-		if errors.Is(err, provider.ErrCommandTimeout) && observed.Stopped && ctx.Err() == nil {
-			result.ExitCode, err = 124, nil
-		}
-	} else {
-		argv := append([]string{"timeout", "--kill-after=1s", fmt.Sprintf("%gs", command.Timeout().Seconds())}, command.Argv...)
-		result, err = e.Sandbox.Exec(ctx, ownershipMetadata(owned), []byte(command.Stdin), argv...)
+	// Start the actual command through the provider's cancellation-aware runner.
+	observed, err := e.Sandbox.Run(ctx, ownershipMetadata(owned), provider.RunRequest{
+		Args: command.Argv, Stdin: []byte(command.Stdin), Timeout: command.Timeout(),
+	})
+	result := observed.Result
+	if errors.Is(err, provider.ErrCommandTimeout) && observed.Stopped && ctx.Err() == nil {
+		result.ExitCode, err = 124, nil
 	}
+
 	if err != nil {
 		return provider.CommandResult{}, err
 	}

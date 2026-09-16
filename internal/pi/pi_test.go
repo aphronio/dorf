@@ -83,7 +83,7 @@ func (r *acceptedRPCSteerRunner) Run(_ context.Context, _ string, input []byte, 
 		r.request = append([]byte(nil), input...)
 		return incus.Result{}, nil
 	}
-	if strings.Join(args, " ") == "exec sandbox -- cat "+rpcEvents {
+	if strings.HasSuffix(strings.Join(args, " "), " cat "+rpcEvents) {
 		return incus.Result{Stdout: `{"id":"run-steer","type":"response","command":"steer","success":true}`}, nil
 	}
 	return incus.Result{}, nil
@@ -108,7 +108,7 @@ func (r *acceptedRPCPromptRunner) Run(_ context.Context, _ string, input []byte,
 		r.submitted = true
 		return incus.Result{}, nil
 	}
-	if command == "exec sandbox -- cat "+rpcEvents {
+	if strings.HasSuffix(command, " cat "+rpcEvents) {
 		return incus.Result{Stdout: `{"id":"` + r.requestID + `","type":"response","command":"prompt","success":true}`}, nil
 	}
 	if strings.Contains(command, "ambiguous Pi session identity") {

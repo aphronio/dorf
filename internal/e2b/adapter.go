@@ -1,7 +1,6 @@
 package e2b
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -149,25 +148,14 @@ func (a Adapter) ReadFile(ctx context.Context, owner provider.Ownership, relativ
 	return provider.ReadFileViaExec(ctx, owner, a.Workspace(), relativePath, a.Exec)
 }
 
+// Exec is the convenience form of Run; all commands share cancellation and stop confirmation.
 func (a Adapter) Exec(ctx context.Context, owner provider.Ownership, input []byte, args ...string) (provider.Result, error) {
-	owned, err := a.Client.FindOwned(ctx, e2bOwnership(owner))
-	if err != nil {
-		return provider.Result{}, err
+	timeout := a.Config.ProcessTimeout
+	if timeout <= 0 {
+		timeout = provider.DefaultCommandTimeout
 	}
-	if owned == nil {
-		return provider.Result{}, provider.OwnershipErrorf("E2B Sandbox metadata is missing, foreign, stale, or ambiguous")
-	}
-	connection, err := a.Client.ConnectEnvd(ctx, owned.ProviderID, a.Config.SandboxTimeout)
-	if err != nil {
-		return provider.Result{}, err
-	}
-	executor, err := NewExecutor(connection, a.Client.HTTPClient)
-	if err != nil {
-		return provider.Result{}, err
-	}
-	var stdout, stderr bytes.Buffer
-	result, execErr := executor.Exec(ctx, ExecRequest{Argv: append([]string(nil), args...), Stdin: input, ProcessTimeout: a.Config.ProcessTimeout, Stdout: &stdout, Stderr: &stderr})
-	return providerExecResult(result, stdout.String(), stderr.String(), execErr)
+	result, err := a.Run(ctx, owner, provider.RunRequest{Args: args, Stdin: input, Timeout: timeout})
+	return result.Result, err
 }
 
 func providerExecResult(result ExecResult, stdout, stderr string, execErr error) (provider.Result, error) {

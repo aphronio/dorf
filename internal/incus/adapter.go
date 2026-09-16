@@ -2,10 +2,13 @@ package incus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
+	"sort"
 	"strings"
+	"time"
 
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
@@ -57,11 +60,46 @@ func (a Adapter) ReadFile(ctx context.Context, owner provider.Ownership, relativ
 	return provider.ReadFileViaExec(ctx, owner, a.Workspace(), relativePath, a.Exec)
 }
 
+// Exec is a convenience form of the same bounded, cancellation-aware runner.
 func (a Adapter) Exec(ctx context.Context, owner provider.Ownership, input []byte, args ...string) (provider.Result, error) {
-	if err := a.Sandbox.AttestOwnership(ctx, owner); err != nil {
-		return provider.Result{}, err
+	result, err := a.Run(ctx, owner, provider.RunRequest{Args: args, Stdin: input, Timeout: provider.DefaultCommandTimeout})
+	return result.Result, err
+}
+
+func (a Adapter) Run(ctx context.Context, owner provider.Ownership, command provider.RunRequest) (provider.RunResult, error) {
+	if len(command.Args) == 0 || command.Timeout <= 0 || command.Timeout > 24*time.Hour {
+		return provider.RunResult{}, fmt.Errorf("command requires arguments and a bounded positive timeout")
 	}
-	return a.Sandbox.Exec(ctx, owner.SandboxID, input, args...)
+	if err := a.Sandbox.AttestOwnership(ctx, owner); err != nil {
+		return provider.RunResult{}, err
+	}
+	// Incus has no native process deadline. GNU timeout owns the process group
+	// and forwards cancellation's SIGTERM, escalating to SIGKILL after one second.
+	args := []string{"timeout", "--kill-after=1s", fmt.Sprintf("%gs", command.Timeout.Seconds())}
+	if len(command.Env) > 0 {
+		args = append(args, "env", "--")
+		keys := make([]string, 0, len(command.Env))
+		for key := range command.Env {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			args = append(args, key+"="+command.Env[key])
+		}
+	}
+	args = append(args, command.Args...)
+	ctx, cancel := context.WithTimeout(ctx, command.Timeout+2*time.Second)
+	defer cancel()
+	result, err := a.Sandbox.Exec(ctx, owner.SandboxID, command.Stdin, args...)
+	out := provider.RunResult{Result: result, Stopped: err == nil}
+	var stopped *commandStoppedError
+	if errors.As(err, &stopped) {
+		out.Stopped = true
+	}
+	if err == nil && result.ExitCode == 124 {
+		err = provider.ErrCommandTimeout
+	}
+	return out, err
 }
 
 func (a Adapter) Endpoint(ctx context.Context, owner provider.Ownership, port int) (provider.Endpoint, error) {

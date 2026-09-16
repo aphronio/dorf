@@ -107,10 +107,6 @@ func (d Driver) Restore(ctx context.Context, owner provider.Ownership, snapshot,
 }
 
 func (d Driver) run(ctx context.Context, owner provider.Ownership, access RepositoryAccess, args ...string) (provider.RunResult, Result, error) {
-	runner, ok := d.Sandbox.(provider.CommandRunner)
-	if !ok {
-		return provider.RunResult{}, Result{}, fmt.Errorf("sandbox lacks bounded cancellable commands")
-	}
 	timeout := d.OperationTimeout
 	if timeout == 0 {
 		timeout = defaultOperation
@@ -149,7 +145,7 @@ func (d Driver) run(ctx context.Context, owner provider.Ownership, access Reposi
 	command := []string{"/usr/bin/flock", "--nonblock", "--no-fork", "/var/tmp/dorf-restic.lock", "/usr/bin/nice", "-n", "10", executable,
 		"--cache-dir", fmt.Sprintf("/var/tmp/dorf-restic-cache/%x", digest)}
 	started := time.Now()
-	observed, err := runner.Run(ctx, owner, provider.RunRequest{Args: append(command, args...), Env: environment, Timeout: timeout})
+	observed, err := d.Sandbox.Run(ctx, owner, provider.RunRequest{Args: append(command, args...), Env: environment, Timeout: timeout})
 	result := Result{Duration: time.Since(started), Cancelled: ctx.Err() != nil, RemoteStopped: observed.Stopped, RemoteStopDuration: observed.StopDuration}
 	if err != nil {
 		return observed, result, fmt.Errorf("restic command failed: remote_stopped=%t: %w", observed.Stopped, commandFailure(ctx))

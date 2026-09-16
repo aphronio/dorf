@@ -98,3 +98,14 @@ func TestRunPreservesStdinAndReportsConfirmedProcessTimeout(t *testing.T) {
 		t.Fatalf("stdin completion failed: %v", err)
 	}
 }
+
+func TestConvenienceExecUsesSameStopConfirmation(t *testing.T) {
+	rpc := &stopProcessClient{fakeProcessClient: fakeProcessClient{stream: &fakeStartStream{
+		messages: []*process.StartResponse{startEvent(42)}, err: context.Canceled,
+	}}, pending: 1}
+	scope := &scopedAccess{ctx: t.Context(), executor: &Executor{process: rpc}}
+	_, err := scope.Exec(t.Context(), provider.Ownership{}, nil, "sleep", "30")
+	if !errors.Is(err, context.Canceled) || rpc.signalPID != 42 || rpc.lists != 2 {
+		t.Fatalf("convenience execution bypassed stop confirmation: %v", err)
+	}
+}
