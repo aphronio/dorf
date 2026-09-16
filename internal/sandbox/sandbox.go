@@ -44,8 +44,13 @@ type CommandRunner interface {
 	Run(context.Context, Ownership, RunRequest) (RunResult, error)
 }
 
+// ErrCommandTimeout reports the provider's process deadline, rather than a
+// caller giving up observation. RunResult.Stopped still owns termination proof.
+var ErrCommandTimeout = errors.New("remote command exceeded its process deadline")
+
 type RunRequest struct {
 	Args    []string
+	Stdin   []byte
 	Env     map[string]string
 	Timeout time.Duration
 }

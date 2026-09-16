@@ -1,6 +1,7 @@
 package e2b
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -72,5 +73,28 @@ func TestRunAlreadyCancelledDoesNotStart(t *testing.T) {
 	result, err := (&Executor{process: rpc}).Run(ctx, provider.RunRequest{Args: []string{"true"}, Timeout: time.Second})
 	if !errors.Is(err, context.Canceled) || !result.Stopped || rpc.startCalls != 0 {
 		t.Fatal("cancelled command started")
+	}
+}
+
+func TestRunPreservesStdinAndReportsConfirmedProcessTimeout(t *testing.T) {
+	input := []byte{'a', 0, 0xff}
+	rpc := &stopProcessClient{fakeProcessClient: fakeProcessClient{stream: &fakeStartStream{
+		messages: []*process.StartResponse{startEvent(42)},
+		err:      connect.NewError(connect.CodeDeadlineExceeded, errors.New("process deadline")),
+	}}}
+	result, err := (&Executor{process: rpc}).Run(t.Context(), provider.RunRequest{
+		Args: []string{"python3", "-c", "import sys; sys.stdin.read()"}, Stdin: input, Timeout: time.Second,
+	})
+	if !errors.Is(err, provider.ErrCommandTimeout) || !result.Stopped || rpc.signalPID != 42 {
+		t.Fatalf("stopped=%t signal=%d error=%v", result.Stopped, rpc.signalPID, err)
+	}
+	// Stdin delivery is asynchronous when a timeout interrupts observation.
+	// Successful completion below establishes the input contract deterministically.
+	rpc = &stopProcessClient{fakeProcessClient: fakeProcessClient{stream: &fakeStartStream{
+		messages: []*process.StartResponse{startEvent(42), endEvent(0, true, "exited", "")},
+	}}}
+	result, err = (&Executor{process: rpc}).Run(t.Context(), provider.RunRequest{Args: []string{"consume"}, Stdin: input, Timeout: time.Second})
+	if err != nil || !result.Stopped || !bytes.Equal(rpc.stdin, input) || rpc.closedPID != 42 {
+		t.Fatalf("stdin completion failed: %v", err)
 	}
 }

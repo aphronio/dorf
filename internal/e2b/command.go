@@ -41,7 +41,7 @@ func (e *Executor) Run(ctx context.Context, command provider.RunRequest) (provid
 		return provider.RunResult{Stopped: true}, err
 	}
 	var stdout, stderr bytes.Buffer
-	observed, err := e.Exec(ctx, ExecRequest{Argv: command.Args, Env: command.Env,
+	observed, err := e.Exec(ctx, ExecRequest{Argv: command.Args, Stdin: command.Stdin, Env: command.Env,
 		ProcessTimeout: command.Timeout, Stdout: &stdout, Stderr: &stderr})
 	result, execErr := providerExecResult(observed, stdout.String(), stderr.String(), err)
 	out := provider.RunResult{Result: result}
@@ -58,6 +58,10 @@ func (e *Executor) Run(ctx context.Context, command provider.RunRequest) (provid
 	defer cancel()
 	stopErr := e.stopCommand(stopCtx, observed.PID)
 	out.Stopped, out.StopDuration = stopErr == nil, time.Since(started)
+	var timeout *ProcessTimeoutError
+	if errors.As(err, &timeout) {
+		execErr = errors.Join(provider.ErrCommandTimeout, execErr)
+	}
 	return out, errors.Join(ctx.Err(), execErr, stopErr)
 }
 
