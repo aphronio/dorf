@@ -114,6 +114,69 @@ func TestControlAPIMultipartAttachmentsPersistAndReplayAfterCleanup(t *testing.T
 	}
 }
 
+func TestControlAPIObservationIntentDefaultsAndReplay(t *testing.T) {
+	ctx := context.Background()
+	store, tasks, profile := controlTestStore(t)
+	auth := controlauth.Service{Store: store}
+	credential, err := controlauth.GenerateCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.IssueKey(ctx, "observation-default-client", credential); err != nil {
+		t.Fatal(err)
+	}
+	handler := controlTestHandler(store, tasks, controlTestGateway(t), auth, controlTestRuntimes{profile: profile}, blob.Store{Root: t.TempDir()})
+	key := fmt.Sprintf("observation-default-%d", time.Now().UnixNano())
+	var job controlapi.DirectJob
+	controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, "/v1/jobs", credential, key, controlapi.AdmitJobRequest{
+		AIConnection: "primary", Model: "model-test", Reasoning: "high",
+	}), http.StatusCreated, &job)
+	path := "/v1/jobs/" + job.ID + "/messages"
+	for _, tc := range []struct {
+		name   string
+		intent string
+		want   core.MessageDeliveryIntent
+	}{
+		{name: "omitted", want: core.MessageAuto},
+		{name: "auto", intent: "auto", want: core.MessageAuto},
+		{name: "follow", intent: "follow", want: core.MessageFollow},
+		{name: "steer", intent: "steer"},
+		{name: "unknown", intent: "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := controlapi.SendMessageRequest{Text: "An external operation completed.", Observation: true, Intent: tc.intent}
+			response := controlTestRequest(t, handler, http.MethodPost, path, credential, key+tc.name, input)
+			if tc.want == "" {
+				var problem controlapi.Problem
+				controlTestJSON(t, response, http.StatusUnprocessableEntity, &problem)
+				if problem.Code != "invalid_input" {
+					t.Fatalf("unexpected rejection: %+v", problem)
+				}
+				return
+			}
+			var message controlapi.Message
+			controlTestJSON(t, response, http.StatusCreated, &message)
+			execution, err := store.AgentMessageExecution(ctx, message.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !execution.Message.Observation || execution.Message.RequestedIntent != tc.want || message.Intent != "follow" {
+				t.Fatalf("observation=%t requested=%s effective=%s", execution.Message.Observation, execution.Message.RequestedIntent, message.Intent)
+			}
+			input.Intent = string(tc.want)
+			var replay controlapi.Message
+			controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, path, credential, key+tc.name, input), http.StatusOK, &replay)
+			if replay.ID != message.ID {
+				t.Fatalf("replay created a different Message: %s != %s", replay.ID, message.ID)
+			}
+		})
+	}
+	deliveries, err := store.Deliveries(ctx, job.ID)
+	if err != nil || len(deliveries) != 3 {
+		t.Fatalf("deliveries=%d want=3 err=%v", len(deliveries), err)
+	}
+}
+
 func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	ctx := context.Background()
 	store, firstTasks, profileName := controlTestStore(t)

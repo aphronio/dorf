@@ -1201,6 +1201,17 @@ func (a controlAPIJobs) SendMessage(ctx context.Context, jobID, key string, inpu
 	if err != nil {
 		return controlapi.Message{}, false, err
 	}
+	var options []core.MessageOption
+	switch input.Intent {
+	case "", string(core.MessageAuto):
+		input.Intent = string(core.MessageAuto)
+		options = append(options, core.PreferSteer())
+	case string(core.MessageFollow):
+	case string(core.MessageSteer):
+		options = append(options, core.Steer())
+	default:
+		return controlapi.Message{}, false, controlapi.ErrInvalidInput
+	}
 	if !core.ValidObservationDelivery(input.Observation, core.MessageDeliveryIntent(input.Intent), len(input.Attachments)) ||
 		(len(input.Attachments) == 0 && strings.TrimSpace(input.Text) == "") ||
 		!core.ValidDeveloperInstructions(&input.Text) || !core.ValidDeveloperInstructions(input.DeveloperInstructions) {
@@ -1209,16 +1220,6 @@ func (a controlAPIJobs) SendMessage(ctx context.Context, jobID, key string, inpu
 	attachments, err := a.retainMessageAttachments(ctx, job.ProfileRef(), input.Attachments)
 	if err != nil {
 		return controlapi.Message{}, false, err
-	}
-	var options []core.MessageOption
-	switch input.Intent {
-	case "", string(core.MessageAuto):
-		options = append(options, core.PreferSteer())
-	case string(core.MessageFollow):
-	case string(core.MessageSteer):
-		options = append(options, core.Steer())
-	default:
-		return controlapi.Message{}, false, controlapi.ErrInvalidInput
 	}
 	if input.RefreshSkills {
 		options = append(options, core.RefreshSkills())
