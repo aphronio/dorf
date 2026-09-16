@@ -12,10 +12,10 @@ import (
 
 	"github.com/aphronio/dorf/internal/incus"
 	incustest "github.com/aphronio/dorf/internal/incus/testkit"
-	"github.com/pelletier/go-toml/v2"
 )
 
 const clientRouteConfig = `# Client-owned configuration
+model_provider = "openai"
 model_reasoning_effort = "high"
 [mcp_servers.example]
 command = "example-mcp"
@@ -72,15 +72,12 @@ func TestRouteLifecyclePreservesClientConfiguration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.HasSuffix(contents, []byte(clientRouteConfig)) {
+		if string(contents) != clientRouteConfig {
 			t.Fatal("route installation changed client bytes")
 		}
-		var parsed map[string]any
-		if err := toml.Unmarshal(contents, &parsed); err != nil {
-			t.Fatal(err)
-		}
-		if parsed["model_provider"] != "dorf" {
-			t.Fatal("Dorf provider not selected")
+		options, err := os.ReadFile(filepath.Join(home, ".config/dorf/codex-route.options"))
+		if err != nil || !bytes.Equal(options, routeOptions("https://gateway.example/v1")) {
+			t.Fatal("native route options not installed")
 		}
 		credential, err := os.ReadFile(filepath.Join(home, ".config/dorf/provider-route.key"))
 		if err != nil || string(credential) != key+"\n" {
@@ -103,6 +100,9 @@ func TestRouteLifecyclePreservesClientConfiguration(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".config/dorf/provider-route.key")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("route credential remains")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config/dorf/codex-route.options")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("route options remain")
 	}
 	if err := agent.RemoveRoute(context.Background(), owner); err != nil {
 		t.Fatal(err)

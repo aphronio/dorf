@@ -185,6 +185,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D136: Shared images install Codex through pinned Nix](decisions/D136-shared-images-install-codex-through-pinned-nix.md) (`partial`). Building guest images or changing how persistent Sandboxes obtain Codex packages.
 - [D137: Provider images share one Nix workstation](decisions/D137-provider-images-share-one-nix-workstation.md) (`current`). Changing shared guest tools, browser installation, or package parity between Incus and E2B.
 - [D138: Session checkpoints use stock restic and scoped object storage](decisions/D138-session-checkpoints-use-stock-restic.md) (`current`). Changing session checkpoint storage, capture, or recovery.
+- [D139: Codex routes use native launch overrides](decisions/D139-codex-routes-use-native-launch-overrides.md) (`current`). Changing Codex route installation, native configuration ownership, or app-server launch.
 
 ## Model access
 
@@ -194,6 +195,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D036: Shared Provider Gateway for trusted clients and Dorf Sandboxes](decisions/D036-shared-provider-gateway-for-trusted-clients-and-dorf-sandboxes.md) (`current`). Changing Provider Gateway connections, consumer routes, or deployment ownership.
 - [D065: Pi is the second Harness and reuses Dorf's scoped Provider Gateway](decisions/D065-pi-is-the-second-harness-and-reuses-dorf-s-scoped-provider-gateway.md) (`current`). Changing Pi integration, native session recovery, or scoped Provider Gateway custody.
 - [D102: One guided Dorf domain publishes two distinct public origins](decisions/D102-one-guided-dorf-domain-publishes-two-distinct-public-origins.md) (`current`). Changing guided Cloudflare ingress or either public Dorf origin.
+- [D139: Codex routes use native launch overrides](decisions/D139-codex-routes-use-native-launch-overrides.md) (`current`). Changing Codex route installation, native configuration ownership, or app-server launch.
 
 ## Clients and API
 

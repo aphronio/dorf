@@ -23,6 +23,19 @@ The Dorf Job path creates, observes, and revokes Routes through stable Actions. 
 Route identity and settlement facts required for reconciliation. The live Gateway remains the
 authority for whether it can route an advertised model.
 
+Codex route installation owns separate guest route settings and credential files, not the client's
+native configuration file. The app-server launcher passes the route settings through native
+configuration overrides; Dorf's provider selection takes precedence for that process while unrelated
+client settings remain native. Install, reinstall, and removal never rewrite or delete client
+configuration. Invalid native configuration remains a native readiness failure, not permission to
+replace it. Remote revocation precedes local route-file removal.
+
+Updated route settings and credentials take effect at the next app-server launch, not by modifying
+an already-running process. Reconnection retains that process's existing configuration. Older
+workspaces without separate route settings continue to launch using their retained native provider
+configuration until the next route installation. Legacy configuration is left untouched, including
+on removal; retained provider settings do not grant access after the scoped credential is revoked.
+
 ## Network boundary
 
 Every Sandbox Profile names one exact guest-reachable Gateway URL. Profile verification proves that

@@ -465,7 +465,7 @@ func appServerScript(endpoint, tokenDigest string, reviewReadOnly bool) string {
 	if reviewReadOnly {
 		configuration += ` -c 'sandbox_mode="read-only"'`
 	}
-	return "umask 077; install -d -m 700 " + serverControlDir + "; rm -f " + serverPIDPath + "; IFS= read -r DORF_PROVIDER_ROUTE_KEY < /root/.config/dorf/provider-route.key; export DORF_PROVIDER_ROUTE_KEY; nohup codex app-server" + configuration + " --listen " + endpoint + " --ws-auth " + serverAuthMode + " --ws-token-sha256 " + tokenDigest + " </dev/null >" + serverLogPath + " 2>&1 & printf '%s\\n' \"$!\" > " + serverPIDPath
+	return "set -e; umask 077; install -d -m 700 " + serverControlDir + "; rm -f " + serverPIDPath + "; IFS= read -r DORF_PROVIDER_ROUTE_KEY < " + routeKeyPath + "; export DORF_PROVIDER_ROUTE_KEY; " + loadRouteOptions + "nohup codex app-server \"${route_options[@]}\"" + configuration + " --listen " + endpoint + " --ws-auth " + serverAuthMode + " --ws-token-sha256 " + tokenDigest + " </dev/null >" + serverLogPath + " 2>&1 & printf '%s\\n' \"$!\" > " + serverPIDPath
 }
 
 type serverProbe struct {
