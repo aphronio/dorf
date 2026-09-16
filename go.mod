@@ -9,8 +9,10 @@ require (
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/coder/websocket v1.8.15
 	github.com/earendil-works/absurd/sdks/go/absurd v0.5.0
+	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/lxc/incus/v7 v7.3.0
+	github.com/pelletier/go-toml/v2 v2.4.3
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.20.0
 	go.opentelemetry.io/otel/log v0.20.0
@@ -53,7 +55,6 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/securecookie v1.1.2 // indirect
-	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect

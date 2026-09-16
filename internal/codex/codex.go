@@ -42,31 +42,6 @@ const Harness = "codex"
 
 func (a Agent) Name() string { return Harness }
 
-func (a Agent) InstallRoute(ctx context.Context, owner provider.Ownership, baseURL, key, _ string) error {
-	config := fmt.Sprintf("model_provider = \"dorf\"\n\n[model_providers.dorf]\nname = \"Dorf Provider Gateway\"\nbase_url = %q\nenv_key = \"DORF_PROVIDER_ROUTE_KEY\"\nwire_api = \"responses\"\nsupports_websockets = true\nrequires_openai_auth = false\n", baseURL)
-	input := []byte(strings.ReplaceAll(config, "\n", "\\n") + "\n" + key + "\n")
-	script := "umask 077; mkdir -p /root/.codex /root/.config/dorf; IFS= read -r config; printf '%b' \"$config\" > /root/.codex/config.toml; IFS= read -r key; printf '%s\\n' \"$key\" > /root/.config/dorf/provider-route.key"
-	result, err := a.Sandbox.Exec(ctx, owner, input, "bash", "-lc", script)
-	if err != nil {
-		return err
-	}
-	if result.ExitCode != 0 {
-		return fmt.Errorf("install Codex scoped provider route: %s", strings.TrimSpace(result.Stderr))
-	}
-	return nil
-}
-
-func (a Agent) RemoveRoute(ctx context.Context, owner provider.Ownership) error {
-	result, err := a.Sandbox.Exec(ctx, owner, nil, "rm", "-f", "/root/.config/dorf/provider-route.key", "/root/.codex/config.toml")
-	if err != nil {
-		return err
-	}
-	if result.ExitCode != 0 {
-		return fmt.Errorf("remove Codex scoped provider route: %s", strings.TrimSpace(result.Stderr))
-	}
-	return nil
-}
-
 type TurnOutcome = core.HarnessTurn
 
 type RejectedError struct {

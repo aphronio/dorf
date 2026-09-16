@@ -116,16 +116,6 @@ func TestCodexCommandBoundaryKeepsFixedPolicyAndScopedCapability(t *testing.T) {
 			t.Fatalf("exact process probe missing %q: %s", want, probe)
 		}
 	}
-
-	runner := &probeRunner{}
-	owner := testOwner("dorf-job")
-	agent := Agent{Sandbox: testSandbox(runner, owner)}
-	if err := agent.InstallRoute(context.Background(), owner, "http://10.42.0.1:8317/v1", "scoped-key", "unused"); err != nil {
-		t.Fatal(err)
-	}
-	if len(runner.inputs) != 1 || !strings.Contains(string(runner.inputs[0]), "supports_websockets = true") || !strings.HasSuffix(string(runner.inputs[0]), "scoped-key\n") {
-		t.Fatalf("InstallRoute input = %q", runner.inputs)
-	}
 }
 
 func TestLiveExactServerReconnectUsesRetainedCapability(t *testing.T) {
