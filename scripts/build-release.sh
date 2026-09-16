@@ -137,6 +137,13 @@ image_output=(--output "type=docker,dest=$STAGE/container-image.tar,rewrite-time
 if [[ "$PUSH_IMAGE" == true ]]; then
   image_output=(--output "type=registry,rewrite-timestamp=true")
 fi
+image_cache=()
+if [[ -n "${DORF_BUILDX_CACHE:-}" ]]; then
+  if [[ -f "$DORF_BUILDX_CACHE/index.json" ]]; then
+    image_cache+=(--cache-from "type=local,src=$DORF_BUILDX_CACHE")
+  fi
+  image_cache+=(--cache-to "type=local,dest=$DORF_BUILDX_CACHE-next,mode=max")
+fi
 docker buildx build \
   --platform linux/amd64 \
   --pull \
@@ -147,7 +154,13 @@ docker buildx build \
   --build-arg "DORF_BINARY_SHA256=$binary_sha256" \
   --build-arg "SOURCE_DATE_EPOCH=0" \
   "${image_output[@]}" \
+  "${image_cache[@]}" \
   "$STAGE/context"
+
+if [[ -n "${DORF_BUILDX_CACHE:-}" ]]; then
+  rm -rf -- "$DORF_BUILDX_CACHE"
+  mv -- "$DORF_BUILDX_CACHE-next" "$DORF_BUILDX_CACHE"
+fi
 
 if [[ "$PUSH_IMAGE" != true ]]; then
   docker load --input "$STAGE/container-image.tar" >/dev/null

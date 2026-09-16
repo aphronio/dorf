@@ -2,6 +2,10 @@ name: Release
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
 
 concurrency:
   group: release-publication
@@ -13,40 +17,80 @@ permissions:
   packages: write
 
 jobs:
+  candidate:
+    name: Select an unpublished version
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      publish: ${{ steps.version.outputs.publish }}
+      sha: ${{ steps.version.outputs.sha }}
+    steps:
+      - name: Check out the CI-tested commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+      - name: Check whether this version is already published
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/version/version.go)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          # API failures fail the step; they must never mean "unpublished".
+          published="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq 'flatten | any(.tag_name == "v'"$version"'")')"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if test "$published" = true; then
+            echo "Version $version already has a release; skipping."
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'publish=true' >> "$GITHUB_OUTPUT"
+          fi
+
   publish:
+    needs: candidate
+    if: needs.candidate.outputs.publish == 'true'
     name: Publish release
     runs-on: ubuntu-24.04
     steps:
-      - name: Require the main branch
-        shell: bash
-        run: test "$GITHUB_REF" = refs/heads/main
-      - name: Check out the dispatched commit
+      - name: Check out the selected commit
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.candidate.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Require successful CI for the dispatched commit
+      - name: Require successful CI for the selected commit
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.candidate.outputs.sha }}
         run: |
           ci_run_id="$(gh run list \
             --repo "$GITHUB_REPOSITORY" \
             --workflow ci.yml \
-            --commit "$GITHUB_SHA" \
+            --commit "$SOURCE_SHA" \
             --event push \
             --status success \
             --limit 1 \
             --json databaseId \
             --jq '.[0].databaseId // empty')"
           if test -z "$ci_run_id"; then
-            echo "The dispatched commit does not have a successful CI run." >&2
+            echo "The selected commit does not have a successful CI run." >&2
             exit 1
           fi
           echo "Verified CI run $ci_run_id."
       - name: Install the release toolchain
         uses: ./.github/actions/setup-mise
+        with:
+          install-args: go
       - name: Set up the release image builder
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
       - name: Require an already published Incus image pin

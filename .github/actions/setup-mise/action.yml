@@ -1,12 +1,31 @@
 name: Set up the Dorf toolchain
 description: Install the repository's pinned Mise and locked tools
 
+inputs:
+  install-args:
+    description: Optional subset of locked tools to install
+    default: ""
+
 runs:
   using: composite
   steps:
     - name: Install Mise and locked tools
       uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
       with:
+        install_args: ${{ inputs.install-args }}
         version: 2026.8.5
         sha256: ee362b6d96c648e27325a8bc7ee866bde4fffc20c88c777c5eb5c3b5c6f3e226
         # mise-action automatically enables locked mode when mise.lock is present.
+    - name: Restore Go and release image build caches
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: |
+          ~/go/pkg/mod
+          ~/.cache/go-build
+          /tmp/dorf-build-cache
+        key: ${{ runner.os }}-${{ runner.arch }}-build-v1-${{ hashFiles('mise.lock', 'go.sum', 'internal/release/container/**') }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-${{ runner.arch }}-build-v1-${{ hashFiles('mise.lock', 'go.sum', 'internal/release/container/**') }}-
+    - name: Configure the release image cache
+      shell: bash
+      run: echo 'DORF_BUILDX_CACHE=/tmp/dorf-build-cache' >> "$GITHUB_ENV"

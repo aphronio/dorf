@@ -7,14 +7,25 @@ The leading zero means the public contract is still evolving; `1.0.0` should mar
 stability commitment, not a release-count milestone. See [Semantic Versioning](https://semver.org/).
 The release version is owned by [`internal/version/version.go`](../internal/version/version.go).
 
-From a clean commit on `main` already available on GitHub with successful CI, dispatch the Release
-workflow. CI owns the full repository and PostgreSQL-backed checks. The publication workflow installs
-only the pinned release toolchain, requires a successful push CI run for the exact event commit, and
-invokes the release authority on that commit:
+Commit the chosen version to `main` (normally through a pull request). After push CI succeeds,
+the Release workflow automatically checks that exact tested commit and publishes its version if
+no GitHub release with that tag exists. Unchanged, already released versions are skipped, including
+CI reruns. Failed CI and pull-request CI cannot publish. A draft release also prevents automatic
+republication; inspect and resolve an interrupted publication before retrying.
+
+CI owns the full repository and PostgreSQL-backed checks. Publication is serialized, installs only
+the locked Go toolchain, and requires successful push CI for the exact selected commit. Manual
+dispatch remains available for retries from a clean commit on `main` already available on GitHub:
 
 ```bash
 gh workflow run release.yml --ref main
 ```
+
+CI and publication share Go module, compilation, and container-layer caches. Cache keys include the
+locked toolchain, Go dependencies, and container recipe; each new source commit can restore a prior
+compatible cache. Builds still verify clean source and binary provenance. Local container builds
+can opt into the same layer reuse by setting `DORF_BUILDX_CACHE` to a dedicated disposable cache
+directory; the builder replaces that directory after a successful image build.
 
 GitHub release immutability must already be enabled and the repository variable
 `DORF_IMMUTABLE_RELEASES_ENABLED` must record `true`. The existing `dorf` GHCR package must grant
@@ -24,7 +35,7 @@ package linked to the repository after publication.
 [`scripts/release.sh`](../scripts/release.sh) remains the source of truth for release inputs,
 artifacts, and publication. Hosted Actions supplies the locked repository toolchain,
 Docker/Buildx, and narrowly scoped `GITHUB_TOKEN` GitHub and GHCR publication permissions. It does
-not provision a development database or repeat CI. The workflow checks out the exact event commit;
+not provision a development database or repeat CI. The workflow checks out the exact selected commit;
 the authority rejects source changes before or during the build and verifies the release binary's
 Go VCS metadata against that commit.
 

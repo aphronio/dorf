@@ -150,6 +150,13 @@ if [[ "${1:-}" == buildx && "${2:-}" == build ]]; then
         image_output="$2"
         shift 2
         ;;
+      --cache-to)
+        cache_dir="${2#type=local,dest=}"
+        cache_dir="${cache_dir%,mode=max}"
+        mkdir -p "$cache_dir"
+        printf '{}\n' >"$cache_dir/index.json"
+        shift 2
+        ;;
       --build-arg)
         if [[ "$2" == DORF_BINARY_SHA256=* ]]; then
           binary_sha256="${2#DORF_BINARY_SHA256=}"
@@ -245,7 +252,7 @@ reset_case() {
 
 release_env() {
   env \
-    -u AI_CONNECTION -u PROOF_PROFILE -u DORF_HOST_COMMAND \
+    -u AI_CONNECTION -u PROOF_PROFILE -u DORF_HOST_COMMAND -u DORF_BUILDX_CACHE \
     GITHUB_REPOSITORY=aphronio/dorf \
     OUTPUT_DIR="$FIXTURE_ROOT/dist/release" \
     DORF_MISE="$FIXTURE_ROOT/.dorf/bin/mise" \
@@ -417,9 +424,28 @@ test_local_build_leaves_one_usable_image() {
   assert_application_artifacts
 }
 
+test_image_cache_cold_and_warm_builds() {
+  reset_case
+  local cache_dir="$FIXTURE_ROOT/../build-cache"
+  release_env DORF_BUILDX_CACHE="$cache_dir" \
+    "$FIXTURE_ROOT/scripts/build-release.sh" "$FIXTURE_ROOT/dist/release"
+  [[ -f "$cache_dir/index.json" ]] || fail "cold build did not export the image cache"
+  if grep -F -- '--cache-from' "$EVENTS" >/dev/null; then
+    fail "cold build tried to import a missing cache"
+  fi
+  touch "$cache_dir/stale-layer"
+  : >"$EVENTS"
+  release_env DORF_BUILDX_CACHE="$cache_dir" \
+    "$FIXTURE_ROOT/scripts/build-release.sh" "$FIXTURE_ROOT/dist/release"
+  grep -F -- "type=local,src=$cache_dir" "$EVENTS" >/dev/null || fail "warm build omitted cache import"
+  [[ -f "$cache_dir/index.json" && ! -e "$cache_dir/stale-layer" && ! -e "$cache_dir-next" ]] ||
+    fail "warm build did not replace the old cache"
+}
+
 test_publish_verifies_before_latest_promotion
 test_failed_publication_never_changes_latest
 test_dirty_or_foreign_binary_never_publishes
 test_local_build_leaves_one_usable_image
+test_image_cache_cold_and_warm_builds
 
 printf 'release tests passed\n'
