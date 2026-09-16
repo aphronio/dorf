@@ -45,8 +45,8 @@ jobs:
           version="$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/version/version.go)"
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           # API failures fail the step; they must never mean "unpublished".
-          published="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-            --jq 'flatten | any(.tag_name == "v'"$version"'")')"
+          releases="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100")"
+          published="$(jq --arg tag "v$version" 'flatten | any(.tag_name == $tag)' <<<"$releases")"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           if test "$published" = true; then
             echo "Version $version already has a release; skipping."
