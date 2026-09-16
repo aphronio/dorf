@@ -60,6 +60,10 @@ jobs:
     if: needs.candidate.outputs.publish == 'true'
     name: Publish release
     runs-on: ubuntu-24.04
+    env:
+      # Keep nested mise exec calls scoped to the installed release toolchain.
+      MISE_ENABLE_TOOLS: go
+      MISE_LOCKED: "1"
     steps:
       - name: Check out the selected commit
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
