@@ -1,5 +1,9 @@
 # Support and diagnostics
 
+The [native Session capability review](implementation/native-session-contract.md) records an
+isolated Codex input-contract probe for the accepted redesign. That evidence does not change the
+currently supported Message API or extend provider/recovery guarantees.
+
 ## Native conversation timelines
 
 Timeline reads use Codex `thread/turns/list` with `itemsView: full`. Native proofs on Codex 0.147

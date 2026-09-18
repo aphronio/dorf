@@ -32,31 +32,27 @@ reason to build it.
 
 ## Durable Sessions, replaceable processes, isolated Sandboxes
 
-A Session is the durable unit of user intent. Its initiating client, controller, task-executor process, and
-current agent process may disappear without erasing accepted input or observed progress. A Session owns
-one admitted Sandbox, an isolated mutable workstation with retained physical resource generations
-for replacement and one deterministically named Provider Route. Immutable Action success records the Route and Sandbox lifecycle. AgentRuns use
-a Sandbox rather than owning infrastructure. The Session owns the binding to one harness
-Thread for client input. Native subagent threads remain the Harness's responsibility. Every AgentRun
-consumes one durable Message and retains its exact Turn binding. Every Message selected for agent delivery has one AgentRun record. While admission is open, a follow joins
-the FIFO, reuses the authoritative retained Thread, and creates a distinct Turn. A steer atomically
-targets the exact active Turn and may overtake queued follows. Explicit steer never falls back to a
-new Turn and fails honestly when that target becomes terminal. Automatic intent preserves eventual
-input delivery: after proof that its selected Turn terminated without accepting the exact Message,
-the same Message returns to FIFO as a follow. Harness protocol and transcripts remain behind the adapter.
+A Session owns configuration, its native Thread binding, isolated compute, and resource lifecycle.
+The Harness owns conversation content, input placement, and execution. Exposing native items and
+Turns through a stable API does not require mirroring them into durable Dorf aggregates.
 
-Do not introduce a durable Worker merely as a synonym for a process or AgentRun. Add Worker only
+Persist only facts needed for Dorf's own authority and recovery. A client connection, native
+connection, or process is not the Session itself. Keep the resources and connection behavior needed
+for accepted native work to continue after a client disconnects, while reporting the Harness's
+actual persistence and restart limits. Native acknowledgement is not automatically durable storage.
+The [North Star](north-star.md#input-semantics) owns the selected input contract.
+
+Do not introduce a durable Worker merely as a synonym for a process or native Turn. Add Worker only
 when persistent personality, capability, reputation, ownership, or memory across Sessions becomes a
 real product requirement.
 
 ## Deterministic before agentic
 
-Anything that can be derived or executed programmatically should be. Admission, identity,
-sequencing, workflow policy, evidence hashing, external-effect reconciliation, retry, and
-cleanup execution are code-owned rather than agent judgment. Apply the
+Anything that can be derived or executed programmatically should be. Resource admission, identity,
+external-effect reconciliation, and cleanup are code-owned rather than agent judgment. Apply the
 [North Star product boundary](north-star.md#product-boundary): “code-owned” identifies automation,
-not which layer owns its meaning. Actions record code-owned external mutations; an agent invocation
-is instead owned and reconciled by its AgentRun.
+not which layer owns its meaning. Actions record infrastructure mutations. Native input and
+execution remain Harness-owned.
 
 Application setup, evaluation, review, and publication are client-owned policy. Native agent output
 is input to that policy, not an authority that can waive execution constraints.
@@ -68,8 +64,9 @@ where code believes the workflow is. The execution controller derives one curren
 facts and executes it through Absurd. Inspection derives the expected dependency chain,
 chronological history, and current work from the same source of truth.
 
-This rule exists for clarity and composition: a new feedback source adds a Message. Neither should require a new phase or a matrix of transitions across
-admission, readiness, publication, and inspection. Each client owns decisions over its application facts; the durable core does not interpret their meaning.
+Apply this to the facts Dorf owns. Native events can drive an ephemeral projection; native history
+repairs that projection where supported. Neither creates another execution authority. Clients own
+decisions over application facts and the durable core does not interpret their meaning.
 
 Do not turn this into a generic DAG engine, configurable workflow language, copied event log, giant
 SQL `next_work` query, or persisted derived status. Keep each proven workflow decision visible in
@@ -160,8 +157,10 @@ remain targeted terminals for changes that touch those authorities, not default 
 
 ## Evidence over narration
 
-Agent prose is a Message or application result, not proof. Process state, command results, commits,
-harness observation, external authority, and retained content identity are observed facts. Clients retain application evidence; Dorf retains input and execution/resource receipts.
+Agent prose is native output or an application result, not proof. Process state, command results,
+commits, harness observation, external authority, and retained content identity are observed facts.
+Clients retain application evidence; Dorf retains resource and lifecycle facts and exposes native
+observations.
 Do not duplicate reviewer prose as platform evidence. A fluent agent must never silently become the authority
 for its own success.
 

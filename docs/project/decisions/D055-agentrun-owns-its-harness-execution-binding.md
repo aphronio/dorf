@@ -3,7 +3,8 @@
 - **Applicability:** partial
 - **Areas:** harnesses, workflows, persistence
 - **Read when:** Changing AgentRun ownership of Message delivery, Harness threads, turns, or execution recovery.
-- **Decision history:** Accepted execution simplification; terminal-target fallback superseded by D096 — 2026-08-25; direct Job Thread ownership superseded by D145 — 2026-09-18
+- **Decision history:** Accepted execution simplification; terminal-target fallback superseded by D096 — 2026-08-25; direct Job Thread ownership superseded by D145 — 2026-09-18 D148 supersedes durable input custody as product direction;
+  the existing Message implementation remains during the coordinated native API transition — 2026-09-18.
 - **Decision:** `AgentRun` is Dorf's complete durable delivery record for one durable Message.
   Submitting, reconciling, waiting for, and recording the harness Turn are its lifecycle, not a
   paired `Action`. Every AgentRun consumes exactly one durable Message; every Message selected for

@@ -39,6 +39,10 @@ in its owner and replace the other copies with links or stable summaries.
 
 ## Active implementation
 
+- [Native Session contract](implementation/native-session-contract.md): accepted thin control-plane
+  direction, pinned Codex capability evidence and remaining proof for the API replacement. The
+  existing queued Message API remains current until that replacement lands.
+
 - [Session checkpoints](implementation/session-checkpoints.md): provider-independent native state
   recovery, currently under implementation and verification.
 

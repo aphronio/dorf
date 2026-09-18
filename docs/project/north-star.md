@@ -2,91 +2,106 @@
 
 **Your agents. Your infrastructure. One API.**
 
-Dorf is a stateful, self-hostable control plane for supported agent Harnesses on compatible isolated
-infrastructure. It keeps accepted input, native conversation bindings, resource ownership, and
-recovery dependable after the client disconnects. It does not replace the native Harness.
+Dorf is a stateful, self-hostable control plane for supported native agent Harnesses on compatible
+isolated infrastructure. It provides a stable client API and manages the configuration, compute,
+access, and lifecycle needed to use those Harnesses. The Harness owns the conversation and execution.
 
-Current support belongs in [Support](../support.md), operator steps in
-[Getting started](../getting-started.md), and technical authority in [Architecture](architecture.md).
+This is the accepted direction in [D148](decisions/D148-thin-native-session-control-plane.md).
+The existing durable Message API has not yet been replaced; [Remote Control API](../control-api.md)
+and its OpenAPI document describe current behavior. The [slice tracker](../implementation/session-product-proposals.md)
+separates completed boundary work from proposed implementation.
 
 ## Product boundary
 
 Clients choose goals, supply instructions and tool configuration, prepare application files,
 interpret results, compose independent execution contexts, and decide when to release resources.
-Coding, repository selection, review policy, publication, GitHub credentials, and business outcomes
-belong to the client. Dorf ships no built-in application workflow.
+Coding, repository selection, review policy, publication, credentials for application services,
+and business outcomes belong to the client.
 
-Dorf owns accepted immutable Message input and attachments, ordered delivery, exact native
-acceptance reconciliation and interruption, attested compute ownership, scoped model access,
-supported recovery, and requested cleanup. Harnesses own native execution and conversation history.
-Dorf exposes observations and durable receipts without treating agent prose as proof of success.
+Dorf owns Session identity and configuration, the selected native Thread binding, attested compute,
+scoped model access, readiness and maintenance gates, supported recovery, and requested release.
+It exposes supported input, controls, events, and history through adapters. A stable API does not
+require another database copy of everything that API exposes.
 
-Apply this test before adding a concept: if it interprets business success, acceptance, rejection,
-human judgment, cross-Session composition, or release timing, place it in the client. Keep only the
-execution custody or lifecycle mechanism that remains after that policy is removed.
+Harnesses own native input placement, messages, tool calls, Turns, conversation history, and agent
+execution. Dorf does not schedule Follow/Steer/Auto deliveries or promise an offline input inbox in
+the target contract. Adapters translate native capabilities; they do not rebuild a Harness to make
+unsupported semantics appear portable. Start with the verified Codex surface. Further Harnesses
+must earn support through concrete adapter proofs.
+
+Apply this test before retaining a concept: which authority owns the fact, and which actual
+control-plane obligation requires Dorf to persist it? Resource custody and uncertain lifecycle
+effects qualify. Merely returning a native message or Turn through the API does not.
 
 ## Vocabulary
 
 | Term | Meaning |
 | --- | --- |
-| **Session** | The current durable execution handle with admitted configuration, one native Thread binding, Messages, owned resources, and lifecycle |
+| **Session** | Dorf's durable handle for admitted configuration, a native Thread binding, owned resources, and lifecycle |
 | **Sandbox** | An isolated mutable workstation with exact resource ownership |
-| **Message** | Durable text and optional ordered attachments with delivery intent and an immutable request identity |
-| **AgentRun** | The current internal delivery and native execution recovery record for one Message |
-| **Harness** | Native software hosting an agent, such as Codex app-server or Pi |
-| **Thread / Turn** | The Harness's continuing conversation and individual execution identities |
-| **Action** | A fixed compute or model-route lifecycle effect with stable identity and reconciliation |
+| **Harness** | Native software hosting an agent and its conversation, such as Codex app-server |
+| **Thread** | The native continuing conversation; one input Thread is bound to each Session today |
+| **Message / item** | Native conversation content exposed through the adapter, not an additional Dorf aggregate |
+| **Turn** | A native execution whose identity and status can be observed without a Dorf Turn table |
+| **Action** | A fixed infrastructure lifecycle effect with stable identity and reconciliation |
 
-A Session binds the Thread receiving client input; native subagent threads remain
-Harness-owned. AgentRuns retain exact delivery and Turn attribution.
-Separate Turn ownership remains a [proposal](../implementation/session-product-proposals.md).
+Native subagent threads remain Harness-owned. Additional independently addressable Threads need a
+real client use case; no Thread collection or multi-Harness dispatch is added now.
 
-## Message semantics
+## Input semantics
 
-While admission is open, Follow joins the FIFO, reuses the retained Thread, and starts a distinct
-Turn. Steer captures the exact active Turn and may overtake queued Follows. Explicit Steer never
-silently becomes Follow. Auto returns the same Message to the FIFO only after proof that its
-selected Turn ended without accepting it. Interruption targets an exact Turn. Clients choose
-input and intent; Dorf reconciles delivery and preserves these rules.
+A successful send means the Harness acknowledged acceptance. It does not mean a Dorf queue retained
+the payload, a native history write finished, a Turn completed, or a backup captured the input.
+If the environment is preparing, unavailable, or held for maintenance, Dorf cannot accept input
+for later delivery. Clients retain unsent work and choose when to attempt a new submission.
+
+If an acknowledgement is lost, inspect native evidence where supported or expose an unknown
+outcome. Never infer nonacceptance from a missing history item or replay an ambiguous mutation
+solely because a request has an ID. A native correlation ID is not necessarily a deduplication key.
+The [native capability review](../implementation/native-session-contract.md) owns version-specific
+acceptance, persistence, and retry evidence.
+
+Controls act through the Harness. Ordinary input needs no caller-selected Turn; interruption must
+still avoid affecting a successor through a delayed or repeated request. The public operation names
+and their exact error and retry shapes are settled in the implementing slice.
 
 ## Workflow examples
 
-An external coding client creates a direct Session, prepares its checkout, and sends instructions.
-It retrieves files before cleanup and owns revision selection, isolated reviews, publication,
-credentials, and the meaning of merge or close events. Several independently controlled agents
-use separate Sessions composed by that client. Native Harness subagents remain native behavior.
-
-An investigation client similarly supplies its source and instructions, chooses report paths,
-retrieves needed files, and decides whether to continue. Neither application needs Dorf to assign
-meaning to its output. Public primitives must earn any additional guarantees through concrete use.
+An external client creates a Session, prepares its workspace, waits for readiness, and submits
+input. It observes native events and retrieves native history after reconnecting. It chooses the
+next task and release timing. Application-specific input queues, reply publication, review evidence,
+and success criteria remain with that client.
 
 ## Desired experience
 
 - Supported agent setups run on verified owner-selected infrastructure.
-- Accepted input and recoverable execution survive client and worker process loss.
-- Inspection reports execution, delivery uncertainty, resource state, and cleanup honestly.
+- Client disconnection does not itself release compute or terminate accepted native work.
+- Input acceptance, native execution, availability, and recovery limits are distinguishable.
+- Clients inspect native work through a stable API without reconstructing Dorf delivery states.
 - Model and provider credentials remain behind their defined authority boundaries.
-- Release follows an explicit client request; idle does not mean that the goal is complete.
+- Release follows an explicit client request; idle does not mean the goal is complete.
 
 ## Layers and ownership
 
 ```text
-Client        Goals, application setup, evaluation, composition, release timing
-Dorf          Input and execution custody, resources, supported recovery, cleanup
-Adapters      Native Harness protocols, compute access, and model authority
-Harness       Conversation history, agent execution, native tools and subagents
+Client        Goals, application setup, unsent work, evaluation, release timing
+Dorf          Stable API, Session binding, resources, access, recovery, cleanup
+Adapters      Verified translation of native and provider operations
+Harness       Input placement, conversation history, execution, tools, subagents
 ```
 
 ## Non-goals until evidence demands them
 
-Dorf is not a workflow engine, agent builder, transcript replacement, application evidence store,
-skills marketplace, or universal provider/harness compatibility layer. A profile is a verified
-combination, not a promise that every provider supports every Harness or recovery mechanism.
+Dorf is not a workflow engine, agent builder, durable message broker, transcript replacement,
+application evidence store, skills marketplace, or universal compatibility layer. A profile is a
+verified combination, not a promise that every provider supports every Harness or recovery mode.
+Native queuing, where available, is a distinct optional capability; it is not assumed by ordinary send.
 
 ## Proof that the North Star is real
 
-A client can admit input, disappear, and later observe exact delivery and native execution without
-duplicate unsafe effects. Messages remain ordered; ambiguous acceptance is reconciled against its
-authority. Cleanup accounts for exact owned resources and scoped access. Provider replacement and
-checkpoint recovery expose only their verified continuity guarantees. Agent output never becomes
+A client can configure a Session, submit input to its ready Harness, disconnect, and later inspect
+native work. Dorf preserves resource ownership and reports unknown outcomes without duplicate
+submission. Native history availability follows the supported storage and recovery contract;
+release does not imply a retained conversation archive. Recovery cannot silently roll back external
+work, and cleanup accounts for exact owned resources and scoped access. Agent output never becomes
 its own success authority.

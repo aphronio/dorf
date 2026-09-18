@@ -1,10 +1,11 @@
 # D147: Remove residual application machinery
 
-- **Applicability:** current
+- **Applicability:** partial
 - **Areas:** persistence, workflows, client-api
 - **Read when:** Changing Session execution facts, scheduling, or retained application machinery.
 - **Decision history:** Completes D144's removal of application policy after D146's Session rename,
-  2026-09-18.
+  2026-09-18. D148 supersedes durable input custody as product direction;
+  the existing Message implementation remains during the coordinated native API transition — 2026-09-18.
 - **Decision:** Remove Session workflow identity and AgentRun role, capability, input revision,
   and the unused strict-review submission nonce. Remove the workflow sender kind. Keep native
   acceptance attribution and resource ownership. Name the retained failure fields ExecutionAttention.

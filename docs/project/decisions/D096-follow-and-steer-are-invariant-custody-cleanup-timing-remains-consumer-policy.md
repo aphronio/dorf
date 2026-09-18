@@ -4,7 +4,8 @@
 - **Areas:** interaction, core, workflows
 - **Read when:** Changing follow, steer, or consumer-controlled cleanup semantics.
 - **Decision history:** Accepted message-semantics convergence — 2026-08-25. Automatic-intent
-  terminal-target behavior superseded by D126 — 2026-09-14.
+  terminal-target behavior superseded by D126 — 2026-09-14. D148 supersedes durable input custody as product direction;
+  the existing Message implementation remains during the coordinated native API transition — 2026-09-18.
 - **Decision:** While Job admission is open, Core accepts follow as durable FIFO input. A follow may
   queue before the preceding Turn settles, reuses the Agent handle's authoritative retained Harness
   Thread, and receives a distinct Turn. Steer atomically captures the exact active Turn at admission,

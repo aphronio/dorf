@@ -1,9 +1,10 @@
 # D126: Automatic messages preserve eventual delivery
 
-- **Applicability:** current
+- **Applicability:** partial
 - **Areas:** core, persistence, client-api
 - **Read when:** Changing automatic message resolution, steer reconciliation, or message replay.
-- **Decision history:** Accepted after a retained-session terminal-target race — 2026-09-14.
+- **Decision history:** Accepted after a retained-session terminal-target race — 2026-09-14. D148 supersedes durable input custody as product direction;
+  the existing Message implementation remains during the coordinated native API transition — 2026-09-18.
 - **Decision:** Treat automatic intent as eventual delivery of one immutable accepted Message. Core
   initially selects steer when exactly one active Turn exists and follow otherwise. If the selected
   Turn accepts the exact Message ID, the steer remains bound there. If reconciliation instead proves

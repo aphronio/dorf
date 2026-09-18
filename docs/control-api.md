@@ -1,5 +1,11 @@
 # Remote Control API
 
+This document describes the currently implemented API. The accepted
+[native Session boundary](project/north-star.md#product-boundary) replaces queued Message custody
+with native acceptance in a subsequent implementation slice. Existing Message endpoints and replay
+guarantees remain current until that coordinated API/client change; no new endpoints are implied
+by the proposal.
+
 Dorf exposes one deliberately narrow HTTPS boundary for operating one configured Deployment. The
 machine-readable authority is the embedded OpenAPI 3.1 document served by that Deployment at
 `GET /v1/openapi.json`; discovery at `GET /v1` links to it and advertises supported capabilities.

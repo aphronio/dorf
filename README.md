@@ -10,8 +10,10 @@
 **Dorf is the open-source control plane for running agent harnesses on infrastructure you control.**
 
 Dorf's direction is to carry a supported agent setup into compatible isolated infrastructure
-without rebuilding it in a new agent framework. Dorf keeps custody of controlled execution,
-including recovery, external effects, retained results, and requested cleanup.
+without rebuilding it in a new agent framework. Dorf provides a stable API and manages Session
+configuration, compute, access, supported recovery, and requested cleanup. The native harness owns
+the conversation and execution. The [North Star](docs/project/north-star.md) describes this accepted
+direction; the current Message API is being simplified in the [Session slices](docs/implementation/session-product-proposals.md).
 
 ```text
 Deployment-host CLI      Remote clients

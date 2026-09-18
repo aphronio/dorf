@@ -50,10 +50,11 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D120: Default idle pause with an admitted keep-running override](decisions/D120-default-idle-pause-with-an-admitted-keep-running-override.md) (`partial`). Changing Sandbox idle policy, E2B retention, or admission defaults.
 - [D121: Messages retain application developer instructions](decisions/D121-messages-retain-application-developer-instructions.md) (`current`). Changing application instruction custody or Harness prompt authority.
 - [D122: Sandbox activity delays idle pause](decisions/D122-sandbox-activity-delays-idle-pause.md) (`current`). Changing idle pause timing, managed Sandbox access, or cancellation fences.
-- [D126: Automatic messages preserve eventual delivery](decisions/D126-automatic-messages-preserve-eventual-delivery.md) (`current`). Changing automatic message resolution, steer reconciliation, or message replay.
+- [D126: Automatic messages preserve eventual delivery](decisions/D126-automatic-messages-preserve-eventual-delivery.md) (`partial`). Changing automatic message resolution, steer reconciliation, or message replay.
 - [D128: Execution changes wake the attached task](decisions/D128-execution-changes-wake-the-attached-task.md) (`current`). Changing execution wake hints, native completion delivery, or durable wait ordering.
 - [D129: Controls reuse native resources and exact target validation](decisions/D129-controls-reuse-native-resources-and-exact-target-validation.md) (`current`). Changing Steer connection ownership or exact native interruption recovery.
 - [D130: Exact file reads have source and transfer bounds](decisions/D130-exact-file-reads-have-source-and-transfer-bounds.md) (`current`). Changing Sandbox file capture, HTTP file transport, or cleanup protection.
+- [D148: Thin native Session control plane](decisions/D148-thin-native-session-control-plane.md) (`current`). Changing input custody, native observation, Session storage, or the Harness adapter.
 
 ## Workflows
 
@@ -82,7 +83,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D106: Remove unused workflow capability declarations](decisions/D106-remove-unused-workflow-capability-declarations.md) (`current`). Adding optional provider requirements or workflow runtime metadata.
 - [D143: Retire built-in investigation](decisions/D143-retire-built-in-investigation.md) (`current`). Changing the supported workflow surface or retiring application-owned records.
 - [D144: Retire built-in coding](decisions/D144-retire-built-in-coding.md) (`partial`). Changing application policy ownership or the direct-only public boundary.
-- [D147: Remove residual application machinery](decisions/D147-remove-residual-application-machinery.md) (`current`). Changing Session execution facts, scheduling, or retained application machinery.
+- [D147: Remove residual application machinery](decisions/D147-remove-residual-application-machinery.md) (`partial`). Changing Session execution facts, scheduling, or retained application machinery.
 
 ## Interaction
 
@@ -168,6 +169,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D139: Codex routes use native launch overrides](decisions/D139-codex-routes-use-native-launch-overrides.md) (`current`). Changing Codex route installation, native configuration ownership, or app-server launch.
 - [D145: Direct Job owns its Thread](decisions/D145-direct-job-owns-its-thread.md) (`partial`). Changing conversation continuity, native acceptance recovery, or Thread migration.
 - [D146: Name the execution context Session](decisions/D146-name-the-execution-context-session.md) (`current`). Changing execution resource names, Thread ownership, or upgrading clients.
+- [D148: Thin native Session control plane](decisions/D148-thin-native-session-control-plane.md) (`current`). Changing input custody, native observation, Session storage, or the Harness adapter.
 
 ## Model access
 
@@ -206,13 +208,14 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D122: Sandbox activity delays idle pause](decisions/D122-sandbox-activity-delays-idle-pause.md) (`current`). Changing idle pause timing, managed Sandbox access, or cancellation fences.
 - [D123: Message timelines project completed native replies](decisions/D123-message-timelines-project-completed-native-replies.md) (`current`). Changing live assistant reply delivery, retained item identity, or input attribution.
 - [D125: Messages distinguish application observations](decisions/D125-messages-distinguish-application-observations.md) (`partial`). Delivering asynchronous application updates without impersonating human input.
-- [D126: Automatic messages preserve eventual delivery](decisions/D126-automatic-messages-preserve-eventual-delivery.md) (`current`). Changing automatic message resolution, steer reconciliation, or message replay.
+- [D126: Automatic messages preserve eventual delivery](decisions/D126-automatic-messages-preserve-eventual-delivery.md) (`partial`). Changing automatic message resolution, steer reconciliation, or message replay.
 - [D127: Message observations deliver completed prefix deltas](decisions/D127-message-observations-deliver-completed-prefix-deltas.md) (`current`). Changing Message observation, native connection reuse, stream replay, or idle behavior.
 - [D131: Application observations reuse automatic delivery](decisions/D131-application-observations-reuse-automatic-delivery.md) (`current`). Delivering application updates into active work or recovering native start-or-steer races.
 - [D143: Retire built-in investigation](decisions/D143-retire-built-in-investigation.md) (`current`). Changing the supported workflow surface or retiring application-owned records.
 - [D144: Retire built-in coding](decisions/D144-retire-built-in-coding.md) (`partial`). Changing application policy ownership or the direct-only public boundary.
 - [D146: Name the execution context Session](decisions/D146-name-the-execution-context-session.md) (`current`). Changing execution resource names, Thread ownership, or upgrading clients.
-- [D147: Remove residual application machinery](decisions/D147-remove-residual-application-machinery.md) (`current`). Changing Session execution facts, scheduling, or retained application machinery.
+- [D147: Remove residual application machinery](decisions/D147-remove-residual-application-machinery.md) (`partial`). Changing Session execution facts, scheduling, or retained application machinery.
+- [D148: Thin native Session control plane](decisions/D148-thin-native-session-control-plane.md) (`current`). Changing input custody, native observation, Session storage, or the Harness adapter.
 
 ## Deployment and setup
 
@@ -259,7 +262,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D110: Separate Job setup from Message delivery](decisions/D110-separate-job-setup-from-messages.md) (`current`). Changing Job creation, workspace instructions, or Message admission.
 - [D117: Clients request skill refresh at fresh Turn boundaries](decisions/D117-client-requested-skill-refresh-at-fresh-turn-boundaries.md) (`current`). Changing skill discovery after client-managed Sandbox updates.
 - [D118: Messages retain ordered input attachments and immutable bytes](decisions/D118-messages-retain-ordered-input-attachments-and-immutable-bytes.md) (`current`). Changing Message attachments, input blob custody, native image delivery, or attachment replay.
-- [D126: Automatic messages preserve eventual delivery](decisions/D126-automatic-messages-preserve-eventual-delivery.md) (`current`). Changing automatic message resolution, steer reconciliation, or message replay.
+- [D126: Automatic messages preserve eventual delivery](decisions/D126-automatic-messages-preserve-eventual-delivery.md) (`partial`). Changing automatic message resolution, steer reconciliation, or message replay.
 - [D128: Execution changes wake the attached task](decisions/D128-execution-changes-wake-the-attached-task.md) (`current`). Changing execution wake hints, native completion delivery, or durable wait ordering.
 - [D132: Profile revisions separate promotion from Job custody](decisions/D132-profile-revisions-separate-promotion-from-job-custody.md) (`current`). Updating a profile used by retained Jobs, promoting verified images, or resolving old runtime custody.
 - [D133: Logical Sandboxes retain provider resource identities](decisions/D133-logical-sandboxes-retain-provider-resource-identities.md) (`current`). Replacing a provider VM, implementing package upgrade rollback, or investigating which infrastructure served a Job.
@@ -269,7 +272,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D144: Retire built-in coding](decisions/D144-retire-built-in-coding.md) (`partial`). Changing application policy ownership or the direct-only public boundary.
 - [D145: Direct Job owns its Thread](decisions/D145-direct-job-owns-its-thread.md) (`partial`). Changing conversation continuity, native acceptance recovery, or Thread migration.
 - [D146: Name the execution context Session](decisions/D146-name-the-execution-context-session.md) (`current`). Changing execution resource names, Thread ownership, or upgrading clients.
-- [D147: Remove residual application machinery](decisions/D147-remove-residual-application-machinery.md) (`current`). Changing Session execution facts, scheduling, or retained application machinery.
+- [D147: Remove residual application machinery](decisions/D147-remove-residual-application-machinery.md) (`partial`). Changing Session execution facts, scheduling, or retained application machinery.
 
 ## GitHub integration
 

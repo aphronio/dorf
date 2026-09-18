@@ -1,7 +1,8 @@
 # Session product: proposed slices
 
-Status: iterative tracker. Slices 1–3, 5, and 5a have agreed implementation scopes; other slices remain
-proposals requiring their own discussion and agreement.
+Status: iterative tracker. Slices 1–3, 5, and 5a are complete. Slice 6 is withdrawn. Slice 8
+records the agreed thin native boundary and completed capability review; the runtime replacement
+in slice 9 remains proposed. Each implementation slice is discussed before it starts.
 
 This tracker explores a smaller product centered on one durable Session, with application goals,
 evaluation, and external application effects owned by clients. The current
@@ -38,8 +39,10 @@ decision record. This proposal tracker is not a substitute for either.
 | 4. Dependable setup and activation | Proposed | Hold native delivery until an exact configuration revision is ready; validate provider and harness options in their selected adapters. | Define lifetime-pinned versus changeable settings, profile/package compatibility, field ownership, quiescent updates, and uncertain setup-command outcomes. |
 | 5. Job owns its Thread | Verified | Store the authoritative native conversation binding directly on the execution owner. | Prove uncertain initial acceptance and queued Follow recovery; define legacy binding conversion and conflict handling. Decide when public and internal Job naming changes. |
 | 5a. Session naming | Verified | Rename the existing execution context and its client contract; retain one primary Thread and derive Harness from the pinned profile. | Agreed scope is recorded below. |
-| 6. Separate delivery from Turn execution | Proposed | Several accepted Message receipts reference one Turn outcome; interruption targets that exact Turn. | Prove accepted, rejected, and uncertain Steers, Auto successor adoption, and preserved native submission attribution. |
-| 7. Finish application removal | Dropped | Application evidence and application-only tables are removed with coding. | Remaining generic Job/AgentRun fields belong to their future ownership slices. |
+| 6. Separate delivery from Turn execution | Dropped | Withdraw the uncommitted shared-Turn schema and delivery refactor. | D148 assigns messages and Turns to the Harness; do not add another durable aggregate. |
+| 7. Finish application removal | Dropped | Application evidence and application-only tables are removed with coding. | Remaining Message/AgentRun removal belongs to the native API replacement. |
+| 8. Native boundary and capability proof | Verified | Record the thin control-plane contract, inspect Codex and client use, and remove the abandoned shared-Turn patch. | Source and isolated-server evidence are recorded below; runtime behavior is unchanged. |
+| 9. Replace queued Messages with native input and observation | Proposed | One ready-Session send path, native history and controls, coordinated client replacement, and deletion of the old input pipeline. | Agree exact public shapes and resolve the capability review's input, uncertainty, observation, maintenance and recovery proofs. |
 
 ```text
 Completed: separate review contracts -> remove investigation -> remove coding
@@ -47,7 +50,10 @@ Completed next: Job Thread ownership (slice 5, before setup/activation)
 
 Completed: Session naming (slice 5a)
 Completed: audited leftover removal
-Remaining candidates: setup/activation, delivery/Turn facts
+Completed: thin native boundary and capability review (slice 8)
+Withdrawn: shared Turn ownership (slice 6)
+Next proposal: native input/API/client replacement (slice 9)
+Deferred: setup/activation, pending what the native surface already provides
 
 Each arrow is a proposed dependency, not approval to start the next slice.
 ```
@@ -156,36 +162,64 @@ Each arrow is a proposed dependency, not approval to start the next slice.
 
 ### Slice 6: delivery and execution facts
 
-- Agreed scope: pending discussion.
-- Implementation and verification: pending.
+- Dropped after reconsidering the product boundary. The uncommitted shared-Turn implementation,
+  generated SQL, migration, dedicated tests, and completion claims were removed.
+- Do not replace the old Message/AgentRun aggregate with new Message-delivery and Turn aggregates.
+  The accepted native boundary assigns conversation and execution to the Harness.
+- No deployment used the withdrawn migration. The disposable development database was backed up
+  outside the repository and rebuilt from the retained migrations, removing the abandoned schema.
 
 ### Slice 7: remaining application removal
 
 - Folded into slice 3 to remove application evidence and storage with their final consumers.
 
-## Client API review: proposals to discuss
+### Slice 8: native boundary and capability proof
+
+- Agreed scope: revise responsibilities around confirmed native acceptance; inspect the Codex
+  app-server surface, pinned source and current client usage; verify uncertain assumptions against
+  an isolated server; remove stale shared-Turn work and update the owning documents.
+- Decision: [D148](../project/decisions/D148-thin-native-session-control-plane.md).
+- Evidence: [native capability review](native-session-contract.md). The client retains its own
+  application input but depends on current Message replay, observations, effective intent and
+  interruption. Replacement requires a coordinated client change.
+- Verification: the isolated real Codex probe confirms native start-or-steer, repeated-ID duplicate
+  submission, cold completed history, and an acknowledged steering input absent after process loss.
+  Source establishes acknowledgement before persistence. No production resource or live model
+  was used. `mise run docs:check` passes. This verifies the bounded review; it does not claim the
+  new API is implemented.
+
+### Slice 9: native input and observation replacement
+
+- Proposed scope: replace the current Message-facing contract and consumer path with ready-Session
+  input, native history/events, and controls. Remove FIFO/Auto selection, durable Message input,
+  AgentRun outcomes, delivery wakes, public aliases, and tests specific to retired semantics when
+  the replacement is authoritative. No shared Turn table or second production execution path.
+- Keep configuration, compute, model access, Session binding, exact ownership and release. Keep
+  existing file/process operations until native alternatives prove smaller and equally useful.
+- Settle exact operation names, shapes, attachment handling, application tool output, developer
+  instructions and refresh behavior against the native capabilities before implementation.
+- Prove unknown-send behavior and remove client retries based on the retired Message replay
+  contract. Preserve client reply publication without Follow/Steer-based ownership.
+- Replace Message-dependent pause, upgrade, checkpoint and release guards before removing their
+  storage. Native idle status or missing history alone cannot prove absence of an unresolved send.
+- Implementation and verification: pending discussion. The
+  [capability review](native-session-contract.md#client-change-and-remaining-proof) owns the detailed
+  proof questions. Native lifecycle scheduling and guest transport replacement remain separate.
+
+## Client API review
 
 Apply [Build a small thing that composes](../project/principles.md#build-a-small-thing-that-composes):
-inspect real callers before changing the contract, describe the client simplification, and keep
-application policy outside Dorf. Consumer-specific source evidence belongs outside this public
-repository. Except for naming in slice 5a, these candidates have not been approved for implementation.
+inspect real callers, describe the client simplification, and keep application policy outside Dorf.
+Consumer-specific source evidence belongs outside this public repository.
 
-| Candidate | Client simplification | Scope to settle |
-| --- | --- | --- |
-| Align existing consumers with application retirement | A client can regenerate its models and use the supported direct contract without retired workflow types or dispatch paths. | Audit actual callers before deployment. Retire unused application flows or implement their policy in the client through existing primitives. No workflow restoration in Core. |
-| Job → Session vocabulary (agreed in slice 5a) | One consistent name for the durable context across creation, continued input, inspection, and release. | Agree on a coordinated API/client change, retained ID and request-key behavior, and concrete deployment order. A rename alone does not simplify execution or justify another resource. |
-| Workspace access through the Session handle | Clients need not repeatedly retrieve a collection and select the default Sandbox before reading files or executing commands. | First compare a small client helper with a public API change. Preserve readiness, delivery holds, exact ownership, bounded files, and unknown command outcomes. Resource generations remain internal custody. |
-| Separate Message delivery from Turn observation | Clients can distinguish input acceptance from the shared execution outcome without reconstructing it across steering Messages. | Keep this in slice 6; demonstrate an actual reduction in client reconciliation while retaining reply ordering, cursor gaps, completion watermarks, and exact interruption. |
+Session naming and application retirement are complete. The next client simplification is native
+input and observation: remove effective-intent reconciliation, repeated Message-to-Turn discovery,
+and assumptions that a Dorf input receipt owns the native reply. Native execution and application
+reply publication retain their separate responsibilities. See slice 9 for the coordinated change.
 
-Use **Session** for the durable public context, **Message** for admitted input, **Turn** for native
-execution, and **Sandbox** for supported isolated compute in the proposed vocabulary. **Thread**
-identifies the primary native conversation receiving input; native subagent threads remain
-Harness-owned. A Session ID need not equal any native Thread or session ID. Saved Agent resources,
-a second transcript store, and additional configuration lifecycle states need their own use case.
-
-Consumer contract alignment and naming are complete. Discuss workspace access next only against
-a concrete client diff. Setup/activation remains proposed; the existing create → prepare → send
-sequence must be evaluated before adding another barrier or configuration revision model.
+Workspace access convenience and explicit setup/activation remain proposals. Evaluate the existing
+create → prepare → send flow and native configuration capabilities before adding public resources,
+barriers, or revision models. Profile naming remains deferred.
 
 ## Post-Session cleanup audit
 
@@ -211,8 +245,9 @@ from unnecessary compatibility branches; any change to retained identities needs
 transition for active resources and work. Do not retain unused fields solely for nonexistent
 application history.
 
-The controller, effect fences, retry receipts, resource generations, and ambiguous native acceptance
-remain active responsibilities. Their replacement is not justified by a naming or dead-code cleanup.
+Effect fences, infrastructure retry receipts, resource generations and honest native uncertainty
+remain control-plane responsibilities. D148 changes input custody; re-evaluate the existing
+controller after removing its delivery work rather than preserving or replacing it by default.
 
 ## Deferred proposals
 

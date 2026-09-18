@@ -6,6 +6,26 @@ query, and API shape; GitHub issues own temporary implementation scope and accep
 
 Product direction and vocabulary live in the [North Star](north-star.md).
 
+## Accepted native boundary
+
+[D148](decisions/D148-thin-native-session-control-plane.md) changes the target to a stable API over
+native input, controls, events, and history, with Dorf owning infrastructure and Session lifecycle.
+The Harness owns messages and Turns. PostgreSQL retains Session configuration, its native Thread
+binding, exact resource generations, authority, and lifecycle receipts. It does not need an
+independent Message inbox or Turn aggregate to expose native work.
+
+Send returns confirmed native acceptance, rejection, or an unresolved outcome. Unavailable compute
+and maintenance gates prevent submission rather than enqueueing it. Native acceptance carries only
+the selected Harness's guarantees; it does not establish persisted history or exactly-once input.
+The [capability review](../implementation/native-session-contract.md) records the pinned source and
+running-server evidence, the proposed surface, and the obligations that must survive removal.
+
+This is a responsibility decision, not a completed runtime migration. The sections below document
+the existing queued implementation until its replacement slice lands. Their Message/AgentRun
+storage, FIFO selection, Auto fallback, Message-based observation, and recovery cutoffs are removal
+targets, not requirements to reproduce behind a new API. Keep the existing API truthful during the
+transition. No shared Turn schema is being introduced.
+
 ## System shape
 
 ```mermaid
@@ -295,10 +315,11 @@ into Dorf's product history.
 
 ## Durable core and workflow facts
 
-Core retains only execution facts whose authority and recovery meaning survive removal of client or
-workflow policy: durable identity, accepted Message text and attachment custody, accepted input
-order, internal AgentRuns, Sandbox ownership, stable external effects, recovery,
-caller-requested attention, and caller-requested cleanup.
+The current implementation retains durable identity, Message text and attachments, input order,
+AgentRuns, Sandbox ownership, external effects, recovery, attention, and requested cleanup.
+Under the accepted native boundary, Message and AgentRun custody are retired with their delivery
+pipeline. Resource and lifecycle facts remain; maintenance and recovery must stop relying on
+Message sequence before those rows can be removed.
 
 Client- and workflow-specific inputs, results, external authorities, and terminal meaning remain in
 their typed owner. They do not become nullable Core fields, generic payloads, common phases, or
