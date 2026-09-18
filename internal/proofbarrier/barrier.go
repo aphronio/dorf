@@ -18,12 +18,12 @@ import (
 const proofEnablePhrase = "external-sigkill-proof-only"
 
 type Barrier struct {
-	Point    string
-	Sequence int64
-	JobID    string
-	Dir      string
-	Wait     time.Duration
-	Lease    time.Duration
+	Point     string
+	Sequence  int64
+	SessionID string
+	Dir       string
+	Wait      time.Duration
+	Lease     time.Duration
 }
 
 func FromEnv() (core.FaultBarrier, error) {
@@ -40,15 +40,15 @@ func FromEnv() (core.FaultBarrier, error) {
 		return nil, fmt.Errorf("DORF_PROOF_FAULT_BARRIER requires the exact proof-only enable phrase %q", proofEnablePhrase)
 	}
 	var sequence int64
-	jobID := strings.TrimSpace(os.Getenv("DORF_PROOF_FAULT_BARRIER_JOB"))
+	sessionID := strings.TrimSpace(os.Getenv("DORF_PROOF_FAULT_BARRIER_SESSION"))
 	if messagePoint {
 		var err error
 		sequence, err = strconv.ParseInt(strings.TrimSpace(os.Getenv("DORF_PROOF_FAULT_BARRIER_SEQUENCE")), 10, 64)
 		if err != nil || sequence < 1 {
 			return nil, fmt.Errorf("DORF_PROOF_FAULT_BARRIER_SEQUENCE must be a positive integer")
 		}
-	} else if jobID == "" {
-		return nil, fmt.Errorf("DORF_PROOF_FAULT_BARRIER_JOB is required for repository proof boundaries")
+	} else if sessionID == "" {
+		return nil, fmt.Errorf("DORF_PROOF_FAULT_BARRIER_SESSION is required for repository proof boundaries")
 	}
 	dir := strings.TrimSpace(os.Getenv("DORF_PROOF_FAULT_BARRIER_DIR"))
 	if dir == "" {
@@ -58,24 +58,24 @@ func FromEnv() (core.FaultBarrier, error) {
 	if err != nil {
 		return nil, err
 	}
-	return Barrier{Point: point, Sequence: sequence, JobID: jobID, Dir: dir, Wait: 8 * time.Second, Lease: 10 * time.Second}, nil
+	return Barrier{Point: point, Sequence: sequence, SessionID: sessionID, Dir: dir, Wait: 8 * time.Second, Lease: 10 * time.Second}, nil
 }
 
-func (b Barrier) ReachWorkflow(ctx context.Context, point, jobID, identity string) error {
-	if point != b.Point || jobID != b.JobID {
+func (b Barrier) ReachWorkflow(ctx context.Context, point, sessionID, identity string) error {
+	if point != b.Point || sessionID != b.SessionID {
 		return nil
 	}
-	return b.reach(ctx, jobID, identity, point, fmt.Sprintf("job=%s\nidentity=%s\npoint=%s\n", jobID, identity, point), true)
+	return b.reach(ctx, sessionID, identity, point, fmt.Sprintf("session=%s\nidentity=%s\npoint=%s\n", sessionID, identity, point), true)
 }
 
-func (b Barrier) reach(ctx context.Context, jobID, identity, point, payload string, heartbeat bool) error {
+func (b Barrier) reach(ctx context.Context, sessionID, identity, point, payload string, heartbeat bool) error {
 	if b.Wait <= 0 || b.Wait > 30*time.Second || heartbeat && (b.Lease <= b.Wait || b.Lease > time.Minute) {
 		return fmt.Errorf("unsafe proof barrier timing")
 	}
 	if err := os.MkdirAll(b.Dir, 0o700); err != nil {
 		return err
 	}
-	base := fmt.Sprintf("%s-%s-%s", jobID, identity, point)
+	base := fmt.Sprintf("%s-%s-%s", sessionID, identity, point)
 	ready := filepath.Join(b.Dir, base+".ready")
 	release := filepath.Join(b.Dir, base+".release")
 	if recovered, err := recoverReady(ready, payload); err != nil {
@@ -120,10 +120,10 @@ func (b Barrier) Reach(ctx context.Context, point string, delivery core.Delivery
 	if err := os.MkdirAll(b.Dir, 0o700); err != nil {
 		return err
 	}
-	base := fmt.Sprintf("%s-seq-%d-%s", delivery.Message.JobID, delivery.Message.Sequence, point)
+	base := fmt.Sprintf("%s-seq-%d-%s", delivery.Message.SessionID, delivery.Message.Sequence, point)
 	ready := filepath.Join(b.Dir, base+".ready")
 	release := filepath.Join(b.Dir, base+".release")
-	payload := fmt.Sprintf("job=%s\nsequence=%d\nmessage=%s\nagent_run=%s\npoint=%s\n", delivery.Message.JobID, delivery.Message.Sequence, delivery.Message.ID, delivery.AgentRun.ID, point)
+	payload := fmt.Sprintf("session=%s\nsequence=%d\nmessage=%s\nagent_run=%s\npoint=%s\n", delivery.Message.SessionID, delivery.Message.Sequence, delivery.Message.ID, delivery.AgentRun.ID, point)
 	if recovered, err := recoverReady(ready, payload); err != nil {
 		return err
 	} else if recovered {

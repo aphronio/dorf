@@ -29,7 +29,7 @@ func TestSendMessagePreservesMultipartBytesNamesOrderAndTextOnlyJSON(t *testing.
 			requests := 0
 			client, err := New("https://dorf.example.test", "credential", roundTripFunc(func(request *http.Request) (*http.Response, error) {
 				requests++
-				if request.Method != http.MethodPost || request.URL.Path != "/v1/jobs/worker/messages" || request.Header.Get("Idempotency-Key") != "stable-key" {
+				if request.Method != http.MethodPost || request.URL.Path != "/v1/sessions/worker/messages" || request.Header.Get("Idempotency-Key") != "stable-key" {
 					t.Fatalf("incorrect Message identity: %s %s", request.Method, request.URL.Path)
 				}
 				if len(input.Attachments) == 0 {
@@ -43,7 +43,7 @@ func TestSendMessagePreservesMultipartBytesNamesOrderAndTextOnlyJSON(t *testing.
 				} else {
 					assertMessageMultipart(t, request, input)
 				}
-				return jsonResponse(http.StatusCreated, `{"id":"message","job_id":"worker","intent":"follow"}`), nil
+				return jsonResponse(http.StatusCreated, `{"id":"message","session_id":"worker","intent":"follow"}`), nil
 			}))
 			if err != nil {
 				t.Fatal(err)
@@ -102,7 +102,7 @@ func TestSendMessageRejectsInvalidAttachmentsBeforeTransport(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := client.SendMessage(context.Background(), "job", "key", controlapi.SendMessageRequest{Attachments: files}); err == nil || strings.Contains(err.Error(), "Injected") {
+			if _, err := client.SendMessage(context.Background(), "session", "key", controlapi.SendMessageRequest{Attachments: files}); err == nil || strings.Contains(err.Error(), "Injected") {
 				t.Fatalf("invalid input error=%v", err)
 			}
 		})

@@ -2,7 +2,7 @@
 
 Buzz runs as the single developer's main, long-lived deployment in a clean Incus VM. It is used
 directly throughout iterative development rather than promoted through separate staging and
-production environments. It is not a Dorf Sandbox: Dorf does not assign Jobs to it, clone
+production environments. It is not a Dorf Sandbox: Dorf does not assign Sessions to it, clone
 managed repositories into it, or give an agent control of its lifecycle.
 
 The default capacity is:
@@ -61,7 +61,7 @@ scripts/incus/normalize-nostr-public-key.py npub1...
 
 That normalizer is the repository's sole retained Python file. It is a bounded deployment helper
 for D032's independently operated Buzz VM: it validates and converts a human Nostr public key
-before provisioning. It is never imported, packaged, or invoked by the Dorf Go application, Job
+before provisioning. It is never imported, packaged, or invoked by the Dorf Go application, Session
 worker, Sandbox, repository checks, Provider Gateway, or release artifact.
 
 ## Expose through the existing host tailnet

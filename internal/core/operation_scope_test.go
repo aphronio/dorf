@@ -63,7 +63,7 @@ type scopedSteerExternal struct {
 	t                    *testing.T
 }
 
-func (e *scopedSteerExternal) WithSteerScope(ctx context.Context, _ Job, _ Delivery, fn func(context.Context, SteerExternals) error) error {
+func (e *scopedSteerExternal) WithSteerScope(ctx context.Context, _ Session, _ Delivery, fn func(context.Context, SteerExternals) error) error {
 	e.scopes++
 	*e.active = true
 	defer func() { *e.active = false }()
@@ -86,7 +86,7 @@ func (b *scopedSteerBarrier) Reach(_ context.Context, point string, _ Delivery) 
 	return nil
 }
 
-func (e *scopedSteerExternal) SteerHistory(context.Context, Job, string, string) (HarnessHistory, error) {
+func (e *scopedSteerExternal) SteerHistory(context.Context, Session, string, string) (HarnessHistory, error) {
 	if !*e.active {
 		e.t.Fatal("steer history escaped scope")
 	}
@@ -98,7 +98,7 @@ func (e *scopedSteerExternal) SteerHistory(context.Context, Job, string, string)
 	return HarnessHistory{Harness: "codex", ThreadID: "thread", Turns: []HarnessTurn{{ID: "target", Status: "inProgress", AcceptedMessageIDs: accepted}}}, nil
 }
 
-func (e *scopedSteerExternal) AgentSteer(context.Context, Job, Delivery) (string, error) {
+func (e *scopedSteerExternal) AgentSteer(context.Context, Session, Delivery) (string, error) {
 	if !*e.active || !e.store.run.BaselineRecorded || e.store.run.BaselineTurnID != "target" {
 		e.t.Fatal("steer mutation preceded its durable baseline or escaped scope")
 	}
@@ -144,15 +144,15 @@ func TestSteerScopeContainsHistoryBaselineMutationFreshRecoveryAndBinding(t *tes
 	active := false
 	store := &scopedSteerStore{active: &active, t: t, run: AgentRun{
 		ID: "run", State: AgentRunPending, Harness: "codex", ThreadID: "thread",
-		MessageID: "message", JobID: "job", SandboxID: "sandbox",
+		MessageID: "message", SessionID: "session", SandboxID: "sandbox",
 	}}
 	external := &scopedSteerExternal{active: &active, store: store, t: t}
 	barrier := &scopedSteerBarrier{active: &active, store: store, t: t}
 	service := NewExecutionService(store, external, barrier, allowAgentRunRecord)
 	delivery := Delivery{AgentRun: store.run, Message: Message{
-		ID: "message", JobID: "job", Intent: MessageSteer, TargetTurnID: "target",
+		ID: "message", SessionID: "session", Intent: MessageSteer, TargetTurnID: "target",
 	}}
-	if err := service.deliver(context.Background(), Job{ID: "job"}, delivery, nil, "steer"); err != nil {
+	if err := service.deliver(context.Background(), Session{ID: "session"}, delivery, nil, "steer"); err != nil {
 		t.Fatal(err)
 	}
 	if active || external.scopes != 1 || external.historyCalls != 2 || external.mutations != 1 || barrier.calls != 1 || store.run.TurnID != "target" || store.run.State != AgentRunActive {

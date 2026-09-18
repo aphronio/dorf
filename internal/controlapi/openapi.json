@@ -4,7 +4,7 @@
   "info": {
     "title": "Dorf Remote Control API",
     "version": "1.0.0",
-    "description": "The authenticated, purpose-built remote boundary for one Dorf Deployment. A Job is the long-running resource; internal Tasks, AgentRuns, Actions, and providers are not exposed as resources. Timeline reads expose native Harness, Thread, and Turn references without granting control over them."
+    "description": "The authenticated, purpose-built remote boundary for one Dorf Deployment. A Session is the long-running resource; internal Tasks, AgentRuns, Actions, and providers are not exposed as resources. Timeline reads expose native Harness, Thread, and Turn references without granting control over them."
   },
   "servers": [
     {
@@ -21,7 +21,7 @@
     { "name": "Discovery" },
     { "name": "Authentication" },
     { "name": "Profiles" },
-    { "name": "Jobs" },
+    { "name": "Sessions" },
     { "name": "Messages" },
     { "name": "Sandboxes" }
   ],
@@ -121,7 +121,7 @@
     "/v1/profiles": {
       "get": {
         "operationId": "listProfiles",
-        "summary": "List Sandbox profiles available for Job selection",
+        "summary": "List Sandbox profiles available for Session selection",
         "description": "Returns all configured profiles in name order, including unverified profiles. Verification reflects stored proof for the current definition, not a live availability check. Infrastructure configuration and credentials remain private.",
         "tags": ["Profiles"],
         "responses": {
@@ -137,22 +137,22 @@
         }
       }
     },
-    "/v1/jobs": {
+    "/v1/sessions": {
       "get": {
-        "operationId": "listJobs",
-        "summary": "List one newest-first page of Jobs",
-        "description": "This is keyset traversal of current Job facts, not a frozen snapshot. Pass next_cursor unchanged to retrieve the next page.",
-        "tags": ["Jobs"],
+        "operationId": "listSessions",
+        "summary": "List one newest-first page of Sessions",
+        "description": "This is keyset traversal of current Session facts, not a frozen snapshot. Pass next_cursor unchanged to retrieve the next page.",
+        "tags": ["Sessions"],
         "parameters": [
           { "$ref": "#/components/parameters/PageLimit" },
           { "$ref": "#/components/parameters/PageCursor" }
         ],
         "responses": {
           "200": {
-            "description": "One page of narrow Job summaries",
+            "description": "One page of narrow Session summaries",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/JobList" }
+                "schema": { "$ref": "#/components/schemas/SessionList" }
               }
             }
           },
@@ -160,9 +160,9 @@
         }
       },
       "post": {
-        "operationId": "admitDirectJob",
-        "summary": "Admit or exactly replay a direct Job",
-        "tags": ["Jobs"],
+        "operationId": "createSession",
+        "summary": "Admit or exactly replay a direct Session",
+        "tags": ["Sessions"],
         "parameters": [
           { "$ref": "#/components/parameters/IdempotencyKey" }
         ],
@@ -170,30 +170,30 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/AdmitDirectJobRequest" }
+              "schema": { "$ref": "#/components/schemas/CreateSessionRequest" }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Exact replay of the admitted Job",
+            "description": "Exact replay of the admitted Session",
             "headers": {
               "ETag": { "$ref": "#/components/headers/ETag" }
             },
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/DirectJob" }
+                "schema": { "$ref": "#/components/schemas/Session" }
               }
             }
           },
           "201": {
-            "description": "Job admitted",
+            "description": "Session admitted",
             "headers": {
               "ETag": { "$ref": "#/components/headers/ETag" }
             },
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/DirectJob" }
+                "schema": { "$ref": "#/components/schemas/Session" }
               }
             }
           },
@@ -201,24 +201,24 @@
         }
       }
     },
-    "/v1/jobs/{job}": {
+    "/v1/sessions/{session}": {
       "get": {
-        "operationId": "getJob",
-        "summary": "Read one canonical Job snapshot",
-        "tags": ["Jobs"],
+        "operationId": "getSession",
+        "summary": "Read one canonical Session snapshot",
+        "tags": ["Sessions"],
         "parameters": [
-          { "$ref": "#/components/parameters/JobID" },
+          { "$ref": "#/components/parameters/SessionID" },
           { "$ref": "#/components/parameters/IfNoneMatch" }
         ],
         "responses": {
           "200": {
-            "description": "Current complete Job representation",
+            "description": "Current complete Session representation",
             "headers": {
               "ETag": { "$ref": "#/components/headers/ETag" }
             },
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/Job" }
+                "schema": { "$ref": "#/components/schemas/Session" }
               }
             }
           },
@@ -232,7 +232,7 @@
         }
       }
     },
-    "/v1/jobs/{job}/messages/{message}/timeline": {
+    "/v1/sessions/{session}/messages/{message}/timeline": {
       "get": {
         "operationId": "readMessageTimeline",
         "summary": "Read completed replies and inputs in the Message's native turn",
@@ -242,7 +242,7 @@
         ],
         "parameters": [
           {
-            "$ref": "#/components/parameters/JobID"
+            "$ref": "#/components/parameters/SessionID"
           },
           {
             "$ref": "#/components/parameters/MessageID"
@@ -271,17 +271,17 @@
         }
       }
     },
-    "/v1/jobs/{job}/timeline": {
+    "/v1/sessions/{session}/timeline": {
       "get": {
-        "operationId": "readJobTimeline",
+        "operationId": "readSessionTimeline",
         "summary": "Read one native conversation turn without starting work",
         "description": "Returns original userMessage and agentMessage objects in native order. Omitted turn_id selects the latest started turn once. Unavailable, unsupported, oversized, or incomplete history fails without truncation.",
         "tags": [
-          "Jobs"
+          "Sessions"
         ],
         "parameters": [
           {
-            "$ref": "#/components/parameters/JobID"
+            "$ref": "#/components/parameters/SessionID"
           },
           {
             "name": "turn_id",
@@ -317,14 +317,14 @@
         }
       }
     },
-    "/v1/jobs/{job}/watch": {
+    "/v1/sessions/{session}/watch": {
       "get": {
-        "operationId": "watchJob",
-        "summary": "Watch newer complete Job snapshots",
-        "description": "A non-durable server-sent event stream. Each snapshot event carries an id equal to the canonical representation digest and data containing one complete Job JSON object. Keepalives are comments. Reconnect by reading the canonical Job or by supplying the last event id; the stream closes for bounded reauthentication.",
-        "tags": ["Jobs"],
+        "operationId": "watchSession",
+        "summary": "Watch newer complete Session snapshots",
+        "description": "A non-durable server-sent event stream. Each snapshot event carries an id equal to the canonical representation digest and data containing one complete Session JSON object. Keepalives are comments. Reconnect by reading the canonical Session or by supplying the last event id; the stream closes for bounded reauthentication.",
+        "tags": ["Sessions"],
         "parameters": [
-          { "$ref": "#/components/parameters/JobID" },
+          { "$ref": "#/components/parameters/SessionID" },
           { "$ref": "#/components/parameters/SSEAccept" },
           { "$ref": "#/components/parameters/LastEventID" }
         ],
@@ -337,7 +337,7 @@
                 "x-dorf-event": {
                   "name": "snapshot",
                   "id": "SHA-256 hex digest of data",
-                  "dataSchema": { "$ref": "#/components/schemas/Job" }
+                  "dataSchema": { "$ref": "#/components/schemas/Session" }
                 }
               }
             }
@@ -346,13 +346,13 @@
         }
       }
     },
-    "/v1/jobs/{job}/messages": {
+    "/v1/sessions/{session}/messages": {
       "post": {
-        "operationId": "sendJobMessage",
+        "operationId": "sendSessionMessage",
         "summary": "Admit or exactly replay a follow or steer Message",
         "tags": ["Messages"],
         "parameters": [
-          { "$ref": "#/components/parameters/JobID" },
+          { "$ref": "#/components/parameters/SessionID" },
           { "$ref": "#/components/parameters/IdempotencyKey" }
         ],
         "requestBody": {
@@ -404,13 +404,13 @@
         }
       }
     },
-    "/v1/jobs/{job}/messages/{message}": {
+    "/v1/sessions/{session}/messages/{message}": {
       "get": {
-        "operationId": "getJobMessage",
+        "operationId": "getSessionMessage",
         "summary": "Inspect one accepted Message delivery",
         "tags": ["Messages"],
         "parameters": [
-          { "$ref": "#/components/parameters/JobID" },
+          { "$ref": "#/components/parameters/SessionID" },
           { "$ref": "#/components/parameters/MessageID" }
         ],
         "responses": {
@@ -427,14 +427,14 @@
         "description": " Use latest as the Message selector to inspect the latest settled reply in the main Sandbox."
       }
     },
-    "/v1/jobs/{job}/messages/{message}/interrupt": {
+    "/v1/sessions/{session}/messages/{message}/interrupt": {
       "put": {
-        "operationId": "interruptJobMessage",
+        "operationId": "interruptSessionMessage",
         "summary": "Request interruption of the exact Turn for a direct Codex Message",
         "description": "Idempotent. A Steer addresses its original Turn, never a successor. A settled target is a no-op. Inspect the result for the observed outcome.",
         "tags": ["Messages"],
         "parameters": [
-          { "$ref": "#/components/parameters/JobID" },
+          { "$ref": "#/components/parameters/SessionID" },
           { "$ref": "#/components/parameters/MessageID" }
         ],
         "responses": {
@@ -450,13 +450,13 @@
         }
       }
     },
-    "/v1/jobs/{job}/retries": {
+    "/v1/sessions/{session}/retries": {
       "post": {
-        "operationId": "retryJob",
-        "summary": "Retry the Job's eligible failed execution",
-        "tags": ["Jobs"],
+        "operationId": "retrySession",
+        "summary": "Retry the Session's eligible failed execution",
+        "tags": ["Sessions"],
         "parameters": [
-          { "$ref": "#/components/parameters/JobID" },
+          { "$ref": "#/components/parameters/SessionID" },
           { "$ref": "#/components/parameters/IdempotencyKey" }
         ],
         "responses": {
@@ -480,23 +480,23 @@
         }
       }
     },
-    "/v1/jobs/{job}/cleanup": {
+    "/v1/sessions/{session}/cleanup": {
       "put": {
-        "operationId": "requestJobCleanup",
-        "summary": "Request Job cleanup idempotently",
-        "tags": ["Jobs"],
+        "operationId": "requestSessionCleanup",
+        "summary": "Request Session cleanup idempotently",
+        "tags": ["Sessions"],
         "parameters": [
-          { "$ref": "#/components/parameters/JobID" }
+          { "$ref": "#/components/parameters/SessionID" }
         ],
         "responses": {
           "200": {
-            "description": "Current complete Job representation after accepting the request",
+            "description": "Current complete Session representation after accepting the request",
             "headers": {
               "ETag": { "$ref": "#/components/headers/ETag" }
             },
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/Job" }
+                "schema": { "$ref": "#/components/schemas/Session" }
               }
             }
           },
@@ -507,7 +507,7 @@
     "/v1/sandboxes/{sandbox}/files": {
       "put": {
         "operationId": "putSandboxFile",
-        "summary": "Write a Job-owned Sandbox file",
+        "summary": "Write a Session-owned Sandbox file",
         "description": "Atomically replaces one regular file inside the Sandbox, up to 128 KiB, with mode 0600. Creates missing parent directories with mode 0700. Accepts absolute paths, ~/ paths relative to the Sandbox execution user home, and paths relative to the workspace. Rejects symlinks and non-canonical paths. If-None-Match: * creates only when absent; an existing regular file is preserved and also returns 204. Cleanup fences apply to the entire write.",
         "tags": [
           "Sandboxes"
@@ -560,8 +560,8 @@
       },
       "get": {
         "operationId": "getSandboxFile",
-        "summary": "Read exact bytes from one Job-owned Sandbox",
-        "description": "Reads up to 8 MiB from one regular file inside the Sandbox using an absolute, home-relative (~/), or workspace-relative path while Job cleanup still permits reads. Rejects symlinks and non-canonical paths. The client must verify Content-Digest before using or writing the bytes.",
+        "summary": "Read exact bytes from one Session-owned Sandbox",
+        "description": "Reads up to 8 MiB from one regular file inside the Sandbox using an absolute, home-relative (~/), or workspace-relative path while Session cleanup still permits reads. Rejects symlinks and non-canonical paths. The client must verify Content-Digest before using or writing the bytes.",
         "tags": ["Sandboxes"],
         "parameters": [
           {
@@ -625,7 +625,7 @@
       "post": {
         "operationId": "execSandbox",
         "summary": "Execute a bounded command inside an owned Sandbox",
-        "description": "Runs argv once with optional text stdin and a bounded deadline. Returns exit code and capped text output. No idempotency key or automatic retry: a transport failure may leave the command outcome unknown. Job ownership and cleanup fences apply.",
+        "description": "Runs argv once with optional text stdin and a bounded deadline. Returns exit code and capped text output. No idempotency key or automatic retry: a transport failure may leave the command outcome unknown. Session ownership and cleanup fences apply.",
         "parameters": [
           {
             "name": "sandbox",
@@ -669,7 +669,7 @@
         ]
       }
     },
-    "/v1/jobs/{job}/messages/{message}/observation": {
+    "/v1/sessions/{session}/messages/{message}/observation": {
       "get": {
         "operationId": "readMessageObservation",
         "summary": "Read coherent Message outcome and completed replies",
@@ -679,7 +679,7 @@
         ],
         "parameters": [
           {
-            "$ref": "#/components/parameters/JobID"
+            "$ref": "#/components/parameters/SessionID"
           },
           {
             "$ref": "#/components/parameters/MessageID"
@@ -721,7 +721,7 @@
         }
       }
     },
-    "/v1/jobs/{job}/messages/{message}/observation/stream": {
+    "/v1/sessions/{session}/messages/{message}/observation/stream": {
       "get": {
         "operationId": "streamMessageObservation",
         "summary": "Stream coherent Message outcome and completed replies",
@@ -731,7 +731,7 @@
         ],
         "parameters": [
           {
-            "$ref": "#/components/parameters/JobID"
+            "$ref": "#/components/parameters/SessionID"
           },
           {
             "$ref": "#/components/parameters/MessageID"
@@ -804,8 +804,8 @@
       }
     },
     "parameters": {
-      "JobID": {
-        "name": "job",
+      "SessionID": {
+        "name": "session",
         "in": "path",
         "required": true,
         "schema": { "type": "string", "minLength": 1 }
@@ -866,7 +866,7 @@
     },
     "headers": {
       "ETag": {
-        "description": "Strong SHA-256 identity of the complete canonical Job representation",
+        "description": "Strong SHA-256 identity of the complete canonical Session representation",
         "schema": { "type": "string" }
       }
     },
@@ -908,7 +908,7 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "job_id",
+          "session_id",
           "message_id",
           "harness",
           "thread_id",
@@ -917,7 +917,7 @@
           "items"
         ],
         "properties": {
-          "job_id": {
+          "session_id": {
             "type": "string"
           },
           "message_id": {
@@ -989,7 +989,7 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "job_id",
+          "session_id",
           "harness",
           "thread_id",
           "turn_id",
@@ -997,7 +997,7 @@
           "items"
         ],
         "properties": {
-          "job_id": {
+          "session_id": {
             "type": "string"
           },
           "harness": {
@@ -1044,7 +1044,7 @@
             "type": "array",
             "items": { "type": "string" },
             "uniqueItems": true,
-            "description": "Supported feature names for this Deployment. Clients must ignore names they do not recognize; openapi identifies this document, job_list identifies paginated Job listing, and profile_list identifies Sandbox profile discovery."
+            "description": "Supported feature names for this Deployment. Clients must ignore names they do not recognize; openapi identifies this document, session_list identifies paginated Session listing, and profile_list identifies Sandbox profile discovery."
           },
           "links": { "$ref": "#/components/schemas/DiscoveryLinks" }
         }
@@ -1111,7 +1111,7 @@
           "default": { "type": "boolean" },
           "verified": {
             "type": "boolean",
-            "description": "Stored verification matches the current profile definition and contract, and its probe and cleanup completed without an error. This is not a live readiness check or a guarantee that Job admission will succeed."
+            "description": "Stored verification matches the current profile definition and contract, and its probe and cleanup completed without an error. This is not a live readiness check or a guarantee that Session admission will succeed."
           }
         }
       },
@@ -1127,27 +1127,27 @@
           }
         }
       },
-      "AdmitDirectJobRequest": {
+      "CreateSessionRequest": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "keep_running": { "type": "boolean", "default": false, "description": "Disable pause between turns for this Job. E2B pauses idle Sandboxes by default; other providers retain their existing lifecycle. Does not bypass provider timeouts." },
+          "keep_running": { "type": "boolean", "default": false, "description": "Disable pause between turns for this Session. E2B pauses idle Sandboxes by default; other providers retain their existing lifecycle. Does not bypass provider timeouts." },
           "client_reference": { "type": "string", "maxLength": 255, "description": "Optional opaque caller thread or task reference; retained at admission. Empty means no reference." },
           "agents_md": { "type": "string", "maxLength": 1048576, "description": "Initial workspace AGENTS.md, installed before the Harness starts" },
           "profile": { "type": "string", "description": "Named verified profile; omitted or empty selects the Deployment default" },
           "ai_connection": { "type": "string", "description": "Named AI connection; omitted or empty selects the Deployment default" },
-          "model": { "type": "string", "maxLength": 1024, "description": "Harness model override; omitted or empty selects the resolved AI connection's default. The admitted Job always returns the exact resolved model." },
+          "model": { "type": "string", "maxLength": 1024, "description": "Harness model override; omitted or empty selects the resolved AI connection's default. The admitted Session always returns the exact resolved model." },
           "reasoning": { "$ref": "#/components/schemas/ReasoningEffort" }
         }
       },
-      "JobList": {
+      "SessionList": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["jobs", "next_cursor"],
+        "required": ["sessions", "next_cursor"],
         "properties": {
-          "jobs": {
+          "sessions": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/JobSummary" }
+            "items": { "$ref": "#/components/schemas/SessionSummary" }
           },
           "next_cursor": {
             "oneOf": [
@@ -1157,7 +1157,7 @@
           }
         }
       },
-      "JobCreator": {
+      "SessionCreator": {
         "type": "object",
         "additionalProperties": false,
         "required": ["id", "name"],
@@ -1166,32 +1166,16 @@
           "name": { "type": "string", "minLength": 1 }
         }
       },
-      "JobSummary": {
+      "SessionSummary": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "kind", "admitted_at"],
+        "required": ["id", "admitted_at"],
         "properties": {
           "client_reference": { "type": "string", "maxLength": 255, "description": "Optional opaque caller thread or task reference; retained at admission. Empty means no reference." },
-          "created_by_client": { "oneOf": [{ "$ref": "#/components/schemas/JobCreator" }, { "type": "null" }], "description": "Authenticated creator of the first admission; null for unattributed Jobs. Revoked Clients remain identifiable." },
+          "created_by_client": { "oneOf": [{ "$ref": "#/components/schemas/SessionCreator" }, { "type": "null" }], "description": "Authenticated creator of the first admission; null for unattributed Sessions. Revoked Clients remain identifiable." },
           "id": { "type": "string", "minLength": 1 },
-          "kind": { "$ref": "#/components/schemas/JobKind" },
           "admitted_at": { "type": "string", "format": "date-time" }
         }
-      },
-      "Job": {
-        "oneOf": [
-          { "$ref": "#/components/schemas/DirectJob" }
-        ],
-        "discriminator": {
-          "propertyName": "kind",
-          "mapping": {
-            "direct": "#/components/schemas/DirectJob"
-          }
-        }
-      },
-      "JobKind": {
-        "type": "string",
-        "enum": ["direct"]
       },
       "GitCommitOID": {
         "type": "string",
@@ -1202,17 +1186,17 @@
         "type": "string",
         "enum": ["low", "medium", "high", "xhigh"],
         "default": "high",
-        "description": "Omitted admission input defaults to high; Job responses always contain the effective value"
+        "description": "Omitted admission input defaults to high; Session responses always contain the effective value"
       },
-      "JobCommon": {
+      "Session": {
         "type": "object",
-        "required": ["id", "kind", "profile", "model", "reasoning", "admission", "execution", "attention", "cleanup", "sandboxes"],
+        "additionalProperties": false,
+        "required": ["id", "profile", "model", "reasoning", "admission", "execution", "attention", "cleanup", "sandboxes"],
         "properties": {
-          "keep_running": { "type": "boolean", "default": false, "description": "Disable pause between turns for this Job. E2B pauses idle Sandboxes by default; other providers retain their existing lifecycle. Does not bypass provider timeouts." },
+          "keep_running": { "type": "boolean", "default": false, "description": "Disable pause between turns for this Session. E2B pauses idle Sandboxes by default; other providers retain their existing lifecycle. Does not bypass provider timeouts." },
           "client_reference": { "type": "string", "maxLength": 255, "description": "Optional opaque caller thread or task reference; retained at admission. Empty means no reference." },
-          "created_by_client": { "oneOf": [{ "$ref": "#/components/schemas/JobCreator" }, { "type": "null" }], "description": "Authenticated creator of the first admission; null for unattributed Jobs. Revoked Clients remain identifiable." },
+          "created_by_client": { "oneOf": [{ "$ref": "#/components/schemas/SessionCreator" }, { "type": "null" }], "description": "Authenticated creator of the first admission; null for unattributed Sessions. Revoked Clients remain identifiable." },
           "id": { "type": "string", "minLength": 1 },
-          "kind": { "$ref": "#/components/schemas/JobKind" },
           "profile": { "type": "string", "minLength": 1 },
           "model": { "type": "string", "minLength": 1 },
           "reasoning": { "$ref": "#/components/schemas/ReasoningEffort" },
@@ -1234,18 +1218,6 @@
             "description": "Latest settled reply in the main Sandbox, derived from retained Messages and AgentRuns. Pending follow-ups and steer acknowledgements are excluded."
           }
         }
-      },
-      "DirectJob": {
-        "allOf": [
-          { "$ref": "#/components/schemas/JobCommon" },
-          {
-            "type": "object",
-            "properties": {
-              "kind": { "const": "direct" }
-            }
-          }
-        ],
-        "unevaluatedProperties": false
       },
       "Admission": {
         "type": "object",
@@ -1355,10 +1327,10 @@
       "Message": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "job_id", "sequence", "intent", "delivery", "result", "attention", "admitted_at", "interrupt_requested"],
+        "required": ["id", "session_id", "sequence", "intent", "delivery", "result", "attention", "admitted_at", "interrupt_requested"],
         "properties": {
           "id": { "type": "string", "minLength": 1 },
-          "job_id": { "type": "string", "minLength": 1 },
+          "session_id": { "type": "string", "minLength": 1 },
           "sequence": { "type": "integer", "minimum": 1 },
           "interrupt_requested": { "type": "boolean", "description": "Stop was accepted for this exact Turn; the result reports its observed outcome." },
           "wait_reason": { "type": "string", "enum": ["workspace_upgrade", "checkpoint_recovery"], "description": "Accepted input is waiting for a durable workspace delivery hold to be released." },
@@ -1400,9 +1372,9 @@
       "Retry": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["job_id", "state"],
+        "required": ["session_id", "state"],
         "properties": {
-          "job_id": { "type": "string", "minLength": 1 },
+          "session_id": { "type": "string", "minLength": 1 },
           "state": { "type": "string", "const": "scheduled" }
         }
       },
@@ -1504,7 +1476,7 @@
         "additionalProperties": false,
         "required": [
           "attention",
-          "job_id",
+          "session_id",
           "message_id",
           "intent",
           "interrupt_requested",
@@ -1520,7 +1492,7 @@
         ],
         "properties": {
           "attention": {"anyOf": [{"$ref": "#/components/schemas/Attention"}, {"type": "null"}]},
-          "job_id": {
+          "session_id": {
             "type": "string"
           },
           "message_id": {

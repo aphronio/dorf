@@ -11,13 +11,13 @@ import (
 func TestDeveloperInstructionsRetainExactNullableAdmissionAcrossRestart(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
-	job, _ := prepareTransportIntegrationJob(t, store, "developer-instructions")
+	session, _ := prepareTransportIntegrationSession(t, store, "developer-instructions")
 	value, empty := "Application rules\nexact bytes", ""
 	for _, item := range []struct {
 		key   string
 		value *string
 	}{{"absent", nil}, {"set", &value}, {"clear", &empty}} {
-		input := core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: item.key, Input: "continue", Intent: core.MessageFollow, DeveloperInstructions: item.value}
+		input := core.MessageAdmission{SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), FromKind: core.MessageFromHuman, FromID: item.key, Input: "continue", Intent: core.MessageFollow, DeveloperInstructions: item.value}
 		accepted, err := store.AdmitDirectMessage(ctx, input)
 		if err != nil || !accepted.Created {
 			t.Fatalf("admit: %+v %v", accepted, err)

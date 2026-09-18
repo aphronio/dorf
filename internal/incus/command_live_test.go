@@ -19,7 +19,7 @@ func TestLiveCommandCancellation(t *testing.T) {
 	if name == "" || project == "" {
 		t.Skip("set DORF_INCUS_COMMAND_VM and DORF_INCUS_COMMAND_PROJECT for a disposable guest")
 	}
-	owner := provider.Ownership{JobID: "command-proof", SandboxID: name, OwnershipNonce: strings.Repeat("1", 64)}
+	owner := provider.Ownership{SessionID: "command-proof", SandboxID: name, OwnershipNonce: strings.Repeat("1", 64)}
 	connection := DefaultConnectionConfig()
 	connection.Project = project
 	adapter := Adapter{Sandbox: Sandbox{Config: Config{Workspace: "/workspace/job", Connection: connection}}}

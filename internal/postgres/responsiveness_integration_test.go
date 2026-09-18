@@ -71,7 +71,7 @@ func (o responsivenessOperation) Submit(_ context.Context, run core.AgentRun, _ 
 	o.harness.turn = core.HarnessTurn{ID: "responsiveness-turn-" + run.ID, Status: status}
 	binding := o.binding(run)
 	o.harness.target = core.NativeTerminalWakeTarget{
-		JobID: o.execution.Job.ID, SandboxID: run.SandboxID, AgentRunID: run.ID, ThreadID: binding.ThreadID, TurnID: binding.Turn.ID,
+		SessionID: o.execution.Session.ID, SandboxID: run.SandboxID, AgentRunID: run.ID, ThreadID: binding.ThreadID, TurnID: binding.Turn.ID,
 	}
 	o.harness.mu.Unlock()
 	select {
@@ -136,7 +136,7 @@ func (o responsivenessOperation) Interrupt(_ context.Context, run core.AgentRun)
 func (o responsivenessOperation) binding(run core.AgentRun) core.HarnessBinding {
 	threadID := run.ThreadID
 	if threadID == "" {
-		threadID = "responsiveness-thread-" + o.execution.Job.ID
+		threadID = "responsiveness-thread-" + o.execution.Session.ID
 	}
 	return core.HarnessBinding{Harness: "codex", ThreadID: threadID, Turn: o.harness.turn}
 }
@@ -174,14 +174,14 @@ func TestDirectInterruptPriorityDoesNotSpinForQueuedSteer(t *testing.T) {
 func TestUncertainSteerBlocksLaterPendingSteerDrain(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
-	job, _, err := admitDirectFixture(t, store, ctx, core.JobAdmission{
+	session, _, err := admitDirectFixture(t, store, ctx, core.SessionAdmission{
 		AdmissionKey: fmt.Sprintf("uncertain-steer-responsiveness-%d", time.Now().UnixNano()), SandboxProfile: "incus",
 		ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "low",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := nextDelivery(ctx, store, job.ID)
+	target, err := nextDelivery(ctx, store, session.ID)
 	if err != nil || target == nil {
 		t.Fatalf("target delivery=%+v err=%v", target, err)
 	}
@@ -193,13 +193,13 @@ func TestUncertainSteerBlocksLaterPendingSteerDrain(t *testing.T) {
 	}
 	for index := range 2 {
 		if _, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{
-			JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman,
+			SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), FromKind: core.MessageFromHuman,
 			FromID: fmt.Sprintf("uncertain-steer-%d", index), Input: "queued correction", Intent: core.MessageSteer,
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	first, err := nextDelivery(ctx, store, job.ID)
+	first, err := nextDelivery(ctx, store, session.ID)
 	if err != nil || first == nil {
 		t.Fatalf("first Steer=%+v err=%v", first, err)
 	}
@@ -209,7 +209,7 @@ func TestUncertainSteerBlocksLaterPendingSteerDrain(t *testing.T) {
 	if err := store.UncertainAgentRun(ctx, first.AgentRun.ID, "accepted Steer visibility is ambiguous"); err != nil {
 		t.Fatal(err)
 	}
-	if ready, err := store.HasImmediatelyEligibleAgentMessage(ctx, job.ID); err != nil || ready {
+	if ready, err := store.HasImmediatelyEligibleAgentMessage(ctx, session.ID); err != nil || ready {
 		t.Fatalf("uncertain earlier Steer allowed pending successor drain: ready=%t err=%v", ready, err)
 	}
 }
@@ -225,16 +225,16 @@ func TestDirectPrequeuedMessagesAdvanceWithoutWakeTimeout(t *testing.T) {
 	resolver := integrationRuntimeResolver{execution: execution, profile: "incus"}
 	application := core.Application{Store: store, Tasks: client, SandboxRuntimes: resolver}
 	direct.Register(application, store, resolver)
-	job, created, err := store.AdmitDirect(ctx, core.JobAdmission{
+	session, created, err := store.AdmitDirect(ctx, core.SessionAdmission{
 		AdmissionKey: fmt.Sprintf("prequeued-responsiveness-%d", time.Now().UnixNano()), SandboxProfile: "incus",
 		ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "low",
 	}, client.QueueName())
 	if err != nil || !created {
-		t.Fatalf("admit direct Job=%+v created=%t err=%v", job, created, err)
+		t.Fatalf("admit direct Session=%+v created=%t err=%v", session, created, err)
 	}
 	for index := range 3 {
 		admitted, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{
-			JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman,
+			SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), FromKind: core.MessageFromHuman,
 			FromID: fmt.Sprintf("prequeued-%d", index), Input: "queued input", Intent: core.MessageFollow,
 		})
 		if err != nil {
@@ -260,7 +260,7 @@ func TestDirectPrequeuedMessagesAdvanceWithoutWakeTimeout(t *testing.T) {
 	deadline := time.NewTimer(900 * time.Millisecond)
 	defer deadline.Stop()
 	for {
-		deliveries, err := store.Deliveries(ctx, job.ID)
+		deliveries, err := store.Deliveries(ctx, session.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -323,14 +323,14 @@ func runResponsivenessSample(t *testing.T, offset time.Duration, useWake, queueS
 	}
 	direct.Register(application, store, resolver)
 
-	job, created, err := store.AdmitDirect(ctx, core.JobAdmission{
+	session, created, err := store.AdmitDirect(ctx, core.SessionAdmission{
 		AdmissionKey: fmt.Sprintf("responsiveness-%d", time.Now().UnixNano()), SandboxProfile: "incus",
 		ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "low",
 	}, client.QueueName())
 	if err != nil || !created {
-		t.Fatalf("admit direct Job=%+v created=%t err=%v", job, created, err)
+		t.Fatalf("admit direct Session=%+v created=%t err=%v", session, created, err)
 	}
-	message, err := store.AdmitDirectMessage(ctx, fixtureMessage(job.ID))
+	message, err := store.AdmitDirectMessage(ctx, fixtureMessage(session.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +353,7 @@ func runResponsivenessSample(t *testing.T, offset time.Duration, useWake, queueS
 	submitted := awaitTimestamp(t, ctx, harness.submitted, "native submission")
 	if queueSteer {
 		if _, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{
-			JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman,
+			SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), FromKind: core.MessageFromHuman,
 			FromID: "queued-steer", Input: "queued correction", Intent: core.MessageSteer,
 		}); err != nil {
 			t.Fatal(err)
@@ -365,20 +365,20 @@ func runResponsivenessSample(t *testing.T, offset time.Duration, useWake, queueS
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
-	target, err := store.RequestMessageInterrupt(ctx, job.ID, message.Message.ID)
+	target, err := store.RequestMessageInterrupt(ctx, session.ID, message.Message.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	accepted := time.Now()
 	if useWake {
-		if _, err := store.SignalJobExecutionWake(ctx, client.QueueName(), job.ID, "stop:"+target.AgentRunID); err != nil {
+		if _, err := store.SignalSessionExecutionWake(ctx, client.QueueName(), session.ID, "stop:"+target.AgentRunID); err != nil {
 			t.Fatal(err)
 		}
 	}
 	dispatched := awaitTimestamp(t, ctx, harness.dispatched, "native interrupt dispatch")
 	if completionGate != nil {
 		for {
-			result, err := client.FetchTaskResult(ctx, client.QueueName(), job.CurrentTaskID)
+			result, err := client.FetchTaskResult(ctx, client.QueueName(), session.CurrentTaskID)
 			if err != nil {
 				t.Fatal(err)
 			}

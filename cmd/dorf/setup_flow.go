@@ -1471,7 +1471,7 @@ func setupDefaultProfile(ctx context.Context, store postgres.Store, profiles []c
 		}
 		group := huh.NewGroup(setupSelect(presenter, &selected, options...)).
 			Title("Which Sandbox profile should be the default?").
-			Description("Every Job may still select another verified profile explicitly.")
+			Description("Every Session may still select another verified profile explicitly.")
 		if err := presenter.RunForm(ctx, group); err != nil {
 			return core.SandboxProfile{}, err
 		}

@@ -35,7 +35,7 @@ func (r *observationTestRuntime) ResolveSandbox(_ context.Context, profile core.
 	}
 	return core.SandboxRuntime{SandboxProfile: profile, Timeline: r}, nil
 }
-func (r *observationTestRuntime) ReadTimeline(_ context.Context, _ core.Job, _ core.Sandbox, thread, turn string) (core.HarnessTimeline, error) {
+func (r *observationTestRuntime) ReadTimeline(_ context.Context, _ core.Session, _ core.Sandbox, thread, turn string) (core.HarnessTimeline, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.reads++
@@ -70,12 +70,12 @@ func TestControlObservationStreamsAcrossPrivateHTTPWithDurableCustody(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := controlapi.NewServer(controlapi.Discovery{Product: "dorf"}, auth, controlAPIJobs{store: store, tasks: tasks, directAdmissions: direct.NewAdmissionService(store, tasks.QueueName(), reader), reader: reader, blobs: blob.Store{Root: t.TempDir()}}, controlAPIProfiles{store: store}).Handler
+	handler := controlapi.NewServer(controlapi.Discovery{Product: "dorf"}, auth, controlAPISessions{store: store, tasks: tasks, directAdmissions: direct.NewAdmissionService(store, tasks.QueueName(), reader), reader: reader, blobs: blob.Store{Root: t.TempDir()}}, controlAPIProfiles{store: store}).Handler
 	key := fmt.Sprintf("observation-%d", time.Now().UnixNano())
-	var job controlapi.DirectJob
-	controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, "/v1/jobs", credential, key+"-job", controlapi.AdmitJobRequest{AIConnection: "primary", Model: "model-test", Reasoning: "high"}), 201, &job)
+	var session controlapi.Session
+	controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, "/v1/sessions", credential, key+"-session", controlapi.CreateSessionRequest{AIConnection: "primary", Model: "model-test", Reasoning: "high"}), 201, &session)
 	var message controlapi.Message
-	controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, "/v1/jobs/"+job.ID+"/messages", credential, key+"-message", controlapi.SendMessageRequest{Text: "observation input"}), 201, &message)
+	controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, "/v1/sessions/"+session.ID+"/messages", credential, key+"-message", controlapi.SendMessageRequest{Text: "observation input"}), 201, &message)
 	runID := core.AgentRunID(message.ID)
 	if err = store.PrepareAgentRun(ctx, runID, "codex", ""); err != nil {
 		t.Fatal(err)
@@ -83,15 +83,15 @@ func TestControlObservationStreamsAcrossPrivateHTTPWithDurableCustody(t *testing
 	if err = store.BindAgentRun(ctx, runID, "codex", "native-thread", "native-turn", "inProgress"); err != nil {
 		t.Fatal(err)
 	}
-	owned, err := store.Sandbox(ctx, core.MainSandboxName(job.ID))
+	owned, err := store.Sandbox(ctx, core.MainSandboxName(session.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding := codex.ReplyBinding{JobID: job.ID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce, Harness: "codex", ThreadID: "native-thread", TurnID: "native-turn"}
+	binding := codex.ReplyBinding{SessionID: session.ID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce, Harness: "codex", ThreadID: "native-thread", TurnID: "native-turn"}
 	runtime.items = []core.HarnessConversationItem{{Index: 0, NativeItemID: "input-0", Kind: "input", ClientID: runID}}
 	publicServer := httptest.NewServer(handler)
 	defer publicServer.Close()
-	path := publicServer.URL + "/v1/jobs/" + job.ID + "/messages/" + message.ID + "/observation"
+	path := publicServer.URL + "/v1/sessions/" + session.ID + "/messages/" + message.ID + "/observation"
 	get := func(cursor string) controlapi.MessageObservation {
 		t.Helper()
 		request, err := http.NewRequest(http.MethodGet, path, nil)

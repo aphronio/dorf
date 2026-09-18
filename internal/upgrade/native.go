@@ -21,7 +21,7 @@ type NativeDriver struct {
 }
 
 func upgradeOwner(s core.Sandbox) provider.Ownership {
-	return provider.Ownership{JobID: s.JobID, SandboxID: s.ID, OwnershipNonce: s.OwnershipNonce}
+	return provider.Ownership{SessionID: s.SessionID, SandboxID: s.ID, OwnershipNonce: s.OwnershipNonce}
 }
 func (d NativeDriver) InspectPackage(ctx context.Context, s core.Sandbox, r Request) (string, error) {
 	if err := r.Validate(); err != nil {

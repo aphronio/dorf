@@ -21,13 +21,13 @@ func (s Service) Exec(ctx context.Context, sandboxID string, command provider.Co
 		return provider.CommandResult{}, ErrInvalidRequest
 	}
 	var result provider.CommandResult
-	err := s.withSandbox(ctx, sandboxID, func(runtime core.SandboxRuntime, job core.Job, owned core.Sandbox) error {
+	err := s.withSandbox(ctx, sandboxID, func(runtime core.SandboxRuntime, session core.Session, owned core.Sandbox) error {
 		executor := runtime.Commands
 		if executor == nil {
 			return ErrUnavailable
 		}
 		var err error
-		result, err = executor.ExecSandbox(ctx, job, owned, command)
+		result, err = executor.ExecSandbox(ctx, session, owned, command)
 		return err
 	})
 	return result, err

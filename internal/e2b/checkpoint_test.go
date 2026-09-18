@@ -29,7 +29,7 @@ func (r *checkpointResponseLoss) RoundTrip(request *http.Request) (*http.Respons
 
 func TestCheckpointAndReplacementRecoverLostResponsesWithoutCrossingOwners(t *testing.T) {
 	ctx := context.Background()
-	source := provider.Ownership{JobID: "job", SandboxID: "logical", OwnershipNonce: strings.Repeat("a", 64)}
+	source := provider.Ownership{SessionID: "session", SandboxID: "logical", OwnershipNonce: strings.Repeat("a", 64)}
 	destination := source
 	destination.OwnershipNonce = strings.Repeat("b", 64)
 	api := newFakeAPI(t)

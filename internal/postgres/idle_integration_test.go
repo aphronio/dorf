@@ -17,7 +17,7 @@ type idleIntegrationExternals struct {
 	pause func() error
 }
 
-func (e idleIntegrationExternals) SandboxPause(context.Context, core.Job, core.Sandbox) error {
+func (e idleIntegrationExternals) SandboxPause(context.Context, core.Session, core.Sandbox) error {
 	return e.pause()
 }
 
@@ -27,9 +27,9 @@ func TestIdlePolicyAdmissionAndReplay(t *testing.T) {
 	service := direct.NewAdmissionService(store, client.QueueName(), providerCheck{})
 	for _, keep := range []bool{false, true} {
 		request := direct.AdmissionRequest{KeepRunning: keep, AdmissionKey: fmt.Sprintf("idle-policy-%t-%d", keep, time.Now().UnixNano()), SandboxProfile: "incus", ProviderConnection: "primary", Model: "model-test", ReasoningEffort: "low"}
-		job, created, err := service.Admit(ctx, request)
-		if err != nil || !created || job.KeepRunning != keep {
-			t.Fatalf("admit=%+v %v", job, err)
+		session, created, err := service.Admit(ctx, request)
+		if err != nil || !created || session.KeepRunning != keep {
+			t.Fatalf("admit=%+v %v", session, err)
 		}
 		// A fresh service reloads the same immutable override after restart.
 		restarted := direct.NewAdmissionService(store, client.QueueName(), providerCheck{})
@@ -48,11 +48,11 @@ func TestIdlePauseFenceOrdersNewMessageAndRetry(t *testing.T) {
 	db, store, client := testDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	job, _, err := direct.NewAdmissionService(store, client.QueueName(), providerCheck{}).Admit(ctx, direct.AdmissionRequest{AdmissionKey: fmt.Sprintf("idle-race-%d", time.Now().UnixNano()), SandboxProfile: "incus", ProviderConnection: "primary", Model: "model-test", ReasoningEffort: "low"})
+	session, _, err := direct.NewAdmissionService(store, client.QueueName(), providerCheck{}).Admit(ctx, direct.AdmissionRequest{AdmissionKey: fmt.Sprintf("idle-race-%d", time.Now().UnixNano()), SandboxProfile: "incus", ProviderConnection: "primary", Model: "model-test", ReasoningEffort: "low"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, "update dorf.jobs set sandbox_last_active_at=clock_timestamp()-interval '2 minutes' where id=$1", job.ID); err != nil {
+	if _, err := db.ExecContext(ctx, "update dorf.sessions set sandbox_last_active_at=clock_timestamp()-interval '2 minutes' where id=$1", session.ID); err != nil {
 		t.Fatal(err)
 	}
 	entered, release := make(chan struct{}), make(chan struct{})
@@ -69,7 +69,7 @@ func TestIdlePauseFenceOrdersNewMessageAndRetry(t *testing.T) {
 	}}
 	execution := core.NewExecutionService(store, external, nil, nil)
 	paused := make(chan error, 1)
-	go func() { paused <- execution.ReconcileIdleSandboxes(ctx, job.ID) }()
+	go func() { paused <- execution.ReconcileIdleSandboxes(ctx, session.ID) }()
 	select {
 	case <-entered:
 	case <-ctx.Done():
@@ -77,7 +77,7 @@ func TestIdlePauseFenceOrdersNewMessageAndRetry(t *testing.T) {
 	}
 	admitted := make(chan error, 1)
 	go func() {
-		_, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "new-turn", Input: "continue", Intent: core.MessageFollow})
+		_, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), FromKind: core.MessageFromHuman, FromID: "new-turn", Input: "continue", Intent: core.MessageFollow})
 		admitted <- err
 	}()
 	// Admission can acknowledge while a provider call is in progress. Native
@@ -87,7 +87,7 @@ func TestIdlePauseFenceOrdersNewMessageAndRetry(t *testing.T) {
 	}
 	retried := make(chan error, 1)
 	go func() {
-		retried <- core.NewExecutionService(store, external, nil, nil).ReconcileIdleSandboxes(ctx, job.ID)
+		retried <- core.NewExecutionService(store, external, nil, nil).ReconcileIdleSandboxes(ctx, session.ID)
 	}()
 	select {
 	case err := <-retried:
@@ -109,7 +109,7 @@ func TestIdlePauseFenceOrdersNewMessageAndRetry(t *testing.T) {
 func TestSandboxIdleGracePersistsAcrossRestartAndInterruptedActivity(t *testing.T) {
 	db, store, client := testDatabase(t)
 	ctx := context.Background()
-	job, _, err := direct.NewAdmissionService(store, client.QueueName(), providerCheck{}).Admit(ctx, direct.AdmissionRequest{AdmissionKey: fmt.Sprintf("idle-grace-%d", time.Now().UnixNano()), SandboxProfile: "incus", ProviderConnection: "primary", Model: "model-test", ReasoningEffort: "low"})
+	session, _, err := direct.NewAdmissionService(store, client.QueueName(), providerCheck{}).Admit(ctx, direct.AdmissionRequest{AdmissionKey: fmt.Sprintf("idle-grace-%d", time.Now().UnixNano()), SandboxProfile: "incus", ProviderConnection: "primary", Model: "model-test", ReasoningEffort: "low"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,21 +117,21 @@ func TestSandboxIdleGracePersistsAcrossRestartAndInterruptedActivity(t *testing.
 	external := idleIntegrationExternals{pause: func() error { calls++; return nil }}
 	reconcile := func() {
 		t.Helper()
-		if err := core.NewExecutionService(store, external, nil, nil).ReconcileIdleSandboxes(ctx, job.ID); err != nil {
+		if err := core.NewExecutionService(store, external, nil, nil).ReconcileIdleSandboxes(ctx, session.ID); err != nil {
 			t.Fatal(err)
 		}
 	}
 	activityTime := func() time.Time {
 		t.Helper()
 		var at time.Time
-		if err := db.QueryRowContext(ctx, "select sandbox_last_active_at from dorf.jobs where id=$1", job.ID).Scan(&at); err != nil {
+		if err := db.QueryRowContext(ctx, "select sandbox_last_active_at from dorf.sessions where id=$1", session.ID).Scan(&at); err != nil {
 			t.Fatal(err)
 		}
 		return at
 	}
 	age := func(seconds int) {
 		t.Helper()
-		if _, err := db.ExecContext(ctx, "update dorf.jobs set sandbox_last_active_at=clock_timestamp()-make_interval(secs=>$2) where id=$1", job.ID, seconds); err != nil {
+		if _, err := db.ExecContext(ctx, "update dorf.sessions set sandbox_last_active_at=clock_timestamp()-make_interval(secs=>$2) where id=$1", session.ID, seconds); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -148,7 +148,7 @@ func TestSandboxIdleGracePersistsAcrossRestartAndInterruptedActivity(t *testing.
 	if calls != 2 || !activityTime().Equal(before) {
 		t.Fatal("idle polling changed activity or missed eligible pause")
 	}
-	if err := store.WithJobFence(ctx, job.ID, func() error { return store.BeginSandboxActivity(ctx, job.ID) }); err != nil {
+	if err := store.WithSessionFence(ctx, session.ID, func() error { return store.BeginSandboxActivity(ctx, session.ID) }); err != nil {
 		t.Fatal(err)
 	}
 	reconcile()
@@ -159,8 +159,8 @@ func TestSandboxIdleGracePersistsAcrossRestartAndInterruptedActivity(t *testing.
 	}
 	age(61)
 	failure := errors.New("file read failed after waking")
-	if err := store.WithJobFence(ctx, job.ID, func() error {
-		return core.WithSandboxActivity(ctx, store, job.ID, func() error { return failure })
+	if err := store.WithSessionFence(ctx, session.ID, func() error {
+		return core.WithSandboxActivity(ctx, store, session.ID, func() error { return failure })
 	}); !errors.Is(err, failure) {
 		t.Fatalf("operation error=%v", err)
 	}
@@ -174,11 +174,11 @@ func TestCanceledSandboxActivityKeepsFenceUntilFinishIsRecorded(t *testing.T) {
 	db, store, client := testDatabase(t)
 	ctx, stop := context.WithTimeout(context.Background(), 10*time.Second)
 	defer stop()
-	job, _, err := direct.NewAdmissionService(store, client.QueueName(), providerCheck{}).Admit(ctx, direct.AdmissionRequest{AdmissionKey: fmt.Sprintf("idle-cancel-%d", time.Now().UnixNano()), SandboxProfile: "incus", ProviderConnection: "primary", Model: "model-test", ReasoningEffort: "low"})
+	session, _, err := direct.NewAdmissionService(store, client.QueueName(), providerCheck{}).Admit(ctx, direct.AdmissionRequest{AdmissionKey: fmt.Sprintf("idle-cancel-%d", time.Now().UnixNano()), SandboxProfile: "incus", ProviderConnection: "primary", Model: "model-test", ReasoningEffort: "low"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, "update dorf.jobs set sandbox_last_active_at=clock_timestamp()-interval '2 minutes' where id=$1", job.ID); err != nil {
+	if _, err := db.ExecContext(ctx, "update dorf.sessions set sandbox_last_active_at=clock_timestamp()-interval '2 minutes' where id=$1", session.ID); err != nil {
 		t.Fatal(err)
 	}
 	requestCtx, cancel := context.WithCancel(ctx)
@@ -186,8 +186,8 @@ func TestCanceledSandboxActivityKeepsFenceUntilFinishIsRecorded(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	finished := make(chan error, 1)
 	go func() {
-		finished <- store.WithJobFence(requestCtx, job.ID, func() error {
-			return core.WithSandboxActivity(requestCtx, store, job.ID, func() error {
+		finished <- store.WithSessionFence(requestCtx, session.ID, func() error {
+			return core.WithSandboxActivity(requestCtx, store, session.ID, func() error {
 				close(entered)
 				select {
 				case <-release:
@@ -208,7 +208,7 @@ func TestCanceledSandboxActivityKeepsFenceUntilFinishIsRecorded(t *testing.T) {
 	external := idleIntegrationExternals{pause: func() error { calls.Add(1); return nil }}
 	paused := make(chan error, 1)
 	go func() {
-		paused <- core.NewExecutionService(store, external, nil, nil).ReconcileIdleSandboxes(ctx, job.ID)
+		paused <- core.NewExecutionService(store, external, nil, nil).ReconcileIdleSandboxes(ctx, session.ID)
 	}()
 	select {
 	case err := <-paused:
@@ -226,7 +226,7 @@ func TestCanceledSandboxActivityKeepsFenceUntilFinishIsRecorded(t *testing.T) {
 		t.Fatal("paused immediately after canceled operation")
 	}
 	var recent bool
-	if err := db.QueryRowContext(ctx, "select sandbox_last_active_at > clock_timestamp()-interval '5 seconds' from dorf.jobs where id=$1", job.ID).Scan(&recent); err != nil || !recent {
+	if err := db.QueryRowContext(ctx, "select sandbox_last_active_at > clock_timestamp()-interval '5 seconds' from dorf.sessions where id=$1", session.ID).Scan(&recent); err != nil || !recent {
 		t.Fatalf("finish was not durable: recent=%v error=%v", recent, err)
 	}
 }
@@ -234,28 +234,28 @@ func TestCanceledSandboxActivityKeepsFenceUntilFinishIsRecorded(t *testing.T) {
 func TestIdleGraceExcludesEveryUnsettledRunState(t *testing.T) {
 	db, store, client := testDatabase(t)
 	ctx := context.Background()
-	job, _, err := direct.NewAdmissionService(store, client.QueueName(), providerCheck{}).Admit(ctx, direct.AdmissionRequest{AdmissionKey: fmt.Sprintf("idle-run-states-%d", time.Now().UnixNano()), SandboxProfile: "incus", ProviderConnection: "primary", Model: "model-test", ReasoningEffort: "low"})
+	session, _, err := direct.NewAdmissionService(store, client.QueueName(), providerCheck{}).Admit(ctx, direct.AdmissionRequest{AdmissionKey: fmt.Sprintf("idle-run-states-%d", time.Now().UnixNano()), SandboxProfile: "incus", ProviderConnection: "primary", Model: "model-test", ReasoningEffort: "low"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	admitted, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "run", Input: "work", Intent: core.MessageFollow})
+	admitted, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), FromKind: core.MessageFromHuman, FromID: "run", Input: "work", Intent: core.MessageFollow})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, "update dorf.jobs set sandbox_last_active_at=clock_timestamp()-interval '2 minutes' where id=$1", job.ID); err != nil {
+	if _, err := db.ExecContext(ctx, "update dorf.sessions set sandbox_last_active_at=clock_timestamp()-interval '2 minutes' where id=$1", session.ID); err != nil {
 		t.Fatal(err)
 	}
 	for _, state := range []string{"pending", "submitting", "active", "uncertain", "completed", "failed", "interrupted"} {
 		if _, err := db.ExecContext(ctx, "update dorf.agent_runs set state=$2 where message_id=$1", admitted.Message.ID, state); err != nil {
 			t.Fatal(err)
 		}
-		eligible, err := store.SandboxIdleFor(ctx, job.ID, time.Minute)
+		eligible, err := store.SandboxIdleFor(ctx, session.ID, time.Minute)
 		want := state == "completed" || state == "failed" || state == "interrupted"
 		if err != nil || eligible != want {
 			t.Fatalf("state=%s idle=%v want=%v err=%v", state, eligible, want, err)
 		}
 		if want {
-			work, err := store.AgentMessage(ctx, job.ID)
+			work, err := store.AgentMessage(ctx, session.ID)
 			if err != nil || work != nil {
 				t.Fatalf("idle poll selected settled state=%s work=%+v err=%v", state, work, err)
 			}

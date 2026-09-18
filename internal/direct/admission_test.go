@@ -11,19 +11,21 @@ import (
 
 type admissionServiceStore struct {
 	exists       bool
-	job          core.Job
+	session      core.Session
 	profile      core.SandboxProfile
 	profileErr   error
 	conflictOnce bool
 	created      bool
-	admitted     core.JobAdmission
+	admitted     core.SessionAdmission
 }
 
-func (s *admissionServiceStore) JobExists(context.Context, string) (bool, error) {
+func (s *admissionServiceStore) SessionExists(context.Context, string) (bool, error) {
 	return s.exists, nil
 }
 
-func (s *admissionServiceStore) Job(context.Context, string) (core.Job, error) { return s.job, nil }
+func (s *admissionServiceStore) Session(context.Context, string) (core.Session, error) {
+	return s.session, nil
+}
 
 func (s *admissionServiceStore) ActiveSandboxProfile(context.Context, string) (core.SandboxProfile, error) {
 	return s.profile, s.profileErr
@@ -33,21 +35,21 @@ func (s *admissionServiceStore) DefaultSandboxProfile(context.Context) (core.San
 	return s.profile, s.profileErr
 }
 
-func (s *admissionServiceStore) AdmitDirect(_ context.Context, input core.JobAdmission, _ string) (core.Job, bool, error) {
-	s.job.CurrentTaskID = "task-retained"
+func (s *admissionServiceStore) AdmitDirect(_ context.Context, input core.SessionAdmission, _ string) (core.Session, bool, error) {
+	s.session.CurrentTaskID = "task-retained"
 	s.admitted = input
 	if s.conflictOnce {
 		s.conflictOnce = false
-		return core.Job{}, false, ErrAdmissionConflict
+		return core.Session{}, false, ErrAdmissionConflict
 	}
-	expected := core.JobAdmission{
-		AdmissionKey: s.job.AdmissionKey, AgentsMD: s.job.AgentsMD, SandboxProfile: s.job.SandboxProfile,
-		ProviderConnection: s.job.ProviderConnection, Model: s.job.Model, ReasoningEffort: s.job.ReasoningEffort,
+	expected := core.SessionAdmission{
+		AdmissionKey: s.session.AdmissionKey, AgentsMD: s.session.AgentsMD, SandboxProfile: s.session.SandboxProfile,
+		ProviderConnection: s.session.ProviderConnection, Model: s.session.Model, ReasoningEffort: s.session.ReasoningEffort,
 	}
-	if s.job.AdmissionKey != "" && input != expected {
-		return core.Job{}, false, ErrAdmissionConflict
+	if s.session.AdmissionKey != "" && input != expected {
+		return core.Session{}, false, ErrAdmissionConflict
 	}
-	return s.job, s.created, nil
+	return s.session, s.created, nil
 }
 
 type admissionServiceProvider struct {
@@ -79,43 +81,43 @@ func (p *admissionServiceProvider) Check(_ context.Context, connection string) e
 }
 
 func TestAdmissionServiceCreateRaceReplaysDurableAdmission(t *testing.T) {
-	job := core.Job{
+	session := core.Session{
 		ID: "job-direct-request", AdmissionKey: "direct-request", AgentsMD: "preserve exact goal",
 		SandboxProfile: "cloud", ProviderConnection: "primary", Model: "gpt-5.6-sol",
 		ReasoningEffort: "high", AdmissionOpen: true,
 	}
 	store := &admissionServiceStore{
-		job: job, profile: verifiedAdmissionProfile("cloud"), conflictOnce: true,
+		session: session, profile: verifiedAdmissionProfile("cloud"), conflictOnce: true,
 	}
-	request := AdmissionRequest{AdmissionKey: "direct-request", AgentsMD: job.AgentsMD}
+	request := AdmissionRequest{AdmissionKey: "direct-request", AgentsMD: session.AgentsMD}
 
 	got, created, err := NewAdmissionService(
 		store, "test-queue", &admissionServiceProvider{},
 	).Admit(context.Background(), request)
-	if err != nil || created || got.ID != job.ID || got.CurrentTaskID == "" {
-		t.Fatalf("create race replay Job=%#v created=%t err=%v", got, created, err)
+	if err != nil || created || got.ID != session.ID || got.CurrentTaskID == "" {
+		t.Fatalf("create race replay Session=%#v created=%t err=%v", got, created, err)
 	}
 }
 
 func TestAdmissionServiceReplaySkipsVolatileAuthority(t *testing.T) {
 	authorityErr := errors.New("volatile authority must be skipped")
-	job := core.Job{
+	session := core.Session{
 		ID: "job-replay", AdmissionKey: "replay", AgentsMD: "goal", SandboxProfile: "cloud",
 		ProviderConnection: "primary", Model: "model", ReasoningEffort: "high", AdmissionOpen: true,
 	}
-	store := &admissionServiceStore{exists: true, job: job, profileErr: authorityErr}
+	store := &admissionServiceStore{exists: true, session: session, profileErr: authorityErr}
 	provider := &admissionServiceProvider{defaultErr: authorityErr, defaultModelErr: authorityErr, checkErr: authorityErr}
 	request := AdmissionRequest{AdmissionKey: "replay", AgentsMD: "goal"}
 
 	got, created, err := NewAdmissionService(store, "test-queue", provider).Admit(context.Background(), request)
-	if err != nil || created || got.ID != job.ID {
-		t.Fatalf("replay Job=%#v created=%t err=%v", got, created, err)
+	if err != nil || created || got.ID != session.ID {
+		t.Fatalf("replay Session=%#v created=%t err=%v", got, created, err)
 	}
 }
 
 func TestAdmissionServiceRejectsConflictingReplay(t *testing.T) {
 	request := AdmissionRequest{AdmissionKey: "replay", AgentsMD: "goal", Model: "model"}
-	job := core.Job{
+	session := core.Session{
 		ID: "job-replay", AdmissionKey: "replay", AgentsMD: "goal", SandboxProfile: "cloud",
 		ProviderConnection: "primary", Model: "model", ReasoningEffort: "high", AdmissionOpen: true,
 	}
@@ -129,9 +131,9 @@ func TestAdmissionServiceRejectsConflictingReplay(t *testing.T) {
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			stored := job
+			stored := session
 			stored.Workflow = test.workflow
-			store := &admissionServiceStore{exists: true, job: stored}
+			store := &admissionServiceStore{exists: true, session: stored}
 			if _, _, err := NewAdmissionService(store, "test-queue", &admissionServiceProvider{}).
 				Admit(context.Background(), test.request); !errors.Is(err, ErrAdmissionConflict) {
 				t.Fatalf("error=%v, want admission conflict", err)
@@ -161,8 +163,8 @@ func TestAdmissionServiceValidatesBeforeMutableAuthority(t *testing.T) {
 
 func TestAdmissionServiceExplicitConnectionUsesItsDefaultModel(t *testing.T) {
 	defaultErr := errors.New("DefaultConnection must be skipped")
-	job := core.Job{ID: "job-explicit", AdmissionOpen: true}
-	store := &admissionServiceStore{job: job, profile: verifiedAdmissionProfile("explicit-profile"), created: true}
+	session := core.Session{ID: "job-explicit", AdmissionOpen: true}
+	store := &admissionServiceStore{session: session, profile: verifiedAdmissionProfile("explicit-profile"), created: true}
 	provider := &admissionServiceProvider{defaultErr: defaultErr}
 	request := AdmissionRequest{
 		AdmissionKey: "explicit", AgentsMD: "goal", SandboxProfile: " explicit-profile ",
@@ -179,8 +181,8 @@ func TestAdmissionServiceExplicitConnectionUsesItsDefaultModel(t *testing.T) {
 }
 
 func TestAdmissionServiceExplicitModelBypassesConnectionDefault(t *testing.T) {
-	job := core.Job{ID: "job-explicit-model", AdmissionOpen: true}
-	store := &admissionServiceStore{job: job, profile: verifiedAdmissionProfile("profile"), created: true}
+	session := core.Session{ID: "job-explicit-model", AdmissionOpen: true}
+	store := &admissionServiceStore{session: session, profile: verifiedAdmissionProfile("profile"), created: true}
 	provider := &admissionServiceProvider{defaultModelErr: errors.New("DefaultModel must be skipped")}
 	request := AdmissionRequest{AdmissionKey: "explicit-model", AgentsMD: "goal", Model: " model "}
 

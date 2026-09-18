@@ -17,18 +17,18 @@ func TestDirectAutomaticMessagesAndExactInterruptReconciliation(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	job, _, err := admitDirectFixture(t, store, ctx, core.JobAdmission{
+	session, _, err := admitDirectFixture(t, store, ctx, core.SessionAdmission{
 		AdmissionKey:   fmt.Sprintf("assistant-%d", time.Now().UnixNano()),
 		SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "low",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial, err := nextDelivery(ctx, store, job.ID)
+	initial, err := nextDelivery(ctx, store, session.ID)
 	if err != nil || initial == nil {
 		t.Fatalf("initial=%v err=%v", initial, err)
 	}
-	idleInput := core.MessageAdmission{JobID: job.ID, SandboxID: initial.AgentRun.SandboxID,
+	idleInput := core.MessageAdmission{SessionID: session.ID, SandboxID: initial.AgentRun.SandboxID,
 		FromKind: core.MessageFromHuman, FromID: "idle-auto", Input: "next question", Intent: core.MessageAuto}
 	idle, err := store.AdmitDirectMessage(ctx, idleInput)
 	if err != nil || idle.Message.Intent != core.MessageFollow {
@@ -55,14 +55,14 @@ func TestDirectAutomaticMessagesAndExactInterruptReconciliation(t *testing.T) {
 		t.Fatalf("changed requested intent did not conflict: %v", err)
 	}
 	// The latest user message may still be an undelivered Steer when Stop arrives.
-	target, err := store.RequestMessageInterrupt(ctx, job.ID, steer.Message.ID)
+	target, err := store.RequestMessageInterrupt(ctx, session.ID, steer.Message.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.AgentRunID != initial.AgentRun.ID || target.JobID != job.ID || !target.InterruptRequested {
+	if target.AgentRunID != initial.AgentRun.ID || target.SessionID != session.ID || !target.InterruptRequested {
 		t.Fatalf("interrupt target=%+v", target)
 	}
-	selected, err := store.AgentMessage(ctx, job.ID)
+	selected, err := store.AgentMessage(ctx, session.ID)
 	if err != nil || selected == nil || selected.MessageID != initial.Message.ID {
 		t.Fatalf("interrupt did not take priority over queued input: %+v %v", selected, err)
 	}
@@ -70,7 +70,7 @@ func TestDirectAutomaticMessagesAndExactInterruptReconciliation(t *testing.T) {
 	if err != nil || !observed.AgentRun.InterruptRequested {
 		t.Fatalf("interrupt was not durable: %+v %v", observed.AgentRun, err)
 	}
-	deliveries, err := store.Deliveries(ctx, job.ID)
+	deliveries, err := store.Deliveries(ctx, session.ID)
 	if err != nil || !deliveries[0].AgentRun.InterruptRequested || deliveries[1].AgentRun.InterruptRequested || !deliveries[2].AgentRun.InterruptRequested {
 		t.Fatalf("interrupt projection did not follow the exact Turn: %+v %v", deliveries, err)
 	}
@@ -83,7 +83,7 @@ func TestDirectAutomaticMessagesAndExactInterruptReconciliation(t *testing.T) {
 	execution := core.NewExecutionService(store, nil, nil, absurdruntime.RequireClaim).
 		WithAgentExecution(resultBoundaryAgentExecution{operation: native})
 	taskName := "dorf-message-interrupt-proof-v1"
-	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
+	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.SessionTaskParams) (core.TaskResultV1, error) {
 		for _, observation := range []struct {
 			turn, outcome string
 			wantErr       bool
@@ -95,7 +95,7 @@ func TestDirectAutomaticMessagesAndExactInterruptReconciliation(t *testing.T) {
 		} {
 			native.binding = core.HarnessBinding{Harness: "codex", ThreadID: "assistant-thread",
 				Turn: core.HarnessTurn{ID: observation.turn, Status: observation.outcome}}
-			_, reconcileErr := execution.ReconcileJobAgent(taskCtx, job.ID)
+			_, reconcileErr := execution.ReconcileSessionAgent(taskCtx, session.ID)
 			if (reconcileErr != nil) != observation.wantErr {
 				return core.TaskResultV1{}, fmt.Errorf("interrupt observation %s/%s: %v", observation.turn, observation.outcome, reconcileErr)
 			}
@@ -104,13 +104,13 @@ func TestDirectAutomaticMessagesAndExactInterruptReconciliation(t *testing.T) {
 				return core.TaskResultV1{}, fmt.Errorf("interrupt observation changed wrong state or target: %+v %v", observed.AgentRun, err)
 			}
 		}
-		return core.TaskResultV1{JobID: job.ID, Outcome: "interrupted"}, nil
+		return core.TaskResultV1{SessionID: session.ID, Outcome: "interrupted"}, nil
 	}))
-	spawned, err := client.Spawn(ctx, taskName, core.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: taskName + ":" + job.ID})
+	spawned, err := client.Spawn(ctx, taskName, core.SessionTaskParams{SessionID: session.ID}, absurd.SpawnOptions{IdempotencyKey: taskName + ":" + session.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AttachJobTask(ctx, job.ID, "", spawned.TaskID, taskName); err != nil {
+	if err := store.AttachSessionTask(ctx, session.ID, "", spawned.TaskID, taskName); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "interrupt-proof", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
@@ -122,7 +122,7 @@ func TestDirectAutomaticMessagesAndExactInterruptReconciliation(t *testing.T) {
 	if err := store.FailAgentRun(ctx, core.AgentRunID(steer.Message.ID), "steer target settled before delivery"); err != nil {
 		t.Fatal(err)
 	}
-	next, err := nextDelivery(ctx, store, job.ID)
+	next, err := nextDelivery(ctx, store, session.ID)
 	if err != nil || next == nil || next.Message.ID != idle.Message.ID || next.AgentRun.ThreadID != "assistant-thread" {
 		t.Fatalf("follow did not retain the conversation: %+v %v", next, err)
 	}
@@ -132,7 +132,7 @@ func TestDirectAutomaticMessagesAndExactInterruptReconciliation(t *testing.T) {
 	if err := store.BindAgentRun(ctx, next.AgentRun.ID, "codex", "assistant-thread", "second-turn", "inProgress"); err != nil {
 		t.Fatal(err)
 	}
-	replayedTarget, err := store.RequestMessageInterrupt(ctx, job.ID, steer.Message.ID)
+	replayedTarget, err := store.RequestMessageInterrupt(ctx, session.ID, steer.Message.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,34 +146,34 @@ func TestDirectAutomaticMessagesAndExactInterruptReconciliation(t *testing.T) {
 	if replay, err := store.AdmitDirectMessage(ctx, activeInput); err != nil || replay.Created || !reflect.DeepEqual(replay.Message, steer.Message) {
 		t.Fatalf("auto replay retargeted successor: %+v %v", replay, err)
 	}
-	if _, err := store.RequestMessageInterrupt(ctx, "foreign-job", steer.Message.ID); !errors.Is(err, core.ErrMessageInterruptUnavailable) {
-		t.Fatalf("foreign Job accepted interrupt: %v", err)
+	if _, err := store.RequestMessageInterrupt(ctx, "foreign-session", steer.Message.ID); !errors.Is(err, core.ErrMessageInterruptUnavailable) {
+		t.Fatalf("foreign Session accepted interrupt: %v", err)
 	}
 }
 
 func TestDeliveriesDeduplicatesInterruptedRunsForOneTurn(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
-	job, threadID := prepareTransportIntegrationJob(t, store, "duplicate-interrupted-turn")
-	target, err := nextDelivery(ctx, store, job.ID)
+	session, threadID := prepareTransportIntegrationSession(t, store, "duplicate-interrupted-turn")
+	target, err := nextDelivery(ctx, store, session.ID)
 	if err != nil || target == nil {
 		t.Fatalf("target delivery=%+v err=%v", target, err)
 	}
 	if err := store.PrepareAgentRun(ctx, target.AgentRun.ID, "codex", ""); err != nil {
 		t.Fatal(err)
 	}
-	turnID := "shared-interrupted-turn-" + job.ID
+	turnID := "shared-interrupted-turn-" + session.ID
 	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, turnID, "running"); err != nil {
 		t.Fatal(err)
 	}
 	steer, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{
-		JobID: job.ID, SandboxID: target.AgentRun.SandboxID, FromKind: core.MessageFromHuman,
+		SessionID: session.ID, SandboxID: target.AgentRun.SandboxID, FromKind: core.MessageFromHuman,
 		FromID: "shared-interrupted-steer", Input: "apply this correction", Intent: core.MessageSteer,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	steerDelivery, err := nextDelivery(ctx, store, job.ID)
+	steerDelivery, err := nextDelivery(ctx, store, session.ID)
 	if err != nil || steerDelivery == nil || steerDelivery.Message.ID != steer.Message.ID {
 		t.Fatalf("steer delivery=%+v err=%v", steerDelivery, err)
 	}
@@ -189,7 +189,7 @@ func TestDeliveriesDeduplicatesInterruptedRunsForOneTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deliveries, err := store.Deliveries(ctx, job.ID)
+	deliveries, err := store.Deliveries(ctx, session.ID)
 	if err != nil || len(deliveries) != 2 {
 		t.Fatalf("deliveries=%+v err=%v, want exactly two retained Messages", deliveries, err)
 	}

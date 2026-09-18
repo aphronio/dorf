@@ -21,19 +21,19 @@ import (
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
-func TestMessageCLIForwardsImageAndFileToAnotherJob(t *testing.T) {
+func TestMessageCLIForwardsImageAndFileToAnotherSession(t *testing.T) {
 	files := cliAttachmentFixtures(t)
-	jobs := &attachmentCLIJobs{}
-	client := attachmentCLIClient(t, jobs)
+	sessions := &attachmentCLISessions{}
+	client := attachmentCLIClient(t, sessions)
 	cfg := clientconfig.Config{DeploymentURL: "https://dorf.example.test"}
 	parentArgs := []string{"--key", "parent-message", "--attach", files[0], "--attach", files[1], "--output", "json"}
 	if err := remoteRun(context.Background(), client, cfg, parentArgs, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if len(jobs.messages) != 1 || jobs.messages[0].jobID != "direct-job" || jobs.messages[0].key != "parent-message" || jobs.messages[0].input.Text != "" {
-		t.Fatalf("attachment-only initial message=%+v", jobs.messages)
+	if len(sessions.messages) != 1 || sessions.messages[0].sessionID != "direct-session" || sessions.messages[0].key != "parent-message" || sessions.messages[0].input.Text != "" {
+		t.Fatalf("attachment-only initial message=%+v", sessions.messages)
 	}
-	parentInput := jobs.messages[0].input
+	parentInput := sessions.messages[0].input
 	if len(parentInput.Attachments) != 2 {
 		t.Fatalf("initial message attachment count=%d", len(parentInput.Attachments))
 	}
@@ -50,15 +50,15 @@ func TestMessageCLIForwardsImageAndFileToAnotherJob(t *testing.T) {
 		}
 		forwardArgs = append(forwardArgs, "--attach", localPath)
 	}
-	forwardArgs = append(forwardArgs, "worker-job")
+	forwardArgs = append(forwardArgs, "worker-session")
 	if err := remoteMessageSend(context.Background(), cfg, client, forwardArgs, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if len(jobs.messages) != 2 {
-		t.Fatalf("forward message count=%d", len(jobs.messages))
+	if len(sessions.messages) != 2 {
+		t.Fatalf("forward message count=%d", len(sessions.messages))
 	}
-	forwarded := jobs.messages[1]
-	if forwarded.jobID != "worker-job" || forwarded.key != "forward-to-worker" || forwarded.input.Intent != "steer" || !forwarded.input.RefreshSkills ||
+	forwarded := sessions.messages[1]
+	if forwarded.sessionID != "worker-session" || forwarded.key != "forward-to-worker" || forwarded.input.Intent != "steer" || !forwarded.input.RefreshSkills ||
 		!reflect.DeepEqual(forwarded.input.Attachments, parentInput.Attachments) {
 		t.Fatalf("forwarding changed the destination, intent, or ordered file bytes: %+v", forwarded)
 	}
@@ -101,7 +101,7 @@ func TestAttachmentCLIRejectsInvalidLocalInputBeforeRemoteEffects(t *testing.T) 
 				t.Fatal("run accepted invalid local input")
 			}
 			if err := remoteMessageSend(context.Background(), clientconfig.Config{}, client, append(append([]string{}, args...), "worker"), io.Discard, io.Discard); err == nil {
-				t.Fatal("job message accepted invalid local input")
+				t.Fatal("session message accepted invalid local input")
 			}
 		})
 	}
@@ -126,10 +126,10 @@ func cliAttachmentFixtures(t *testing.T) []string {
 	return files
 }
 
-func attachmentCLIClient(t *testing.T, jobs *attachmentCLIJobs) *controlclient.Client {
+func attachmentCLIClient(t *testing.T, sessions *attachmentCLISessions) *controlclient.Client {
 	t.Helper()
 	auth := &remoteCLIAuth{credential: "credential", client: controlauth.Client{ID: "cli-client", Name: "example client"}}
-	handler := controlapi.NewServer(controlapi.Discovery{}, auth, jobs, nil).Handler
+	handler := controlapi.NewServer(controlapi.Discovery{}, auth, sessions, nil).Handler
 	client, err := controlclient.New("https://dorf.example.test", "credential", roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
@@ -142,19 +142,19 @@ func attachmentCLIClient(t *testing.T, jobs *attachmentCLIJobs) *controlclient.C
 }
 
 type capturedAttachmentMessage struct {
-	jobID, key string
-	input      controlapi.SendMessageRequest
+	sessionID, key string
+	input          controlapi.SendMessageRequest
 }
 
-type attachmentCLIJobs struct {
-	controlapi.Jobs
+type attachmentCLISessions struct {
+	controlapi.Sessions
 	messages []capturedAttachmentMessage
 }
 
-func (*attachmentCLIJobs) AdmitDirect(context.Context, string, string, controlapi.AdmitJobRequest) (controlapi.DirectJob, bool, error) {
-	return controlapi.DirectJob{Job: controlapi.Job{ID: "direct-job", Kind: controlapi.JobKindDirect}}, true, nil
+func (*attachmentCLISessions) Create(context.Context, string, string, controlapi.CreateSessionRequest) (controlapi.Session, bool, error) {
+	return controlapi.Session{ID: "direct-session"}, true, nil
 }
-func (j *attachmentCLIJobs) SendMessage(_ context.Context, jobID, key string, input controlapi.SendMessageRequest) (controlapi.Message, bool, error) {
-	j.messages = append(j.messages, capturedAttachmentMessage{jobID: jobID, key: key, input: input})
-	return controlapi.Message{ID: "message", JobID: jobID, Intent: input.Intent}, true, nil
+func (j *attachmentCLISessions) SendMessage(_ context.Context, sessionID, key string, input controlapi.SendMessageRequest) (controlapi.Message, bool, error) {
+	j.messages = append(j.messages, capturedAttachmentMessage{sessionID: sessionID, key: key, input: input})
+	return controlapi.Message{ID: "message", SessionID: sessionID, Intent: input.Intent}, true, nil
 }

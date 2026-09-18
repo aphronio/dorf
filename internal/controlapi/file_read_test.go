@@ -17,28 +17,28 @@ import (
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
-func TestPublicFileReadRejectsOversizedJobsResult(t *testing.T) {
+func TestPublicFileReadRejectsOversizedSessionsResult(t *testing.T) {
 	const credential = "dcr_file-bound"
-	jobs := &fileBudgetJobs{
-		fakeJobs: &fakeJobs{job: controlapi.Job{ID: "job-1", Kind: controlapi.JobKindDirect, Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1"}}}},
-		contents: bytes.Repeat([]byte{'x'}, provider.MaxFileReadBytes+1),
+	sessions := &fileBudgetSessions{
+		fakeSessions: &fakeSessions{session: controlapi.Session{ID: "job-1", Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1"}}}},
+		contents:     bytes.Repeat([]byte{'x'}, provider.MaxFileReadBytes+1),
 	}
-	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs, nil).Handler
+	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, sessions, nil).Handler
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, publicFileRequest(context.Background(), credential))
 	requireProblem(t, response, http.StatusConflict, "file_too_large")
 	if response.Header().Get("Content-Digest") != "" {
-		t.Fatal("oversized custom Jobs result committed file headers")
+		t.Fatal("oversized custom Sessions result committed file headers")
 	}
 }
 
 func TestPublicFileTooLargeRetainsProblemAndTypedClientError(t *testing.T) {
 	const credential = "dcr_file-too-large"
-	jobs := &fileBudgetJobs{
-		fakeJobs: &fakeJobs{job: controlapi.Job{ID: "job-1", Kind: controlapi.JobKindDirect, Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1"}}}},
-		err:      controlapi.ErrFileTooLarge,
+	sessions := &fileBudgetSessions{
+		fakeSessions: &fakeSessions{session: controlapi.Session{ID: "job-1", Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1"}}}},
+		err:          controlapi.ErrFileTooLarge,
 	}
-	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs, nil).Handler
+	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, sessions, nil).Handler
 	client, err := controlclient.New("https://dorf.example.test", credential, publicHandlerTransport{handler: handler})
 	if err != nil {
 		t.Fatal(err)
@@ -52,11 +52,11 @@ func TestPublicFileTooLargeRetainsProblemAndTypedClientError(t *testing.T) {
 
 func TestPublicFileReadTransferBudgetIncludesSlowWrite(t *testing.T) {
 	const credential = "dcr_file-budget"
-	jobs := &fileBudgetJobs{
-		fakeJobs: &fakeJobs{job: controlapi.Job{ID: "job-1", Kind: controlapi.JobKindDirect, Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1"}}}},
-		contents: []byte("exact"), entered: make(chan struct{}, 16),
+	sessions := &fileBudgetSessions{
+		fakeSessions: &fakeSessions{session: controlapi.Session{ID: "job-1", Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1"}}}},
+		contents:     []byte("exact"), entered: make(chan struct{}, 16),
 	}
-	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs, nil).Handler
+	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, sessions, nil).Handler
 
 	var group sync.WaitGroup
 	releases := make([]*publicReleaseSignal, 0, provider.MaxConcurrentFileReads+1)
@@ -79,9 +79,9 @@ func TestPublicFileReadTransferBudgetIncludesSlowWrite(t *testing.T) {
 		group.Wait()
 	})
 	for range provider.MaxConcurrentFileReads {
-		waitPublicSignal(t, jobs.entered, "initial Jobs file read")
+		waitPublicSignal(t, sessions.entered, "initial Sessions file read")
 	}
-	waitPublicAtomic(t, &jobs.calls, provider.MaxConcurrentFileReads, "initial Jobs calls")
+	waitPublicAtomic(t, &sessions.calls, provider.MaxConcurrentFileReads, "initial Sessions calls")
 
 	me := httptest.NewRecorder()
 	meDone := make(chan struct{})
@@ -105,7 +105,7 @@ func TestPublicFileReadTransferBudgetIncludesSlowWrite(t *testing.T) {
 		defer close(queuedDone)
 		handler.ServeHTTP(httptest.NewRecorder(), publicFileRequest(queuedCtx, credential))
 	}()
-	assertNoPublicSignal(t, jobs.entered, "queued Jobs read")
+	assertNoPublicSignal(t, sessions.entered, "queued Sessions read")
 	cancelQueued()
 	waitPublicSignal(t, queuedDone, "queued cancellation")
 
@@ -113,9 +113,9 @@ func TestPublicFileReadTransferBudgetIncludesSlowWrite(t *testing.T) {
 	releases = append(releases, nextRelease)
 	nextWriter := &publicBlockingWriter{header: make(http.Header), entered: make(chan struct{}, 1), release: nextRelease.ch}
 	start(context.Background(), nextWriter)
-	assertNoPublicSignal(t, jobs.entered, "fifth live Jobs read before release")
+	assertNoPublicSignal(t, sessions.entered, "fifth live Sessions read before release")
 	releases[0].close()
-	waitPublicSignal(t, jobs.entered, "next Jobs read after release")
+	waitPublicSignal(t, sessions.entered, "next Sessions read after release")
 	waitPublicSignal(t, nextWriter.entered, "next blocked response write")
 }
 
@@ -135,15 +135,15 @@ func TestOpenAPIFileReadPublishesBoundAndTypedConflict(t *testing.T) {
 	}
 }
 
-type fileBudgetJobs struct {
-	*fakeJobs
+type fileBudgetSessions struct {
+	*fakeSessions
 	contents []byte
 	err      error
 	entered  chan struct{}
 	calls    atomic.Int32
 }
 
-func (j *fileBudgetJobs) ReadSandboxFile(context.Context, string, string) ([]byte, error) {
+func (j *fileBudgetSessions) ReadSandboxFile(context.Context, string, string) ([]byte, error) {
 	j.calls.Add(1)
 	if j.entered != nil {
 		j.entered <- struct{}{}
@@ -219,4 +219,4 @@ func waitPublicAtomic(t *testing.T, value *atomic.Int32, want int, what string) 
 	}
 }
 
-var _ controlapi.Jobs = (*fileBudgetJobs)(nil)
+var _ controlapi.Sessions = (*fileBudgetSessions)(nil)

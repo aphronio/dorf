@@ -73,23 +73,23 @@ func TestMismatchedHarnessReturnsToCoreWithoutAcquiringScope(t *testing.T) {
 }
 
 func TestSteerScopeBindsCopiedExternalsToOneOwnerAndThread(t *testing.T) {
-	owner := provider.Ownership{JobID: "job", SandboxID: "sandbox", OwnershipNonce: "nonce"}
+	owner := provider.Ownership{SessionID: "session", SandboxID: "sandbox", OwnershipNonce: "nonce"}
 	harness := &steerScopeHarness{}
 	ownerReads := 0
 	externals := Externals{Agent: harness, Ownership: func(context.Context, string) (provider.Ownership, error) {
 		ownerReads++
 		return owner, nil
 	}}
-	job := core.Job{ID: owner.JobID}
+	session := core.Session{ID: owner.SessionID}
 	delivery := core.Delivery{
-		AgentRun: core.AgentRun{ID: "run", Harness: harness.Name(), ThreadID: "thread", MessageID: "message", JobID: job.ID, SandboxID: owner.SandboxID},
+		AgentRun: core.AgentRun{ID: "run", Harness: harness.Name(), ThreadID: "thread", MessageID: "message", SessionID: session.ID, SandboxID: owner.SandboxID},
 		Message:  core.Message{ID: "message", Intent: core.MessageSteer, TargetTurnID: "turn"},
 	}
-	if err := externals.WithSteerScope(context.Background(), job, delivery, func(ctx context.Context, bound core.SteerExternals) error {
-		if _, err := bound.SteerHistory(ctx, job, owner.SandboxID, "thread"); err != nil {
+	if err := externals.WithSteerScope(context.Background(), session, delivery, func(ctx context.Context, bound core.SteerExternals) error {
+		if _, err := bound.SteerHistory(ctx, session, owner.SandboxID, "thread"); err != nil {
 			return err
 		}
-		_, err := bound.AgentSteer(ctx, job, delivery)
+		_, err := bound.AgentSteer(ctx, session, delivery)
 		return err
 	}); err != nil {
 		t.Fatal(err)

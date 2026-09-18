@@ -11,8 +11,8 @@ import (
 func TestSkillRefreshSurvivesSteeringQueueFailureAndRestart(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
-	job, threadID := prepareTransportIntegrationJob(t, store, "skill-refresh")
-	first, err := nextDelivery(ctx, store, job.ID)
+	session, threadID := prepareTransportIntegrationSession(t, store, "skill-refresh")
+	first, err := nextDelivery(ctx, store, session.ID)
 	if err != nil || first == nil {
 		t.Fatalf("initial=%+v err=%v", first, err)
 	}
@@ -24,7 +24,7 @@ func TestSkillRefreshSurvivesSteeringQueueFailureAndRestart(t *testing.T) {
 	}
 	admit := func(key string, intent core.MessageDeliveryIntent, refresh bool) core.MessageAdmissionResult {
 		t.Helper()
-		result, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: key, Input: key, Intent: intent, RefreshSkills: refresh})
+		result, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), FromKind: "human", FromID: key, Input: key, Intent: intent, RefreshSkills: refresh})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -50,14 +50,14 @@ func TestSkillRefreshSurvivesSteeringQueueFailureAndRestart(t *testing.T) {
 	if err := store.BindSteer(ctx, steerExecution.AgentRun.ID, "turn-first", "running"); err != nil {
 		t.Fatal(err)
 	}
-	if selected, err := store.AgentMessage(ctx, job.ID); err != nil || selected == nil || selected.MessageID != first.Message.ID {
+	if selected, err := store.AgentMessage(ctx, session.ID); err != nil || selected == nil || selected.MessageID != first.Message.ID {
 		t.Fatalf("active selection=%+v err=%v", selected, err)
 	}
 	if err := store.BindAgentRun(ctx, first.AgentRun.ID, "codex", threadID, "turn-first", "completed"); err != nil {
 		t.Fatal(err)
 	}
 	store = postgres.Store{DB: store.DB}
-	if selected, err := store.AgentMessage(ctx, job.ID); err != nil || selected == nil || selected.MessageID != queued.Message.ID {
+	if selected, err := store.AgentMessage(ctx, session.ID); err != nil || selected == nil || selected.MessageID != queued.Message.ID {
 		t.Fatalf("queued selection=%+v err=%v", selected, err)
 	}
 	inherited := execution(queued, true)
@@ -78,7 +78,7 @@ func TestSkillRefreshSurvivesSteeringQueueFailureAndRestart(t *testing.T) {
 	if next.Message.Intent != core.MessageFollow {
 		t.Fatalf("idle auto=%+v", next.Message)
 	}
-	if selected, err := store.AgentMessage(ctx, job.ID); err != nil || selected == nil || selected.MessageID != next.Message.ID {
+	if selected, err := store.AgentMessage(ctx, session.ID); err != nil || selected == nil || selected.MessageID != next.Message.ID {
 		t.Fatalf("retry selection=%+v err=%v", selected, err)
 	}
 	retried := execution(next, true)
@@ -90,8 +90,8 @@ func TestSkillRefreshSurvivesSteeringQueueFailureAndRestart(t *testing.T) {
 	}
 	ordinary := admit("ordinary-after-refresh", core.MessageAuto, false)
 	execution(ordinary, false)
-	otherJob, _ := prepareTransportIntegrationJob(t, store, "skill-refresh-other-job")
-	other, err := nextDelivery(ctx, store, otherJob.ID)
+	otherSession, _ := prepareTransportIntegrationSession(t, store, "skill-refresh-other-session")
+	other, err := nextDelivery(ctx, store, otherSession.ID)
 	if err != nil || other == nil {
 		t.Fatalf("other=%+v err=%v", other, err)
 	}
@@ -104,8 +104,8 @@ func TestSkillRefreshSurvivesSteeringQueueFailureAndRestart(t *testing.T) {
 func TestFailedFollowRetainsSkillRefreshForNextFollow(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
-	job, threadID := prepareTransportIntegrationJob(t, store, "failed-follow-refresh")
-	first, err := nextDelivery(ctx, store, job.ID)
+	session, threadID := prepareTransportIntegrationSession(t, store, "failed-follow-refresh")
+	first, err := nextDelivery(ctx, store, session.ID)
 	if err != nil || first == nil {
 		t.Fatalf("initial=%+v err=%v", first, err)
 	}
@@ -115,7 +115,7 @@ func TestFailedFollowRetainsSkillRefreshForNextFollow(t *testing.T) {
 	if err := store.BindAgentRun(ctx, first.AgentRun.ID, "codex", threadID, "initial-turn", "completed"); err != nil {
 		t.Fatal(err)
 	}
-	flagged, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "refresh", Input: "refresh", RefreshSkills: true})
+	flagged, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), FromKind: "human", FromID: "refresh", Input: "refresh", RefreshSkills: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestFailedFollowRetainsSkillRefreshForNextFollow(t *testing.T) {
 	if err := store.FailAgentRun(ctx, core.AgentRunID(flagged.Message.ID), "refresh rejected"); err != nil {
 		t.Fatal(err)
 	}
-	next, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "retry", Input: "retry"})
+	next, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), FromKind: "human", FromID: "retry", Input: "retry"})
 	if err != nil {
 		t.Fatal(err)
 	}

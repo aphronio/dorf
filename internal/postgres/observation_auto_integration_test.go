@@ -16,20 +16,20 @@ import (
 func TestAutoObservationAdoptsNativeFollowAfterLostAcknowledgement(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
-	job, threadID := prepareTransportIntegrationJob(t, store, "auto-steer-error-terminal-follow")
-	target, err := nextDelivery(ctx, store, job.ID)
+	session, threadID := prepareTransportIntegrationSession(t, store, "auto-steer-error-terminal-follow")
+	target, err := nextDelivery(ctx, store, session.ID)
 	if err != nil || target == nil {
 		t.Fatalf("target delivery=%#v err=%v", target, err)
 	}
 	if err := store.PrepareAgentRun(ctx, target.AgentRun.ID, "codex", ""); err != nil {
 		t.Fatal(err)
 	}
-	targetTurnID := "turn-target-" + job.ID
+	targetTurnID := "turn-target-" + session.ID
 	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "running"); err != nil {
 		t.Fatal(err)
 	}
 	automatic, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{
-		JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman,
+		SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), FromKind: core.MessageFromHuman,
 		FromID: "steer-error-terminal-auto", Input: "preserve after uncertain acknowledgement", Intent: core.MessageAuto, Observation: true,
 	})
 	if err != nil || !automatic.Created || automatic.Message.Intent != core.MessageSteer {
@@ -45,24 +45,24 @@ func TestAutoObservationAdoptsNativeFollowAfterLostAcknowledgement(t *testing.T)
 	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
 		WithAgentExecution(resultBoundaryAgentExecution{externals: externals})
 	taskName := "dorf-steer-error-terminal-auto-follow-proof-v1"
-	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
-		if _, err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
+	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.SessionTaskParams) (core.TaskResultV1, error) {
+		if _, err := execution.ReconcileSessionAgent(taskCtx, session.ID); err != nil {
 			return core.TaskResultV1{}, err
 		}
-		if _, err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
+		if _, err := execution.ReconcileSessionAgent(taskCtx, session.ID); err != nil {
 			return core.TaskResultV1{}, err
 		}
 		adopted, err := store.AgentMessageExecution(taskCtx, automatic.Message.ID)
 		if err != nil || adopted.Message.Intent != core.MessageFollow || adopted.AgentRun.TurnID != "event-follow" || adopted.AgentRun.State != core.AgentRunActive {
 			return core.TaskResultV1{}, fmt.Errorf("accepted event follow was not adopted: %+v %v", adopted, err)
 		}
-		return core.TaskResultV1{JobID: job.ID, Outcome: "terminal-auto-follow-requeued"}, nil
+		return core.TaskResultV1{SessionID: session.ID, Outcome: "terminal-auto-follow-requeued"}, nil
 	}))
-	spawned, err := client.Spawn(ctx, taskName, core.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: taskName + ":" + job.ID})
+	spawned, err := client.Spawn(ctx, taskName, core.SessionTaskParams{SessionID: session.ID}, absurd.SpawnOptions{IdempotencyKey: taskName + ":" + session.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AttachJobTask(ctx, job.ID, "", spawned.TaskID, taskName); err != nil {
+	if err := store.AttachSessionTask(ctx, session.ID, "", spawned.TaskID, taskName); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "steer-error-terminal-auto-follow", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {

@@ -17,12 +17,12 @@ import (
 
 func TestMessageMultipartPreservesTextOptionsAndOrderedAttachmentBytes(t *testing.T) {
 	credential := "dcr_multipart-client"
-	jobs := &fakeJobs{
-		job:     controlapi.Job{ID: "job-multipart", Kind: controlapi.JobKindDirect},
-		message: controlapi.Message{ID: "message-multipart", JobID: "job-multipart"}, messageCreated: true,
+	sessions := &fakeSessions{
+		session: controlapi.Session{ID: "job-multipart"},
+		message: controlapi.Message{ID: "message-multipart", SessionID: "job-multipart"}, messageCreated: true,
 	}
-	server := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential, client: controlauth.Client{ID: "client"}}, jobs, nil)
-	request := messageMultipartRequest(t, "/v1/jobs/job-multipart/messages", func(writer *multipart.Writer) {
+	server := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential, client: controlauth.Client{ID: "client"}}, sessions, nil)
+	request := messageMultipartRequest(t, "/v1/sessions/job-multipart/messages", func(writer *multipart.Writer) {
 		writeMultipartField(t, writer, "text", "")
 		writeMultipartField(t, writer, "intent", "auto")
 		writeMultipartField(t, writer, "refresh_skills", "true")
@@ -43,8 +43,8 @@ func TestMessageMultipartPreservesTextOptionsAndOrderedAttachmentBytes(t *testin
 			{Filename: "notes.txt", Contents: []byte("second bytes")},
 		},
 	}
-	if jobs.messageKey != "multipart-send" || !reflect.DeepEqual(jobs.messageInput, want) {
-		t.Fatalf("key/input=%q/%#v, want multipart-send/%#v", jobs.messageKey, jobs.messageInput, want)
+	if sessions.messageKey != "multipart-send" || !reflect.DeepEqual(sessions.messageInput, want) {
+		t.Fatalf("key/input=%q/%#v, want multipart-send/%#v", sessions.messageKey, sessions.messageInput, want)
 	}
 }
 
@@ -93,16 +93,16 @@ func TestMessageMultipartRejectsAmbiguousOrUnboundedPartsBeforeAdmission(t *test
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			credential := "dcr_invalid-multipart"
-			jobs := &fakeJobs{job: controlapi.Job{ID: "job", Kind: controlapi.JobKindDirect}}
-			server := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs, nil)
-			request := messageMultipartRequest(t, "/v1/jobs/job/messages", func(writer *multipart.Writer) { test.add(t, writer) })
+			sessions := &fakeSessions{session: controlapi.Session{ID: "session"}}
+			server := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, sessions, nil)
+			request := messageMultipartRequest(t, "/v1/sessions/session/messages", func(writer *multipart.Writer) { test.add(t, writer) })
 			request.Header.Set("Authorization", "Bearer "+credential)
 			request.Header.Set("Idempotency-Key", "send")
 			response := httptest.NewRecorder()
 			server.Handler.ServeHTTP(response, request)
 			requireProblem(t, response, controlapiProblemStatus(test.code), test.code)
-			if jobs.messageKey != "" {
-				t.Fatalf("invalid multipart reached Message admission: %#v", jobs.messageInput)
+			if sessions.messageKey != "" {
+				t.Fatalf("invalid multipart reached Message admission: %#v", sessions.messageInput)
 			}
 		})
 	}
@@ -119,9 +119,9 @@ func TestMessageAttachmentAdmissionErrorsHaveStableProblems(t *testing.T) {
 	} {
 		t.Run(test.code, func(t *testing.T) {
 			credential := "dcr_attachment-problem"
-			jobs := &fakeJobs{job: controlapi.Job{ID: "job", Kind: controlapi.JobKindDirect}, messageErr: test.err}
-			server := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs, nil)
-			request := httptest.NewRequest(http.MethodPost, "/v1/jobs/job/messages", strings.NewReader(`{"text":"image"}`))
+			sessions := &fakeSessions{session: controlapi.Session{ID: "session"}, messageErr: test.err}
+			server := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, sessions, nil)
+			request := httptest.NewRequest(http.MethodPost, "/v1/sessions/session/messages", strings.NewReader(`{"text":"image"}`))
 			request.Header.Set("Content-Type", "application/json")
 			request.Header.Set("Authorization", "Bearer "+credential)
 			request.Header.Set("Idempotency-Key", "send")

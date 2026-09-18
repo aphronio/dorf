@@ -80,9 +80,9 @@ func TestLiveE2BScopedGatewayCompletesCodexTurn(t *testing.T) {
 	}
 
 	externals := terminalapp.Externals{Sandbox: sandbox, Gateway: providerGateway, Agent: agent}
-	job := core.Job{ID: owner.JobID, ProviderConnection: connectionName, Model: "gpt-5.6-sol"}
-	durableSandbox := core.Sandbox{ID: owner.SandboxID, JobID: owner.JobID, OwnershipNonce: owner.OwnershipNonce}
-	if err := externals.RouteCreate(ctx, job, durableSandbox, core.Route{ID: routeID, SandboxID: owner.SandboxID}); err != nil {
+	session := core.Session{ID: owner.SessionID, ProviderConnection: connectionName, Model: "gpt-5.6-sol"}
+	durableSandbox := core.Sandbox{ID: owner.SandboxID, SessionID: owner.SessionID, OwnershipNonce: owner.OwnershipNonce}
+	if err := externals.RouteCreate(ctx, session, durableSandbox, core.Route{ID: routeID, SandboxID: owner.SandboxID}); err != nil {
 		t.Fatal(err)
 	}
 	routeCreated = true

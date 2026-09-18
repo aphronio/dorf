@@ -177,7 +177,7 @@ func TestExpiredCheckpointPauseWindowIsIneligibleBeforeCapture(t *testing.T) {
 func TestCheckpointCaptureClassifiesSourceMutationWithoutPathDetails(t *testing.T) {
 	var observed telemetry.Event
 	capture := checkpointCapture{emit: func(event telemetry.Event) { observed = event }}
-	capture.recordNativeFailure(persistence.CaptureBoundary{JobID: "job", SandboxID: "sandbox", ResourceID: "resource"}, "finish",
+	capture.recordNativeFailure(persistence.CaptureBoundary{SessionID: "session", SandboxID: "sandbox", ResourceID: "resource"}, "finish",
 		&codex.PersistenceCaptureError{Class: codex.PersistenceSourceChangedCapture})
 	if observed.Name != "dorf.checkpoint.native-rejected" {
 		t.Fatalf("event name = %q", observed.Name)

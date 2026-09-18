@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/clientconfig"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlapi"
@@ -26,6 +25,7 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/hostclientconfig"
 	"github.com/aphronio/dorf/internal/postgres"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -55,7 +55,7 @@ func TestServeAllowsWildcardOnlyWithExplicitContainerOptIn(t *testing.T) {
 
 func TestHostControlGuidanceDoesNotMaskLocalErrors(t *testing.T) {
 	local := errors.New("invalid local arguments")
-	if got := jobControlError(hostclientconfig.HostOrigin, local); !errors.Is(got, local) || got.Error() != local.Error() {
+	if got := sessionControlError(hostclientconfig.HostOrigin, local); !errors.Is(got, local) || got.Error() != local.Error() {
 		t.Fatalf("host local error=%v", got)
 	}
 }
@@ -128,7 +128,7 @@ func TestConfiguredControlReaderUsesOnlyCompleteInternalCapability(t *testing.T)
 	})
 }
 
-func TestJobControlTargetPrefersExplicitRemoteThenFallsBackToHost(t *testing.T) {
+func TestSessionControlTargetPrefersExplicitRemoteThenFallsBackToHost(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(root, "data"))
@@ -159,30 +159,30 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 		ID: "client-1", Name: "laptop",
 		CredentialExpiresAt: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC),
 	}}
-	jobs := &remoteCLIJobs{job: controlapi.DirectJob{Job: controlapi.Job{
-		CreatedByClient: &controlapi.JobCreator{ID: "client-1", Name: "laptop"}, ClientReference: "task-42",
-		ID: "job-1", Kind: "direct", Profile: "default",
+	sessions := &remoteCLISessions{session: controlapi.Session{
+		CreatedByClient: &controlapi.SessionCreator{ID: "client-1", Name: "laptop"}, ClientReference: "task-42",
+		ID: "job-1", Profile: "default",
 		Model: "gpt-5.6-sol", Reasoning: "high", Admission: controlapi.Admission{Open: true},
 		Execution: controlapi.State{State: "idle"}, Cleanup: controlapi.State{State: "not_requested"},
 		Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1", Name: "main"}},
-	}}}
+	}}
 	api := controlapi.NewServer(controlapi.Discovery{
-		Product: "dorf", Version: "test", Capabilities: []string{"direct_jobs"},
-	}, auth, jobs, nil)
+		Product: "dorf", Version: "test", Capabilities: []string{"direct_sessions"},
+	}, auth, sessions, nil)
 	originalTransport := http.DefaultTransport
 	var admissionAttempts []string
 	var messageAttempts, retryAttempts []string
 	http.DefaultTransport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		lostResponse := false
-		if request.Method == http.MethodPost && request.URL.Path == "/v1/jobs" {
+		if request.Method == http.MethodPost && request.URL.Path == "/v1/sessions" {
 			admissionAttempts = append(admissionAttempts, request.Header.Get("Idempotency-Key"))
 			lostResponse = len(admissionAttempts) == 1
 		}
-		if request.Method == http.MethodPost && request.URL.Path == "/v1/jobs/job-1/messages" {
+		if request.Method == http.MethodPost && request.URL.Path == "/v1/sessions/job-1/messages" {
 			messageAttempts = append(messageAttempts, request.Header.Get("Idempotency-Key"))
 			lostResponse = len(messageAttempts) == 1
 		}
-		if request.Method == http.MethodPost && request.URL.Path == "/v1/jobs/job-1/retries" {
+		if request.Method == http.MethodPost && request.URL.Path == "/v1/sessions/job-1/retries" {
 			retryAttempts = append(retryAttempts, request.Header.Get("Idempotency-Key"))
 			lostResponse = len(retryAttempts) == 1
 		}
@@ -218,13 +218,13 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 		{"connect", "--name", "laptop", "--enrollment-file", enrollmentFile, deploymentURL},
 		{"auth", "status"},
 		{"run", "--input-file", goalFile, "--ai-connection", "personal"},
-		{"job", "list"},
-		{"job", "inspect", jobs.job.ID},
-		{"job", "message", "--input-file", messageFile, jobs.job.ID},
-		{"job", "message", "inspect", jobs.job.ID},
-		{"job", "retry", jobs.job.ID},
+		{"session", "list"},
+		{"session", "inspect", sessions.session.ID},
+		{"session", "message", "--input-file", messageFile, sessions.session.ID},
+		{"session", "message", "inspect", sessions.session.ID},
+		{"session", "retry", sessions.session.ID},
 		{"sandbox", "file", "get", "sandbox-1", "REPORT.md", "--output", download},
-		{"job", "cleanup", jobs.job.ID},
+		{"session", "cleanup", sessions.session.ID},
 	}
 	var output strings.Builder
 	for _, command := range commands {
@@ -242,7 +242,7 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 		if err := run(context.Background(), command, &stdout, &stderr); err != nil {
 			t.Fatalf("dorf %s: %v\nstderr: %s", strings.Join(command, " "), err, stderr.String())
 		}
-		if command[0] == "job" && (command[1] == "list" || command[1] == "inspect") {
+		if command[0] == "session" && (command[1] == "list" || command[1] == "inspect") {
 			if !strings.Contains(stdout.String(), "created by: laptop (client-1)") || !strings.Contains(stdout.String(), `client reference: "task-42"`) {
 				t.Fatalf("missing attribution in %s: %s", command[1], stdout.String())
 			}
@@ -264,15 +264,15 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	auth.mu.Lock()
 	code, name, credential := auth.code, auth.name, auth.credential
 	auth.mu.Unlock()
-	jobs.mu.Lock()
-	requestKey, admission := jobs.key, jobs.input
-	jobs.mu.Unlock()
+	sessions.mu.Lock()
+	requestKey, admission := sessions.key, sessions.input
+	sessions.mu.Unlock()
 	if code != "one-time-code" || name != "laptop" || len(credential) != 43 {
 		t.Fatalf("enrollment code=%q name=%q credential length=%d", code, name, len(credential))
 	}
-	wantAdmission := controlapi.AdmitJobRequest{ClientReference: "task-42", AIConnection: "personal", Reasoning: jobs.job.Reasoning}
+	wantAdmission := controlapi.CreateSessionRequest{ClientReference: "task-42", AIConnection: "personal", Reasoning: sessions.session.Reasoning}
 	if admission != wantAdmission {
-		t.Fatalf("Job admission=%#v, want %#v", admission, wantAdmission)
+		t.Fatalf("Session admission=%#v, want %#v", admission, wantAdmission)
 	}
 	if requestKey == "" || len(admissionAttempts) != 2 || admissionAttempts[0] != requestKey || admissionAttempts[1] != requestKey {
 		t.Fatalf("automatic admission attempts=%q, want the same generated identity twice", admissionAttempts)
@@ -284,9 +284,9 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	if contents, err := os.ReadFile(download); err != nil || string(contents) != "exact report\x00\n" {
 		t.Fatalf("downloaded exact Sandbox file=%q err=%v", contents, err)
 	}
-	if !strings.Contains(output.String(), "Job job-1 accepted") || !strings.Contains(output.String(), "Message message-2 accepted") ||
-		!strings.Contains(output.String(), "Retry scheduled") || !strings.Contains(output.String(), "Cleanup requested for Job job-1") {
-		t.Fatalf("remote CLI journey output omitted its Job result:\n%s", output.String())
+	if !strings.Contains(output.String(), "Session job-1 accepted") || !strings.Contains(output.String(), "Message message-2 accepted") ||
+		!strings.Contains(output.String(), "Retry scheduled") || !strings.Contains(output.String(), "Cleanup requested for Session job-1") {
+		t.Fatalf("remote CLI journey output omitted its Session result:\n%s", output.String())
 	}
 	for _, secret := range []string{code, credential, requestKey, messageAttempts[0], retryAttempts[0]} {
 		if secret != "" && strings.Contains(output.String(), secret) {
@@ -326,7 +326,7 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	}
 }
 
-func TestPublicJobStatesKeepCleanupTruthSeparateFromExecution(t *testing.T) {
+func TestPublicSessionStatesKeepCleanupTruthSeparateFromExecution(t *testing.T) {
 	const privateMarker = "reconciling private provider resource"
 	tests := []struct {
 		name          string
@@ -354,10 +354,10 @@ func TestPublicJobStatesKeepCleanupTruthSeparateFromExecution(t *testing.T) {
 			if test.wantCode == "agent_attention" {
 				inputAttention = &controlapi.Attention{Code: "agent_attention", Detail: "safe detail"}
 			}
-			view, err := publicCommonJob(core.Job{
+			view, err := publicSession(core.Session{
 				ID: "job-1", CleanupState: test.cleanup, CleanupAttention: privateMarker,
-			}, controlapi.JobKindDirect, test.execution, inputAttention, taskResultView{State: test.task, failure: test.failure},
-				[]core.Sandbox{{ID: "sandbox-1", JobID: "job-1", Name: "default"}})
+			}, test.execution, inputAttention, taskResultView{State: test.task, failure: test.failure},
+				[]core.Sandbox{{ID: "sandbox-1", SessionID: "job-1", Name: "default"}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -371,24 +371,6 @@ func TestPublicJobStatesKeepCleanupTruthSeparateFromExecution(t *testing.T) {
 				t.Fatalf("cleanup attention=%#v, want fixed %q", view.Attention, test.wantCode)
 			}
 		})
-	}
-}
-
-func TestControlJobClassificationIsClosed(t *testing.T) {
-	tests := []struct {
-		workflow core.WorkflowName
-		revision string
-		want     controlJobKind
-		ok       bool
-	}{
-		{want: controlDirectJob, ok: true},
-		{workflow: "unrecognized", revision: "1"},
-	}
-	for _, test := range tests {
-		got, ok := classifyControlJob(test.workflow, test.revision)
-		if got != test.want || ok != test.ok {
-			t.Fatalf("workflow %q revision %q classified as %q/%t, want %q/%t", test.workflow, test.revision, got, ok, test.want, test.ok)
-		}
 	}
 }
 
@@ -439,11 +421,11 @@ func TestAdmissionRetryUsesHTTPFailureClass(t *testing.T) {
 	}
 }
 
-func TestRemoteJobWatchWritesOneSnapshotPerJSONLLine(t *testing.T) {
+func TestRemoteSessionWatchWritesOneSnapshotPerJSONLLine(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	body := &cancelAtEOF{reader: strings.NewReader("event: snapshot\nid: snapshot-1\ndata: {\"id\":\"job-watch\",\"kind\":\"direct\"}\n\n"), cancel: cancel}
+	body := &cancelAtEOF{reader: strings.NewReader("event: snapshot\nid: snapshot-1\ndata: {\"id\":\"job-watch\"}\n\n"), cancel: cancel}
 	client, err := controlclient.New("https://dorf.example.test", "credential", roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		if request.URL.Path != "/v1/jobs/job-watch/watch" || request.Header.Get("Accept") != "text/event-stream" {
+		if request.URL.Path != "/v1/sessions/job-watch/watch" || request.Header.Get("Accept") != "text/event-stream" {
 			t.Fatalf("watch request path=%q accept=%q", request.URL.Path, request.Header.Get("Accept"))
 		}
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: body}, nil
@@ -452,7 +434,7 @@ func TestRemoteJobWatchWritesOneSnapshotPerJSONLLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr strings.Builder
-	if err := remoteJobWatch(ctx, client, []string{"--output", "jsonl", "job-watch"}, &stdout, &stderr); err != nil {
+	if err := remoteSessionWatch(ctx, client, []string{"--output", "jsonl", "job-watch"}, &stdout, &stderr); err != nil {
 		t.Fatalf("watch: %v stderr=%s", err, stderr.String())
 	}
 	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
@@ -473,18 +455,18 @@ func TestRemoteMessageHumanOutputQuotesHarnessControlBytes(t *testing.T) {
 }
 
 func TestControlAdmissionRejectsValuesPostgresCannotRetain(t *testing.T) {
-	for _, input := range []controlapi.AdmitJobRequest{
+	for _, input := range []controlapi.CreateSessionRequest{
 		{AgentsMD: "contains\x00nul", Model: "model", Reasoning: "high"},
 		{AgentsMD: "valid instructions", Model: strings.Repeat("m", maxControlModelBytes+1), Reasoning: "high"},
 	} {
-		if _, _, err := (controlAPIJobs{}).AdmitDirect(context.Background(), "", "request", input); !errors.Is(err, controlapi.ErrInvalidInput) {
+		if _, _, err := (controlAPISessions{}).Create(context.Background(), "", "request", input); !errors.Is(err, controlapi.ErrInvalidInput) {
 			t.Fatalf("input=%#v error=%v, want invalid input", input, err)
 		}
 	}
 }
 
 func TestControlAdmissionAllowsServerResolvedModel(t *testing.T) {
-	admission, err := newControlJobAdmission("request", "goal", "", "", "", "")
+	admission, err := newControlSessionAdmission("request", "goal", "", "", "", "")
 	if err != nil || admission.Model != "" {
 		t.Fatalf("admission=%#v error=%v", admission, err)
 	}
@@ -538,93 +520,93 @@ func (a *remoteCLIAuth) Authenticate(_ context.Context, credential string) (cont
 	return a.client, nil
 }
 
-type remoteCLIJobs struct {
-	mu    sync.Mutex
-	job   controlapi.DirectJob
-	key   string
-	input controlapi.AdmitJobRequest
+type remoteCLISessions struct {
+	mu      sync.Mutex
+	session controlapi.Session
+	key     string
+	input   controlapi.CreateSessionRequest
 }
 
-func (j *remoteCLIJobs) List(_ context.Context, limit int, cursor string) (controlapi.JobList, error) {
+func (j *remoteCLISessions) List(_ context.Context, limit int, cursor string) (controlapi.SessionList, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	return controlapi.JobList{Jobs: []controlapi.JobSummary{{
-		CreatedByClient: j.job.CreatedByClient, ClientReference: j.job.ClientReference, ID: j.job.ID, Kind: j.job.Kind, AdmittedAt: time.Date(2026, 8, 26, 11, 0, 0, 0, time.UTC),
+	return controlapi.SessionList{Sessions: []controlapi.SessionSummary{{
+		CreatedByClient: j.session.CreatedByClient, ClientReference: j.session.ClientReference, ID: j.session.ID, AdmittedAt: time.Date(2026, 8, 26, 11, 0, 0, 0, time.UTC),
 	}}}, nil
 }
 
-func (j *remoteCLIJobs) AdmitDirect(_ context.Context, _ string, key string, input controlapi.AdmitJobRequest) (controlapi.DirectJob, bool, error) {
+func (j *remoteCLISessions) Create(_ context.Context, _ string, key string, input controlapi.CreateSessionRequest) (controlapi.Session, bool, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.key, j.input = key, input
-	return j.job, true, nil
+	return j.session, true, nil
 }
 
-func (j *remoteCLIJobs) Get(_ context.Context, id string) (controlapi.JobView, error) {
+func (j *remoteCLISessions) Get(_ context.Context, id string) (controlapi.Session, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if id != j.job.ID {
-		return nil, controlapi.ErrJobNotFound
+	if id != j.session.ID {
+		return controlapi.Session{}, controlapi.ErrSessionNotFound
 	}
-	return j.job, nil
+	return j.session, nil
 }
 
-func (j *remoteCLIJobs) RequestCleanup(_ context.Context, id string) (controlapi.JobView, error) {
+func (j *remoteCLISessions) RequestCleanup(_ context.Context, id string) (controlapi.Session, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if id != j.job.ID {
-		return nil, controlapi.ErrJobNotFound
+	if id != j.session.ID {
+		return controlapi.Session{}, controlapi.ErrSessionNotFound
 	}
-	j.job.Cleanup.State = "requested"
-	return j.job, nil
+	j.session.Cleanup.State = "requested"
+	return j.session, nil
 }
 
-func (j *remoteCLIJobs) SendMessage(_ context.Context, jobID, _ string, input controlapi.SendMessageRequest) (controlapi.Message, bool, error) {
-	if jobID != j.job.ID {
-		return controlapi.Message{}, false, controlapi.ErrJobNotFound
+func (j *remoteCLISessions) SendMessage(_ context.Context, sessionID, _ string, input controlapi.SendMessageRequest) (controlapi.Message, bool, error) {
+	if sessionID != j.session.ID {
+		return controlapi.Message{}, false, controlapi.ErrSessionNotFound
 	}
 	return controlapi.Message{
-		ID: "message-2", JobID: jobID, Sequence: 2, Intent: input.Intent,
+		ID: "message-2", SessionID: sessionID, Sequence: 2, Intent: input.Intent,
 		Delivery: controlapi.State{State: "pending"}, AdmittedAt: time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC),
 	}, true, nil
 }
 
-func (j *remoteCLIJobs) GetMessage(_ context.Context, jobID, messageID string) (controlapi.Message, error) {
-	if jobID != j.job.ID || (messageID != "message-2" && messageID != "latest") {
+func (j *remoteCLISessions) GetMessage(_ context.Context, sessionID, messageID string) (controlapi.Message, error) {
+	if sessionID != j.session.ID || (messageID != "message-2" && messageID != "latest") {
 		return controlapi.Message{}, controlapi.ErrMessageNotFound
 	}
-	return controlapi.Message{ID: messageID, JobID: jobID, Sequence: 2, Intent: "follow", Delivery: controlapi.State{State: "completed"}}, nil
+	return controlapi.Message{ID: messageID, SessionID: sessionID, Sequence: 2, Intent: "follow", Delivery: controlapi.State{State: "completed"}}, nil
 }
 
-func (j *remoteCLIJobs) InterruptMessage(ctx context.Context, jobID, messageID string) (controlapi.Message, error) {
-	message, err := j.GetMessage(ctx, jobID, messageID)
+func (j *remoteCLISessions) InterruptMessage(ctx context.Context, sessionID, messageID string) (controlapi.Message, error) {
+	message, err := j.GetMessage(ctx, sessionID, messageID)
 	message.InterruptRequested = err == nil
 	return message, err
 }
 
-func (j *remoteCLIJobs) Retry(_ context.Context, jobID, _ string) (controlapi.Retry, bool, error) {
-	if jobID != j.job.ID {
-		return controlapi.Retry{}, false, controlapi.ErrJobNotFound
+func (j *remoteCLISessions) Retry(_ context.Context, sessionID, _ string) (controlapi.Retry, bool, error) {
+	if sessionID != j.session.ID {
+		return controlapi.Retry{}, false, controlapi.ErrSessionNotFound
 	}
-	return controlapi.Retry{JobID: jobID, State: "scheduled"}, true, nil
+	return controlapi.Retry{SessionID: sessionID, State: "scheduled"}, true, nil
 }
 
-func (j *remoteCLIJobs) ReadSandboxFile(_ context.Context, sandboxID, path string) ([]byte, error) {
+func (j *remoteCLISessions) ReadSandboxFile(_ context.Context, sandboxID, path string) ([]byte, error) {
 	if sandboxID != "sandbox-1" || path != "REPORT.md" {
 		return nil, controlapi.ErrFileNotFound
 	}
 	return []byte("exact report\x00\n"), nil
 }
 
-func (j *remoteCLIJobs) WriteSandboxFile(context.Context, string, string, []byte, bool) error {
+func (j *remoteCLISessions) WriteSandboxFile(context.Context, string, string, []byte, bool) error {
 	return nil
 }
 
-func (f *remoteCLIJobs) ExecSandbox(context.Context, string, provider.Command) (provider.CommandResult, error) {
+func (f *remoteCLISessions) ExecSandbox(context.Context, string, provider.Command) (provider.CommandResult, error) {
 	return provider.CommandResult{}, nil
 }
 
-func TestRemoteJobHumanExecutionLabels(t *testing.T) {
+func TestRemoteSessionHumanExecutionLabels(t *testing.T) {
 	for _, test := range []struct {
 		state     string
 		attention *controlapi.Attention
@@ -642,14 +624,10 @@ func TestRemoteJobHumanExecutionLabels(t *testing.T) {
 	} {
 		t.Run(test.state+"/"+test.want, func(t *testing.T) {
 			var output strings.Builder
-			job := controlapi.Job{Execution: controlapi.State{State: test.state}, Attention: test.attention}
-			var view controlapi.JobView = controlapi.DirectJob{Job: job}
-			if test.state == "complete" {
-				view = controlapi.DirectJob{Job: job}
-			}
-			renderRemoteJob(&output, view)
+			session := controlapi.Session{Execution: controlapi.State{State: test.state}, Attention: test.attention}
+			renderRemoteSession(&output, session)
 			if !strings.Contains(output.String(), "  execution: "+test.want+"\n") {
-				t.Fatalf("human Job output = %q", output.String())
+				t.Fatalf("human Session output = %q", output.String())
 			}
 		})
 	}
@@ -682,6 +660,6 @@ func TestRemoteMessageHumanDeliveryLabels(t *testing.T) {
 	}
 }
 
-func (f *remoteCLIJobs) ReadSandboxStatus(context.Context, string) (provider.Status, error) {
+func (f *remoteCLISessions) ReadSandboxStatus(context.Context, string) (provider.Status, error) {
 	return provider.Status{Provider: "incus", State: "running"}, nil
 }

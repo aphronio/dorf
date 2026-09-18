@@ -14,7 +14,7 @@ pre-upgrade environment, including application data that the new version may hav
 
 Keep the first version small: one upgrade at a time per Sandbox, one checkpoint, a bounded
 verification step, and rollback before reopening message delivery. Profile promotion selects
-images for future Jobs; this follow-up updates packages inside existing VMs. Retain the original
+images for future Sessions; this follow-up updates packages inside existing VMs. Retain the original
 profile revision and record the package upgrade separately so diagnostics explain both.
 
 ## High-level flow
@@ -77,11 +77,11 @@ checkpoint. Incus does not require retaining a restored snapshot as the running 
 
 ### Stable logical Sandbox, replaceable provider resource
 
-Keep the Job and logical Sandbox IDs stable. Bind each logical Sandbox explicitly to its active
-provider resource. Retain an append-only replacement history, accessible through Job inspection,
+Keep the Session and logical Sandbox IDs stable. Bind each logical Sandbox explicitly to its active
+provider resource. Retain an append-only replacement history, accessible through Session inspection,
 with the previous and replacement provider IDs, upgrade ID, checkpoint reference, reason,
 verification timestamps, and cleanup outcome. Incus restore records the same resource ID on both
-sides; E2B restore records a new one. Do not duplicate this history on the Job itself.
+sides; E2B restore records a new one. Do not duplicate this history on the Session itself.
 
 Persist replacement intent before creating a VM. Exact resource ownership must distinguish the
 old VM from the replacement while both exist; broad owner discovery must not choose arbitrarily.
@@ -108,7 +108,7 @@ Product-specific copy and UI behavior belong in the consuming application.
 ## Logfire observability
 
 Assign a stable `upgrade_id` that survives retries and controller restarts. Correlate all upgrade
-events and spans with Job ID, logical Sandbox ID, provider sandbox IDs, provider, old/new package
+events and spans with Session ID, logical Sandbox ID, provider sandbox IDs, provider, old/new package
 versions or generations, and checkpoint reference. Include durations and sanitized error details.
 
 Record request acceptance, delivery hold, checkpoint creation, installation, verification,
@@ -129,9 +129,9 @@ Progress as of 2026-09-15:
   E2B using Dorf's Go checkpoint adapters: package activation, nonempty native replies, original
   context, exact local-state restoration, retry identity, and resource/checkpoint cleanup.
 - Resource foundation implemented: separate records, active binding, immutable attested locator,
-  migration preserving ownership, Job inspection history, and retained deletion receipts.
+  migration preserving ownership, Session inspection history, and retained deletion receipts.
   Checkpoint authority/fault tests, live proofs, and the full deterministic gate pass.
-- Delivery-hold foundation implemented for direct Jobs: durable admission barrier, FIFO release
+- Delivery-hold foundation implemented for direct Sessions: durable admission barrier, FIFO release
   with an atomic execution wake, stale-release protection, idle/access exclusion, and cleanup.
   `mise run integration:delivery-hold` verifies storage, public waiting status, and an actual
   Absurd worker restart with exactly one native submission per queued Message.
@@ -218,10 +218,10 @@ ingestion is confirmed in the 14:17–14:26 UTC window: 4 Incus image events, 6 
 (including the initial failure), and 35/37 coordinator events respectively. Each coordinator proof
 has one `upgraded` and one `rolled_back` outcome. The full deterministic repository gate also passed.
 
-`dorf upgrade request` accepts an exact staged Nix closure and version for a direct Job. The same
+`dorf upgrade request` accepts an exact staged Nix closure and version for a direct Session. The same
 retained task owns native work and upgrade reconciliation. A restarted executor reloads receipts;
 stale claims or a changed source binding cannot select a replacement. The operator-facing receipt
-and Job projection retain source/destination resources, checkpoint, package versions, verification,
+and Session projection retain source/destination resources, checkpoint, package versions, verification,
 terminal outcome, and failure codes. The profile revision remains unchanged.
 
 The shared guest recipe installs pinned Nix, the initial Codex generation, and the same workstation
@@ -332,7 +332,7 @@ size limit. The E2B release template is public after explicit publication author
 verified using credentials from a different deployment team.
 
 Deployed profile verification and synthetic initial/follow-up checks passed on both providers.
-Each follow-up recalled its original marker; image metadata matched the release, and test Jobs
+Each follow-up recalled its original marker; image metadata matched the release, and test Sessions
 completed cleanup. Deployment-specific identities and consuming-application checks remain in
 private operational records. Automatic fleet rollout, offline delivery, old-image bootstrap,
 and live updates of packages other than Codex remain deferred.

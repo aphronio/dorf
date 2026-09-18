@@ -20,8 +20,8 @@ import (
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-var ErrNotFound = errors.New("Dorf Job not found")
-var ErrAdmissionConflict = errors.New("admission key is bound to different complete Job input")
+var ErrNotFound = errors.New("Dorf Session not found")
+var ErrAdmissionConflict = errors.New("admission key is bound to different complete Session input")
 var sha256Digest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var sandboxName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,126}$`)
 
@@ -31,7 +31,7 @@ const (
 	AbsurdSchemaSHA256  = "d34309370c539f3a51f2b36b69b1f77551f8e4a14480a1c8def8bb8f40fd9aab"
 )
 
-var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql", "009_message_attachments.sql", "010_job_idle_policy.sql", "011_message_developer_instructions.sql", "012_sandbox_idle_grace.sql", "013_message_observation.sql", "014_job_execution_wakes.sql", "015_observation_auto.sql", "016_profile_revisions.sql", "017_sandbox_resources.sql", "018_sandbox_delivery_holds.sql", "019_sandbox_upgrades.sql", "020_sandbox_checkpoints.sql", "021_checkpoint_recovery.sql", "022_remove_investigation.sql", "023_remove_coding.sql", "024_job_thread.sql"}
+var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql", "009_message_attachments.sql", "010_job_idle_policy.sql", "011_message_developer_instructions.sql", "012_sandbox_idle_grace.sql", "013_message_observation.sql", "014_job_execution_wakes.sql", "015_observation_auto.sql", "016_profile_revisions.sql", "017_sandbox_resources.sql", "018_sandbox_delivery_holds.sql", "019_sandbox_upgrades.sql", "020_sandbox_checkpoints.sql", "021_checkpoint_recovery.sql", "022_remove_investigation.sql", "023_remove_coding.sql", "024_job_thread.sql", "025_sessions.sql"}
 
 type Store struct{ DB *sql.DB }
 
@@ -198,7 +198,7 @@ func (s Store) admitMessage(ctx context.Context, input core.MessageAdmission) (c
 }
 
 func normalizeMessage(input core.MessageAdmission) (core.MessageAdmission, error) {
-	input.JobID = strings.TrimSpace(input.JobID)
+	input.SessionID = strings.TrimSpace(input.SessionID)
 	input.SandboxID = strings.TrimSpace(input.SandboxID)
 	input.FromKind = core.MessageFromKind(strings.TrimSpace(string(input.FromKind)))
 	input.FromID = strings.TrimSpace(input.FromID)
@@ -208,8 +208,8 @@ func normalizeMessage(input core.MessageAdmission) (core.MessageAdmission, error
 	if input.Intent == "" {
 		input.Intent = core.MessageFollow
 	}
-	if input.JobID == "" || input.SandboxID == "" || input.FromID == "" {
-		return core.MessageAdmission{}, fmt.Errorf("message admission requires Job ID, exact Sandbox ID, from ID, and text or attachments")
+	if input.SessionID == "" || input.SandboxID == "" || input.FromID == "" {
+		return core.MessageAdmission{}, fmt.Errorf("message admission requires Session ID, exact Sandbox ID, from ID, and text or attachments")
 	}
 	if input.FromKind != core.MessageFromHuman && input.FromKind != core.MessageFromAgent && input.FromKind != core.MessageFromWorkflow {
 		return core.MessageAdmission{}, fmt.Errorf("invalid message from kind")
@@ -232,25 +232,25 @@ func normalizeMessage(input core.MessageAdmission) (core.MessageAdmission, error
 
 func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission) (core.Message, bool, error) {
 	queries := dbsql.New(tx)
-	job, err := queries.GetJobAdmissionForUpdate(ctx, input.JobID)
+	session, err := queries.GetSessionAdmissionForUpdate(ctx, input.SessionID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return core.Message{}, false, ErrNotFound
 		}
 		return core.Message{}, false, err
 	}
-	if job.WorkflowName != "" || job.WorkflowRevision != "" {
-		return core.Message{}, false, fmt.Errorf("Job %s is not client-directed", input.JobID)
+	if session.WorkflowName != "" || session.WorkflowRevision != "" {
+		return core.Message{}, false, fmt.Errorf("Session %s is not client-directed", input.SessionID)
 	}
-	row, err := queries.GetMessageBySender(ctx, dbsql.GetMessageBySenderParams{JobID: input.JobID, FromKind: input.FromKind, FromID: input.FromID})
+	row, err := queries.GetMessageBySender(ctx, dbsql.GetMessageBySenderParams{SessionID: input.SessionID, FromKind: input.FromKind, FromID: input.FromID})
 	if err == nil {
 		return replayMessageAdmission(ctx, queries, row, input)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return core.Message{}, false, err
 	}
-	if !job.AdmissionOpen {
-		return core.Message{}, false, fmt.Errorf("%w for Job %s", core.ErrMessageAdmissionClosed, input.JobID)
+	if !session.AdmissionOpen {
+		return core.Message{}, false, fmt.Errorf("%w for Session %s", core.ErrMessageAdmissionClosed, input.SessionID)
 	}
 	run, err := resolveDirectMessageEnvelope(input)
 	if err != nil {
@@ -268,23 +268,23 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 	message.RefreshSkills = input.RefreshSkills
 	message.Observation = input.Observation
 	message.DeveloperInstructions = input.DeveloperInstructions
-	message.Sequence, err = queries.NextMessageSequence(ctx, input.JobID)
+	message.Sequence, err = queries.NextMessageSequence(ctx, input.SessionID)
 	if err != nil {
 		return core.Message{}, false, err
 	}
-	message.ID = core.MessageID(input.JobID, input.FromKind, input.FromID)
-	message.JobID, message.FromKind, message.FromID, message.Input, message.Attachments, message.Intent = input.JobID, input.FromKind, input.FromID, input.Input, input.Attachments, target.intent
+	message.ID = core.MessageID(input.SessionID, input.FromKind, input.FromID)
+	message.SessionID, message.FromKind, message.FromID, message.Input, message.Attachments, message.Intent = input.SessionID, input.FromKind, input.FromID, input.Input, input.Attachments, target.intent
 	message.RequestedIntent = input.Intent
 	attachments, err := encodeMessageAttachments(message.Attachments)
 	if err != nil {
 		return core.Message{}, false, err
 	}
-	if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{ID: message.ID, JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID, Sequence: message.Sequence, Input: message.Input, Attachments: attachments, DeliveryIntent: message.Intent, RequestedIntent: string(input.Intent), Observation: input.Observation, DeveloperInstructions: instructionSQL(input.DeveloperInstructions), RefreshSkills: input.RefreshSkills, SteerTargetTurnID: message.TargetTurnID}); err != nil {
+	if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{ID: message.ID, SessionID: message.SessionID, FromKind: message.FromKind, FromID: message.FromID, Sequence: message.Sequence, Input: message.Input, Attachments: attachments, DeliveryIntent: message.Intent, RequestedIntent: string(input.Intent), Observation: input.Observation, DeveloperInstructions: instructionSQL(input.DeveloperInstructions), RefreshSkills: input.RefreshSkills, SteerTargetTurnID: message.TargetTurnID}); err != nil {
 		return core.Message{}, false, err
 	}
 	runID := core.AgentRunID(message.ID)
 	rows, err := queries.InsertAdmittedAgentRun(ctx, dbsql.InsertAdmittedAgentRunParams{
-		ID: runID, JobID: message.JobID, MessageID: message.ID,
+		ID: runID, SessionID: message.SessionID, MessageID: message.ID,
 		Harness: nullableString(target.harness), ThreadID: nullableString(target.threadID),
 		Role: run.Role, InputRevision: nullableString(run.InputRevision),
 		Capability: nullableString(run.Capability), SandboxID: run.SandboxID,
@@ -292,7 +292,7 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 	if err := expectOneRows(rows, err); err != nil {
 		return core.Message{}, false, fmt.Errorf("insert %s execution-envelope AgentRun: %w", run.Role, err)
 	}
-	storedMessage, err := queries.GetMessageBySender(ctx, dbsql.GetMessageBySenderParams{JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID})
+	storedMessage, err := queries.GetMessageBySender(ctx, dbsql.GetMessageBySenderParams{SessionID: message.SessionID, FromKind: message.FromKind, FromID: message.FromID})
 	if err != nil {
 		return core.Message{}, false, err
 	}
@@ -310,7 +310,7 @@ func replayMessageAdmission(ctx context.Context, queries *dbsql.Queries, row dbs
 		return core.Message{}, false, fmt.Errorf("load durable AgentRun for Message replay: %w", err)
 	}
 	stored := core.MessageAdmission{
-		JobID: run.JobID, SandboxID: run.SandboxID, FromKind: message.FromKind, FromID: message.FromID,
+		SessionID: run.SessionID, SandboxID: run.SandboxID, FromKind: message.FromKind, FromID: message.FromID,
 		Input: message.Input, Attachments: message.Attachments, Intent: core.MessageDeliveryIntent(row.RequestedIntent), RefreshSkills: message.RefreshSkills, Observation: message.Observation, DeveloperInstructions: message.DeveloperInstructions,
 	}
 	if !sameMessageAdmission(stored, input) {
@@ -342,7 +342,7 @@ func resolveMessageTarget(ctx context.Context, queries *dbsql.Queries, input cor
 		return target, nil
 	}
 	active, err := queries.GetActiveAgentTurn(ctx, dbsql.GetActiveAgentTurnParams{
-		JobID: input.JobID, Role: run.Role, SandboxID: run.SandboxID,
+		SessionID: input.SessionID, Role: run.Role, SandboxID: run.SandboxID,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		if input.Intent == core.MessageSteer {
@@ -356,23 +356,23 @@ func resolveMessageTarget(ctx context.Context, queries *dbsql.Queries, input cor
 	return messageTarget{intent: core.MessageSteer, harness: active.Harness, threadID: active.ThreadID, turnID: active.TurnID}, nil
 }
 
-func allocateMessageSequenceTx(ctx context.Context, tx *sql.Tx, jobID string) (int64, error) {
-	return dbsql.New(tx).NextMessageSequence(ctx, jobID)
+func allocateMessageSequenceTx(ctx context.Context, tx *sql.Tx, sessionID string) (int64, error) {
+	return dbsql.New(tx).NextMessageSequence(ctx, sessionID)
 }
 
-func (s Store) Job(ctx context.Context, id string) (core.Job, error) {
-	row, err := dbsql.New(s.DB).GetJob(ctx, id)
+func (s Store) Session(ctx context.Context, id string) (core.Session, error) {
+	row, err := dbsql.New(s.DB).GetSession(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return core.Job{}, ErrNotFound
+		return core.Session{}, ErrNotFound
 	}
 	if err != nil {
-		return core.Job{}, err
+		return core.Session{}, err
 	}
-	return core.Job{
+	return core.Session{
 		CreatedByClientID: row.CreatedByClientID, CreatedByClientName: row.CreatedByClientName, ClientReference: row.ClientReference,
 		ID: row.ID, AdmissionKey: row.AdmissionKey, Workflow: core.WorkflowName(row.WorkflowName), WorkflowRevision: row.WorkflowRevision,
-		AgentsMD:      row.AgentsMd,
-		ThreadHarness: row.ThreadHarness, ThreadID: row.ThreadID,
+		AgentsMD: row.AgentsMd,
+		Harness:  row.Harness, ThreadID: row.ThreadID,
 		SandboxProfile: row.SandboxProfile, SandboxProfileRevision: row.SandboxProfileRevision, ProviderConnection: row.ProviderConnection,
 		KeepRunning: row.KeepRunning, Model: row.Model, ReasoningEffort: row.ReasoningEffort, AdmissionOpen: row.AdmissionOpen, CleanupState: core.CleanupState(row.CleanupState),
 		CurrentTaskID:     row.CurrentTaskID,
@@ -382,33 +382,33 @@ func (s Store) Job(ctx context.Context, id string) (core.Job, error) {
 	}, nil
 }
 
-func (s Store) JobExists(ctx context.Context, id string) (bool, error) {
-	_, err := s.Job(ctx, id)
+func (s Store) SessionExists(ctx context.Context, id string) (bool, error) {
+	_, err := s.Session(ctx, id)
 	if errors.Is(err, ErrNotFound) {
 		return false, nil
 	}
 	return err == nil, err
 }
 
-func (s Store) JobTasks(ctx context.Context, jobID string) ([]core.JobTask, error) {
-	rows, err := dbsql.New(s.DB).ListJobTasks(ctx, jobID)
+func (s Store) SessionTasks(ctx context.Context, sessionID string) ([]core.SessionTask, error) {
+	rows, err := dbsql.New(s.DB).ListSessionTasks(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	tasks := make([]core.JobTask, 0, len(rows))
+	tasks := make([]core.SessionTask, 0, len(rows))
 	for _, row := range rows {
-		tasks = append(tasks, core.JobTask{
-			JobID: row.JobID, Sequence: row.Sequence, TaskID: row.TaskID,
+		tasks = append(tasks, core.SessionTask{
+			SessionID: row.SessionID, Sequence: row.Sequence, TaskID: row.TaskID,
 			TaskName: row.TaskName, AttachedAt: row.AttachedAt,
 		})
 	}
 	return tasks, nil
 }
 
-// WithJobFence serializes harness and other external mutation for one Job
+// WithSessionFence serializes harness and other external mutation for one Session
 // independently of an expiring Absurd claim. Message admission intentionally
 // does not take this long-lived fence.
-func (s Store) WithJobFence(ctx context.Context, jobID string, fn func() error) error {
+func (s Store) WithSessionFence(ctx context.Context, sessionID string, fn func() error) error {
 	conn, err := s.DB.Conn(ctx)
 	if err != nil {
 		return err
@@ -419,7 +419,7 @@ func (s Store) WithJobFence(ctx context.Context, jobID string, fn func() error) 
 		return err
 	}
 	defer tx.Rollback()
-	if err := acquireJobFenceTx(ctx, tx, jobID); err != nil {
+	if err := acquireSessionFenceTx(ctx, tx, sessionID); err != nil {
 		return err
 	}
 	if err := fn(); err != nil {
@@ -428,25 +428,25 @@ func (s Store) WithJobFence(ctx context.Context, jobID string, fn func() error) 
 	return tx.Commit()
 }
 
-func acquireJobFenceTx(ctx context.Context, tx *sql.Tx, jobID string) error {
-	if _, err := tx.ExecContext(ctx, `select pg_advisory_xact_lock(hashtextextended('dorf-job-effect:' || $1, 0))`, jobID); err != nil {
-		return fmt.Errorf("acquire Job execution fence: %w", err)
+func acquireSessionFenceTx(ctx context.Context, tx *sql.Tx, sessionID string) error {
+	if _, err := tx.ExecContext(ctx, `select pg_advisory_xact_lock(hashtextextended('dorf-job-effect:' || $1, 0))`, sessionID); err != nil {
+		return fmt.Errorf("acquire Session execution fence: %w", err)
 	}
 	return nil
 }
 
-// AttachJobTask appends one exact Absurd task handoff. The deterministic Absurd
+// AttachSessionTask appends one exact Absurd task handoff. The deterministic Absurd
 // idempotency key supplies task identity; Dorf records only ordered attachment.
-func (s Store) AttachJobTask(ctx context.Context, jobID, expectedCurrentTaskID, taskID, taskName string) error {
-	return s.attachJobTask(ctx, jobID, expectedCurrentTaskID, taskID, taskName, false)
+func (s Store) AttachSessionTask(ctx context.Context, sessionID, expectedCurrentTaskID, taskID, taskName string) error {
+	return s.attachSessionTask(ctx, sessionID, expectedCurrentTaskID, taskID, taskName, false)
 }
 
-func messageFromValues(id, jobID string, fromKind core.MessageFromKind, fromID string, sequence int64, input string, intent core.MessageDeliveryIntent, targetTurnID string) core.Message {
-	return core.Message{ID: id, JobID: jobID, FromKind: fromKind, FromID: fromID, Sequence: sequence, Input: input, Intent: intent, TargetTurnID: targetTurnID}
+func messageFromValues(id, sessionID string, fromKind core.MessageFromKind, fromID string, sequence int64, input string, intent core.MessageDeliveryIntent, targetTurnID string) core.Message {
+	return core.Message{ID: id, SessionID: sessionID, FromKind: fromKind, FromID: fromID, Sequence: sequence, Input: input, Intent: intent, TargetTurnID: targetTurnID}
 }
 
-func messageFromStoredValues(id, jobID string, fromKind core.MessageFromKind, fromID string, sequence int64, input string, attachments []byte, intent core.MessageDeliveryIntent, targetTurnID string) (core.Message, error) {
-	message := messageFromValues(id, jobID, fromKind, fromID, sequence, input, intent, targetTurnID)
+func messageFromStoredValues(id, sessionID string, fromKind core.MessageFromKind, fromID string, sequence int64, input string, attachments []byte, intent core.MessageDeliveryIntent, targetTurnID string) (core.Message, error) {
+	message := messageFromValues(id, sessionID, fromKind, fromID, sequence, input, intent, targetTurnID)
 	decoded, err := decodeMessageAttachments(attachments)
 	if err != nil {
 		return core.Message{}, fmt.Errorf("Message %s has invalid durable attachments: %w", id, err)
@@ -457,7 +457,7 @@ func messageFromStoredValues(id, jobID string, fromKind core.MessageFromKind, fr
 
 func messageFromSenderRow(row dbsql.GetMessageBySenderRow) (core.Message, error) {
 	message, err := messageFromStoredValues(
-		row.ID, row.JobID, row.FromKind, row.FromID, row.Sequence, row.Input,
+		row.ID, row.SessionID, row.FromKind, row.FromID, row.Sequence, row.Input,
 		row.Attachments, row.DeliveryIntent, row.SteerTargetTurnID,
 	)
 	if err != nil {
@@ -497,7 +497,7 @@ func decodeMessageAttachments(encoded []byte) ([]core.MessageAttachment, error) 
 }
 
 func sameMessageAdmission(left, right core.MessageAdmission) bool {
-	if left.Observation != right.Observation || !core.SameDeveloperInstructions(left.DeveloperInstructions, right.DeveloperInstructions) || left.RefreshSkills != right.RefreshSkills || left.JobID != right.JobID || left.SandboxID != right.SandboxID ||
+	if left.Observation != right.Observation || !core.SameDeveloperInstructions(left.DeveloperInstructions, right.DeveloperInstructions) || left.RefreshSkills != right.RefreshSkills || left.SessionID != right.SessionID || left.SandboxID != right.SandboxID ||
 		left.FromKind != right.FromKind || left.FromID != right.FromID || left.Input != right.Input || left.Intent != right.Intent ||
 		len(left.Attachments) != len(right.Attachments) {
 		return false
@@ -510,20 +510,20 @@ func sameMessageAdmission(left, right core.MessageAdmission) bool {
 	return true
 }
 
-func actionFromValues(id, jobID string, kind core.ActionKind, state core.ActionState, scope string, createdAt time.Time, settledAt sql.NullTime) core.Action {
-	return core.Action{ID: id, JobID: jobID, Kind: kind, State: state, Scope: scope, CreatedAt: createdAt, SettledAt: timeValue(settledAt)}
+func actionFromValues(id, sessionID string, kind core.ActionKind, state core.ActionState, scope string, createdAt time.Time, settledAt sql.NullTime) core.Action {
+	return core.Action{ID: id, SessionID: sessionID, Kind: kind, State: state, Scope: scope, CreatedAt: createdAt, SettledAt: timeValue(settledAt)}
 }
 
-func exactScopedAction(row dbsql.DorfAction, jobID string, kind core.ActionKind, scope string) (core.Action, error) {
-	expectedID := core.ScopedActionID(jobID, kind, scope)
-	if row.ID != expectedID || row.JobID != jobID || row.Kind != kind || row.ScopeKey != scope {
-		return core.Action{}, fmt.Errorf("Action %s conflicts with exact Job %s, kind %s, and scope %s", row.ID, jobID, kind, scope)
+func exactScopedAction(row dbsql.DorfAction, sessionID string, kind core.ActionKind, scope string) (core.Action, error) {
+	expectedID := core.ScopedActionID(sessionID, kind, scope)
+	if row.ID != expectedID || row.SessionID != sessionID || row.Kind != kind || row.ScopeKey != scope {
+		return core.Action{}, fmt.Errorf("Action %s conflicts with exact Session %s, kind %s, and scope %s", row.ID, sessionID, kind, scope)
 	}
-	return actionFromValues(row.ID, row.JobID, row.Kind, row.State, row.ScopeKey, row.CreatedAt, row.SettledAt), nil
+	return actionFromValues(row.ID, row.SessionID, row.Kind, row.State, row.ScopeKey, row.CreatedAt, row.SettledAt), nil
 }
 
-func agentRunFromValues(id, jobID, messageID string, state core.AgentRunState, harness, threadID string, baselineRecorded bool, baselineTurnID, turnID, turnOutcome, attention, role, inputRevision string) core.AgentRun {
-	return core.AgentRun{ID: id, JobID: jobID, MessageID: messageID, Harness: harness, ThreadID: threadID, State: state, BaselineRecorded: baselineRecorded, BaselineTurnID: baselineTurnID, TurnID: turnID, TurnOutcome: turnOutcome, Attention: attention, Role: role, InputRevision: inputRevision}
+func agentRunFromValues(id, sessionID, messageID string, state core.AgentRunState, harness, threadID string, baselineRecorded bool, baselineTurnID, turnID, turnOutcome, attention, role, inputRevision string) core.AgentRun {
+	return core.AgentRun{ID: id, SessionID: sessionID, MessageID: messageID, Harness: harness, ThreadID: threadID, State: state, BaselineRecorded: baselineRecorded, BaselineTurnID: baselineTurnID, TurnID: turnID, TurnOutcome: turnOutcome, Attention: attention, Role: role, InputRevision: inputRevision}
 }
 
 func agentRunOutcome(state core.AgentRunState, outcome string) string {
@@ -546,22 +546,22 @@ func timeValue(value sql.NullTime) time.Time {
 	return value.Time
 }
 
-func (s Store) RequestCleanup(ctx context.Context, jobID string) error {
+func (s Store) RequestCleanup(ctx context.Context, sessionID string) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(s.DB).WithTx(tx)
-	if _, err := queries.GetCleanupJobForUpdate(ctx, jobID); err != nil {
+	if _, err := queries.GetCleanupSessionForUpdate(ctx, sessionID); err != nil {
 		return err
 	}
-	closed, err := queries.RequestCleanup(ctx, jobID)
+	closed, err := queries.RequestCleanup(ctx, sessionID)
 	if err != nil {
 		return err
 	}
 	if closed != 1 {
-		return fmt.Errorf("Job %s cannot record cleanup request from its current state", jobID)
+		return fmt.Errorf("Session %s cannot record cleanup request from its current state", sessionID)
 	}
 	return tx.Commit()
 }
@@ -570,38 +570,38 @@ func (s Store) CleanupRequests(ctx context.Context) ([]string, error) {
 	return dbsql.New(s.DB).ListCleanupRequests(ctx)
 }
 
-func (s Store) AttachCleanupTask(ctx context.Context, jobID, expectedCurrentTaskID, taskID, taskName string) error {
-	return s.attachJobTask(ctx, jobID, expectedCurrentTaskID, taskID, taskName, true)
+func (s Store) AttachCleanupTask(ctx context.Context, sessionID, expectedCurrentTaskID, taskID, taskName string) error {
+	return s.attachSessionTask(ctx, sessionID, expectedCurrentTaskID, taskID, taskName, true)
 }
 
-func (s Store) attachJobTask(ctx context.Context, jobID, expectedCurrentTaskID, taskID, taskName string, cleanup bool) error {
-	jobID = strings.TrimSpace(jobID)
+func (s Store) attachSessionTask(ctx context.Context, sessionID, expectedCurrentTaskID, taskID, taskName string, cleanup bool) error {
+	sessionID = strings.TrimSpace(sessionID)
 	expectedCurrentTaskID = strings.TrimSpace(expectedCurrentTaskID)
 	taskID = strings.TrimSpace(taskID)
 	taskName = strings.TrimSpace(taskName)
-	if jobID == "" || taskID == "" || taskName == "" {
-		return fmt.Errorf("Job task attachment requires exact Job, task, and task-name identities")
+	if sessionID == "" || taskID == "" || taskName == "" {
+		return fmt.Errorf("Session task attachment requires exact Session, task, and task-name identities")
 	}
 	if cleanup && taskName != core.CleanupTaskName {
-		return fmt.Errorf("Job cleanup task must use Core task name %s", core.CleanupTaskName)
+		return fmt.Errorf("Session cleanup task must use Core task name %s", core.CleanupTaskName)
 	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if err := attachJobTaskTx(ctx, dbsql.New(tx), jobID, expectedCurrentTaskID, taskID, taskName, cleanup); err != nil {
+	if err := attachSessionTaskTx(ctx, dbsql.New(tx), sessionID, expectedCurrentTaskID, taskID, taskName, cleanup); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func attachJobTaskTx(ctx context.Context, queries *dbsql.Queries, jobID, expectedCurrentTaskID, taskID, taskName string, cleanup bool) error {
-	current, err := queries.GetCurrentJobTaskForUpdate(ctx, jobID)
+func attachSessionTaskTx(ctx context.Context, queries *dbsql.Queries, sessionID, expectedCurrentTaskID, taskID, taskName string, cleanup bool) error {
+	current, err := queries.GetCurrentSessionTaskForUpdate(ctx, sessionID)
 	if err != nil {
 		return err
 	}
-	if err := validateTaskAttachmentState(current, jobID, taskID, cleanup); err != nil {
+	if err := validateTaskAttachmentState(current, sessionID, taskID, cleanup); err != nil {
 		return err
 	}
 	if current.TaskID == taskID {
@@ -610,40 +610,40 @@ func attachJobTaskTx(ctx context.Context, queries *dbsql.Queries, jobID, expecte
 		}
 	} else {
 		if current.TaskID != expectedCurrentTaskID {
-			return fmt.Errorf("Job %s current task is %q, not expected predecessor %q", jobID, current.TaskID, expectedCurrentTaskID)
+			return fmt.Errorf("Session %s current task is %q, not expected predecessor %q", sessionID, current.TaskID, expectedCurrentTaskID)
 		}
-		inserted, err := queries.InsertJobTask(ctx, dbsql.InsertJobTaskParams{
-			JobID: jobID, Sequence: current.Sequence + 1, TaskID: taskID, TaskName: taskName,
+		inserted, err := queries.InsertSessionTask(ctx, dbsql.InsertSessionTaskParams{
+			SessionID: sessionID, Sequence: current.Sequence + 1, TaskID: taskID, TaskName: taskName,
 		})
 		if err != nil {
 			return err
 		}
 		if inserted != 1 {
-			return fmt.Errorf("Absurd task %s is already attached to another Job", taskID)
+			return fmt.Errorf("Absurd task %s is already attached to another Session", taskID)
 		}
 	}
 	if cleanup && current.CleanupState == core.CleanupRequested {
-		updated, err := queries.MarkCleanupScheduled(ctx, jobID)
+		updated, err := queries.MarkCleanupScheduled(ctx, sessionID)
 		if err != nil {
 			return err
 		}
 		if updated != 1 {
-			return fmt.Errorf("Job %s cleanup scheduling did not settle", jobID)
+			return fmt.Errorf("Session %s cleanup scheduling did not settle", sessionID)
 		}
 	}
 	return nil
 }
 
-func validateTaskAttachmentState(current dbsql.GetCurrentJobTaskForUpdateRow, jobID, taskID string, cleanup bool) error {
+func validateTaskAttachmentState(current dbsql.GetCurrentSessionTaskForUpdateRow, sessionID, taskID string, cleanup bool) error {
 	if cleanup {
 		if current.AdmissionOpen || (current.CleanupState != core.CleanupRequested && current.CleanupState != core.CleanupScheduled) {
-			return fmt.Errorf("Job %s cannot attach cleanup from state %s", jobID, current.CleanupState)
+			return fmt.Errorf("Session %s cannot attach cleanup from state %s", sessionID, current.CleanupState)
 		}
 		if current.CleanupState == core.CleanupScheduled && current.TaskID != taskID {
-			return fmt.Errorf("Job %s already has cleanup task %s", jobID, current.TaskID)
+			return fmt.Errorf("Session %s already has cleanup task %s", sessionID, current.TaskID)
 		}
 	} else if !current.AdmissionOpen || current.CleanupState != core.CleanupPending {
-		return fmt.Errorf("Job %s cannot attach ordinary task after cleanup begins", jobID)
+		return fmt.Errorf("Session %s cannot attach ordinary task after cleanup begins", sessionID)
 	}
 	return nil
 }
@@ -653,17 +653,17 @@ func (s Store) GetOrCreateSandboxAction(ctx context.Context, sandboxID string, k
 	if err != nil {
 		return core.Action{}, err
 	}
-	id := core.ScopedActionID(sandbox.JobID, kind, sandboxID)
+	id := core.ScopedActionID(sandbox.SessionID, kind, sandboxID)
 	q := dbsql.New(s.DB)
-	insertErr := expectOneRows(q.InsertScopedAction(ctx, dbsql.InsertScopedActionParams{ID: id, JobID: sandbox.JobID, Kind: kind, ScopeKey: sandboxID}))
-	row, getErr := q.GetScopedAction(ctx, dbsql.GetScopedActionParams{JobID: sandbox.JobID, Kind: kind, ScopeKey: sandboxID})
+	insertErr := expectOneRows(q.InsertScopedAction(ctx, dbsql.InsertScopedActionParams{ID: id, SessionID: sandbox.SessionID, Kind: kind, ScopeKey: sandboxID}))
+	row, getErr := q.GetScopedAction(ctx, dbsql.GetScopedActionParams{SessionID: sandbox.SessionID, Kind: kind, ScopeKey: sandboxID})
 	if getErr != nil {
 		if insertErr != nil {
 			return core.Action{}, insertErr
 		}
 		return core.Action{}, getErr
 	}
-	return exactScopedAction(row, sandbox.JobID, kind, sandboxID)
+	return exactScopedAction(row, sandbox.SessionID, kind, sandboxID)
 }
 
 func (s Store) Sandbox(ctx context.Context, id string) (core.Sandbox, error) {
@@ -674,54 +674,54 @@ func (s Store) Sandbox(ctx context.Context, id string) (core.Sandbox, error) {
 	if err != nil {
 		return core.Sandbox{}, err
 	}
-	return core.Sandbox{ID: row.ID, JobID: row.JobID, Name: row.Name, OwnershipNonce: row.OwnershipNonce, ResourceID: row.ActiveResourceID, ProviderID: row.ProviderID}, nil
+	return core.Sandbox{ID: row.ID, SessionID: row.SessionID, Name: row.Name, OwnershipNonce: row.OwnershipNonce, ResourceID: row.ActiveResourceID, ProviderID: row.ProviderID}, nil
 }
-func (s Store) Sandboxes(ctx context.Context, jobID string) ([]core.Sandbox, error) {
-	rows, err := dbsql.New(s.DB).ListJobSandboxes(ctx, jobID)
+func (s Store) Sandboxes(ctx context.Context, sessionID string) ([]core.Sandbox, error) {
+	rows, err := dbsql.New(s.DB).ListSessionSandboxes(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]core.Sandbox, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, core.Sandbox{ID: r.ID, JobID: r.JobID, Name: r.Name, OwnershipNonce: r.OwnershipNonce, ResourceID: r.ActiveResourceID, ProviderID: r.ProviderID})
+		out = append(out, core.Sandbox{ID: r.ID, SessionID: r.SessionID, Name: r.Name, OwnershipNonce: r.OwnershipNonce, ResourceID: r.ActiveResourceID, ProviderID: r.ProviderID})
 	}
 	return out, nil
 }
 
 // EnsureSandbox durably reserves one stable logical Sandbox identity. Provider
 // reconciliation is deliberately outside this transaction and is protected by
-// the Job effect fence plus the Sandbox's stable Action.
-func (s Store) EnsureSandbox(ctx context.Context, jobID, name string) (core.Sandbox, error) {
-	jobID = strings.TrimSpace(jobID)
+// the Session effect fence plus the Sandbox's stable Action.
+func (s Store) EnsureSandbox(ctx context.Context, sessionID, name string) (core.Sandbox, error) {
+	sessionID = strings.TrimSpace(sessionID)
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = core.DefaultSandbox
 	}
-	if jobID == "" || !sandboxName.MatchString(name) {
-		return core.Sandbox{}, fmt.Errorf("Sandbox ensure requires a Job and a lowercase name containing only letters, digits, and hyphens")
+	if sessionID == "" || !sandboxName.MatchString(name) {
+		return core.Sandbox{}, fmt.Errorf("Sandbox ensure requires a Session and a lowercase name containing only letters, digits, and hyphens")
 	}
-	id := core.NamedSandboxID(jobID, name)
+	id := core.NamedSandboxID(sessionID, name)
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return core.Sandbox{}, err
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(tx)
-	job, err := queries.GetJobForSandboxEnsure(ctx, jobID)
+	session, err := queries.GetSessionForSandboxEnsure(ctx, sessionID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return core.Sandbox{}, ErrNotFound
 	}
 	if err != nil {
 		return core.Sandbox{}, err
 	}
-	if !job.AdmissionOpen || job.CleanupState != core.CleanupPending {
-		return core.Sandbox{}, fmt.Errorf("Job %s cannot admit Sandbox %q after cleanup begins", jobID, name)
+	if !session.AdmissionOpen || session.CleanupState != core.CleanupPending {
+		return core.Sandbox{}, fmt.Errorf("Session %s cannot admit Sandbox %q after cleanup begins", sessionID, name)
 	}
-	row, err := queries.GetJobSandboxByNameForUpdate(ctx, dbsql.GetJobSandboxByNameForUpdateParams{JobID: jobID, Name: name})
+	row, err := queries.GetSessionSandboxByNameForUpdate(ctx, dbsql.GetSessionSandboxByNameForUpdateParams{SessionID: sessionID, Name: name})
 	if errors.Is(err, sql.ErrNoRows) {
 		foreign, foreignErr := queries.GetSandboxForUpdate(ctx, id)
 		if foreignErr == nil {
-			return core.Sandbox{}, fmt.Errorf("Sandbox identity %s is already owned by Job %s as name %q", id, foreign.JobID, foreign.Name)
+			return core.Sandbox{}, fmt.Errorf("Sandbox identity %s is already owned by Session %s as name %q", id, foreign.SessionID, foreign.Name)
 		}
 		if !errors.Is(foreignErr, sql.ErrNoRows) {
 			return core.Sandbox{}, foreignErr
@@ -730,29 +730,29 @@ func (s Store) EnsureSandbox(ctx context.Context, jobID, name string) (core.Sand
 		if nonceErr != nil {
 			return core.Sandbox{}, nonceErr
 		}
-		inserted, insertErr := queries.ReserveSandbox(ctx, dbsql.ReserveSandboxParams{ID: id, JobID: jobID, Name: name, OwnershipNonce: nonce})
+		inserted, insertErr := queries.ReserveSandbox(ctx, dbsql.ReserveSandboxParams{ID: id, SessionID: sessionID, Name: name, OwnershipNonce: nonce})
 		if insertErr != nil {
 			return core.Sandbox{}, insertErr
 		}
 		if inserted != 1 {
 			return core.Sandbox{}, fmt.Errorf("Sandbox %q conflicts with an existing durable resource", name)
 		}
-		row, err = queries.GetJobSandboxByNameForUpdate(ctx, dbsql.GetJobSandboxByNameForUpdateParams{JobID: jobID, Name: name})
+		row, err = queries.GetSessionSandboxByNameForUpdate(ctx, dbsql.GetSessionSandboxByNameForUpdateParams{SessionID: sessionID, Name: name})
 	}
 	if err != nil {
 		return core.Sandbox{}, err
 	}
-	if row.ID != id || row.JobID != jobID || row.Name != name || !sha256Digest.MatchString(row.OwnershipNonce) {
-		return core.Sandbox{}, fmt.Errorf("Sandbox %q conflicts with its exact Job-owned identity", name)
+	if row.ID != id || row.SessionID != sessionID || row.Name != name || !sha256Digest.MatchString(row.OwnershipNonce) {
+		return core.Sandbox{}, fmt.Errorf("Sandbox %q conflicts with its exact Session-owned identity", name)
 	}
 	if err := tx.Commit(); err != nil {
 		return core.Sandbox{}, err
 	}
-	return core.Sandbox{ID: row.ID, JobID: row.JobID, Name: row.Name, OwnershipNonce: row.OwnershipNonce, ResourceID: row.ActiveResourceID, ProviderID: row.ProviderID}, nil
+	return core.Sandbox{ID: row.ID, SessionID: row.SessionID, Name: row.Name, OwnershipNonce: row.OwnershipNonce, ResourceID: row.ActiveResourceID, ProviderID: row.ProviderID}, nil
 }
 
-func (s Store) Deliveries(ctx context.Context, jobID string) ([]core.Delivery, error) {
-	rows, err := dbsql.New(s.DB).ListDeliveries(ctx, jobID)
+func (s Store) Deliveries(ctx context.Context, sessionID string) ([]core.Delivery, error) {
+	rows, err := dbsql.New(s.DB).ListDeliveries(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -761,10 +761,10 @@ func (s Store) Deliveries(ctx context.Context, jobID string) ([]core.Delivery, e
 		if !r.AgentRunPresent {
 			return nil, fmt.Errorf("Message %s (sequence %d) has no AgentRun", r.MessageID, r.Sequence)
 		}
-		if r.AgentRunMessageID != r.MessageID || r.AgentRunJobID != r.MessageJobID {
-			return nil, fmt.Errorf("Message %s (Job %s) has mismatched AgentRun %s (Message %s, Job %s)", r.MessageID, r.MessageJobID, r.AgentRunID, r.AgentRunMessageID, r.AgentRunJobID)
+		if r.AgentRunMessageID != r.MessageID || r.AgentRunSessionID != r.MessageSessionID {
+			return nil, fmt.Errorf("Message %s (Session %s) has mismatched AgentRun %s (Message %s, Session %s)", r.MessageID, r.MessageSessionID, r.AgentRunID, r.AgentRunMessageID, r.AgentRunSessionID)
 		}
-		message, err := messageFromStoredValues(r.MessageID, r.MessageJobID, r.FromKind, r.FromID, r.Sequence, r.Input, r.Attachments, r.DeliveryIntent, r.SteerTargetTurnID)
+		message, err := messageFromStoredValues(r.MessageID, r.MessageSessionID, r.FromKind, r.FromID, r.Sequence, r.Input, r.Attachments, r.DeliveryIntent, r.SteerTargetTurnID)
 		if err != nil {
 			return nil, err
 		}
@@ -773,7 +773,7 @@ func (s Store) Deliveries(ctx context.Context, jobID string) ([]core.Delivery, e
 		message.RefreshSkills = r.RefreshSkills
 		message.Observation = r.Observation
 		message.DeveloperInstructions = instructionPointer(r.DeveloperInstructions)
-		run := agentRunFromValues(r.AgentRunID, r.AgentRunJobID, r.AgentRunMessageID, r.State, r.Harness, r.ThreadID, r.BaselineRecorded, r.BaselineTurnID, r.TurnID, r.TurnOutcome, r.Attention, r.Role, r.InputRevision)
+		run := agentRunFromValues(r.AgentRunID, r.AgentRunSessionID, r.AgentRunMessageID, r.State, r.Harness, r.ThreadID, r.BaselineRecorded, r.BaselineTurnID, r.TurnID, r.TurnOutcome, r.Attention, r.Role, r.InputRevision)
 		run.Capability = r.Capability
 		run.SandboxID = r.SandboxID
 		run.SubmissionNonce = r.SubmissionNonce
@@ -787,14 +787,14 @@ func (s Store) Deliveries(ctx context.Context, jobID string) ([]core.Delivery, e
 
 // AgentMessageExecution reloads the exact durable execution aggregate by the
 // stable Message identity. Callers that may touch the Harness invoke this only
-// while holding the owning Job's effect fence and discard earlier snapshots.
+// while holding the owning Session's effect fence and discard earlier snapshots.
 func (s Store) AgentMessageExecution(ctx context.Context, messageID string) (core.AgentMessageExecution, error) {
 	queries := dbsql.New(s.DB)
 	messageRow, err := queries.GetMessage(ctx, messageID)
 	if err != nil {
 		return core.AgentMessageExecution{}, err
 	}
-	message, err := messageFromStoredValues(messageRow.ID, messageRow.JobID, messageRow.FromKind, messageRow.FromID, messageRow.Sequence, messageRow.Input, messageRow.Attachments, messageRow.DeliveryIntent, messageRow.SteerTargetTurnID)
+	message, err := messageFromStoredValues(messageRow.ID, messageRow.SessionID, messageRow.FromKind, messageRow.FromID, messageRow.Sequence, messageRow.Input, messageRow.Attachments, messageRow.DeliveryIntent, messageRow.SteerTargetTurnID)
 	if err != nil {
 		return core.AgentMessageExecution{}, err
 	}
@@ -807,14 +807,14 @@ func (s Store) AgentMessageExecution(ctx context.Context, messageID string) (cor
 	if err != nil {
 		return core.AgentMessageExecution{}, fmt.Errorf("Message %s has no atomically admitted AgentRun: %w", message.ID, err)
 	}
-	run := agentRunFromValues(runRow.ID, runRow.JobID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention, runRow.Role, runRow.InputRevision)
+	run := agentRunFromValues(runRow.ID, runRow.SessionID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention, runRow.Role, runRow.InputRevision)
 	run.Capability = runRow.Capability
 	run.SandboxID = runRow.SandboxID
 	run.SubmissionNonce = runRow.SubmissionNonce
 	run.InterruptRequested = runRow.InterruptRequested
 	run.StartedAt = timeValue(runRow.StartedAt)
 	run.FinishedAt = timeValue(runRow.FinishedAt)
-	job, err := s.Job(ctx, message.JobID)
+	session, err := s.Session(ctx, message.SessionID)
 	if err != nil {
 		return core.AgentMessageExecution{}, err
 	}
@@ -822,14 +822,14 @@ func (s Store) AgentMessageExecution(ctx context.Context, messageID string) (cor
 	if err != nil {
 		return core.AgentMessageExecution{}, err
 	}
-	if run.MessageID != message.ID || run.JobID != job.ID || message.JobID != job.ID || sandbox.JobID != job.ID || run.SandboxID != sandbox.ID {
-		return core.AgentMessageExecution{}, fmt.Errorf("Message %s execution does not match its authoritative Job, AgentRun, and Sandbox", message.ID)
+	if run.MessageID != message.ID || run.SessionID != session.ID || message.SessionID != session.ID || sandbox.SessionID != session.ID || run.SandboxID != sandbox.ID {
+		return core.AgentMessageExecution{}, fmt.Errorf("Message %s execution does not match its authoritative Session, AgentRun, and Sandbox", message.ID)
 	}
 	refreshSkills, err := queries.AgentMessageNeedsSkillRefresh(ctx, messageID)
 	if err != nil {
 		return core.AgentMessageExecution{}, err
 	}
-	return core.AgentMessageExecution{Job: job, Message: message, AgentRun: run, Sandbox: sandbox, RefreshSkills: refreshSkills}, nil
+	return core.AgentMessageExecution{Session: session, Message: message, AgentRun: run, Sandbox: sandbox, RefreshSkills: refreshSkills}, nil
 }
 
 func (s Store) InterruptAgentRun(ctx context.Context, runID, reason string) error {
@@ -848,30 +848,30 @@ func nullableString(value string) sql.NullString {
 	return sql.NullString{String: value, Valid: value != ""}
 }
 
-func (s Store) SetWorkflowAttention(ctx context.Context, jobID, source, detail string) error {
+func (s Store) SetWorkflowAttention(ctx context.Context, sessionID, source, detail string) error {
 	source, detail = strings.TrimSpace(source), strings.TrimSpace(detail)
-	if jobID == "" || source == "" || detail == "" {
-		return fmt.Errorf("workflow attention requires Job ID, exact source, and detail")
+	if sessionID == "" || source == "" || detail == "" {
+		return fmt.Errorf("workflow attention requires Session ID, exact source, and detail")
 	}
 	if len(detail) > 4096 {
 		detail = detail[:4096]
 	}
-	return expectOneRows(dbsql.New(s.DB).SetWorkflowAttention(ctx, dbsql.SetWorkflowAttentionParams{JobID: jobID, Source: sql.NullString{String: source, Valid: true}, Detail: sql.NullString{String: detail, Valid: true}}))
+	return expectOneRows(dbsql.New(s.DB).SetWorkflowAttention(ctx, dbsql.SetWorkflowAttentionParams{SessionID: sessionID, Source: sql.NullString{String: source, Valid: true}, Detail: sql.NullString{String: detail, Valid: true}}))
 }
 
-func (s Store) ClearWorkflowAttention(ctx context.Context, jobID, source string) error {
+func (s Store) ClearWorkflowAttention(ctx context.Context, sessionID, source string) error {
 	source = strings.TrimSpace(source)
-	if jobID == "" || source == "" {
-		return fmt.Errorf("workflow attention clearing requires Job ID and exact source")
+	if sessionID == "" || source == "" {
+		return fmt.Errorf("workflow attention clearing requires Session ID and exact source")
 	}
 	rows, err := dbsql.New(s.DB).ClearWorkflowAttention(ctx, dbsql.ClearWorkflowAttentionParams{
-		JobID: jobID, Source: sql.NullString{String: source, Valid: true},
+		SessionID: sessionID, Source: sql.NullString{String: source, Valid: true},
 	})
 	if err != nil {
 		return err
 	}
 	if rows > 1 {
-		return fmt.Errorf("workflow attention source %s changed %d Jobs", source, rows)
+		return fmt.Errorf("workflow attention source %s changed %d Sessions", source, rows)
 	}
 	return nil
 }
@@ -931,33 +931,33 @@ func authorizeSandboxActionTx(ctx context.Context, queries *dbsql.Queries, id, t
 	if row.State != core.ActionUnsettled && row.State != core.ActionSucceeded {
 		return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox Action %s is %s, not unsettled or succeeded", id, row.State)
 	}
-	if row.ScopeKey == "" || row.ID != core.ScopedActionID(row.JobID, row.Kind, row.ScopeKey) {
-		return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox Action %s conflicts with its exact Job and Sandbox", id)
+	if row.ScopeKey == "" || row.ID != core.ScopedActionID(row.SessionID, row.Kind, row.ScopeKey) {
+		return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox Action %s conflicts with its exact Session and Sandbox", id)
 	}
 	owned, err := queries.GetSandbox(ctx, row.ScopeKey)
 	if err != nil {
 		return core.SandboxActionAuthorization{}, err
 	}
-	if owned.JobID != row.JobID {
-		return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox Action %s conflicts with its exact Job and Sandbox", id)
+	if owned.SessionID != row.SessionID {
+		return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox Action %s conflicts with its exact Session and Sandbox", id)
 	}
-	job, err := queries.GetJobForSandboxActionAuthorization(ctx, row.JobID)
+	session, err := queries.GetSessionForSandboxActionAuthorization(ctx, row.SessionID)
 	if err != nil {
 		return core.SandboxActionAuthorization{}, err
 	}
-	if requireTask && (taskID == "" || taskName == "" || job.CurrentTaskID != taskID || job.CurrentTaskName != taskName) {
+	if requireTask && (taskID == "" || taskName == "" || session.CurrentTaskID != taskID || session.CurrentTaskName != taskName) {
 		return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox Action %s requires the exact current attached task", id)
 	}
 	cleanup := row.Kind == core.ActionRouteRevoke || row.Kind == core.ActionSandboxDelete
 	if cleanup {
-		if job.AdmissionOpen || job.CleanupState != core.CleanupScheduled || requireTask && taskName != core.CleanupTaskName {
+		if session.AdmissionOpen || session.CleanupState != core.CleanupScheduled || requireTask && taskName != core.CleanupTaskName {
 			return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox cleanup Action %s requires a durably scheduled cleanup", id)
 		}
-	} else if !job.AdmissionOpen || job.CleanupState != core.CleanupPending {
+	} else if !session.AdmissionOpen || session.CleanupState != core.CleanupPending {
 		return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox Action %s cannot mutate provider after cleanup begins", id)
 	}
 	if row.Kind == core.ActionSandboxDelete {
-		revoked, err := queries.GetScopedAction(ctx, dbsql.GetScopedActionParams{JobID: row.JobID, Kind: core.ActionRouteRevoke, ScopeKey: row.ScopeKey})
+		revoked, err := queries.GetScopedAction(ctx, dbsql.GetScopedActionParams{SessionID: row.SessionID, Kind: core.ActionRouteRevoke, ScopeKey: row.ScopeKey})
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && revoked.State != core.ActionSucceeded) {
 			return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox cleanup cannot delete before its exact route revoke Action succeeds")
 		}
@@ -966,28 +966,28 @@ func authorizeSandboxActionTx(ctx context.Context, queries *dbsql.Queries, id, t
 		}
 	}
 	return core.SandboxActionAuthorization{
-		Job: core.Job{
-			CreatedByClientID: job.CreatedByClientID, CreatedByClientName: job.CreatedByClientName, ClientReference: job.ClientReference,
-			ID: job.ID, AdmissionKey: job.AdmissionKey, Workflow: job.WorkflowName, WorkflowRevision: job.WorkflowRevision, AgentsMD: job.AgentsMd,
-			ThreadHarness: job.ThreadHarness, ThreadID: job.ThreadID,
-			KeepRunning: job.KeepRunning, SandboxProfile: job.SandboxProfile, SandboxProfileRevision: job.SandboxProfileRevision, ProviderConnection: job.ProviderConnection, Model: job.Model, ReasoningEffort: job.ReasoningEffort,
-			AdmissionOpen: job.AdmissionOpen, CleanupState: job.CleanupState, CurrentTaskID: job.CurrentTaskID,
-			WorkflowAttention: job.WorkflowAttention, WorkflowAttentionSource: job.WorkflowAttentionSource,
-			WorkflowAttentionAt: timeValue(job.WorkflowAttentionAt), CleanupAttention: job.CleanupAttention,
-			AdmittedAt: job.AdmittedAt, CleanedAt: timeValue(job.CleanedAt),
+		Session: core.Session{
+			CreatedByClientID: session.CreatedByClientID, CreatedByClientName: session.CreatedByClientName, ClientReference: session.ClientReference,
+			ID: session.ID, AdmissionKey: session.AdmissionKey, Workflow: session.WorkflowName, WorkflowRevision: session.WorkflowRevision, AgentsMD: session.AgentsMd,
+			Harness: session.Harness, ThreadID: session.ThreadID,
+			KeepRunning: session.KeepRunning, SandboxProfile: session.SandboxProfile, SandboxProfileRevision: session.SandboxProfileRevision, ProviderConnection: session.ProviderConnection, Model: session.Model, ReasoningEffort: session.ReasoningEffort,
+			AdmissionOpen: session.AdmissionOpen, CleanupState: session.CleanupState, CurrentTaskID: session.CurrentTaskID,
+			WorkflowAttention: session.WorkflowAttention, WorkflowAttentionSource: session.WorkflowAttentionSource,
+			WorkflowAttentionAt: timeValue(session.WorkflowAttentionAt), CleanupAttention: session.CleanupAttention,
+			AdmittedAt: session.AdmittedAt, CleanedAt: timeValue(session.CleanedAt),
 		},
-		Sandbox: core.Sandbox{ID: owned.ID, JobID: owned.JobID, Name: owned.Name, OwnershipNonce: owned.OwnershipNonce, ResourceID: owned.ActiveResourceID, ProviderID: owned.ProviderID},
-		Action:  actionFromValues(row.ID, row.JobID, row.Kind, row.State, row.ScopeKey, row.CreatedAt, row.SettledAt),
-		TaskID:  job.CurrentTaskID, TaskName: job.CurrentTaskName,
+		Sandbox: core.Sandbox{ID: owned.ID, SessionID: owned.SessionID, Name: owned.Name, OwnershipNonce: owned.OwnershipNonce, ResourceID: owned.ActiveResourceID, ProviderID: owned.ProviderID},
+		Action:  actionFromValues(row.ID, row.SessionID, row.Kind, row.State, row.ScopeKey, row.CreatedAt, row.SettledAt),
+		TaskID:  session.CurrentTaskID, TaskName: session.CurrentTaskName,
 	}, nil
 }
 
-// AgentMessage selects one opaque Message across the whole Job.
+// AgentMessage selects one opaque Message across the whole Session.
 // Steer priority, Follow FIFO, recovery ordering, and retained-Thread adoption
 // are invariant for every consumer.
-func (s Store) AgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
-	if strings.TrimSpace(jobID) == "" {
-		return nil, fmt.Errorf("Agent Message selection requires an exact Job")
+func (s Store) AgentMessage(ctx context.Context, sessionID string) (*core.AgentMessageWork, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return nil, fmt.Errorf("Agent Message selection requires an exact Session")
 	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -995,14 +995,14 @@ func (s Store) AgentMessage(ctx context.Context, jobID string) (*core.AgentMessa
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(s.DB).WithTx(tx)
-	job, err := queries.GetJobAdmissionForUpdate(ctx, jobID)
+	session, err := queries.GetSessionAdmissionForUpdate(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	if !job.AdmissionOpen || job.CleanupState != core.CleanupPending {
+	if !session.AdmissionOpen || session.CleanupState != core.CleanupPending {
 		return nil, nil
 	}
-	row, err := queries.NextAgentMessage(ctx, jobID)
+	row, err := queries.NextAgentMessage(ctx, sessionID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, tx.Commit()
 	}
@@ -1010,26 +1010,26 @@ func (s Store) AgentMessage(ctx context.Context, jobID string) (*core.AgentMessa
 		return nil, err
 	}
 	message := core.Message{
-		ID: row.ID, JobID: row.JobID, FromKind: core.MessageFromKind(row.FromKind), FromID: row.FromID,
+		ID: row.ID, SessionID: row.SessionID, FromKind: core.MessageFromKind(row.FromKind), FromID: row.FromID,
 		RefreshSkills: row.RefreshSkills, Sequence: row.Sequence, Intent: core.MessageDeliveryIntent(row.DeliveryIntent), RequestedIntent: core.MessageDeliveryIntent(row.RequestedIntent), TargetTurnID: row.SteerTargetTurnID, AdmittedAt: row.AdmittedAt,
 	}
 	runRow, err := queries.GetAgentRunByMessage(ctx, message.ID)
 	if err != nil {
 		return nil, fmt.Errorf("delivery Message %s has no atomically admitted AgentRun: %w", message.ID, err)
 	}
-	run := agentRunFromValues(runRow.ID, runRow.JobID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention, runRow.Role, runRow.InputRevision)
+	run := agentRunFromValues(runRow.ID, runRow.SessionID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention, runRow.Role, runRow.InputRevision)
 	run.SandboxID = runRow.SandboxID
-	if message.Intent == core.MessageFollow && run.State == core.AgentRunPending && run.ThreadID == "" && job.ThreadID != "" {
-		if err := expectOneRows(queries.BindPendingFollowToJobThread(ctx, message.ID)); err != nil {
+	if message.Intent == core.MessageFollow && run.State == core.AgentRunPending && run.ThreadID == "" && session.ThreadID != "" {
+		if err := expectOneRows(queries.BindPendingFollowToSessionThread(ctx, message.ID)); err != nil {
 			return nil, err
 		}
-		run.Harness, run.ThreadID = job.ThreadHarness, job.ThreadID
+		run.Harness, run.ThreadID = session.Harness, session.ThreadID
 	}
 	if run.Role == "" || run.SandboxID == "" {
 		return nil, fmt.Errorf("delivery candidate AgentRun %s has an incomplete execution envelope", run.ID)
 	}
-	if run.ThreadID != "" && (run.Harness != job.ThreadHarness || run.ThreadID != job.ThreadID) {
-		return nil, fmt.Errorf("AgentRun %s conflicts with Job %s Thread", run.ID, jobID)
+	if run.ThreadID != "" && (run.Harness != session.Harness || run.ThreadID != session.ThreadID) {
+		return nil, fmt.Errorf("AgentRun %s conflicts with Session %s Thread", run.ID, sessionID)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -1037,9 +1037,9 @@ func (s Store) AgentMessage(ctx context.Context, jobID string) (*core.AgentMessa
 	return &core.AgentMessageWork{MessageID: message.ID, SandboxID: run.SandboxID}, nil
 }
 
-func (s Store) HasImmediatelyEligibleAgentMessage(ctx context.Context, jobID string) (bool, error) {
+func (s Store) HasImmediatelyEligibleAgentMessage(ctx context.Context, sessionID string) (bool, error) {
 	q := dbsql.New(s.DB)
-	selected, err := q.NextAgentMessage(ctx, jobID)
+	selected, err := q.NextAgentMessage(ctx, sessionID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -1098,10 +1098,10 @@ func (s Store) BindAgentRun(ctx context.Context, runID, harness, threadID, turnI
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(s.DB).WithTx(tx)
-	// Lock the Job before the run, matching admission and delivery selection.
+	// Lock the Session before the run, matching admission and delivery selection.
 	// The binding and accepted Turn commit together, including on recovery.
-	if err := expectOneRows(queries.BindJobThread(ctx, dbsql.BindJobThreadParams{RunID: runID, Harness: nullableString(harness), ThreadID: nullableString(threadID)})); err != nil {
-		return fmt.Errorf("AgentRun %s cannot bind the Job Thread: %w", runID, err)
+	if err := expectOneRows(queries.BindSessionThread(ctx, dbsql.BindSessionThreadParams{RunID: runID, Harness: harness, ThreadID: nullableString(threadID)})); err != nil {
+		return fmt.Errorf("AgentRun %s cannot bind the Session Thread: %w", runID, err)
 	}
 	run, err := queries.GetAgentRunForBinding(ctx, runID)
 	if err != nil {
@@ -1181,8 +1181,8 @@ func (s Store) AgentRunAttention(ctx context.Context, runID, reason string) erro
 	return expectOneRows(dbsql.New(s.DB).SetAgentRunAttention(ctx, dbsql.SetAgentRunAttentionParams{Reason: sql.NullString{String: reason, Valid: true}, RunID: runID}))
 }
 
-func (s Store) UnsettledAgentMessages(ctx context.Context, jobID string) ([]core.AgentMessageWork, error) {
-	rows, err := dbsql.New(s.DB).ListUnsettledAgentMessages(ctx, jobID)
+func (s Store) UnsettledAgentMessages(ctx context.Context, sessionID string) ([]core.AgentMessageWork, error) {
+	rows, err := dbsql.New(s.DB).ListUnsettledAgentMessages(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -1193,42 +1193,42 @@ func (s Store) UnsettledAgentMessages(ctx context.Context, jobID string) ([]core
 	return messages, nil
 }
 
-func (s Store) SetCleanupAttention(ctx context.Context, jobID, detail string) error {
+func (s Store) SetCleanupAttention(ctx context.Context, sessionID, detail string) error {
 	detail = strings.TrimSpace(detail)
 	if len(detail) > 4096 {
 		detail = detail[:4096]
 	}
-	return expectOneRows(dbsql.New(s.DB).SetCleanupAttention(ctx, dbsql.SetCleanupAttentionParams{Detail: detail, JobID: jobID}))
+	return expectOneRows(dbsql.New(s.DB).SetCleanupAttention(ctx, dbsql.SetCleanupAttentionParams{Detail: detail, SessionID: sessionID}))
 }
 
-func (s Store) CompleteCleanup(ctx context.Context, jobID, taskID string) error {
+func (s Store) CompleteCleanup(ctx context.Context, sessionID, taskID string) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(s.DB).WithTx(tx)
-	job, err := queries.GetCleanupJobForUpdate(ctx, jobID)
+	session, err := queries.GetCleanupSessionForUpdate(ctx, sessionID)
 	if err != nil {
 		return err
 	}
-	if job.CurrentTaskID == "" || job.CurrentTaskID != strings.TrimSpace(taskID) {
-		return fmt.Errorf("cleanup cannot complete without ownership by the Job's current attached cleanup task")
+	if session.CurrentTaskID == "" || session.CurrentTaskID != strings.TrimSpace(taskID) {
+		return fmt.Errorf("cleanup cannot complete without ownership by the Session's current attached cleanup task")
 	}
-	tasks, err := queries.ListJobTasks(ctx, jobID)
+	tasks, err := queries.ListSessionTasks(ctx, sessionID)
 	if err != nil {
 		return err
 	}
 	if len(tasks) == 0 || tasks[len(tasks)-1].TaskID != taskID || tasks[len(tasks)-1].TaskName != core.CleanupTaskName {
 		return fmt.Errorf("cleanup cannot complete without the exact Core cleanup task attachment")
 	}
-	if !job.AdmissionOpen && job.CleanupState == core.CleanupComplete {
+	if !session.AdmissionOpen && session.CleanupState == core.CleanupComplete {
 		return tx.Commit()
 	}
-	if job.AdmissionOpen || job.CleanupState != core.CleanupScheduled {
+	if session.AdmissionOpen || session.CleanupState != core.CleanupScheduled {
 		return fmt.Errorf("cleanup cannot complete while admission or cleanup scheduling remains unsettled")
 	}
-	deliveries, err := queries.ListDeliveries(ctx, jobID)
+	deliveries, err := queries.ListDeliveries(ctx, sessionID)
 	if err != nil {
 		return err
 	}
@@ -1236,7 +1236,7 @@ func (s Store) CompleteCleanup(ctx context.Context, jobID, taskID string) error 
 		if !delivery.AgentRunPresent {
 			return fmt.Errorf("cleanup cannot complete because Message %s has no AgentRun", delivery.MessageID)
 		}
-		if delivery.AgentRunMessageID != delivery.MessageID || delivery.AgentRunJobID != delivery.MessageJobID {
+		if delivery.AgentRunMessageID != delivery.MessageID || delivery.AgentRunSessionID != delivery.MessageSessionID {
 			return fmt.Errorf("cleanup cannot complete because Message %s has a mismatched AgentRun %s", delivery.MessageID, delivery.AgentRunID)
 		}
 		run := delivery
@@ -1244,33 +1244,33 @@ func (s Store) CompleteCleanup(ctx context.Context, jobID, taskID string) error 
 			return fmt.Errorf("cleanup cannot complete with unsettled AgentRun %s", run.AgentRunID)
 		}
 	}
-	unsettled, err := queries.CountUnsettledSandboxCleanupActions(ctx, jobID)
+	unsettled, err := queries.CountUnsettledSandboxCleanupActions(ctx, sessionID)
 	if err != nil {
 		return err
 	}
 	if unsettled != 0 {
-		return fmt.Errorf("cleanup cannot complete with %d unsettled Job resources", unsettled)
+		return fmt.Errorf("cleanup cannot complete with %d unsettled Session resources", unsettled)
 	}
-	if err := expectOneRows(queries.CompleteCleanup(ctx, jobID)); err != nil {
+	if err := expectOneRows(queries.CompleteCleanup(ctx, sessionID)); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func (s Store) Actions(ctx context.Context, jobID string) ([]core.Action, error) {
-	rows, err := dbsql.New(s.DB).ListActions(ctx, jobID)
+func (s Store) Actions(ctx context.Context, sessionID string) ([]core.Action, error) {
+	rows, err := dbsql.New(s.DB).ListActions(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	var actions []core.Action
 	for _, row := range rows {
-		actions = append(actions, actionFromValues(row.ID, row.JobID, row.Kind, row.State, row.ScopeKey, row.CreatedAt, row.SettledAt))
+		actions = append(actions, actionFromValues(row.ID, row.SessionID, row.Kind, row.State, row.ScopeKey, row.CreatedAt, row.SettledAt))
 	}
 	return actions, nil
 }
 
-func (s Store) NextWakeSequence(ctx context.Context, jobID string) (int64, error) {
-	return dbsql.New(s.DB).NextWakeSequence(ctx, jobID)
+func (s Store) NextWakeSequence(ctx context.Context, sessionID string) (int64, error) {
+	return dbsql.New(s.DB).NextWakeSequence(ctx, sessionID)
 }
 
 func expectOne(result sql.Result, err error) error {

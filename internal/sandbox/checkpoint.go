@@ -32,10 +32,10 @@ func OwnedCheckpointName(owner Ownership, key string) (string, error) {
 	if err := ValidateCheckpointKey(key); err != nil {
 		return "", err
 	}
-	if owner.JobID == "" || owner.SandboxID == "" || !checkpointNonce.MatchString(owner.OwnershipNonce) {
+	if owner.SessionID == "" || owner.SandboxID == "" || !checkpointNonce.MatchString(owner.OwnershipNonce) {
 		return "", OwnershipErrorf("checkpoint requires complete resource ownership")
 	}
-	encoded, err := json.Marshal([4]string{owner.JobID, owner.SandboxID, owner.OwnershipNonce, key})
+	encoded, err := json.Marshal([4]string{owner.SessionID, owner.SandboxID, owner.OwnershipNonce, key})
 	if err != nil {
 		return "", err
 	}

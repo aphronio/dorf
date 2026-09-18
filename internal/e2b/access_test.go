@@ -50,7 +50,7 @@ type accessFixture struct {
 
 func newAccessFixture(t testing.TB) *accessFixture {
 	t.Helper()
-	f := &accessFixture{owner: provider.Ownership{JobID: "job-access", SandboxID: "sandbox-access", OwnershipNonce: strings.Repeat("a", 64)}, process: &accessProcess{}}
+	f := &accessFixture{owner: provider.Ownership{SessionID: "job-access", SandboxID: "sandbox-access", OwnershipNonce: strings.Repeat("a", 64)}, process: &accessProcess{}}
 	_, processHandler := processconnect.NewProcessHandler(f.process)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/process.Process/") {

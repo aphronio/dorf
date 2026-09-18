@@ -47,21 +47,21 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 		"/v1/auth/enrollments/redeem": {"post"},
 		"/v1/me":                      {"get"},
 		"/v1/profiles":                {"get"},
-		"/v1/jobs":                    {"get", "post"},
-		"/v1/jobs/{job}":              {"get"},
-		"/v1/jobs/{job}/messages/{message}/observation":        {"get"},
-		"/v1/jobs/{job}/messages/{message}/observation/stream": {"get"},
-		"/v1/jobs/{job}/messages/{message}/timeline":           {"get"},
-		"/v1/jobs/{job}/timeline":                              {"get"},
-		"/v1/jobs/{job}/watch":                                 {"get"},
-		"/v1/jobs/{job}/messages":                              {"post"},
-		"/v1/jobs/{job}/messages/{message}":                    {"get"},
-		"/v1/jobs/{job}/messages/{message}/interrupt":          {"put"},
-		"/v1/jobs/{job}/retries":                               {"post"},
-		"/v1/jobs/{job}/cleanup":                               {"put"},
-		"/v1/sandboxes/{sandbox}/status":                       {"get"},
-		"/v1/sandboxes/{sandbox}/exec":                         {"post"},
-		"/v1/sandboxes/{sandbox}/files":                        {"get", "put"},
+		"/v1/sessions":                {"get", "post"},
+		"/v1/sessions/{session}":      {"get"},
+		"/v1/sessions/{session}/messages/{message}/observation":        {"get"},
+		"/v1/sessions/{session}/messages/{message}/observation/stream": {"get"},
+		"/v1/sessions/{session}/messages/{message}/timeline":           {"get"},
+		"/v1/sessions/{session}/timeline":                              {"get"},
+		"/v1/sessions/{session}/watch":                                 {"get"},
+		"/v1/sessions/{session}/messages":                              {"post"},
+		"/v1/sessions/{session}/messages/{message}":                    {"get"},
+		"/v1/sessions/{session}/messages/{message}/interrupt":          {"put"},
+		"/v1/sessions/{session}/retries":                               {"post"},
+		"/v1/sessions/{session}/cleanup":                               {"put"},
+		"/v1/sandboxes/{sandbox}/status":                               {"get"},
+		"/v1/sandboxes/{sandbox}/exec":                                 {"post"},
+		"/v1/sandboxes/{sandbox}/files":                                {"get", "put"},
 	}
 	paths := objectAt(t, document, "paths")
 	if len(paths) != len(wantOperations) {
@@ -102,13 +102,6 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 		t.Fatalf("default security=%#v, want clientBearer", security)
 	}
 
-	wantMapping := map[string]any{
-		"direct": "#/components/schemas/DirectJob",
-	}
-	mapping := objectAt(t, objectAt(t, objectAt(t, objectAt(t, document, "components"), "schemas"), "Job"), "discriminator", "mapping")
-	if !reflect.DeepEqual(mapping, wantMapping) {
-		t.Fatalf("Job discriminator=%#v, want %#v", mapping, wantMapping)
-	}
 	wantHoldReasons := []any{"workspace_upgrade", "checkpoint_recovery"}
 	for _, path := range [][]string{
 		{"components", "schemas", "SandboxDeliveryHold", "properties", "reason"},
@@ -120,14 +113,14 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 		}
 	}
 
-	assertRef(t, document, "#/components/schemas/JobList", "paths", "/v1/jobs", "get", "responses", "200", "content", "application/json", "schema", "$ref")
+	assertRef(t, document, "#/components/schemas/SessionList", "paths", "/v1/sessions", "get", "responses", "200", "content", "application/json", "schema", "$ref")
 	assertRef(t, document, "#/components/schemas/ProfileList", "paths", "/v1/profiles", "get", "responses", "200", "content", "application/json", "schema", "$ref")
-	assertRef(t, document, "#/components/schemas/Job", "paths", "/v1/jobs/{job}/watch", "get", "responses", "200", "content", "text/event-stream", "x-dorf-event", "dataSchema", "$ref")
+	assertRef(t, document, "#/components/schemas/Session", "paths", "/v1/sessions/{session}/watch", "get", "responses", "200", "content", "text/event-stream", "x-dorf-event", "dataSchema", "$ref")
 	assertRef(t, document, "#/components/schemas/Problem", "components", "responses", "Problem", "content", "application/problem+json", "schema", "$ref")
 	if _, ok := objectAt(t, document, "paths", "/v1/sandboxes/{sandbox}/files", "get", "responses", "200", "content")["application/octet-stream"]; !ok {
 		t.Fatal("Sandbox file response does not describe application/octet-stream")
 	}
-	for _, schema := range []string{"AdmitDirectJobRequest"} {
+	for _, schema := range []string{"CreateSessionRequest"} {
 		properties := objectAt(t, document, "components", "schemas", schema, "properties")
 		if _, ok := properties["ai_connection"]; !ok {
 			t.Fatalf("%s does not publish ai_connection", schema)

@@ -30,5 +30,5 @@ type HarnessTimeline struct {
 }
 
 type SandboxTimelineReader interface {
-	ReadTimeline(context.Context, Job, Sandbox, string, string) (HarnessTimeline, error)
+	ReadTimeline(context.Context, Session, Sandbox, string, string) (HarnessTimeline, error)
 }

@@ -31,20 +31,20 @@ type timelineTestRuntime struct {
 }
 
 func (r *timelineTestRuntime) ResolveSandbox(context.Context, core.SandboxProfileRef) (core.SandboxRuntime, error) {
-	return core.SandboxRuntime{SandboxProfile: r.store.job.ProfileRef(), Timeline: r}, nil
+	return core.SandboxRuntime{SandboxProfile: r.store.session.ProfileRef(), Timeline: r}, nil
 }
-func (r *timelineTestRuntime) ReadTimeline(_ context.Context, job core.Job, owned core.Sandbox, threadID, turnID string) (core.HarnessTimeline, error) {
+func (r *timelineTestRuntime) ReadTimeline(_ context.Context, session core.Session, owned core.Sandbox, threadID, turnID string) (core.HarnessTimeline, error) {
 	r.calls++
-	if !r.store.inFence || job != r.store.job || owned != r.store.sandbox || threadID != "bound" || turnID != "selected" {
+	if !r.store.inFence || session != r.store.session || owned != r.store.sandbox || threadID != "bound" || turnID != "selected" {
 		return core.HarnessTimeline{}, errors.New("wrong read authority")
 	}
 	return r.result, r.err
 }
 
 func TestTimelineClientEnforcesCustodyAndPropagatesNativeFailures(t *testing.T) {
-	job := core.Job{ID: "job", SandboxProfile: "profile", CleanupState: core.CleanupPending, ThreadHarness: "codex", ThreadID: "bound"}
-	owned := core.Sandbox{ID: "sandbox", Name: core.DefaultSandbox, JobID: job.ID, OwnershipNonce: strings.Repeat("a", 64)}
-	store := &timelineTestStore{readerTestStore: &readerTestStore{job: job, sandbox: owned}}
+	session := core.Session{ID: "session", SandboxProfile: "profile", CleanupState: core.CleanupPending, Harness: "codex", ThreadID: "bound"}
+	owned := core.Sandbox{ID: "sandbox", Name: core.DefaultSandbox, SessionID: session.ID, OwnershipNonce: strings.Repeat("a", 64)}
+	store := &timelineTestStore{readerTestStore: &readerTestStore{session: session, sandbox: owned}}
 	runtime := &timelineTestRuntime{store: store, result: core.HarnessTimeline{Harness: "codex", ThreadID: "bound", TurnID: "selected", Status: "inProgress", Items: []json.RawMessage{json.RawMessage(`{"id":"item","type":"agentMessage","phase":"commentary"}`)}}}
 	handler, err := NewHandler(strings.Repeat("b", 64), Service{Store: store, Runtimes: runtime})
 	if err != nil {
@@ -54,29 +54,29 @@ func TestTimelineClientEnforcesCustodyAndPropagatesNativeFailures(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := client.ReadTimeline(context.Background(), job.ID, "selected")
+	result, err := client.ReadTimeline(context.Background(), session.ID, "selected")
 	if err != nil || result.TurnID != "selected" || runtime.calls != 1 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	for _, test := range []string{"missing-job", "cleanup", "no-binding", "foreign-sandbox", "foreign-thread", "unknown-turn", "unsupported", "oversized"} {
+	for _, test := range []string{"missing-session", "cleanup", "no-binding", "foreign-sandbox", "foreign-thread", "unknown-turn", "unsupported", "oversized"} {
 		t.Run(test, func(t *testing.T) {
-			store.job = job
+			store.session = session
 			store.sandbox = owned
 			runtime.err = nil
 			runtime.result.ThreadID = "bound"
 			runtime.result.Items = []json.RawMessage{json.RawMessage(`{"id":"item","type":"agentMessage"}`)}
-			jobID := job.ID
+			sessionID := session.ID
 			want := core.ErrTimelineUnavailable
 			switch test {
-			case "missing-job":
-				jobID = "missing"
-				want = ErrJobNotFound
+			case "missing-session":
+				sessionID = "missing"
+				want = ErrSessionNotFound
 			case "cleanup":
-				store.job.CleanupState = core.CleanupRequested
+				store.session.CleanupState = core.CleanupRequested
 			case "no-binding":
-				store.job.ThreadHarness, store.job.ThreadID = "", ""
+				store.session.Harness, store.session.ThreadID = "", ""
 			case "foreign-sandbox":
-				store.sandbox.JobID = "foreign"
+				store.sandbox.SessionID = "foreign"
 			case "foreign-thread":
 				runtime.result.ThreadID = "other"
 			case "unknown-turn":
@@ -88,7 +88,7 @@ func TestTimelineClientEnforcesCustodyAndPropagatesNativeFailures(t *testing.T) 
 				runtime.result.Items = []json.RawMessage{json.RawMessage(`{"text":"` + strings.Repeat("x", MaxObservationBytes) + `"}`)}
 				want = ErrResponseTooLarge
 			}
-			result, err := client.ReadTimeline(context.Background(), jobID, "selected")
+			result, err := client.ReadTimeline(context.Background(), sessionID, "selected")
 			if !errors.Is(err, want) || len(result.Items) != 0 {
 				t.Fatalf("result=%+v err=%v want=%v", result, err, want)
 			}
@@ -97,12 +97,12 @@ func TestTimelineClientEnforcesCustodyAndPropagatesNativeFailures(t *testing.T) 
 }
 
 func TestMessageTimelineMapsOnlyInputsWithExactStoredTurnCustody(t *testing.T) {
-	job := core.Job{ID: "job", SandboxProfile: "profile", CleanupState: core.CleanupPending}
-	owned := core.Sandbox{ID: "sandbox", Name: "review-sandbox", JobID: job.ID, OwnershipNonce: strings.Repeat("a", 64)}
-	run := core.AgentRun{ID: "run", JobID: job.ID, MessageID: "message", SandboxID: owned.ID, Harness: "codex", ThreadID: "bound", TurnID: "selected", State: core.AgentRunActive}
-	message := core.Message{ID: "message", JobID: job.ID}
-	execution := core.AgentMessageExecution{Job: job, Message: message, AgentRun: run, Sandbox: owned}
-	store := &timelineTestStore{readerTestStore: &readerTestStore{job: job, sandbox: owned, execution: execution}, deliveries: []core.Delivery{{Message: message, AgentRun: run}}}
+	session := core.Session{ID: "session", SandboxProfile: "profile", CleanupState: core.CleanupPending}
+	owned := core.Sandbox{ID: "sandbox", Name: "review-sandbox", SessionID: session.ID, OwnershipNonce: strings.Repeat("a", 64)}
+	run := core.AgentRun{ID: "run", SessionID: session.ID, MessageID: "message", SandboxID: owned.ID, Harness: "codex", ThreadID: "bound", TurnID: "selected", State: core.AgentRunActive}
+	message := core.Message{ID: "message", SessionID: session.ID}
+	execution := core.AgentMessageExecution{Session: session, Message: message, AgentRun: run, Sandbox: owned}
+	store := &timelineTestStore{readerTestStore: &readerTestStore{session: session, sandbox: owned, execution: execution}, deliveries: []core.Delivery{{Message: message, AgentRun: run}}}
 	runtime := &timelineTestRuntime{store: store, result: core.HarnessTimeline{Harness: "codex", ThreadID: "bound", TurnID: "selected", Status: "inProgress", Items: []json.RawMessage{json.RawMessage(`{"id":"input","type":"userMessage"}`)}, CompletedItems: []core.HarnessConversationItem{{Index: 0, NativeItemID: "input", Kind: "input", ClientID: "run"}, {Index: 1, NativeItemID: "answer", Kind: "reply", Text: "[PDF](sandbox:/report.pdf)"}, {Index: 2, NativeItemID: "unknown", Kind: "input", ClientID: "not-ours"}}}}
 	handler, err := NewHandler(strings.Repeat("b", 64), Service{Store: store, Runtimes: runtime})
 	if err != nil {
@@ -112,17 +112,17 @@ func TestMessageTimelineMapsOnlyInputsWithExactStoredTurnCustody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := client.ReadMessageTimeline(context.Background(), job.ID, message.ID)
+	result, err := client.ReadMessageTimeline(context.Background(), session.ID, message.ID)
 	if err != nil || len(result.CompletedItems) != 3 || result.CompletedItems[0].MessageID != message.ID || result.CompletedItems[0].ClientID != "" || result.CompletedItems[1].Text != "[PDF](sandbox:/report.pdf)" || result.CompletedItems[2].MessageID != "" || len(result.Items) != 0 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	for _, invalid := range []string{"job", "message", "sandbox", "nonce", "thread", "turn", "harness", "cleanup", "stale-sandbox"} {
+	for _, invalid := range []string{"session", "message", "sandbox", "nonce", "thread", "turn", "harness", "cleanup", "stale-sandbox"} {
 		t.Run(invalid, func(t *testing.T) {
 			store.execution = execution
 			store.sandbox = owned
 			switch invalid {
-			case "job":
-				store.execution.AgentRun.JobID = "other"
+			case "session":
+				store.execution.AgentRun.SessionID = "other"
 			case "message":
 				store.execution.AgentRun.MessageID = "other"
 			case "sandbox":
@@ -136,12 +136,12 @@ func TestMessageTimelineMapsOnlyInputsWithExactStoredTurnCustody(t *testing.T) {
 			case "harness":
 				store.execution.AgentRun.Harness = ""
 			case "cleanup":
-				store.execution.Job.CleanupState = core.CleanupRequested
+				store.execution.Session.CleanupState = core.CleanupRequested
 			case "stale-sandbox":
 				store.sandbox.OwnershipNonce = strings.Repeat("c", 64)
 			}
 			before := runtime.calls
-			_, err := client.ReadMessageTimeline(context.Background(), job.ID, message.ID)
+			_, err := client.ReadMessageTimeline(context.Background(), session.ID, message.ID)
 			if !errors.Is(err, core.ErrTimelineUnavailable) || runtime.calls != before {
 				t.Fatalf("err=%v calls=%d/%d", err, runtime.calls, before)
 			}
@@ -150,16 +150,16 @@ func TestMessageTimelineMapsOnlyInputsWithExactStoredTurnCustody(t *testing.T) {
 }
 
 func TestMessageTimelineDoesNotAttributeAnInputThroughForeignDelivery(t *testing.T) {
-	run := core.AgentRun{ID: "run", JobID: "job", MessageID: "message", SandboxID: "sandbox", Harness: "codex", ThreadID: "thread", TurnID: "turn"}
-	original := core.Delivery{Message: core.Message{ID: "message", JobID: "job"}, AgentRun: run}
-	for _, field := range []string{"job", "message-job", "message", "sandbox", "harness", "thread", "turn"} {
+	run := core.AgentRun{ID: "run", SessionID: "session", MessageID: "message", SandboxID: "sandbox", Harness: "codex", ThreadID: "thread", TurnID: "turn"}
+	original := core.Delivery{Message: core.Message{ID: "message", SessionID: "session"}, AgentRun: run}
+	for _, field := range []string{"session", "message-session", "message", "sandbox", "harness", "thread", "turn"} {
 		t.Run(field, func(t *testing.T) {
 			delivery := original
 			switch field {
-			case "job":
-				delivery.AgentRun.JobID = "other"
-			case "message-job":
-				delivery.Message.JobID = "other"
+			case "session":
+				delivery.AgentRun.SessionID = "other"
+			case "message-session":
+				delivery.Message.SessionID = "other"
 			case "message":
 				delivery.AgentRun.MessageID = "other"
 			case "sandbox":

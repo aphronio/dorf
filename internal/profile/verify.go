@@ -25,7 +25,7 @@ type RuntimeFactory func(core.SandboxProfile) (provider.Sandbox, error)
 
 // VerifyBase reconciles one disposable provider resource, executes Dorf's
 // current base-contract functional probe, and confirms exact deletion before
-// the profile may admit Jobs. Each explicit invocation starts a fresh attempt after any prior
+// the profile may admit Sessions. Each explicit invocation starts a fresh attempt after any prior
 // settled verification; a retry of an interrupted attempt reuses its durable
 // ownership identity.
 func VerifyBase(ctx context.Context, store Store, runtimeForProfile RuntimeFactory, name string) (core.SandboxProfile, error) {
@@ -55,7 +55,7 @@ func verifyBaseExclusive(ctx context.Context, store Store, runtimeForProfile Run
 		return core.SandboxProfile{}, failure
 	}
 	owner := provider.Ownership{
-		JobID: "profile:" + profile.Name, SandboxID: verification.SandboxID,
+		SessionID: "profile:" + profile.Name, SandboxID: verification.SandboxID,
 		OwnershipNonce: verification.OwnershipNonce,
 	}
 	if verification.ProbeCompletedAt.IsZero() {

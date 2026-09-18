@@ -51,15 +51,15 @@ var (
 	ErrResponseTooLarge = errors.New("control reader response exceeds its bound")
 )
 
-// Store is the durable custody needed to prove one read belongs to one Job.
+// Store is the durable custody needed to prove one read belongs to one Session.
 // The provider-facing process receives no alternate resource or profile input.
 type Store interface {
 	SandboxDeliveryHeld(context.Context, string) (bool, error)
 	core.SandboxActivityStore
-	Job(context.Context, string) (core.Job, error)
+	Session(context.Context, string) (core.Session, error)
 	Sandbox(context.Context, string) (core.Sandbox, error)
 	AgentMessageExecution(context.Context, string) (core.AgentMessageExecution, error)
-	WithJobFence(context.Context, string, func() error) error
+	WithSessionFence(context.Context, string, func() error) error
 }
 
 type AdmissionProvider interface {
@@ -71,7 +71,7 @@ type AdmissionProvider interface {
 // Service owns provider-facing reads. It accepts only durable Dorf identities
 // and one already-validated Sandbox file path.
 type Service struct {
-	ObservationAttention func(context.Context, core.Job) (string, error)
+	ObservationAttention func(context.Context, core.Session) (string, error)
 	Replies              *codex.ReplyFeed
 	Store                Store
 	Runtimes             core.SandboxRuntimeResolver
@@ -83,12 +83,12 @@ func (s Service) ReadFile(ctx context.Context, sandboxID, relativePath string) (
 		return nil, ErrInvalidFilePath
 	}
 	var contents []byte
-	err := s.withSandbox(ctx, sandboxID, func(runtime core.SandboxRuntime, job core.Job, owned core.Sandbox) error {
+	err := s.withSandbox(ctx, sandboxID, func(runtime core.SandboxRuntime, session core.Session, owned core.Sandbox) error {
 		if runtime.Files == nil {
 			return ErrUnavailable
 		}
 		var err error
-		contents, err = runtime.Files.ReadSandboxFile(ctx, job, owned, relativePath)
+		contents, err = runtime.Files.ReadSandboxFile(ctx, session, owned, relativePath)
 		if err != nil {
 			contents = nil
 		}
@@ -101,11 +101,11 @@ func (s Service) ReadFile(ctx context.Context, sandboxID, relativePath string) (
 	return contents, err
 }
 
-func (s Service) withSandbox(ctx context.Context, sandboxID string, call func(core.SandboxRuntime, core.Job, core.Sandbox) error) error {
+func (s Service) withSandbox(ctx context.Context, sandboxID string, call func(core.SandboxRuntime, core.Session, core.Sandbox) error) error {
 	return s.accessSandbox(ctx, sandboxID, true, call)
 }
 
-func (s Service) accessSandbox(ctx context.Context, sandboxID string, reconcileIdle bool, call func(core.SandboxRuntime, core.Job, core.Sandbox) error) error {
+func (s Service) accessSandbox(ctx context.Context, sandboxID string, reconcileIdle bool, call func(core.SandboxRuntime, core.Session, core.Sandbox) error) error {
 	if !validIdentity(sandboxID) {
 		return ErrSandboxNotFound
 	}
@@ -119,26 +119,26 @@ func (s Service) accessSandbox(ctx context.Context, sandboxID string, reconcileI
 	if err != nil {
 		return err
 	}
-	if owned.ID != sandboxID || !validIdentity(owned.JobID) || !validIdentity(owned.OwnershipNonce) {
+	if owned.ID != sandboxID || !validIdentity(owned.SessionID) || !validIdentity(owned.OwnershipNonce) {
 		return ErrUnavailable
 	}
 
 	var idleRuntime core.Execution
 	defer func() {
 		if reconcileIdle {
-			core.ReconcileIdle(ctx, idleRuntime, owned.JobID)
+			core.ReconcileIdle(ctx, idleRuntime, owned.SessionID)
 		}
 	}()
-	err = s.Store.WithJobFence(ctx, owned.JobID, func() error {
-		runtime, job, err := s.sandboxAuthority(ctx, owned)
+	err = s.Store.WithSessionFence(ctx, owned.SessionID, func() error {
+		runtime, session, err := s.sandboxAuthority(ctx, owned)
 		if err != nil {
 			return err
 		}
 		idleRuntime = runtime.Execution
 		if reconcileIdle {
-			err = core.WithSandboxActivity(ctx, s.Store, job.ID, func() error { return call(runtime, job, owned) })
+			err = core.WithSandboxActivity(ctx, s.Store, session.ID, func() error { return call(runtime, session, owned) })
 		} else {
-			err = call(runtime, job, owned)
+			err = call(runtime, session, owned)
 		}
 		switch {
 		case errors.Is(err, provider.ErrInvalidFilePath):
@@ -154,46 +154,46 @@ func (s Service) accessSandbox(ctx context.Context, sandboxID string, reconcileI
 	return err
 }
 
-func (s Service) sandboxAuthority(ctx context.Context, owned core.Sandbox) (core.SandboxRuntime, core.Job, error) {
-	job, err := s.Store.Job(ctx, owned.JobID)
+func (s Service) sandboxAuthority(ctx context.Context, owned core.Sandbox) (core.SandboxRuntime, core.Session, error) {
+	session, err := s.Store.Session(ctx, owned.SessionID)
 	if errors.Is(err, postgres.ErrNotFound) {
-		return core.SandboxRuntime{}, core.Job{}, ErrUnavailable
+		return core.SandboxRuntime{}, core.Session{}, ErrUnavailable
 	}
 	if err != nil {
-		return core.SandboxRuntime{}, core.Job{}, err
+		return core.SandboxRuntime{}, core.Session{}, err
 	}
-	if job.ID != owned.JobID || job.CleanupState != core.CleanupPending {
-		return core.SandboxRuntime{}, core.Job{}, ErrUnavailable
+	if session.ID != owned.SessionID || session.CleanupState != core.CleanupPending {
+		return core.SandboxRuntime{}, core.Session{}, ErrUnavailable
 	}
 	current, err := s.Store.Sandbox(ctx, owned.ID)
 	if errors.Is(err, postgres.ErrNotFound) {
-		return core.SandboxRuntime{}, core.Job{}, ErrUnavailable
+		return core.SandboxRuntime{}, core.Session{}, ErrUnavailable
 	}
 	if err != nil {
-		return core.SandboxRuntime{}, core.Job{}, err
+		return core.SandboxRuntime{}, core.Session{}, err
 	}
 	if current != owned {
-		return core.SandboxRuntime{}, core.Job{}, ErrUnavailable
+		return core.SandboxRuntime{}, core.Session{}, ErrUnavailable
 	}
 	held, err := s.Store.SandboxDeliveryHeld(ctx, owned.ID)
 	if err != nil {
-		return core.SandboxRuntime{}, core.Job{}, err
+		return core.SandboxRuntime{}, core.Session{}, err
 	}
 	if held {
-		return core.SandboxRuntime{}, core.Job{}, ErrUnavailable
+		return core.SandboxRuntime{}, core.Session{}, ErrUnavailable
 	}
-	runtime, err := s.Runtimes.ResolveSandbox(ctx, job.ProfileRef())
+	runtime, err := s.Runtimes.ResolveSandbox(ctx, session.ProfileRef())
 	if err != nil {
-		return core.SandboxRuntime{}, core.Job{}, fmt.Errorf("resolve Sandbox profile for file read: %w", err)
+		return core.SandboxRuntime{}, core.Session{}, fmt.Errorf("resolve Sandbox profile for file read: %w", err)
 	}
-	if runtime.SandboxProfile != job.ProfileRef() {
-		return core.SandboxRuntime{}, core.Job{}, fmt.Errorf("resolved Sandbox runtime has a different profile")
+	if runtime.SandboxProfile != session.ProfileRef() {
+		return core.SandboxRuntime{}, core.Session{}, fmt.Errorf("resolved Sandbox runtime has a different profile")
 	}
-	return runtime, job, nil
+	return runtime, session, nil
 }
 
-func (s Service) ObserveMessage(ctx context.Context, jobID, messageID string) (core.MessageResult, error) {
-	if !validIdentity(jobID) || !validIdentity(messageID) {
+func (s Service) ObserveMessage(ctx context.Context, sessionID, messageID string) (core.MessageResult, error) {
+	if !validIdentity(sessionID) || !validIdentity(messageID) {
 		return core.MessageResult{}, ErrUnavailable
 	}
 	if s.Store == nil || s.Runtimes == nil {
@@ -201,8 +201,8 @@ func (s Service) ObserveMessage(ctx context.Context, jobID, messageID string) (c
 	}
 	var result core.MessageResult
 	var idleRuntime core.Execution
-	defer func() { core.ReconcileIdle(ctx, idleRuntime, jobID) }()
-	err := s.Store.WithJobFence(ctx, jobID, func() error {
+	defer func() { core.ReconcileIdle(ctx, idleRuntime, sessionID) }()
+	err := s.Store.WithSessionFence(ctx, sessionID, func() error {
 		authoritative, err := s.Store.AgentMessageExecution(ctx, messageID)
 		if errors.Is(err, postgres.ErrNotFound) {
 			return ErrUnavailable
@@ -210,13 +210,13 @@ func (s Service) ObserveMessage(ctx context.Context, jobID, messageID string) (c
 		if err != nil {
 			return err
 		}
-		job := authoritative.Job
-		if job.ID != jobID || job.CleanupState != core.CleanupPending ||
-			authoritative.Message.ID != messageID || authoritative.Message.JobID != job.ID ||
-			authoritative.AgentRun.JobID != job.ID || authoritative.AgentRun.MessageID != messageID ||
+		session := authoritative.Session
+		if session.ID != sessionID || session.CleanupState != core.CleanupPending ||
+			authoritative.Message.ID != messageID || authoritative.Message.SessionID != session.ID ||
+			authoritative.AgentRun.SessionID != session.ID || authoritative.AgentRun.MessageID != messageID ||
 			!validIdentity(authoritative.AgentRun.ID) || authoritative.AgentRun.State != core.AgentRunCompleted ||
 			!terminalMessageOutcome(authoritative.AgentRun.TurnOutcome) ||
-			!validIdentity(authoritative.Sandbox.ID) || authoritative.Sandbox.JobID != job.ID ||
+			!validIdentity(authoritative.Sandbox.ID) || authoritative.Sandbox.SessionID != session.ID ||
 			!validIdentity(authoritative.Sandbox.OwnershipNonce) || authoritative.AgentRun.SandboxID != authoritative.Sandbox.ID {
 			return ErrUnavailable
 		}
@@ -224,12 +224,12 @@ func (s Service) ObserveMessage(ctx context.Context, jobID, messageID string) (c
 		if err != nil {
 			return err
 		}
-		if runtime.SandboxProfile != job.ProfileRef() || runtime.Execution == nil {
+		if runtime.SandboxProfile != session.ProfileRef() || runtime.Execution == nil {
 			return fmt.Errorf("resolved Sandbox runtime has no exact Message observation authority")
 		}
 		idleRuntime = runtime.Execution
-		err = core.WithSandboxActivity(ctx, s.Store, job.ID, func() error {
-			result, err = runtime.Execution.ObserveSettledAgentMessage(ctx, job.ID, messageID)
+		err = core.WithSandboxActivity(ctx, s.Store, session.ID, func() error {
+			result, err = runtime.Execution.ObserveSettledAgentMessage(ctx, session.ID, messageID)
 			return err
 		})
 		if err != nil {
@@ -311,7 +311,7 @@ type fileReadRequest struct {
 }
 
 type messageObservationRequest struct {
-	JobID     string `json:"job_id"`
+	SessionID string `json:"session_id"`
 	MessageID string `json:"message_id"`
 }
 
@@ -344,7 +344,7 @@ func NewHandler(token string, service Service) (http.Handler, error) {
 	fileTransfers := make(chan struct{}, provider.MaxConcurrentFileReads)
 	routes := map[string]http.HandlerFunc{
 		CoherentObservationPath: jsonEndpoint(MaxObservationBytes, func(ctx context.Context, input observationRequest) (MessageObservation, error) {
-			return service.ReadMessageObservation(ctx, input.JobID, input.MessageID, input.Cursor)
+			return service.ReadMessageObservation(ctx, input.SessionID, input.MessageID, input.Cursor)
 		}),
 		ObservationStreamPath: observationStreamEndpoint(service),
 		HealthPath: jsonEndpoint(0, func(context.Context, struct{}) (healthResponse, error) {
@@ -359,12 +359,12 @@ func NewHandler(token string, service Service) (http.Handler, error) {
 				if input.TurnID != "" {
 					return core.HarnessTimeline{}, ErrInvalidRequest
 				}
-				return service.ReadMessageTimeline(ctx, input.JobID, input.MessageID)
+				return service.ReadMessageTimeline(ctx, input.SessionID, input.MessageID)
 			}
-			return service.ReadTimeline(ctx, input.JobID, input.TurnID)
+			return service.ReadTimeline(ctx, input.SessionID, input.TurnID)
 		}),
 		MessageObservationPath: jsonEndpoint(MaxObservationBytes, func(ctx context.Context, input messageObservationRequest) (core.MessageResult, error) {
-			return service.ObserveMessage(ctx, input.JobID, input.MessageID)
+			return service.ObserveMessage(ctx, input.SessionID, input.MessageID)
 		}),
 		DefaultConnectionPath: jsonEndpoint(0, func(context.Context, struct{}) (connectionResponse, error) {
 			connection, err := service.DefaultConnection()
@@ -513,8 +513,8 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
 
 func writeServiceError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, ErrJobNotFound):
-		writeProblem(w, http.StatusNotFound, "job_not_found")
+	case errors.Is(err, ErrSessionNotFound):
+		writeProblem(w, http.StatusNotFound, "session_not_found")
 	case errors.Is(err, core.ErrTurnNotFound):
 		writeProblem(w, http.StatusNotFound, "turn_not_found")
 	case errors.Is(err, core.ErrTimelineUnavailable):
@@ -657,8 +657,8 @@ func (c Client) ReadFile(ctx context.Context, sandboxID, relativePath string) ([
 	return contents, nil
 }
 
-func (c Client) ObserveMessage(ctx context.Context, jobID, messageID string) (core.MessageResult, error) {
-	response, err := c.request(ctx, MessageObservationPath, messageObservationRequest{JobID: jobID, MessageID: messageID})
+func (c Client) ObserveMessage(ctx context.Context, sessionID, messageID string) (core.MessageResult, error) {
+	response, err := c.request(ctx, MessageObservationPath, messageObservationRequest{SessionID: sessionID, MessageID: messageID})
 	if err != nil {
 		return core.MessageResult{}, err
 	}
@@ -779,8 +779,8 @@ func decodeProblem(response *http.Response) error {
 		return fmt.Errorf("control reader returned HTTP %d", response.StatusCode)
 	}
 	switch value.Code {
-	case "job_not_found":
-		return ErrJobNotFound
+	case "session_not_found":
+		return ErrSessionNotFound
 	case "turn_not_found":
 		return core.ErrTurnNotFound
 	case "timeline_unavailable":
@@ -812,7 +812,7 @@ func problemMatchesStatus(code string, status int) bool {
 		return status == http.StatusUnauthorized
 	case "invalid_request":
 		return status == http.StatusBadRequest || status == http.StatusUnprocessableEntity
-	case "sandbox_not_found", "file_not_found", "job_not_found", "turn_not_found":
+	case "sandbox_not_found", "file_not_found", "session_not_found", "turn_not_found":
 		return status == http.StatusNotFound
 	case "invalid_file_path":
 		return status == http.StatusUnprocessableEntity

@@ -16,10 +16,10 @@ import (
 )
 
 type retryProofResult struct {
-	JobID string `json:"job_id"`
+	SessionID string `json:"session_id"`
 }
 
-func TestRetryFailedJobSchedulesOneMoreAttemptOnSameTask(t *testing.T) {
+func TestRetryFailedSessionSchedulesOneMoreAttemptOnSameTask(t *testing.T) {
 	_, store, defaultClient := testDatabase(t)
 	defaultClient.Close()
 	ctx := context.Background()
@@ -27,61 +27,61 @@ func TestRetryFailedJobSchedulesOneMoreAttemptOnSameTask(t *testing.T) {
 	client := newFaultClient(t, store, queueName)
 	const taskName = "dorf-retry-proof-v1"
 	client.MustRegister(absurd.Task(taskName, func(_ context.Context, params faultActionParams) (retryProofResult, error) {
-		return retryProofResult{JobID: params.JobID}, errors.New("operator-repairable outage")
+		return retryProofResult{SessionID: params.SessionID}, errors.New("operator-repairable outage")
 	}, absurd.TaskOptions{DefaultMaxAttempts: 1}))
 
-	job := admitFaultJob(t, store, fmt.Sprintf("retry-%d", time.Now().UnixNano()))
-	spawned, err := client.Spawn(ctx, taskName, faultActionParams{JobID: job.ID}, absurd.SpawnOptions{MaxAttempts: 1})
+	session := admitFaultSession(t, store, fmt.Sprintf("retry-%d", time.Now().UnixNano()))
+	spawned, err := client.Spawn(ctx, taskName, faultActionParams{SessionID: session.ID}, absurd.SpawnOptions{MaxAttempts: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AttachJobTask(ctx, job.ID, job.CurrentTaskID, spawned.TaskID, taskName); err != nil {
+	if err := store.AttachSessionTask(ctx, session.ID, session.CurrentTaskID, spawned.TaskID, taskName); err != nil {
 		t.Fatal(err)
 	}
-	job, err = store.Job(ctx, job.ID)
+	session, err = store.Session(ctx, session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "retry-proof-first", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
 		t.Fatal(err)
 	}
-	failed, err := client.FetchTaskResult(ctx, queueName, job.CurrentTaskID)
+	failed, err := client.FetchTaskResult(ctx, queueName, session.CurrentTaskID)
 	if err != nil || failed == nil || failed.State != absurd.TaskFailed {
 		t.Fatalf("failed task=%#v err=%v", failed, err)
 	}
-	requestKey := "retry-request-" + job.ID
-	receipt, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID, requestKey)
+	requestKey := "retry-request-" + session.ID
+	receipt, err := (core.Application{Store: store, Tasks: client}).RetryFailedSession(ctx, session.ID, requestKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.RequestKey != requestKey || receipt.JobID != job.ID || receipt.TaskID != job.CurrentTaskID || receipt.Retry != "scheduled" || receipt.RunID == "" || receipt.Attempt != 2 || !receipt.Created {
+	if receipt.RequestKey != requestKey || receipt.SessionID != session.ID || receipt.TaskID != session.CurrentTaskID || receipt.Retry != "scheduled" || receipt.RunID == "" || receipt.Attempt != 2 || !receipt.Created {
 		t.Fatalf("retry receipt=%#v", receipt)
 	}
-	replayed, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID, requestKey)
-	if err != nil || replayed.RequestKey != receipt.RequestKey || replayed.JobID != receipt.JobID || replayed.TaskID != receipt.TaskID || replayed.RunID != receipt.RunID || replayed.Attempt != receipt.Attempt || replayed.Created {
+	replayed, err := (core.Application{Store: store, Tasks: client}).RetryFailedSession(ctx, session.ID, requestKey)
+	if err != nil || replayed.RequestKey != receipt.RequestKey || replayed.SessionID != receipt.SessionID || replayed.TaskID != receipt.TaskID || replayed.RunID != receipt.RunID || replayed.Attempt != receipt.Attempt || replayed.Created {
 		t.Fatalf("retry replay=%#v original=%#v err=%v", replayed, receipt, err)
 	}
-	other := admitFaultJob(t, store, fmt.Sprintf("retry-conflict-%d", time.Now().UnixNano()))
-	if _, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, other.ID, requestKey); !errors.Is(err, core.ErrRetryReplayConflict) {
-		t.Fatalf("changed Job replay error=%v", err)
+	other := admitFaultSession(t, store, fmt.Sprintf("retry-conflict-%d", time.Now().UnixNano()))
+	if _, err := (core.Application{Store: store, Tasks: client}).RetryFailedSession(ctx, other.ID, requestKey); !errors.Is(err, core.ErrRetryReplayConflict) {
+		t.Fatalf("changed Session replay error=%v", err)
 	}
-	pending, err := client.FetchTaskResult(ctx, queueName, job.CurrentTaskID)
+	pending, err := client.FetchTaskResult(ctx, queueName, session.CurrentTaskID)
 	if err != nil || pending == nil || pending.State != absurd.TaskPending {
 		t.Fatalf("scheduled task=%#v err=%v", pending, err)
 	}
-	if _, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID, requestKey+"-new"); !errors.Is(err, core.ErrRetryNotEligible) {
+	if _, err := (core.Application{Store: store, Tasks: client}).RetryFailedSession(ctx, session.ID, requestKey+"-new"); !errors.Is(err, core.ErrRetryNotEligible) {
 		t.Fatalf("non-failed retry error=%v", err)
 	}
-	after, err := store.Job(ctx, job.ID)
+	after, err := store.Session(ctx, session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after != job {
-		t.Fatalf("retry mutated Dorf Job facts: before=%#v after=%#v", job, after)
+	if after != session {
+		t.Fatalf("retry mutated Dorf Session facts: before=%#v after=%#v", session, after)
 	}
 }
 
-func TestRetryFailedJobTargetsAttachedCleanupTask(t *testing.T) {
+func TestRetryFailedSessionTargetsAttachedCleanupTask(t *testing.T) {
 	_, store, defaultClient := testDatabase(t)
 	defaultClient.Close()
 	ctx := context.Background()
@@ -89,32 +89,32 @@ func TestRetryFailedJobTargetsAttachedCleanupTask(t *testing.T) {
 	client := newFaultClient(t, store, queueName)
 	const taskName = core.CleanupTaskName
 	client.MustRegister(absurd.Task(taskName, func(_ context.Context, params faultActionParams) (retryProofResult, error) {
-		return retryProofResult{JobID: params.JobID}, errors.New("operator-repairable cleanup outage")
+		return retryProofResult{SessionID: params.SessionID}, errors.New("operator-repairable cleanup outage")
 	}, absurd.TaskOptions{DefaultMaxAttempts: 1}))
 
-	job := admitFaultJob(t, store, fmt.Sprintf("cleanup-retry-%d", time.Now().UnixNano()))
-	mainTaskID := "main-task-" + job.ID
-	if err := store.AttachJobTask(ctx, job.ID, "", mainTaskID, "dorf-main-proof-v1"); err != nil {
+	session := admitFaultSession(t, store, fmt.Sprintf("cleanup-retry-%d", time.Now().UnixNano()))
+	mainTaskID := "main-task-" + session.ID
+	if err := store.AttachSessionTask(ctx, session.ID, "", mainTaskID, "dorf-main-proof-v1"); err != nil {
 		t.Fatal(err)
 	}
-	job, err := store.Job(ctx, job.ID)
+	session, err := store.Session(ctx, session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RequestCleanup(ctx, job.ID); err != nil {
+	if err := store.RequestCleanup(ctx, session.ID); err != nil {
 		t.Fatal(err)
 	}
-	spawned, err := client.Spawn(ctx, taskName, faultActionParams{JobID: job.ID}, absurd.SpawnOptions{MaxAttempts: 1})
+	spawned, err := client.Spawn(ctx, taskName, faultActionParams{SessionID: session.ID}, absurd.SpawnOptions{MaxAttempts: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AttachCleanupTask(ctx, job.ID, job.CurrentTaskID, spawned.TaskID, taskName); err != nil {
+	if err := store.AttachCleanupTask(ctx, session.ID, session.CurrentTaskID, spawned.TaskID, taskName); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "cleanup-retry-proof-first", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
 		t.Fatal(err)
 	}
-	before, err := store.Job(ctx, job.ID)
+	before, err := store.Session(ctx, session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestRetryFailedJobTargetsAttachedCleanupTask(t *testing.T) {
 	if err != nil || failed == nil || failed.State != absurd.TaskFailed {
 		t.Fatalf("failed cleanup task=%#v err=%v", failed, err)
 	}
-	attachments, err := store.JobTasks(ctx, job.ID)
+	attachments, err := store.SessionTasks(ctx, session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,28 +131,28 @@ func TestRetryFailedJobTargetsAttachedCleanupTask(t *testing.T) {
 		t.Fatalf("ordered task attachments=%#v", attachments)
 	}
 
-	receipt, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID, "cleanup-retry-"+job.ID)
+	receipt, err := (core.Application{Store: store, Tasks: client}).RetryFailedSession(ctx, session.ID, "cleanup-retry-"+session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.JobID != job.ID || receipt.TaskID != before.CurrentTaskID || receipt.Retry != "scheduled" || receipt.RunID == "" || receipt.Attempt != 2 {
+	if receipt.SessionID != session.ID || receipt.TaskID != before.CurrentTaskID || receipt.Retry != "scheduled" || receipt.RunID == "" || receipt.Attempt != 2 {
 		t.Fatalf("cleanup retry receipt=%#v", receipt)
 	}
 	pending, err := client.FetchTaskResult(ctx, queueName, before.CurrentTaskID)
 	if err != nil || pending == nil || pending.State != absurd.TaskPending {
 		t.Fatalf("scheduled cleanup task=%#v err=%v", pending, err)
 	}
-	after, err := store.Job(ctx, job.ID)
+	after, err := store.Session(ctx, session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if after != before {
-		t.Fatalf("cleanup retry mutated Dorf Job facts: before=%#v after=%#v", before, after)
+		t.Fatalf("cleanup retry mutated Dorf Session facts: before=%#v after=%#v", before, after)
 	}
 }
 
 type faultActionParams struct {
-	JobID string `json:"job_id"`
+	SessionID string `json:"session_id"`
 }
 
 type faultActionResultV1 struct {
@@ -226,7 +226,7 @@ type faultActionExternals struct {
 	runID  string
 }
 
-func (e faultActionExternals) SandboxCreate(context.Context, core.Job, core.Sandbox) (string, error) {
+func (e faultActionExternals) SandboxCreate(context.Context, core.Session, core.Sandbox) (string, error) {
 	e.effect.reconcile(e.runID)
 	return "provider-fault-resource", nil
 }
@@ -251,11 +251,11 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 			return faultActionResultV1{}, absurd.ErrNoTaskContext
 		}
 		result, err := absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (faultActionResultV1, error) {
-			job, err := store.Job(workCtx, params.JobID)
+			session, err := store.Session(workCtx, params.SessionID)
 			if err != nil {
 				return faultActionResultV1{}, err
 			}
-			sandbox, err := store.Sandbox(workCtx, core.MainSandboxName(params.JobID))
+			sandbox, err := store.Sandbox(workCtx, core.MainSandboxName(params.SessionID))
 			if err != nil {
 				return faultActionResultV1{}, err
 			}
@@ -270,10 +270,10 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 					return err
 				},
 			)
-			if err := execution.ExecuteSandboxAction(workCtx, job.ID, sandbox.ID, core.ActionSandboxCreate); err != nil {
+			if err := execution.ExecuteSandboxAction(workCtx, session.ID, sandbox.ID, core.ActionSandboxCreate); err != nil {
 				return faultActionResultV1{}, err
 			}
-			return faultActionResultV1{ActionID: core.ScopedActionID(job.ID, core.ActionSandboxCreate, sandbox.ID)}, nil
+			return faultActionResultV1{ActionID: core.ScopedActionID(session.ID, core.ActionSandboxCreate, sandbox.ID)}, nil
 		})
 		if err != nil {
 			return faultActionResultV1{}, err
@@ -282,15 +282,15 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 	}, absurd.TaskOptions{DefaultMaxAttempts: 2}))
 }
 
-func admitFaultJob(t *testing.T, store postgres.Store, suffix string) core.Job {
+func admitFaultSession(t *testing.T, store postgres.Store, suffix string) core.Session {
 	t.Helper()
-	job, created, err := admitDirectFixture(t, store, context.Background(), directJobInput(
+	session, created, err := admitDirectFixture(t, store, context.Background(), directSessionInput(
 		"absurd-fault-"+suffix,
 	))
 	if err != nil || !created {
-		t.Fatalf("admit fault Job=%#v created=%v err=%v", job, created, err)
+		t.Fatalf("admit fault Session=%#v created=%v err=%v", session, created, err)
 	}
-	return job
+	return session
 }
 
 func newFaultClient(t *testing.T, dbStore postgres.Store, queueName string) *absurd.Client {
@@ -319,12 +319,12 @@ func TestAbsurdCancellationCannotRecordLateActionSuccess(t *testing.T) {
 	t.Cleanup(effect.release)
 	taskName := "dorf-fault-cancel-v1"
 	registerFaultActionTask(client, store, taskName, effect)
-	job := admitFaultJob(t, store, fmt.Sprintf("cancel-%d", time.Now().UnixNano()))
-	spawned, err := client.Spawn(context.Background(), taskName, faultActionParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: "cancel:" + job.ID})
+	session := admitFaultSession(t, store, fmt.Sprintf("cancel-%d", time.Now().UnixNano()))
+	spawned, err := client.Spawn(context.Background(), taskName, faultActionParams{SessionID: session.ID}, absurd.SpawnOptions{IdempotencyKey: "cancel:" + session.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AttachJobTask(context.Background(), job.ID, "", spawned.TaskID, taskName); err != nil {
+	if err := store.AttachSessionTask(context.Background(), session.ID, "", spawned.TaskID, taskName); err != nil {
 		t.Fatal(err)
 	}
 
@@ -342,7 +342,7 @@ func TestAbsurdCancellationCannotRecordLateActionSuccess(t *testing.T) {
 	}
 
 	snapshot, err := client.FetchTaskResult(context.Background(), queueName, spawned.TaskID)
-	actions, actionsErr := store.Actions(context.Background(), job.ID)
+	actions, actionsErr := store.Actions(context.Background(), session.ID)
 	action, found := sandboxCreateAction(actions)
 	passed, failed := effect.claims()
 	if err != nil || actionsErr != nil || snapshot == nil || snapshot.State != absurd.TaskCancelled || !found || action.State != core.ActionUnsettled || effect.mutationCount() != 1 || len(passed) != 1 || passed[0] != firstRunID || len(failed) != 1 || failed[0] != firstRunID {
@@ -398,12 +398,12 @@ func TestAbsurdClaimExpirySandboxEffectFenceSerializesCleanupWithoutLateReceipt(
 	t.Cleanup(effect.release)
 	taskName := "dorf-fault-claim-v1"
 	registerFaultActionTask(client, store, taskName, effect)
-	job := admitFaultJob(t, store, fmt.Sprintf("claim-%d", time.Now().UnixNano()))
-	spawned, err := client.Spawn(context.Background(), taskName, faultActionParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: "claim:" + job.ID})
+	session := admitFaultSession(t, store, fmt.Sprintf("claim-%d", time.Now().UnixNano()))
+	spawned, err := client.Spawn(context.Background(), taskName, faultActionParams{SessionID: session.ID}, absurd.SpawnOptions{IdempotencyKey: "claim:" + session.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AttachJobTask(context.Background(), job.ID, "", spawned.TaskID, taskName); err != nil {
+	if err := store.AttachSessionTask(context.Background(), session.ID, "", spawned.TaskID, taskName); err != nil {
 		t.Fatal(err)
 	}
 
@@ -420,7 +420,7 @@ func TestAbsurdClaimExpirySandboxEffectFenceSerializesCleanupWithoutLateReceipt(
 	}
 	application := core.Application{Store: store, Tasks: client}
 	application.RegisterCleanup()
-	handle, err := application.OpenJob(context.Background(), job.ID)
+	handle, err := application.OpenSession(context.Background(), session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,12 +438,12 @@ func TestAbsurdClaimExpirySandboxEffectFenceSerializesCleanupWithoutLateReceipt(
 	if err := <-cleanupDone; err != nil {
 		t.Fatal(err)
 	}
-	actions, err := store.Actions(context.Background(), job.ID)
+	actions, err := store.Actions(context.Background(), session.ID)
 	action, found := sandboxCreateAction(actions)
 	passed, failed := effect.claims()
-	closed, jobErr := store.Job(context.Background(), job.ID)
-	if err != nil || jobErr != nil || !found || action.State != core.ActionUnsettled || effect.mutationCount() != 1 || len(passed) != 1 || passed[0] != firstRunID || len(failed) != 1 || failed[0] != firstRunID || closed.AdmissionOpen || closed.CleanupState != core.CleanupScheduled {
-		t.Fatalf("serialized cleanup Job=%#v actions=%#v mutations=%d claims passed=%v failed=%v errors=%v/%v", closed, actions, effect.mutationCount(), passed, failed, err, jobErr)
+	closed, sessionErr := store.Session(context.Background(), session.ID)
+	if err != nil || sessionErr != nil || !found || action.State != core.ActionUnsettled || effect.mutationCount() != 1 || len(passed) != 1 || passed[0] != firstRunID || len(failed) != 1 || failed[0] != firstRunID || closed.AdmissionOpen || closed.CleanupState != core.CleanupScheduled {
+		t.Fatalf("serialized cleanup Session=%#v actions=%#v mutations=%d claims passed=%v failed=%v errors=%v/%v", closed, actions, effect.mutationCount(), passed, failed, err, sessionErr)
 	}
 }
 
@@ -460,14 +460,14 @@ type blockingAgentExternals struct {
 type blockingAgentOperation struct {
 	externals *blockingAgentExternals
 	message   core.Message
-	job       core.Job
+	session   core.Session
 }
 
 func (o blockingAgentOperation) Harness() string { return "codex" }
 func (o blockingAgentOperation) Submit(ctx context.Context, run core.AgentRun, input string) (core.HarnessBinding, error) {
 	binding, err := (integrationAgentOperation{
 		externals: o.externals.integrationExternals,
-		execution: core.AgentMessageExecution{Job: o.job, Message: o.message},
+		execution: core.AgentMessageExecution{Session: o.session, Message: o.message},
 	}).Submit(ctx, run, input)
 	if err != nil {
 		return core.HarnessBinding{}, err
@@ -484,10 +484,10 @@ func (o blockingAgentOperation) Submit(ctx context.Context, run core.AgentRun, i
 	}
 }
 func (o blockingAgentOperation) Recover(ctx context.Context, run core.AgentRun) (core.HarnessBinding, error) {
-	return integrationAgentOperation{externals: o.externals.integrationExternals, execution: core.AgentMessageExecution{Job: o.job, Message: o.message}}.Recover(ctx, run)
+	return integrationAgentOperation{externals: o.externals.integrationExternals, execution: core.AgentMessageExecution{Session: o.session, Message: o.message}}.Recover(ctx, run)
 }
 func (o blockingAgentOperation) History(ctx context.Context, run core.AgentRun) (core.HarnessHistory, error) {
-	return integrationAgentOperation{externals: o.externals.integrationExternals, execution: core.AgentMessageExecution{Job: o.job, Message: o.message}}.History(ctx, run)
+	return integrationAgentOperation{externals: o.externals.integrationExternals, execution: core.AgentMessageExecution{Session: o.session, Message: o.message}}.History(ctx, run)
 }
 
 func (e *blockingAgentExternals) startCount() int {
@@ -502,8 +502,8 @@ func TestAgentReconciliationClaimExpirySerializesReplacementAndRecoversLostSubmi
 	ctx := context.Background()
 	queueName := fmt.Sprintf("dorf_agent_fence_%d", time.Now().UnixNano())
 	client := newFaultClient(t, store, queueName)
-	job := admitFaultJob(t, store, fmt.Sprintf("agent-fence-%d", time.Now().UnixNano()))
-	deliveries, err := store.Deliveries(ctx, job.ID)
+	session := admitFaultSession(t, store, fmt.Sprintf("agent-fence-%d", time.Now().UnixNano()))
+	deliveries, err := store.Deliveries(ctx, session.ID)
 	if err != nil || len(deliveries) != 1 {
 		t.Fatalf("initial delivery=%#v err=%v", deliveries, err)
 	}
@@ -516,7 +516,7 @@ func TestAgentReconciliationClaimExpirySerializesReplacementAndRecoversLostSubmi
 	}
 	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
 		WithAgentExecution(resultBoundaryAgentExecution{
-			operation: blockingAgentOperation{externals: externals, message: deliveries[0].Message, job: job},
+			operation: blockingAgentOperation{externals: externals, message: deliveries[0].Message, session: session},
 		})
 	taskName := "dorf-agent-fence-proof-v1"
 	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ faultActionParams) (faultActionResultV1, error) {
@@ -525,10 +525,10 @@ func TestAgentReconciliationClaimExpirySerializesReplacementAndRecoversLostSubmi
 			return faultActionResultV1{}, absurd.ErrNoTaskContext
 		}
 		externals.attempts <- task.RunID()
-		if _, err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
+		if _, err := execution.ReconcileSessionAgent(taskCtx, session.ID); err != nil {
 			return faultActionResultV1{}, err
 		}
-		result, err := execution.ObserveSettledAgentMessage(taskCtx, job.ID, messageID)
+		result, err := execution.ObserveSettledAgentMessage(taskCtx, session.ID, messageID)
 		if err != nil {
 			return faultActionResultV1{}, err
 		}
@@ -537,11 +537,11 @@ func TestAgentReconciliationClaimExpirySerializesReplacementAndRecoversLostSubmi
 		}
 		return faultActionResultV1{ActionID: messageID}, nil
 	}, absurd.TaskOptions{DefaultMaxAttempts: 2}))
-	spawned, err := client.Spawn(ctx, taskName, faultActionParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: taskName + ":" + job.ID})
+	spawned, err := client.Spawn(ctx, taskName, faultActionParams{SessionID: session.ID}, absurd.SpawnOptions{IdempotencyKey: taskName + ":" + session.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AttachJobTask(ctx, job.ID, "", spawned.TaskID, taskName); err != nil {
+	if err := store.AttachSessionTask(ctx, session.ID, "", spawned.TaskID, taskName); err != nil {
 		t.Fatal(err)
 	}
 	firstDone := make(chan error, 1)
@@ -564,7 +564,7 @@ func TestAgentReconciliationClaimExpirySerializesReplacementAndRecoversLostSubmi
 	}
 	select {
 	case err := <-replacementDone:
-		t.Fatalf("replacement crossed the in-flight Agent Job fence: %v", err)
+		t.Fatalf("replacement crossed the in-flight Agent Session fence: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
 	close(externals.release)
@@ -575,7 +575,7 @@ func TestAgentReconciliationClaimExpirySerializesReplacementAndRecoversLostSubmi
 		t.Fatal(err)
 	}
 	result, err := client.FetchTaskResult(ctx, queueName, spawned.TaskID)
-	settled, deliveryErr := store.Deliveries(ctx, job.ID)
+	settled, deliveryErr := store.Deliveries(ctx, session.ID)
 	if err != nil || deliveryErr != nil || result == nil || result.State != absurd.TaskCompleted || len(settled) != 1 || settled[0].AgentRun.State != core.AgentRunCompleted || settled[0].AgentRun.TurnID == "" || externals.startCount() != 1 {
 		t.Fatalf("replacement result=%#v deliveries=%#v starts=%d errors=%v/%v", result, settled, externals.startCount(), err, deliveryErr)
 	}

@@ -15,7 +15,7 @@ import (
 
 func TestReplyFeedBuffersCompletedItemsInNativeStartOrder(t *testing.T) {
 	observations := NewObservations(context.Background(), nil)
-	p := &protocol{observations: observations, owner: provider.Ownership{JobID: "job", SandboxID: "sandbox", OwnershipNonce: "nonce"}, observed: &observedTurn{threadID: "thread", turnID: "turn", subscribed: true}}
+	p := &protocol{observations: observations, owner: provider.Ownership{SessionID: "session", SandboxID: "sandbox", OwnershipNonce: "nonce"}, observed: &observedTurn{threadID: "thread", turnID: "turn", subscribed: true}}
 	binding := p.replyBinding()
 	observations.Replies.Begin(binding, true)
 	event := func(method, id, text string) {
@@ -42,7 +42,7 @@ func TestReplyFeedBuffersCompletedItemsInNativeStartOrder(t *testing.T) {
 
 func TestReplyFeedRequiresRecoverySeedAndIgnoresChangedDiagnosticIDs(t *testing.T) {
 	feed := NewReplyFeed()
-	binding := ReplyBinding{JobID: "job", ThreadID: "thread", TurnID: "turn"}
+	binding := ReplyBinding{SessionID: "session", ThreadID: "thread", TurnID: "turn"}
 	feed.Begin(binding, false)
 	feed.Append(binding, core.HarnessConversationItem{NativeItemID: "late", Kind: "reply", Text: "late"})
 	snapshot, _, _ := feed.Read(binding)
@@ -67,8 +67,8 @@ func TestReplyFeedRequiresRecoverySeedAndIgnoresChangedDiagnosticIDs(t *testing.
 
 func TestReplyFeedGlobalBoundEvictionWakesOldReader(t *testing.T) {
 	feed := NewReplyFeed()
-	first := ReplyBinding{JobID: "first"}
-	second := ReplyBinding{JobID: "second"}
+	first := ReplyBinding{SessionID: "first"}
+	second := ReplyBinding{SessionID: "second"}
 	items := []core.HarnessConversationItem{{NativeItemID: "reply", Kind: "reply", Text: strings.Repeat("x", replyFeedMaxBytes/2+1)}}
 	feed.Seed(first, items, true)
 	_, changed, _ := feed.Read(first)

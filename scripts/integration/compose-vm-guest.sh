@@ -18,7 +18,7 @@ COMPOSE_MANIFEST=
 COMPOSE_INCUS_OVERLAY=
 SECRET_FILE=
 EVIDENCE_DIR=
-JOB_ID=
+SESSION_ID=
 SANDBOX_ID=
 EPHEMERAL_SECRET=
 EPHEMERAL_KEY_PATH=
@@ -175,8 +175,8 @@ capture_failure_evidence() {
 		capture "$EVIDENCE_DIR/failure-worker.log" compose logs --no-color --tail 200 worker || true
 	fi
 	if [[ -n "$DORF_BIN" && -x "$DORF_BIN" ]]; then
-		if [[ -n "$JOB_ID" ]]; then
-			capture "$EVIDENCE_DIR/failure-inspect.json" "$DORF_BIN" inspect --json "$JOB_ID" || true
+		if [[ -n "$SESSION_ID" ]]; then
+			capture "$EVIDENCE_DIR/failure-inspect.json" "$DORF_BIN" inspect --json "$SESSION_ID" || true
 		fi
 	fi
 	capture "$EVIDENCE_DIR/failure-incus.json" incus --force-local --project dorf list --format json || true
@@ -342,7 +342,7 @@ run_setup() {
 	if ! capture "$EVIDENCE_DIR/setup.log" "$DORF_BIN" setup "${setup_args[@]}"; then
 		die "setup did not apply and verify the Dorf deployment"
 	fi
-	grep -Fq -- "Dorf ready: Control plane and durable Job worker ready" "$EVIDENCE_DIR/setup.log" ||
+	grep -Fq -- "Dorf ready: Control plane and durable Session worker ready" "$EVIDENCE_DIR/setup.log" ||
 		die "setup did not print its final ready receipt"
 	if grep -Eq 'Dorf deployment configuration.*deployment guide|follow the deployment guide' "$EVIDENCE_DIR/setup.log"; then
 		die "setup returned a stale deployment handoff"
@@ -420,14 +420,14 @@ proof_nonce() {
 	printf '%s\n' "$nonce"
 }
 
-wait_for_job_completion() {
+wait_for_session_completion() {
 	local attempts=${DORF_PROOF_WAIT_ATTEMPTS:-180}
 	local delay=${DORF_PROOF_POLL_SECONDS:-2}
 	local snapshot="$EVIDENCE_DIR/job-inspect.json"
 	local before_restart="$EVIDENCE_DIR/job-inspect-before-worker-restart.json"
 	local restarted=0 attempt current active_run_id worker_container worker_started_before worker_started_after
 	for ((attempt = 1; attempt <= attempts; attempt++)); do
-		capture "$snapshot" "$DORF_BIN" inspect --json "$JOB_ID"
+		capture "$snapshot" "$DORF_BIN" inspect --json "$SESSION_ID"
 		if [[ -z "$SANDBOX_ID" ]]; then
 			SANDBOX_ID=$(jq -r 'first(.observed_facts.sandboxes[]? | select(.name == "default") | .id) // ""' "$snapshot")
 		fi
@@ -455,14 +455,14 @@ wait_for_job_completion() {
 		if [[ "$current" == "Open and idle" ]] && [[ -n "$active_run_id" ]] && jq -e --arg rid "$active_run_id" \
 			'any(.observed_facts.agent_runs[]?; .id == $rid and .state == "completed" and .turn_outcome == "completed")' \
 			"$snapshot" >/dev/null; then
-			[[ "$restarted" -eq 1 ]] || die "Job completed without proving worker restart during Sandbox custody"
-			printf 'JOB -> Sandbox custody -> worker restart -> Open and idle\n'
+			[[ "$restarted" -eq 1 ]] || die "Session completed without proving worker restart during Sandbox custody"
+			printf 'SESSION -> Sandbox custody -> worker restart -> Open and idle\n'
 			return
 		fi
-		[[ "$current" != "Needs attention" ]] || die "Job entered Needs attention"
+		[[ "$current" != "Needs attention" ]] || die "Session entered Needs attention"
 		sleep "$delay"
 	done
-	die "Job did not reach Open and idle with a completed Turn"
+	die "Session did not reach Open and idle with a completed Turn"
 }
 
 wait_for_service_health() {
@@ -484,9 +484,9 @@ wait_for_cleanup() {
 	local snapshot="$EVIDENCE_DIR/cleanup-inspect.json"
 	local attempt
 	for ((attempt = 1; attempt <= attempts; attempt++)); do
-		capture "$snapshot" "$DORF_BIN" inspect --json "$JOB_ID"
+		capture "$snapshot" "$DORF_BIN" inspect --json "$SESSION_ID"
 		if jq -e --arg sid "$SANDBOX_ID" \
-			'.job.cleanup_state == "complete" and any(.observed_facts.actions[]?; .kind == "sandbox-delete" and .scope == $sid and .state == "succeeded")' \
+			'.session.cleanup_state == "complete" and any(.observed_facts.actions[]?; .kind == "sandbox-delete" and .scope == $sid and .state == "succeeded")' \
 			"$snapshot" >/dev/null; then
 			return
 		fi
@@ -531,17 +531,17 @@ prove() {
 		--profile "$PROFILE_NAME" \
 		--ai-connection "$CONNECTION_NAME" \
 		--reasoning high
-	JOB_ID=$(jq -er '.job_id' "$admission")
-	jq -e '.scheduled == true' "$admission" >/dev/null || die "direct Job was not durably scheduled"
-	wait_for_job_completion
-	[[ "$SANDBOX_ID" =~ ^[A-Za-z0-9._-]+$ ]] || die "Job exposed an unsafe Sandbox identity"
+	SESSION_ID=$(jq -er '.session_id' "$admission")
+	jq -e '.scheduled == true' "$admission" >/dev/null || die "direct Session was not durably scheduled"
+	wait_for_session_completion
+	[[ "$SANDBOX_ID" =~ ^[A-Za-z0-9._-]+$ ]] || die "Session exposed an unsafe Sandbox identity"
 
 	compose restart control-api >/dev/null
 	wait_for_service_health control-api
 	capture_compose_status "$EVIDENCE_DIR/compose-status-after-api-restart.json"
 	"$DORF_BIN" sandbox file get "$SANDBOX_ID" PROOF.txt --output "$observed"
 	cmp "$expected" "$observed" || die "PROOF.txt bytes differ from the admitted nonce"
-	capture "$EVIDENCE_DIR/cleanup-request.json" "$DORF_BIN" cleanup "$JOB_ID"
+	capture "$EVIDENCE_DIR/cleanup-request.json" "$DORF_BIN" cleanup "$SESSION_ID"
 	wait_for_cleanup
 	incus --force-local --project dorf query /1.0 >/dev/null
 	capture "$EVIDENCE_DIR/incus-after-cleanup.json" incus --force-local --project dorf list --format json

@@ -72,7 +72,7 @@ func (a Adapter) CaptureCheckpoint(ctx context.Context, owner provider.Ownership
 }
 
 func (a Adapter) RestoreCheckpoint(ctx context.Context, source, destination provider.Ownership, checkpoint provider.Checkpoint) (string, error) {
-	if source.JobID != destination.JobID || source.SandboxID != destination.SandboxID || source.OwnershipNonce == destination.OwnershipNonce {
+	if source.SessionID != destination.SessionID || source.SandboxID != destination.SandboxID || source.OwnershipNonce == destination.OwnershipNonce {
 		return "", provider.OwnershipErrorf("E2B replacement requires the same logical Sandbox and a new resource owner")
 	}
 	if err := a.requireCheckpoint(ctx, source, checkpoint); err != nil {

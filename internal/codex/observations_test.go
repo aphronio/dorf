@@ -66,7 +66,7 @@ func TestObservationsRetainExactTurnAfterSubmissionReturns(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		p := &protocol{connection: conn, observations: observations, execution: core.AgentRun{ID: runID, JobID: "job", MessageID: "message-" + runID}}
+		p := &protocol{connection: conn, observations: observations, execution: core.AgentRun{ID: runID, SessionID: "session", MessageID: "message-" + runID}}
 		turn, err := p.startTurn(context.Background(), "thread", "/tmp", runID, core.HarnessInput{Text: "same prompt"}, "model", "high", "danger-full-access")
 		if err != nil {
 			t.Fatal(err)
@@ -128,7 +128,7 @@ func TestObservationsRecoverOnlyDurablyBoundTurn(t *testing.T) {
 	defer server.Close()
 	p := dialTestProtocol(t, server)
 	p.observations = observations
-	p.execution = core.AgentRun{ID: "run", MessageID: "message", JobID: "job", TurnID: "bound"}
+	p.execution = core.AgentRun{ID: "run", MessageID: "message", SessionID: "session", TurnID: "bound"}
 	turns, err := p.readTurns(context.Background(), "thread")
 	if err != nil || len(turns) != 2 {
 		t.Fatalf("turns=%v err=%v", turns, err)
@@ -157,7 +157,7 @@ func TestTerminalWakeIsAsynchronousExactAndCoalesced(t *testing.T) {
 		return nil
 	})
 	p := &protocol{observations: observations, observed: &observedTurn{
-		run:      core.AgentRun{ID: "run", JobID: "job", SandboxID: "sandbox"},
+		run:      core.AgentRun{ID: "run", SessionID: "session", SandboxID: "sandbox"},
 		threadID: "thread", turnID: "turn", complete: true,
 	}}
 	p.signalTerminalWake()
@@ -165,7 +165,7 @@ func TestTerminalWakeIsAsynchronousExactAndCoalesced(t *testing.T) {
 	close(release)
 	select {
 	case target := <-wakes:
-		want := (core.NativeTerminalWakeTarget{JobID: "job", SandboxID: "sandbox", AgentRunID: "run", ThreadID: "thread", TurnID: "turn"})
+		want := (core.NativeTerminalWakeTarget{SessionID: "session", SandboxID: "sandbox", AgentRunID: "run", ThreadID: "thread", TurnID: "turn"})
 		if target != want {
 			t.Fatalf("terminal wake target=%+v want=%+v", target, want)
 		}
@@ -184,7 +184,7 @@ func TestTerminalWakeFailureEmitsBoundedDiagnostic(t *testing.T) {
 		return errors.New("database unavailable")
 	})
 	p := &protocol{observations: observations, observed: &observedTurn{
-		run:      core.AgentRun{ID: "run", JobID: "job", SandboxID: "sandbox"},
+		run:      core.AgentRun{ID: "run", SessionID: "session", SandboxID: "sandbox"},
 		threadID: "thread", turnID: "turn", complete: true,
 	}}
 	p.signalTerminalWake()

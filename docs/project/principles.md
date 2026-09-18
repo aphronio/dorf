@@ -25,18 +25,18 @@ substantiating a public comparison. Do not turn feature lists, categories, or ar
 roadmap.
 
 Dorf earns its identity through consistent choices: supported existing harnesses, owner-chosen
-isolated infrastructure, explicit capability admission, and control-plane custody across each Job.
+isolated infrastructure, explicit capability admission, and control-plane custody across each Session.
 Build the smallest useful expression of that belief, then let dogfood and real users reveal what
 comes next. If a proposed feature only makes Dorf resemble another agent platform, that is not a
 reason to build it.
 
-## Durable Jobs, replaceable processes, isolated Sandboxes
+## Durable Sessions, replaceable processes, isolated Sandboxes
 
-A Job is the durable unit of user intent. Its initiating client, controller, task-executor process, and
-current agent process may disappear without erasing accepted input or observed progress. A Job owns
+A Session is the durable unit of user intent. Its initiating client, controller, task-executor process, and
+current agent process may disappear without erasing accepted input or observed progress. A Session owns
 one or more Sandboxes; each Sandbox is an isolated mutable workstation and has one deterministically
 named Provider Route. Immutable Action success records the Route and Sandbox lifecycle. AgentRuns use
-a Sandbox rather than owning infrastructure. The Job owns the binding to one primary harness
+a Sandbox rather than owning infrastructure. The Session owns the binding to one harness
 Thread for client input. Native subagent threads remain the Harness's responsibility. Every AgentRun
 consumes one durable Message and retains its exact Turn binding. Every Message selected for agent delivery has one AgentRun record. While admission is open, a follow joins
 the FIFO, reuses the authoritative retained Thread, and creates a distinct Turn. A steer atomically
@@ -46,7 +46,7 @@ input delivery: after proof that its selected Turn terminated without accepting 
 the same Message returns to FIFO as a follow. Harness protocol and transcripts remain behind the adapter.
 
 Do not introduce a durable Worker merely as a synonym for a process or AgentRun. Add Worker only
-when persistent personality, capability, reputation, ownership, or memory across Jobs becomes a
+when persistent personality, capability, reputation, ownership, or memory across Sessions becomes a
 real product requirement.
 
 ## Deterministic before agentic
@@ -113,7 +113,7 @@ exist. Do not generalize workflow authoring before Core portability is proved.
 
 ## Vertical slices, replaceable technology, and preserved evidence
 
-Architecture advances through narrow slices that end in real Job behavior. A schema, abstraction,
+Architecture advances through narrow slices that end in real Session behavior. A schema, abstraction,
 or mocked adapter is not a terminal. Dogfood the smallest new path, use its evidence to shape the
 next slice, and delete redundant implementation when the replacement is authoritative. Choose the
 live terminal that exercises the changed authority. [Support](../support.md) owns the current
@@ -130,7 +130,7 @@ version removes code or concepts without losing required behavior. Do not mainta
 for a hypothetical consumer.
 
 During the single-user stage, prototype data may be reset after an explicit preservation decision
-and the user's approval. Preserve useful Job history, application evidence, evaluations, dogfood proof, observed
+and the user's approval. Preserve useful Session history, application evidence, evaluations, dogfood proof, observed
 failures, and usage, cost, or outcome history when they can improve later work. Delete caches,
 rebuildable projections, obsolete schemas, and records that have no remaining product, evaluation,
 or audit value.

@@ -15,11 +15,11 @@ import (
 )
 
 // Reuse a retained synthetic VM to shorten adapter diagnosis after a failed
-// live proof. Requires an explicit Job ID and never admits native input.
+// live proof. Requires an explicit Session ID and never admits native input.
 func TestLiveUpgradeQuiesceProbe(t *testing.T) {
-	jobID := os.Getenv("DORF_UPGRADE_PROBE_JOB")
-	if jobID == "" {
-		t.Skip("set an exact retained synthetic proof Job")
+	sessionID := os.Getenv("DORF_UPGRADE_PROBE_SESSION")
+	if sessionID == "" {
+		t.Skip("set an exact retained synthetic proof Session")
 	}
 	db, err := sql.Open("pgx", os.Getenv("DORF_TEST_DATABASE_URL"))
 	if err != nil {
@@ -29,19 +29,19 @@ func TestLiveUpgradeQuiesceProbe(t *testing.T) {
 	store := postgres.Store{DB: db}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	job, err := store.Job(ctx, jobID)
+	session, err := store.Session(ctx, sessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(job.AdmissionKey) < 15 || job.AdmissionKey[:15] != "worker-upgrade-" {
+	if len(session.AdmissionKey) < 15 || session.AdmissionKey[:15] != "worker-upgrade-" {
 		t.Fatal("not a synthetic upgrade proof")
 	}
 	s := liveUpgradeSandbox(t, os.Getenv("DORF_LIVE_UPGRADE_PROVIDER"))
-	owned, err := store.Sandbox(ctx, core.MainSandboxName(jobID))
+	owned, err := store.Sandbox(ctx, core.MainSandboxName(sessionID))
 	if err != nil {
 		t.Fatal(err)
 	}
-	deliveries, err := store.Deliveries(ctx, jobID)
+	deliveries, err := store.Deliveries(ctx, sessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,11 +51,11 @@ func TestLiveUpgradeQuiesceProbe(t *testing.T) {
 			runs = append(runs, delivery.AgentRun)
 		}
 	}
-	owner := provider.Ownership{JobID: jobID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce}
+	owner := provider.Ownership{SessionID: sessionID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce}
 	a := codex.Agent{Sandbox: s, Port: 8755, Timeout: 30 * time.Second}
-	if err := store.WithJobFence(ctx, jobID, func() error {
+	if err := store.WithSessionFence(ctx, sessionID, func() error {
 		if os.Getenv("DORF_UPGRADE_PROBE_ACTION") == "cleanup" {
-			receipts, err := store.JobUpgrades(ctx, jobID)
+			receipts, err := store.SessionUpgrades(ctx, sessionID)
 			if err != nil {
 				return err
 			}

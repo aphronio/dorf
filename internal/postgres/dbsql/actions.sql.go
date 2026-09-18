@@ -12,7 +12,7 @@ import (
 )
 
 const getActionByIDForUpdate = `-- name: GetActionByIDForUpdate :one
-select id,job_id,kind,state,scope_key,created_at,settled_at
+select id,session_id,kind,state,scope_key,created_at,settled_at
 from dorf.actions
 where id=$1
 for update
@@ -23,7 +23,7 @@ func (q *Queries) GetActionByIDForUpdate(ctx context.Context, id string) (DorfAc
 	var i DorfAction
 	err := row.Scan(
 		&i.ID,
-		&i.JobID,
+		&i.SessionID,
 		&i.Kind,
 		&i.State,
 		&i.ScopeKey,
@@ -34,23 +34,23 @@ func (q *Queries) GetActionByIDForUpdate(ctx context.Context, id string) (DorfAc
 }
 
 const getScopedAction = `-- name: GetScopedAction :one
-select id,job_id,kind,state,scope_key,created_at,settled_at
+select id,session_id,kind,state,scope_key,created_at,settled_at
 from dorf.actions
-where job_id=$1 and kind=$2 and scope_key=$3
+where session_id=$1 and kind=$2 and scope_key=$3
 `
 
 type GetScopedActionParams struct {
-	JobID    string
-	Kind     core.ActionKind
-	ScopeKey string
+	SessionID string
+	Kind      core.ActionKind
+	ScopeKey  string
 }
 
 func (q *Queries) GetScopedAction(ctx context.Context, arg GetScopedActionParams) (DorfAction, error) {
-	row := q.db.QueryRowContext(ctx, getScopedAction, arg.JobID, arg.Kind, arg.ScopeKey)
+	row := q.db.QueryRowContext(ctx, getScopedAction, arg.SessionID, arg.Kind, arg.ScopeKey)
 	var i DorfAction
 	err := row.Scan(
 		&i.ID,
-		&i.JobID,
+		&i.SessionID,
 		&i.Kind,
 		&i.State,
 		&i.ScopeKey,
@@ -61,22 +61,22 @@ func (q *Queries) GetScopedAction(ctx context.Context, arg GetScopedActionParams
 }
 
 const insertScopedAction = `-- name: InsertScopedAction :execrows
-insert into dorf.actions(id,job_id,kind,state,scope_key)
+insert into dorf.actions(id,session_id,kind,state,scope_key)
 values($1,$2,$3,'unsettled',$4)
 on conflict do nothing
 `
 
 type InsertScopedActionParams struct {
-	ID       string
-	JobID    string
-	Kind     core.ActionKind
-	ScopeKey string
+	ID        string
+	SessionID string
+	Kind      core.ActionKind
+	ScopeKey  string
 }
 
 func (q *Queries) InsertScopedAction(ctx context.Context, arg InsertScopedActionParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, insertScopedAction,
 		arg.ID,
-		arg.JobID,
+		arg.SessionID,
 		arg.Kind,
 		arg.ScopeKey,
 	)
@@ -87,14 +87,14 @@ func (q *Queries) InsertScopedAction(ctx context.Context, arg InsertScopedAction
 }
 
 const listActions = `-- name: ListActions :many
-select a.id,a.job_id,a.kind,a.state,a.scope_key,a.created_at,a.settled_at
+select a.id,a.session_id,a.kind,a.state,a.scope_key,a.created_at,a.settled_at
 from dorf.actions a
-where a.job_id=$1
+where a.session_id=$1
 order by a.created_at,a.id
 `
 
-func (q *Queries) ListActions(ctx context.Context, jobID string) ([]DorfAction, error) {
-	rows, err := q.db.QueryContext(ctx, listActions, jobID)
+func (q *Queries) ListActions(ctx context.Context, sessionID string) ([]DorfAction, error) {
+	rows, err := q.db.QueryContext(ctx, listActions, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +104,7 @@ func (q *Queries) ListActions(ctx context.Context, jobID string) ([]DorfAction, 
 		var i DorfAction
 		if err := rows.Scan(
 			&i.ID,
-			&i.JobID,
+			&i.SessionID,
 			&i.Kind,
 			&i.State,
 			&i.ScopeKey,
@@ -140,7 +140,7 @@ func (q *Queries) RecordSandboxActionSuccess(ctx context.Context, id string) (in
 
 const reserveSandbox = `-- name: ReserveSandbox :execrows
 with reserved as (
-    insert into dorf.sandboxes(id,job_id,name,active_resource_id)
+    insert into dorf.sandboxes(id,session_id,name,active_resource_id)
     values($2,$3,$4,$2::text || ':initial')
     on conflict do nothing returning id,active_resource_id
 )
@@ -151,7 +151,7 @@ select active_resource_id,id,$1 from reserved
 type ReserveSandboxParams struct {
 	OwnershipNonce string
 	ID             string
-	JobID          string
+	SessionID      string
 	Name           string
 }
 
@@ -159,7 +159,7 @@ func (q *Queries) ReserveSandbox(ctx context.Context, arg ReserveSandboxParams) 
 	result, err := q.db.ExecContext(ctx, reserveSandbox,
 		arg.OwnershipNonce,
 		arg.ID,
-		arg.JobID,
+		arg.SessionID,
 		arg.Name,
 	)
 	if err != nil {

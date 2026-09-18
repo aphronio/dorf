@@ -42,15 +42,15 @@ func (q *Queries) InsertSandboxDeliveryHold(ctx context.Context, arg InsertSandb
 	return err
 }
 
-const listJobDeliveryHolds = `-- name: ListJobDeliveryHolds :many
+const listSessionDeliveryHolds = `-- name: ListSessionDeliveryHolds :many
 select h.id,h.sandbox_id,h.reason,h.requested_at,h.released_at
 from dorf.sandbox_delivery_holds h join dorf.sandboxes s on s.id=h.sandbox_id
-where s.job_id=$1 and h.released_at is null
+where s.session_id=$1 and h.released_at is null
 order by h.requested_at,h.id
 `
 
-func (q *Queries) ListJobDeliveryHolds(ctx context.Context, jobID string) ([]DorfSandboxDeliveryHold, error) {
-	rows, err := q.db.QueryContext(ctx, listJobDeliveryHolds, jobID)
+func (q *Queries) ListSessionDeliveryHolds(ctx context.Context, sessionID string) ([]DorfSandboxDeliveryHold, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionDeliveryHolds, sessionID)
 	if err != nil {
 		return nil, err
 	}

@@ -17,19 +17,19 @@ import (
 	"testing"
 	"time"
 
-	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
 func TestHandlerBoundary(t *testing.T) {
 	credential := "dcr_client-secret-never-returned"
 	enrollment := "enr_AAAAAAAAAAAAAAAAAAAAAA.enrollment-secret-never-returned"
 	auth := &fakeAuth{credential: credential, client: controlauth.Client{ID: "client-1", Name: "laptop"}}
-	jobs := &fakeJobs{job: controlapi.Job{ID: "job-1", Kind: "direct"}}
+	sessions := &fakeSessions{session: controlapi.Session{ID: "job-1"}}
 	server := controlapi.NewServer(controlapi.Discovery{
-		Product: "dorf", Version: "1.2.3", Capabilities: []string{"direct_jobs"},
-	}, auth, jobs, nil)
+		Product: "dorf", Version: "1.2.3", Capabilities: []string{"direct_sessions"},
+	}, auth, sessions, nil)
 	handler := server.Handler
 
 	do := func(method, target, bearer, idempotencyKey string, body io.Reader) *httptest.ResponseRecorder {
@@ -56,16 +56,16 @@ func TestHandlerBoundary(t *testing.T) {
 		path   string
 		body   io.Reader
 	}{
-		{http.MethodDelete, "/v1/jobs", nil},
-		{http.MethodGet, "/v1/jobs/job-1", nil},
-		{http.MethodDelete, "/v1/jobs/job-1", nil},
-		{http.MethodGet, "/v1/jobs/job-1/watch", nil},
-		{http.MethodGet, "/v1/jobs?limit=1", nil},
-		{http.MethodPost, "/v1/jobs/job-1/messages", strings.NewReader(`{}`)},
-		{http.MethodGet, "/v1/jobs/job-1/messages/message-1", nil},
-		{http.MethodPut, "/v1/jobs/job-1/messages/message-1/interrupt", nil},
-		{http.MethodPost, "/v1/jobs/job-1/retries", nil},
-		{http.MethodPut, "/v1/jobs/job-1/cleanup", nil},
+		{http.MethodDelete, "/v1/sessions", nil},
+		{http.MethodGet, "/v1/sessions/job-1", nil},
+		{http.MethodDelete, "/v1/sessions/job-1", nil},
+		{http.MethodGet, "/v1/sessions/job-1/watch", nil},
+		{http.MethodGet, "/v1/sessions?limit=1", nil},
+		{http.MethodPost, "/v1/sessions/job-1/messages", strings.NewReader(`{}`)},
+		{http.MethodGet, "/v1/sessions/job-1/messages/message-1", nil},
+		{http.MethodPut, "/v1/sessions/job-1/messages/message-1/interrupt", nil},
+		{http.MethodPost, "/v1/sessions/job-1/retries", nil},
+		{http.MethodPut, "/v1/sessions/job-1/cleanup", nil},
 		{http.MethodGet, "/v1/sandboxes/sandbox-1/files?path=REPORT.md", nil},
 	} {
 		requireProblem(t, do(route.method, route.path, "", "", route.body), http.StatusUnauthorized, "unauthenticated")
@@ -86,27 +86,27 @@ func TestHandlerBoundary(t *testing.T) {
 	replayedRedemption := do(http.MethodPost, "/v1/auth/enrollments/redeem", "", "", strings.NewReader(redeemBody))
 	requireStatusType(t, replayedRedemption, http.StatusOK, "application/json")
 
-	missingKey := do(http.MethodPost, "/v1/jobs", credential, "", strings.NewReader(`{"agents_md":"ship it","profile":"default","model":"model-1","reasoning":"high"}`))
+	missingKey := do(http.MethodPost, "/v1/sessions", credential, "", strings.NewReader(`{"agents_md":"ship it","profile":"default","model":"model-1","reasoning":"high"}`))
 	requireProblem(t, missingKey, http.StatusBadRequest, "idempotency_key_required")
 
-	strict := do(http.MethodPost, "/v1/jobs", credential, "request-key-2", strings.NewReader(`{"agents_md":"ship it","profile":"default","model":"model-1","reasoning":"high","provider_credential":"leak"}`))
+	strict := do(http.MethodPost, "/v1/sessions", credential, "request-key-2", strings.NewReader(`{"agents_md":"ship it","profile":"default","model":"model-1","reasoning":"high","provider_credential":"leak"}`))
 	requireProblem(t, strict, http.StatusBadRequest, "invalid_json")
 	expandedGoal := strings.Repeat("\x00", 1<<20)
-	expandedBody, err := json.Marshal(controlapi.AdmitJobRequest{AgentsMD: expandedGoal, Profile: "default"})
+	expandedBody, err := json.Marshal(controlapi.CreateSessionRequest{AgentsMD: expandedGoal, Profile: "default"})
 	if err != nil || len(expandedBody) <= 6<<20 {
 		t.Fatalf("encode expanded 1 MiB goal: bytes=%d err=%v", len(expandedBody), err)
 	}
-	expanded := do(http.MethodPost, "/v1/jobs", credential, "request-key-expanded", bytes.NewReader(expandedBody))
+	expanded := do(http.MethodPost, "/v1/sessions", credential, "request-key-expanded", bytes.NewReader(expandedBody))
 	requireStatusType(t, expanded, http.StatusCreated, "application/json")
-	if jobs.gotInput.AgentsMD != expandedGoal {
+	if sessions.gotInput.AgentsMD != expandedGoal {
 		t.Fatal("JSON escaping changed the exact 1 MiB goal")
 	}
-	wrongMethod := do(http.MethodDelete, "/v1/jobs/job-1", credential, "", nil)
+	wrongMethod := do(http.MethodDelete, "/v1/sessions/job-1", credential, "", nil)
 	requireProblem(t, wrongMethod, http.StatusMethodNotAllowed, "method_not_allowed")
-	jobsWrongMethod := do(http.MethodDelete, "/v1/jobs", credential, "", nil)
-	requireProblem(t, jobsWrongMethod, http.StatusMethodNotAllowed, "method_not_allowed")
-	if allow := jobsWrongMethod.Header().Get("Allow"); allow != "GET, POST" {
-		t.Fatalf("jobs Allow=%q, want GET, POST", allow)
+	sessionsWrongMethod := do(http.MethodDelete, "/v1/sessions", credential, "", nil)
+	requireProblem(t, sessionsWrongMethod, http.StatusMethodNotAllowed, "method_not_allowed")
+	if allow := sessionsWrongMethod.Header().Get("Allow"); allow != "GET, POST" {
+		t.Fatalf("sessions Allow=%q, want GET, POST", allow)
 	}
 	redirectSpelling := do(http.MethodGet, "/v1/", "", "", nil)
 	requireProblem(t, redirectSpelling, http.StatusNotFound, "not_found")
@@ -117,26 +117,26 @@ func TestHandlerBoundary(t *testing.T) {
 
 func TestAdmissionsAcceptExplicitAIConnectionAndOmittedModel(t *testing.T) {
 	credential := "dcr_admission-connection"
-	base := controlapi.Job{ID: "job-1"}
+	base := controlapi.Session{ID: "job-1"}
 	tests := []struct {
-		name   string
-		target string
-		body   string
-		jobs   *fakeJobs
-		got    func(*fakeJobs) string
-		model  func(*fakeJobs) string
+		name     string
+		target   string
+		body     string
+		sessions *fakeSessions
+		got      func(*fakeSessions) string
+		model    func(*fakeSessions) string
 	}{
 		{
-			name: "direct", target: "/v1/jobs",
-			body:  `{"agents_md":"ship","ai_connection":"work-openai"}`,
-			jobs:  &fakeJobs{job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindDirect}},
-			got:   func(j *fakeJobs) string { return j.gotInput.AIConnection },
-			model: func(j *fakeJobs) string { return j.gotInput.Model },
+			name: "direct", target: "/v1/sessions",
+			body:     `{"agents_md":"ship","ai_connection":"work-openai"}`,
+			sessions: &fakeSessions{session: controlapi.Session{ID: base.ID}},
+			got:      func(j *fakeSessions) string { return j.gotInput.AIConnection },
+			model:    func(j *fakeSessions) string { return j.gotInput.Model },
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, test.jobs, nil).Handler
+			handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, test.sessions, nil).Handler
 			request := httptest.NewRequest(http.MethodPost, test.target, strings.NewReader(test.body))
 			request.Header.Set("Authorization", "Bearer "+credential)
 			request.Header.Set("Content-Type", "application/json")
@@ -144,10 +144,10 @@ func TestAdmissionsAcceptExplicitAIConnectionAndOmittedModel(t *testing.T) {
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)
 			requireStatusType(t, response, http.StatusCreated, "application/json")
-			if got := test.got(test.jobs); got != "work-openai" {
+			if got := test.got(test.sessions); got != "work-openai" {
 				t.Fatalf("AIConnection=%q, want work-openai", got)
 			}
-			if got := test.model(test.jobs); got != "" {
+			if got := test.model(test.sessions); got != "" {
 				t.Fatalf("Model=%q, want omitted", got)
 			}
 		})
@@ -159,7 +159,7 @@ func TestEnrollmentRedemptionUsesDeploymentWideRateLimit(t *testing.T) {
 		client:    controlauth.Client{Name: "laptop"},
 		redeemErr: controlauth.ErrEnrollmentUnavailable,
 	}
-	handler := controlapi.NewServer(controlapi.Discovery{}, auth, &fakeJobs{}, nil).Handler
+	handler := controlapi.NewServer(controlapi.Discovery{}, auth, &fakeSessions{}, nil).Handler
 	redeem := func(enrollment string) *httptest.ResponseRecorder {
 		t.Helper()
 		body := fmt.Sprintf(`{"enrollment_code":%q,"client_name":"laptop","credential":"dcr_attacker-generated"}`, enrollment)
@@ -190,15 +190,15 @@ func TestEnrollmentRedemptionUsesDeploymentWideRateLimit(t *testing.T) {
 	}
 }
 
-func TestJobListUsesStrictBoundedQueryAndExplicitEmptyCollection(t *testing.T) {
+func TestSessionListUsesStrictBoundedQueryAndExplicitEmptyCollection(t *testing.T) {
 	credential := "dcr_job-list"
 	next := "next-page"
 	admittedAt := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
-	jobs := &fakeJobs{list: controlapi.JobList{
-		Jobs:       []controlapi.JobSummary{{ID: "job-2", Kind: controlapi.JobKindDirect, AdmittedAt: admittedAt}},
+	sessions := &fakeSessions{list: controlapi.SessionList{
+		Sessions:   []controlapi.SessionSummary{{ID: "job-2", AdmittedAt: admittedAt}},
 		NextCursor: &next,
 	}}
-	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs, nil).Handler
+	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, sessions, nil).Handler
 	do := func(target string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodGet, target, nil)
 		request.Header.Set("Authorization", "Bearer "+credential)
@@ -207,40 +207,40 @@ func TestJobListUsesStrictBoundedQueryAndExplicitEmptyCollection(t *testing.T) {
 		return response
 	}
 
-	response := do("/v1/jobs?limit=2&cursor=page-one")
+	response := do("/v1/sessions?limit=2&cursor=page-one")
 	requireStatusType(t, response, http.StatusOK, "application/json")
-	var page controlapi.JobList
+	var page controlapi.SessionList
 	decode(t, response, &page)
-	if jobs.listLimit != 2 || jobs.listCursor != "page-one" || len(page.Jobs) != 1 || page.Jobs[0].ID != "job-2" || page.NextCursor == nil || *page.NextCursor != next {
-		t.Fatalf("request limit/cursor=%d/%q page=%#v", jobs.listLimit, jobs.listCursor, page)
+	if sessions.listLimit != 2 || sessions.listCursor != "page-one" || len(page.Sessions) != 1 || page.Sessions[0].ID != "job-2" || page.NextCursor == nil || *page.NextCursor != next {
+		t.Fatalf("request limit/cursor=%d/%q page=%#v", sessions.listLimit, sessions.listCursor, page)
 	}
 
-	jobs.list = controlapi.JobList{}
-	empty := do("/v1/jobs")
+	sessions.list = controlapi.SessionList{}
+	empty := do("/v1/sessions")
 	requireStatusType(t, empty, http.StatusOK, "application/json")
-	if body := empty.Body.String(); !strings.Contains(body, `"jobs":[]`) || !strings.Contains(body, `"next_cursor":null`) {
+	if body := empty.Body.String(); !strings.Contains(body, `"sessions":[]`) || !strings.Contains(body, `"next_cursor":null`) {
 		t.Fatalf("empty page omitted explicit collection/cursor: %s", body)
 	}
-	requireProblem(t, do("/v1/jobs?limit=101"), http.StatusBadRequest, "invalid_query")
-	requireProblem(t, do("/v1/jobs?cursor="), http.StatusBadRequest, "invalid_cursor")
+	requireProblem(t, do("/v1/sessions?limit=101"), http.StatusBadRequest, "invalid_query")
+	requireProblem(t, do("/v1/sessions?cursor="), http.StatusBadRequest, "invalid_cursor")
 
-	jobs.listErr = controlapi.ErrInvalidCursor
-	requireProblem(t, do("/v1/jobs?cursor=tampered"), http.StatusBadRequest, "invalid_cursor")
+	sessions.listErr = controlapi.ErrInvalidCursor
+	requireProblem(t, do("/v1/sessions?cursor=tampered"), http.StatusBadRequest, "invalid_cursor")
 }
 
-func TestJobConditionalGetAndDirectInteractionRoutes(t *testing.T) {
+func TestSessionConditionalGetAndDirectInteractionRoutes(t *testing.T) {
 	credential := "dcr_control-client"
 	message := controlapi.Message{
-		ID: "message-2", JobID: "job-1", Sequence: 2, Intent: "follow",
+		ID: "message-2", SessionID: "job-1", Sequence: 2, Intent: "follow",
 		Delivery: controlapi.State{State: "completed"}, Result: &controlapi.MessageResult{Outcome: "completed", Output: "done"},
 		AdmittedAt: time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC),
 	}
-	jobs := &fakeJobs{
-		job:     controlapi.Job{ID: "job-1", Kind: "direct", Model: "ship", Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1", Name: "default"}}},
+	sessions := &fakeSessions{
+		session: controlapi.Session{ID: "job-1", Model: "ship", Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1", Name: "default"}}},
 		message: message, messageCreated: true,
-		retry: controlapi.Retry{JobID: "job-1", State: "scheduled"}, retryCreated: true,
+		retry: controlapi.Retry{SessionID: "job-1", State: "scheduled"}, retryCreated: true,
 	}
-	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs, nil).Handler
+	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, sessions, nil).Handler
 
 	request := func(method, target string, body io.Reader) *http.Request {
 		req := httptest.NewRequest(method, target, body)
@@ -253,53 +253,53 @@ func TestJobConditionalGetAndDirectInteractionRoutes(t *testing.T) {
 		return response
 	}
 
-	first := do(request(http.MethodGet, "/v1/jobs/job-1", nil))
+	first := do(request(http.MethodGet, "/v1/sessions/job-1", nil))
 	requireStatusType(t, first, http.StatusOK, "application/json")
 	etag := first.Header().Get("ETag")
 	if len(etag) != 66 || etag[0] != '"' || etag[len(etag)-1] != '"' {
 		t.Fatalf("ETag=%q, want quoted SHA-256 representation hash", etag)
 	}
-	conditionalRequest := request(http.MethodGet, "/v1/jobs/job-1", nil)
+	conditionalRequest := request(http.MethodGet, "/v1/sessions/job-1", nil)
 	conditionalRequest.Header.Set("If-None-Match", etag)
 	conditional := do(conditionalRequest)
 	if conditional.Code != http.StatusNotModified || conditional.Body.Len() != 0 || conditional.Header().Get("ETag") != etag {
 		t.Fatalf("conditional response status/body/etag=%d/%q/%q", conditional.Code, conditional.Body.String(), conditional.Header().Get("ETag"))
 	}
 
-	messageRequest := request(http.MethodPost, "/v1/jobs/job-1/messages", strings.NewReader(`{"text":"continue","intent":"follow"}`))
+	messageRequest := request(http.MethodPost, "/v1/sessions/job-1/messages", strings.NewReader(`{"text":"continue","intent":"follow"}`))
 	messageRequest.Header.Set("Content-Type", "application/json")
 	messageRequest.Header.Set("Idempotency-Key", "send-2")
 	sent := do(messageRequest)
 	requireStatusType(t, sent, http.StatusCreated, "application/json")
 	var accepted controlapi.Message
 	decode(t, sent, &accepted)
-	if accepted.ID != message.ID || accepted.Result == nil || *accepted.Result != *message.Result || jobs.messageKey != "send-2" || !reflect.DeepEqual(jobs.messageInput, controlapi.SendMessageRequest{Text: "continue", Intent: "follow"}) {
-		t.Fatalf("Message=%#v key/input=%q/%#v, want %#v/send-2", accepted, jobs.messageKey, jobs.messageInput, message)
+	if accepted.ID != message.ID || accepted.Result == nil || *accepted.Result != *message.Result || sessions.messageKey != "send-2" || !reflect.DeepEqual(sessions.messageInput, controlapi.SendMessageRequest{Text: "continue", Intent: "follow"}) {
+		t.Fatalf("Message=%#v key/input=%q/%#v, want %#v/send-2", accepted, sessions.messageKey, sessions.messageInput, message)
 	}
-	retryRequest := request(http.MethodPost, "/v1/jobs/job-1/retries", nil)
+	retryRequest := request(http.MethodPost, "/v1/sessions/job-1/retries", nil)
 	retryRequest.Header.Set("Idempotency-Key", "retry-3")
 	retried := do(retryRequest)
 	requireStatusType(t, retried, http.StatusCreated, "application/json")
 	var retry controlapi.Retry
 	decode(t, retried, &retry)
-	if retry != jobs.retry || jobs.retryKey != "retry-3" {
-		t.Fatalf("Retry=%#v key=%q, want %#v/retry-3", retry, jobs.retryKey, jobs.retry)
+	if retry != sessions.retry || sessions.retryKey != "retry-3" {
+		t.Fatalf("Retry=%#v key=%q, want %#v/retry-3", retry, sessions.retryKey, sessions.retry)
 	}
 
-	query := do(request(http.MethodGet, "/v1/jobs/job-1?extra=true", nil))
+	query := do(request(http.MethodGet, "/v1/sessions/job-1?extra=true", nil))
 	requireProblem(t, query, http.StatusBadRequest, "invalid_query")
-	missingMessage := do(request(http.MethodGet, "/v1/jobs/job-1/messages/other", nil))
+	missingMessage := do(request(http.MethodGet, "/v1/sessions/job-1/messages/other", nil))
 	requireProblem(t, missingMessage, http.StatusNotFound, "message_not_found")
-	wrongWatchType := do(request(http.MethodGet, "/v1/jobs/job-1/watch", nil))
+	wrongWatchType := do(request(http.MethodGet, "/v1/sessions/job-1/watch", nil))
 	requireProblem(t, wrongWatchType, http.StatusNotAcceptable, "not_acceptable")
-	invalidResumeRequest := request(http.MethodGet, "/v1/jobs/job-1/watch", nil)
+	invalidResumeRequest := request(http.MethodGet, "/v1/sessions/job-1/watch", nil)
 	invalidResumeRequest.Header.Set("Accept", "text/event-stream")
 	invalidResumeRequest.Header.Set("Last-Event-ID", "not-a-representation-hash")
 	requireProblem(t, do(invalidResumeRequest), http.StatusBadRequest, "invalid_last_event_id")
-	conditionalCleanup := request(http.MethodPut, "/v1/jobs/job-1/cleanup", nil)
+	conditionalCleanup := request(http.MethodPut, "/v1/sessions/job-1/cleanup", nil)
 	conditionalCleanup.Header.Set("If-None-Match", "*")
 	requireProblem(t, do(conditionalCleanup), http.StatusBadRequest, "unsupported_precondition")
-	if jobs.cleanupCalls != 0 {
+	if sessions.cleanupCalls != 0 {
 		t.Fatal("unsupported cleanup precondition reached the mutation")
 	}
 }
@@ -307,8 +307,8 @@ func TestJobConditionalGetAndDirectInteractionRoutes(t *testing.T) {
 func TestSandboxFileResponseContract(t *testing.T) {
 	credential := "dcr_control-client"
 	contents := []byte{0x00, 0xff, '\n'}
-	jobs := &fakeJobs{job: controlapi.Job{Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1"}}}, file: contents}
-	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs, nil).Handler
+	sessions := &fakeSessions{session: controlapi.Session{Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1"}}}, file: contents}
+	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, sessions, nil).Handler
 	get := func(target string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodGet, target, nil)
 		request.Header.Set("Authorization", "Bearer "+credential)
@@ -322,21 +322,21 @@ func TestSandboxFileResponseContract(t *testing.T) {
 	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "application/octet-stream" ||
 		response.Header().Get("Content-Length") != fmt.Sprint(len(contents)) ||
 		response.Header().Get("Content-Digest") != "sha-256=:"+base64.StdEncoding.EncodeToString(digest[:])+":" ||
-		!bytes.Equal(response.Body.Bytes(), contents) || jobs.filePath != "nested/REPORT+.bin" {
-		t.Fatalf("file response status/type/length/digest/path=%d/%q/%q/%q/%q", response.Code, response.Header().Get("Content-Type"), response.Header().Get("Content-Length"), response.Header().Get("Content-Digest"), jobs.filePath)
+		!bytes.Equal(response.Body.Bytes(), contents) || sessions.filePath != "nested/REPORT+.bin" {
+		t.Fatalf("file response status/type/length/digest/path=%d/%q/%q/%q/%q", response.Code, response.Header().Get("Content-Type"), response.Header().Get("Content-Length"), response.Header().Get("Content-Digest"), sessions.filePath)
 	}
 	requireProblem(t, get("/v1/sandboxes/sandbox-1/files"), http.StatusBadRequest, "file_path_required")
 }
 
-func TestJobWatchEmitsChangedSnapshotsAndStopsOnServerShutdown(t *testing.T) {
+func TestSessionWatchEmitsChangedSnapshotsAndStopsOnServerShutdown(t *testing.T) {
 	credential := "dcr_control-client"
-	jobs := &fakeJobs{job: controlapi.Job{ID: "job-1", Kind: "direct", Model: "first", Sandboxes: []controlapi.Sandbox{}}}
-	api := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs, nil)
+	sessions := &fakeSessions{session: controlapi.Session{ID: "job-1", Model: "first", Sandboxes: []controlapi.Sandbox{}}}
+	api := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, sessions, nil)
 
 	open := func(lastID string) (*streamResponse, context.CancelFunc, <-chan struct{}) {
 		t.Helper()
 		ctx, cancel := context.WithCancel(context.Background())
-		request := httptest.NewRequest(http.MethodGet, "/v1/jobs/job-1/watch", nil).WithContext(ctx)
+		request := httptest.NewRequest(http.MethodGet, "/v1/sessions/job-1/watch", nil).WithContext(ctx)
 		request.Header.Set("Authorization", "Bearer "+credential)
 		request.Header.Set("Accept", "text/event-stream")
 		if lastID != "" {
@@ -353,9 +353,9 @@ func TestJobWatchEmitsChangedSnapshotsAndStopsOnServerShutdown(t *testing.T) {
 
 	firstResponse, cancelFirst, firstDone := open("")
 	firstResponse.awaitFlush(t)
-	firstID, firstJob := readSnapshotEvent(t, bufio.NewReader(bytes.NewReader(firstResponse.bytes())))
-	if firstJob.Model != "first" || len(firstID) != 64 {
-		t.Fatalf("first snapshot id/job=%q/%#v", firstID, firstJob)
+	firstID, firstSession := readSnapshotEvent(t, bufio.NewReader(bytes.NewReader(firstResponse.bytes())))
+	if firstSession.Model != "first" || len(firstID) != 64 {
+		t.Fatalf("first snapshot id/session=%q/%#v", firstID, firstSession)
 	}
 	if status, header, bounded := firstResponse.metadata(); status != http.StatusOK || header.Get("Content-Type") != "text/event-stream" || header.Get("Cache-Control") != "no-store, no-transform" || !bounded {
 		t.Fatalf("watch status/type/cache/bounded-write=%d/%q/%q/%t", status, header.Get("Content-Type"), header.Get("Cache-Control"), bounded)
@@ -373,13 +373,13 @@ func TestJobWatchEmitsChangedSnapshotsAndStopsOnServerShutdown(t *testing.T) {
 	if got := resumedResponse.bytes(); len(got) != 0 {
 		t.Fatalf("matching Last-Event-ID replayed unchanged snapshot: %q", got)
 	}
-	jobs.mu.Lock()
-	jobs.job.Model = "changed"
-	jobs.mu.Unlock()
+	sessions.mu.Lock()
+	sessions.session.Model = "changed"
+	sessions.mu.Unlock()
 	resumedResponse.awaitFlush(t)
-	changedID, changedJob := readSnapshotEvent(t, bufio.NewReader(bytes.NewReader(resumedResponse.bytes())))
-	if changedJob.Model != "changed" || changedID == firstID {
-		t.Fatalf("changed snapshot id/job=%q/%#v after %q", changedID, changedJob, firstID)
+	changedID, changedSession := readSnapshotEvent(t, bufio.NewReader(bytes.NewReader(resumedResponse.bytes())))
+	if changedSession.Model != "changed" || changedID == firstID {
+		t.Fatalf("changed snapshot id/session=%q/%#v after %q", changedID, changedSession, firstID)
 	}
 
 	shutdown, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -394,12 +394,12 @@ func TestJobWatchEmitsChangedSnapshotsAndStopsOnServerShutdown(t *testing.T) {
 	}
 }
 
-func TestJobWatchReauthenticatesNoLaterThanCredentialExpiry(t *testing.T) {
+func TestSessionWatchReauthenticatesNoLaterThanCredentialExpiry(t *testing.T) {
 	credential := "dcr_expiring-client"
 	auth := &fakeAuth{credential: credential, client: controlauth.Client{CredentialExpiresAt: time.Now().Add(100 * time.Millisecond)}}
-	jobs := &fakeJobs{job: controlapi.Job{ID: "job-1", Kind: "direct", Sandboxes: []controlapi.Sandbox{}}}
-	api := controlapi.NewServer(controlapi.Discovery{}, auth, jobs, nil)
-	request := httptest.NewRequest(http.MethodGet, "/v1/jobs/job-1/watch", nil)
+	sessions := &fakeSessions{session: controlapi.Session{ID: "job-1", Sandboxes: []controlapi.Sandbox{}}}
+	api := controlapi.NewServer(controlapi.Discovery{}, auth, sessions, nil)
+	request := httptest.NewRequest(http.MethodGet, "/v1/sessions/job-1/watch", nil)
 	request.Header.Set("Authorization", "Bearer "+credential)
 	request.Header.Set("Accept", "text/event-stream")
 	response := newStreamResponse()
@@ -416,7 +416,7 @@ func TestJobWatchReauthenticatesNoLaterThanCredentialExpiry(t *testing.T) {
 	}
 
 	auth.credential = "revoked"
-	reconnect := httptest.NewRequest(http.MethodGet, "/v1/jobs/job-1/watch", nil)
+	reconnect := httptest.NewRequest(http.MethodGet, "/v1/sessions/job-1/watch", nil)
 	reconnect.Header.Set("Authorization", "Bearer "+credential)
 	reconnect.Header.Set("Accept", "text/event-stream")
 	rejected := httptest.NewRecorder()
@@ -424,16 +424,16 @@ func TestJobWatchReauthenticatesNoLaterThanCredentialExpiry(t *testing.T) {
 	requireProblem(t, rejected, http.StatusUnauthorized, "unauthenticated")
 }
 
-func TestJobWatchReturnsAuthenticationProblemWhenCredentialExpiresBeforeStreaming(t *testing.T) {
+func TestSessionWatchReturnsAuthenticationProblemWhenCredentialExpiresBeforeStreaming(t *testing.T) {
 	credential := "dcr_expiring-before-stream"
 	auth := &fakeAuth{credential: credential, client: controlauth.Client{CredentialExpiresAt: time.Now().Add(25 * time.Millisecond)}}
-	jobs := &fakeJobs{job: controlapi.Job{ID: "job-1", Kind: "direct"}, waitForGetContext: true}
-	request := httptest.NewRequest(http.MethodGet, "/v1/jobs/job-1/watch", nil)
+	sessions := &fakeSessions{session: controlapi.Session{ID: "job-1"}, waitForGetContext: true}
+	request := httptest.NewRequest(http.MethodGet, "/v1/sessions/job-1/watch", nil)
 	request.Header.Set("Authorization", "Bearer "+credential)
 	request.Header.Set("Accept", "text/event-stream")
 	response := httptest.NewRecorder()
 
-	controlapi.NewServer(controlapi.Discovery{}, auth, jobs, nil).Handler.ServeHTTP(response, request)
+	controlapi.NewServer(controlapi.Discovery{}, auth, sessions, nil).Handler.ServeHTTP(response, request)
 
 	requireProblem(t, response, http.StatusUnauthorized, "unauthenticated")
 }
@@ -507,7 +507,7 @@ func (w *streamResponse) metadata() (int, http.Header, bool) {
 	return w.status, w.header.Clone(), w.boundedDeadline
 }
 
-func readSnapshotEvent(t *testing.T, reader *bufio.Reader) (string, controlapi.Job) {
+func readSnapshotEvent(t *testing.T, reader *bufio.Reader) (string, controlapi.Session) {
 	t.Helper()
 	var event, id, data string
 	for {
@@ -521,11 +521,11 @@ func readSnapshotEvent(t *testing.T, reader *bufio.Reader) (string, controlapi.J
 			if event != "snapshot" || id == "" || data == "" {
 				t.Fatalf("SSE event/type/id/data=%q/%q/%q", event, id, data)
 			}
-			var job controlapi.DirectJob
-			if err := json.Unmarshal([]byte(data), &job); err != nil {
+			var session controlapi.Session
+			if err := json.Unmarshal([]byte(data), &session); err != nil {
 				t.Fatalf("decode snapshot %q: %v", data, err)
 			}
-			return id, job.Job
+			return id, session
 		case strings.HasPrefix(line, "event: "):
 			event = strings.TrimPrefix(line, "event: ")
 		case strings.HasPrefix(line, "id: "):
@@ -564,18 +564,17 @@ func (a *fakeAuth) Redeem(_ context.Context, code, name, credential string) (con
 	return a.client, a.redeemCalls == 1, nil
 }
 
-type fakeJobs struct {
+type fakeSessions struct {
 	execCalls         int
 	execCommand       provider.Command
 	execErr           error
 	mu                sync.Mutex
-	job               controlapi.Job
-	view              controlapi.JobView
-	list              controlapi.JobList
+	session           controlapi.Session
+	list              controlapi.SessionList
 	listErr           error
 	listLimit         int
 	listCursor        string
-	gotInput          controlapi.AdmitJobRequest
+	gotInput          controlapi.CreateSessionRequest
 	message           controlapi.Message
 	retry             controlapi.Retry
 	file              []byte
@@ -592,95 +591,88 @@ type fakeJobs struct {
 	waitForGetContext bool
 }
 
-func (j *fakeJobs) List(_ context.Context, limit int, cursor string) (controlapi.JobList, error) {
+func (j *fakeSessions) List(_ context.Context, limit int, cursor string) (controlapi.SessionList, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.listLimit, j.listCursor = limit, cursor
 	return j.list, j.listErr
 }
 
-func (j *fakeJobs) AdmitDirect(_ context.Context, _ string, _ string, input controlapi.AdmitJobRequest) (controlapi.DirectJob, bool, error) {
+func (j *fakeSessions) Create(_ context.Context, _ string, _ string, input controlapi.CreateSessionRequest) (controlapi.Session, bool, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.gotInput = input
-	return controlapi.DirectJob{Job: j.job}, true, nil
+	return j.session, true, nil
 }
 
-func (j *fakeJobs) Get(ctx context.Context, id string) (controlapi.JobView, error) {
+func (j *fakeSessions) Get(ctx context.Context, id string) (controlapi.Session, error) {
 	j.mu.Lock()
 	wait := j.waitForGetContext
-	if id != j.job.ID {
+	if id != j.session.ID {
 		j.mu.Unlock()
-		return nil, controlapi.ErrJobNotFound
+		return controlapi.Session{}, controlapi.ErrSessionNotFound
 	}
-	view := j.current()
+	view := j.session
 	j.mu.Unlock()
 	if wait {
 		<-ctx.Done()
-		return nil, ctx.Err()
+		return controlapi.Session{}, ctx.Err()
 	}
 	return view, nil
 }
 
-func (j *fakeJobs) SendMessage(_ context.Context, jobID, key string, input controlapi.SendMessageRequest) (controlapi.Message, bool, error) {
+func (j *fakeSessions) SendMessage(_ context.Context, sessionID, key string, input controlapi.SendMessageRequest) (controlapi.Message, bool, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if jobID != j.job.ID {
-		return controlapi.Message{}, false, controlapi.ErrJobNotFound
+	if sessionID != j.session.ID {
+		return controlapi.Message{}, false, controlapi.ErrSessionNotFound
 	}
 	j.messageKey = key
 	j.messageInput = input
 	return j.message, j.messageCreated, j.messageErr
 }
 
-func (j *fakeJobs) GetMessage(_ context.Context, jobID, messageID string) (controlapi.Message, error) {
+func (j *fakeSessions) GetMessage(_ context.Context, sessionID, messageID string) (controlapi.Message, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if jobID != j.job.ID || messageID != j.message.ID {
+	if sessionID != j.session.ID || messageID != j.message.ID {
 		return controlapi.Message{}, controlapi.ErrMessageNotFound
 	}
 	return j.message, nil
 }
 
-func (j *fakeJobs) InterruptMessage(ctx context.Context, jobID, messageID string) (controlapi.Message, error) {
-	message, err := j.GetMessage(ctx, jobID, messageID)
+func (j *fakeSessions) InterruptMessage(ctx context.Context, sessionID, messageID string) (controlapi.Message, error) {
+	message, err := j.GetMessage(ctx, sessionID, messageID)
 	message.InterruptRequested = err == nil
 	return message, err
 }
 
-func (j *fakeJobs) Retry(_ context.Context, jobID, key string) (controlapi.Retry, bool, error) {
+func (j *fakeSessions) Retry(_ context.Context, sessionID, key string) (controlapi.Retry, bool, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if jobID != j.job.ID {
-		return controlapi.Retry{}, false, controlapi.ErrJobNotFound
+	if sessionID != j.session.ID {
+		return controlapi.Retry{}, false, controlapi.ErrSessionNotFound
 	}
 	j.retryKey = key
 	return j.retry, j.retryCreated, nil
 }
 
-func (j *fakeJobs) ReadSandboxFile(_ context.Context, sandboxID, path string) ([]byte, error) {
-	if len(j.job.Sandboxes) == 0 || sandboxID != j.job.Sandboxes[0].ID {
+func (j *fakeSessions) ReadSandboxFile(_ context.Context, sandboxID, path string) ([]byte, error) {
+	if len(j.session.Sandboxes) == 0 || sandboxID != j.session.Sandboxes[0].ID {
 		return nil, controlapi.ErrSandboxNotFound
 	}
 	j.filePath = path
 	return append([]byte(nil), j.file...), nil
 }
 
-func (j *fakeJobs) RequestCleanup(_ context.Context, id string) (controlapi.JobView, error) {
+func (j *fakeSessions) RequestCleanup(_ context.Context, id string) (controlapi.Session, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.cleanupCalls++
-	if id != j.job.ID {
-		return nil, controlapi.ErrJobNotFound
+	if id != j.session.ID {
+		return controlapi.Session{}, controlapi.ErrSessionNotFound
 	}
-	return j.current(), nil
-}
-
-func (j *fakeJobs) current() controlapi.JobView {
-	if j.view != nil {
-		return j.view
-	}
-	return controlapi.DirectJob{Job: j.job}
+	return j.session, nil
 }
 
 func requireStatusType(t *testing.T, response *httptest.ResponseRecorder, status int, contentType string) {
@@ -716,32 +708,32 @@ func assertSecretsAbsent(t *testing.T, body string, secrets ...string) {
 	}
 }
 
-type watchDeadlineJobs struct {
-	*fakeJobs
+type watchDeadlineSessions struct {
+	*fakeSessions
 	deadline time.Time
 }
 
-func (jobs *watchDeadlineJobs) Get(ctx context.Context, _ string) (controlapi.JobView, error) {
-	jobs.deadline, _ = ctx.Deadline()
-	return nil, controlapi.ErrJobNotFound
+func (sessions *watchDeadlineSessions) Get(ctx context.Context, _ string) (controlapi.Session, error) {
+	sessions.deadline, _ = ctx.Deadline()
+	return controlapi.Session{}, controlapi.ErrSessionNotFound
 }
 
 func TestNonExpiringClientWatchStillHasAuthenticationDeadline(t *testing.T) {
 	credential := "dcr_non-expiring-client"
 	auth := &fakeAuth{credential: credential, client: controlauth.Client{}}
-	jobs := &watchDeadlineJobs{fakeJobs: &fakeJobs{}}
-	request := httptest.NewRequest(http.MethodGet, "/v1/jobs/job-1/watch", nil)
+	sessions := &watchDeadlineSessions{fakeSessions: &fakeSessions{}}
+	request := httptest.NewRequest(http.MethodGet, "/v1/sessions/job-1/watch", nil)
 	request.Header.Set("Authorization", "Bearer "+credential)
 	request.Header.Set("Accept", "text/event-stream")
 	before := time.Now()
-	controlapi.NewServer(controlapi.Discovery{}, auth, jobs, nil).Handler.ServeHTTP(httptest.NewRecorder(), request)
+	controlapi.NewServer(controlapi.Discovery{}, auth, sessions, nil).Handler.ServeHTTP(httptest.NewRecorder(), request)
 	after := time.Now()
-	if jobs.deadline.Before(before.Add(time.Minute)) || jobs.deadline.After(after.Add(time.Minute)) {
-		t.Fatalf("non-expiring Client watch deadline=%v, want one minute authentication lifetime", jobs.deadline)
+	if sessions.deadline.Before(before.Add(time.Minute)) || sessions.deadline.After(after.Add(time.Minute)) {
+		t.Fatalf("non-expiring Client watch deadline=%v, want one minute authentication lifetime", sessions.deadline)
 	}
 }
 
-func (j *fakeJobs) WriteSandboxFile(_ context.Context, sandboxID, name string, contents []byte, ifAbsent bool) error {
+func (j *fakeSessions) WriteSandboxFile(_ context.Context, sandboxID, name string, contents []byte, ifAbsent bool) error {
 	j.fileWrites++
 	j.filePath, j.file, j.fileAbsent = name, contents, ifAbsent
 	return nil
@@ -749,8 +741,8 @@ func (j *fakeJobs) WriteSandboxFile(_ context.Context, sandboxID, name string, c
 
 func TestSandboxFileWriteContract(t *testing.T) {
 	credential := "dcr_control-client"
-	jobs := &fakeJobs{}
-	api := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs, nil)
+	sessions := &fakeSessions{}
+	api := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, sessions, nil)
 	put := func(token, contentType, condition, content string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodPut, "/v1/sandboxes/sandbox-1/files?path=SOUL.md", strings.NewReader(content))
 		request.Header.Set("Authorization", "Bearer "+token)
@@ -768,24 +760,24 @@ func TestSandboxFileWriteContract(t *testing.T) {
 	requireProblem(t, put(credential, "text/plain", "", "text"), 415, "unsupported_media_type")
 	requireProblem(t, put(credential, "application/octet-stream", "bad", "text"), 400, "invalid_query")
 	requireProblem(t, put(credential, "application/octet-stream", "", strings.Repeat("x", provider.MaxFileWriteBytes+1)), 413, "body_too_large")
-	if jobs.fileWrites != 0 {
+	if sessions.fileWrites != 0 {
 		t.Fatal("invalid request reached file writer")
 	}
 	if response := put(credential, "application/octet-stream", "*", "complete\x00bytes"); response.Code != 204 {
 		t.Fatalf("write=%d %s", response.Code, response.Body.String())
 	}
-	if jobs.filePath != "SOUL.md" || string(jobs.file) != "complete\x00bytes" || !jobs.fileAbsent {
-		t.Fatalf("write=%+v", jobs)
+	if sessions.filePath != "SOUL.md" || string(sessions.file) != "complete\x00bytes" || !sessions.fileAbsent {
+		t.Fatalf("write=%+v", sessions)
 	}
 	if response := put(credential, "application/octet-stream", "", ""); response.Code != 204 {
 		t.Fatalf("blank write=%d", response.Code)
 	}
-	if len(jobs.file) != 0 || jobs.fileAbsent {
+	if len(sessions.file) != 0 || sessions.fileAbsent {
 		t.Fatal("blank replacement was changed")
 	}
 }
 
-func (f *fakeJobs) ExecSandbox(_ context.Context, _ string, command provider.Command) (provider.CommandResult, error) {
+func (f *fakeSessions) ExecSandbox(_ context.Context, _ string, command provider.Command) (provider.CommandResult, error) {
 	f.execCalls++
 	f.execCommand = command
 	return provider.CommandResult{ExitCode: 7, Stdout: "out", Stderr: "err"}, f.execErr
@@ -793,8 +785,8 @@ func (f *fakeJobs) ExecSandbox(_ context.Context, _ string, command provider.Com
 
 func TestSandboxExecReportsExitStatusAndDoesNotReplayUncertainCommands(t *testing.T) {
 	credential := "dcr_control-client"
-	jobs := &fakeJobs{}
-	api := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs, nil)
+	sessions := &fakeSessions{}
+	api := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, sessions, nil)
 	execute := func(token, body string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodPost, "/v1/sandboxes/sandbox-1/exec", strings.NewReader(body))
 		request.Header.Set("Authorization", "Bearer "+token)
@@ -803,28 +795,28 @@ func TestSandboxExecReportsExitStatusAndDoesNotReplayUncertainCommands(t *testin
 		api.Handler.ServeHTTP(response, request)
 		return response
 	}
-	if response := execute("wrong", `{"argv":["true"]}`); response.Code != http.StatusUnauthorized || jobs.execCalls != 0 {
+	if response := execute("wrong", `{"argv":["true"]}`); response.Code != http.StatusUnauthorized || sessions.execCalls != 0 {
 		t.Fatal("unauthenticated command executed")
 	}
 	for _, body := range []string{`{"argv":[]}`, `{"argv":["sleep","1"],"timeout_seconds":121}`, `{"argv":["true"],"host":"elsewhere"}`} {
-		if response := execute(credential, body); response.Code < 400 || jobs.execCalls != 0 {
+		if response := execute(credential, body); response.Code < 400 || sessions.execCalls != 0 {
 			t.Fatal("invalid command executed")
 		}
 	}
 	body := `{"argv":["printf","%s","literal $HOME"],"stdin":"` + strings.Repeat(`\u0000`, provider.MaxCommandBytes-21) + `","timeout_seconds":90}`
 	response := execute(credential, body)
 	var result provider.CommandResult
-	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || response.Code != http.StatusOK || result.ExitCode != 7 || result.Stdout != "out" || jobs.execCalls != 1 || jobs.execCommand.Argv[2] != "literal $HOME" {
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || response.Code != http.StatusOK || result.ExitCode != 7 || result.Stdout != "out" || sessions.execCalls != 1 || sessions.execCommand.Argv[2] != "literal $HOME" {
 		t.Fatalf("command result=%+v status=%d err=%v", result, response.Code, err)
 	}
-	jobs.execErr = controlapi.ErrSandboxExecFailed
+	sessions.execErr = controlapi.ErrSandboxExecFailed
 	response = execute(credential, `{"argv":["install","something"]}`)
 	var problem controlapi.Problem
-	if err := json.Unmarshal(response.Body.Bytes(), &problem); err != nil || response.Code != http.StatusBadGateway || problem.Retryable || jobs.execCalls != 2 {
-		t.Fatalf("uncertain command was replayed or misreported: %+v calls=%d", problem, jobs.execCalls)
+	if err := json.Unmarshal(response.Body.Bytes(), &problem); err != nil || response.Code != http.StatusBadGateway || problem.Retryable || sessions.execCalls != 2 {
+		t.Fatalf("uncertain command was replayed or misreported: %+v calls=%d", problem, sessions.execCalls)
 	}
 }
 
-func (f *fakeJobs) ReadSandboxStatus(context.Context, string) (provider.Status, error) {
+func (f *fakeSessions) ReadSandboxStatus(context.Context, string) (provider.Status, error) {
 	return provider.Status{Provider: "e2b", State: "paused"}, nil
 }

@@ -47,12 +47,12 @@ func TestControlAPIMultipartAttachmentsPersistAndReplayAfterCleanup(t *testing.T
 	runtimes := controlTestRuntimes{profile: profileName}
 	blobRoot := t.TempDir()
 	handler := controlTestHandler(store, tasks, provider, auth, runtimes, blob.Store{Root: blobRoot})
-	jobKey := fmt.Sprintf("attachment-job-%d", time.Now().UnixNano())
-	jobResponse := controlTestRequest(t, handler, http.MethodPost, "/v1/jobs", credential, jobKey, controlapi.AdmitJobRequest{
+	sessionKey := fmt.Sprintf("attachment-job-%d", time.Now().UnixNano())
+	sessionResponse := controlTestRequest(t, handler, http.MethodPost, "/v1/sessions", credential, sessionKey, controlapi.CreateSessionRequest{
 		AgentsMD: "attachment integration", AIConnection: "primary", Model: "model-test", Reasoning: "high",
 	})
-	var job controlapi.DirectJob
-	controlTestJSON(t, jobResponse, http.StatusCreated, &job)
+	var session controlapi.Session
+	controlTestJSON(t, sessionResponse, http.StatusCreated, &session)
 
 	imageBytes := encodeTestPNG(t, 3, 2)
 	fileBytes := []byte("generic attachment bytes")
@@ -61,7 +61,7 @@ func TestControlAPIMultipartAttachmentsPersistAndReplayAfterCleanup(t *testing.T
 		{Filename: "notes.txt", Contents: fileBytes},
 	}
 	messageKey := fmt.Sprintf("attachment-message-%d", time.Now().UnixNano())
-	firstResponse := controlTestMultipartMessage(t, handler, job.ID, credential, messageKey, "", "follow", attachments)
+	firstResponse := controlTestMultipartMessage(t, handler, session.ID, credential, messageKey, "", "follow", attachments)
 	var first controlapi.Message
 	controlTestJSON(t, firstResponse, http.StatusCreated, &first)
 	execution, err := store.AgentMessageExecution(ctx, first.ID)
@@ -82,7 +82,7 @@ func TestControlAPIMultipartAttachmentsPersistAndReplayAfterCleanup(t *testing.T
 	}
 
 	restarted := controlTestHandler(store, tasks, provider, controlauth.Service{Store: store}, runtimes, blob.Store{Root: blobRoot})
-	replayResponse := controlTestMultipartMessage(t, restarted, job.ID, credential, messageKey, "", "follow", attachments)
+	replayResponse := controlTestMultipartMessage(t, restarted, session.ID, credential, messageKey, "", "follow", attachments)
 	var replayed controlapi.Message
 	controlTestJSON(t, replayResponse, http.StatusOK, &replayed)
 	if replayed.ID != first.ID {
@@ -91,22 +91,22 @@ func TestControlAPIMultipartAttachmentsPersistAndReplayAfterCleanup(t *testing.T
 	changed := append([]controlapi.SendMessageAttachment(nil), attachments...)
 	changed[0].Contents = encodeTestPNG(t, 4, 2)
 	var conflict controlapi.Problem
-	controlTestJSON(t, controlTestMultipartMessage(t, restarted, job.ID, credential, messageKey, "", "follow", changed), http.StatusConflict, &conflict)
+	controlTestJSON(t, controlTestMultipartMessage(t, restarted, session.ID, credential, messageKey, "", "follow", changed), http.StatusConflict, &conflict)
 	if conflict.Code != "idempotency_conflict" {
 		t.Fatalf("changed attachment conflict=%#v", conflict)
 	}
 
-	deliveriesBeforeCleanup, err := store.Deliveries(ctx, job.ID)
+	deliveriesBeforeCleanup, err := store.Deliveries(ctx, session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RequestCleanup(ctx, job.ID); err != nil {
+	if err := store.RequestCleanup(ctx, session.ID); err != nil {
 		t.Fatal(err)
 	}
-	postCleanupResponse := controlTestMultipartMessage(t, restarted, job.ID, credential, messageKey, "", "follow", attachments)
+	postCleanupResponse := controlTestMultipartMessage(t, restarted, session.ID, credential, messageKey, "", "follow", attachments)
 	var postCleanup controlapi.Message
 	controlTestJSON(t, postCleanupResponse, http.StatusOK, &postCleanup)
-	deliveriesAfterCleanup, err := store.Deliveries(ctx, job.ID)
+	deliveriesAfterCleanup, err := store.Deliveries(ctx, session.ID)
 	if err != nil || postCleanup.ID != first.ID || len(deliveriesAfterCleanup) != len(deliveriesBeforeCleanup) {
 		t.Fatalf("post-cleanup replay=%#v deliveries=%d/%d err=%v", postCleanup, len(deliveriesAfterCleanup), len(deliveriesBeforeCleanup), err)
 	}
@@ -125,11 +125,11 @@ func TestControlAPIObservationIntentDefaultsAndReplay(t *testing.T) {
 	}
 	handler := controlTestHandler(store, tasks, controlTestGateway(t), auth, controlTestRuntimes{profile: profile}, blob.Store{Root: t.TempDir()})
 	key := fmt.Sprintf("observation-default-%d", time.Now().UnixNano())
-	var job controlapi.DirectJob
-	controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, "/v1/jobs", credential, key, controlapi.AdmitJobRequest{
+	var session controlapi.Session
+	controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, "/v1/sessions", credential, key, controlapi.CreateSessionRequest{
 		AIConnection: "primary", Model: "model-test", Reasoning: "high",
-	}), http.StatusCreated, &job)
-	path := "/v1/jobs/" + job.ID + "/messages"
+	}), http.StatusCreated, &session)
+	path := "/v1/sessions/" + session.ID + "/messages"
 	for _, tc := range []struct {
 		name   string
 		intent string
@@ -169,7 +169,7 @@ func TestControlAPIObservationIntentDefaultsAndReplay(t *testing.T) {
 			}
 		})
 	}
-	deliveries, err := store.Deliveries(ctx, job.ID)
+	deliveries, err := store.Deliveries(ctx, session.ID)
 	if err != nil || len(deliveries) != 3 {
 		t.Fatalf("deliveries=%d want=3 err=%v", len(deliveries), err)
 	}
@@ -199,16 +199,16 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	}
 
 	key := fmt.Sprintf("control-api-replay-%d", time.Now().UnixNano())
-	input := controlapi.AdmitJobRequest{ClientReference: "agent0:conversation:example", AgentsMD: "prove remote durable replay", AIConnection: "primary", Model: "model-test", Reasoning: "high"}
+	input := controlapi.CreateSessionRequest{ClientReference: "agent0:conversation:example", AgentsMD: "prove remote durable replay", AIConnection: "primary", Model: "model-test", Reasoning: "high"}
 	// The response is deliberately discarded after the handler commits, matching
 	// a client that cannot know whether its first request succeeded.
-	lost := controlTestRequest(t, first, http.MethodPost, "/v1/jobs", credential, key, input)
+	lost := controlTestRequest(t, first, http.MethodPost, "/v1/sessions", credential, key, input)
 	if lost.Code != http.StatusCreated {
 		t.Fatalf("first admission status=%d body=%s", lost.Code, lost.Body.String())
 	}
-	committed, err := store.Job(ctx, core.JobID(key))
+	committed, err := store.Session(ctx, core.SessionID(key))
 	if err != nil || committed.CurrentTaskID == "" || committed.ProviderConnection != input.AIConnection {
-		t.Fatalf("committed Job=%#v err=%v", committed, err)
+		t.Fatalf("committed Session=%#v err=%v", committed, err)
 	}
 	// Replay must use the retained profile and AI connection even when the
 	// deployment defaults can no longer be consulted.
@@ -218,12 +218,12 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 
 	restartedTasks := controlTestTasks(t, store.DB, firstTasks.QueueName(), false)
 	restarted := controlTestHandler(store, restartedTasks, provider, controlauth.Service{Store: store}, runtimes, blob.Store{Root: t.TempDir()})
-	replay := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs", credential, key, input)
-	var replayed controlapi.DirectJob
+	replay := controlTestRequest(t, restarted, http.MethodPost, "/v1/sessions", credential, key, input)
+	var replayed controlapi.Session
 	controlTestJSON(t, replay, http.StatusOK, &replayed)
-	afterReplay, err := store.Job(ctx, committed.ID)
+	afterReplay, err := store.Session(ctx, committed.ID)
 	if err != nil || replayed.ID != committed.ID || afterReplay.CurrentTaskID != committed.CurrentTaskID {
-		t.Fatalf("replay Job=%#v durable=%#v err=%v", replayed, afterReplay, err)
+		t.Fatalf("replay Session=%#v durable=%#v err=%v", replayed, afterReplay, err)
 	}
 
 	creator, err := auth.Authenticate(ctx, credential)
@@ -244,15 +244,15 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	credential = secondCredential
-	crossClientReplay := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs", credential, key, input)
+	crossClientReplay := controlTestRequest(t, restarted, http.MethodPost, "/v1/sessions", credential, key, input)
 	controlTestJSON(t, crossClientReplay, http.StatusOK, &replayed)
 	if replayed.CreatedByClient == nil || replayed.CreatedByClient.ID != creator.ID || replayed.CreatedByClient.Name != profileName {
 		t.Fatalf("replay reassigned revoked creator: %+v", replayed.CreatedByClient)
 	}
-	var listed controlapi.JobList
-	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs?limit=100", credential, "", nil), http.StatusOK, &listed)
+	var listed controlapi.SessionList
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/sessions?limit=100", credential, "", nil), http.StatusOK, &listed)
 	found := false
-	for _, item := range listed.Jobs {
+	for _, item := range listed.Sessions {
 		if item.ID == committed.ID {
 			found = true
 			if item.CreatedByClient == nil || *item.CreatedByClient != *replayed.CreatedByClient || item.ClientReference != input.ClientReference {
@@ -261,26 +261,26 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("attributed Job missing from index")
+		t.Fatal("attributed Session missing from index")
 	}
 	changedReference := input
 	changedReference.ClientReference = "another-thread"
 	var referenceConflict controlapi.Problem
-	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs", credential, key, changedReference), http.StatusConflict, &referenceConflict)
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodPost, "/v1/sessions", credential, key, changedReference), http.StatusConflict, &referenceConflict)
 	if referenceConflict.Code != "idempotency_conflict" {
 		t.Fatalf("reference conflict=%+v", referenceConflict)
 	}
 	spoof := map[string]any{"created_by_client": map[string]string{"id": creator.ID, "name": profileName}}
-	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs", credential, key+"-spoof", spoof), http.StatusBadRequest, &referenceConflict)
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodPost, "/v1/sessions", credential, key+"-spoof", spoof), http.StatusBadRequest, &referenceConflict)
 
 	var problem controlapi.Problem
 
 	messageKey := fmt.Sprintf("control-message-%d", time.Now().UnixNano())
 	messageInput := controlapi.SendMessageRequest{Text: "continue before the initial Turn settles", RefreshSkills: true}
-	early := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/messages", credential, messageKey, messageInput)
+	early := controlTestRequest(t, restarted, http.MethodPost, "/v1/sessions/"+committed.ID+"/messages", credential, messageKey, messageInput)
 	var accepted controlapi.Message
 	controlTestJSON(t, early, http.StatusCreated, &accepted)
-	if accepted.JobID != committed.ID || accepted.Sequence != 1 || accepted.Delivery.State != "accepted" {
+	if accepted.SessionID != committed.ID || accepted.Sequence != 1 || accepted.Delivery.State != "accepted" {
 		t.Fatalf("early Message=%#v", accepted)
 	}
 	execution, err := store.AgentMessageExecution(ctx, accepted.ID)
@@ -290,11 +290,11 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	restarted = controlTestHandler(store, restartedTasks, provider, controlauth.Service{Store: store}, runtimes, blob.Store{Root: t.TempDir()})
 	changedRefresh := messageInput
 	changedRefresh.RefreshSkills = false
-	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/messages", credential, messageKey, changedRefresh), http.StatusConflict, &problem)
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodPost, "/v1/sessions/"+committed.ID+"/messages", credential, messageKey, changedRefresh), http.StatusConflict, &problem)
 	if problem.Code != "idempotency_conflict" {
 		t.Fatalf("changed refresh=%+v", problem)
 	}
-	replayedMessage := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/messages", credential, messageKey, messageInput)
+	replayedMessage := controlTestRequest(t, restarted, http.MethodPost, "/v1/sessions/"+committed.ID+"/messages", credential, messageKey, messageInput)
 	var sameMessage controlapi.Message
 	controlTestJSON(t, replayedMessage, http.StatusOK, &sameMessage)
 	if sameMessage.ID != accepted.ID {
@@ -302,7 +302,7 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	}
 	changedMessage := messageInput
 	changedMessage.Text = "different input"
-	messageConflict := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/messages", credential, messageKey, changedMessage)
+	messageConflict := controlTestRequest(t, restarted, http.MethodPost, "/v1/sessions/"+committed.ID+"/messages", credential, messageKey, changedMessage)
 	controlTestJSON(t, messageConflict, http.StatusConflict, &problem)
 	if problem.Code != "idempotency_conflict" {
 		t.Fatalf("Message conflict=%#v", problem)
@@ -312,7 +312,7 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.WithJobFence(ctx, committed.ID, func() error {
+	if err := store.WithSessionFence(ctx, committed.ID, func() error {
 		return store.BindSandboxResource(ctx, owned, "synthetic-provider-original")
 	}); err != nil {
 		t.Fatal(err)
@@ -328,10 +328,10 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	}
 	assertExecution := func(want string) {
 		t.Helper()
-		var inspected controlapi.DirectJob
-		response := controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID, credential, "", nil)
+		var inspected controlapi.Session
+		response := controlTestRequest(t, restarted, http.MethodGet, "/v1/sessions/"+committed.ID, credential, "", nil)
 		if strings.Contains(response.Body.String(), owned.OwnershipNonce) || strings.Contains(response.Body.String(), "ownership_nonce") {
-			t.Fatal("Job inspection exposed ownership material")
+			t.Fatal("Session inspection exposed ownership material")
 		}
 		controlTestJSON(t, response, http.StatusOK, &inspected)
 		if inspected.Execution.State != want || inspected.Attention != nil {
@@ -356,7 +356,7 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertExecution("running")
-	auto := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/messages", credential, messageKey+"-auto", controlapi.SendMessageRequest{Text: "correct the active answer", RefreshSkills: true})
+	auto := controlTestRequest(t, restarted, http.MethodPost, "/v1/sessions/"+committed.ID+"/messages", credential, messageKey+"-auto", controlapi.SendMessageRequest{Text: "correct the active answer", RefreshSkills: true})
 	var steering controlapi.Message
 	controlTestJSON(t, auto, http.StatusCreated, &steering)
 	ordinary, err := store.AgentMessageExecution(ctx, steering.ID)
@@ -372,13 +372,13 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	if err := store.BindSteer(ctx, core.AgentRunID(steering.ID), "control-turn", "inProgress"); err != nil {
 		t.Fatal(err)
 	}
-	readSteer := controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID+"/messages/"+steering.ID, credential, "", nil)
+	readSteer := controlTestRequest(t, restarted, http.MethodGet, "/v1/sessions/"+committed.ID+"/messages/"+steering.ID, credential, "", nil)
 	controlTestJSON(t, readSteer, http.StatusOK, &steering)
 	if steering.Result != nil {
 		t.Fatalf("delivered steer fabricated a terminal reply: %+v", steering)
 	}
 	assertExecution("running")
-	interruptPath := "/v1/jobs/" + committed.ID + "/messages/" + steering.ID + "/interrupt"
+	interruptPath := "/v1/sessions/" + committed.ID + "/messages/" + steering.ID + "/interrupt"
 	for range 2 {
 		stop := controlTestRequest(t, restarted, http.MethodPut, interruptPath, credential, "", nil)
 		var stopped controlapi.Message
@@ -387,7 +387,7 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 			t.Fatalf("interrupt did not return exact accepted custody: %+v", stopped)
 		}
 	}
-	missingStop := controlTestRequest(t, restarted, http.MethodPut, "/v1/jobs/"+committed.ID+"/messages/missing/interrupt", credential, "", nil)
+	missingStop := controlTestRequest(t, restarted, http.MethodPut, "/v1/sessions/"+committed.ID+"/messages/missing/interrupt", credential, "", nil)
 	controlTestJSON(t, missingStop, http.StatusNotFound, &problem)
 	if problem.Code != "message_not_found" {
 		t.Fatalf("unknown interrupt target=%+v", problem)
@@ -409,7 +409,7 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	}
 
 	retryKey := fmt.Sprintf("control-retry-%d", time.Now().UnixNano())
-	notEligible := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/retries", credential, retryKey, nil)
+	notEligible := controlTestRequest(t, restarted, http.MethodPost, "/v1/sessions/"+committed.ID+"/retries", credential, retryKey, nil)
 	controlTestJSON(t, notEligible, http.StatusConflict, &problem)
 	if problem.Code != "retry_unavailable" {
 		t.Fatalf("retry problem=%#v", problem)
@@ -417,7 +417,7 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 
 	changed := input
 	changed.AgentsMD = "different input must conflict"
-	conflict := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs", credential, key, changed)
+	conflict := controlTestRequest(t, restarted, http.MethodPost, "/v1/sessions", credential, key, changed)
 	controlTestJSON(t, conflict, http.StatusConflict, &problem)
 	if problem.Code != "idempotency_conflict" {
 		t.Fatalf("conflict=%#v", problem)
@@ -427,18 +427,18 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	var latest controlapi.Message
-	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID+"/messages/latest", credential, "", nil), http.StatusOK, &latest)
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/sessions/"+committed.ID+"/messages/latest", credential, "", nil), http.StatusOK, &latest)
 	if latest.ID != accepted.ID || latest.Result == nil || latest.Result.Outcome != "interrupted" {
 		t.Fatalf("latest reply=%+v", latest)
 	}
-	var withReply controlapi.DirectJob
-	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID, credential, "", nil), http.StatusOK, &withReply)
+	var withReply controlapi.Session
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/sessions/"+committed.ID, credential, "", nil), http.StatusOK, &withReply)
 	if withReply.LatestReplyID != latest.ID {
 		t.Fatalf("inspection lost latest reply: %+v", withReply)
 	}
 	var pending controlapi.Message
-	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/messages", credential, messageKey+"-next", controlapi.SendMessageRequest{Text: "next task", Intent: "follow"}), http.StatusCreated, &pending)
-	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID+"/messages/latest", credential, "", nil), http.StatusOK, &latest)
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodPost, "/v1/sessions/"+committed.ID+"/messages", credential, messageKey+"-next", controlapi.SendMessageRequest{Text: "next task", Intent: "follow"}), http.StatusCreated, &pending)
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/sessions/"+committed.ID+"/messages/latest", credential, "", nil), http.StatusOK, &latest)
 	if latest.ID != accepted.ID {
 		t.Fatal("pending work displaced the latest reply")
 	}
@@ -446,20 +446,20 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID+"/messages/"+pending.ID, credential, "", nil), http.StatusOK, &pending)
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/sessions/"+committed.ID+"/messages/"+pending.ID, credential, "", nil), http.StatusOK, &pending)
 	if pending.WaitReason != "workspace_upgrade" || pending.Delivery.State != "accepted" || pending.Result != nil {
 		t.Fatal("held Message was not reported as accepted and waiting without a result")
 	}
-	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID, credential, "", nil), http.StatusOK, &withReply)
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/sessions/"+committed.ID, credential, "", nil), http.StatusOK, &withReply)
 	if len(withReply.Sandboxes) != 1 || withReply.Sandboxes[0].DeliveryHold == nil || withReply.Sandboxes[0].DeliveryHold.ID != hold.ID {
-		t.Fatal("Job inspection omitted the durable delivery hold")
+		t.Fatal("Session inspection omitted the durable delivery hold")
 	}
 	if err := store.ReleaseSandboxDelivery(ctx, restartedTasks.QueueName(), committed.ID, owned.ID, hold.ID); err != nil {
 		t.Fatal(err)
 	}
 	// Decode into a fresh DTO because omitted optional fields must not reuse a previous value.
 	var released controlapi.Message
-	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID+"/messages/"+pending.ID, credential, "", nil), http.StatusOK, &released)
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/sessions/"+committed.ID+"/messages/"+pending.ID, credential, "", nil), http.StatusOK, &released)
 	if released.WaitReason != "" {
 		t.Fatal("released Message retained a queue wait reason")
 	}
@@ -467,22 +467,22 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	if _, err := store.DB.ExecContext(ctx, `insert into dorf.sandbox_delivery_holds(id,sandbox_id,reason) values($1,$2,'checkpoint_recovery')`, recoveryHoldID, owned.ID); err != nil {
 		t.Fatal(err)
 	}
-	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID+"/messages/"+pending.ID, credential, "", nil), http.StatusOK, &pending)
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/sessions/"+committed.ID+"/messages/"+pending.ID, credential, "", nil), http.StatusOK, &pending)
 	if pending.WaitReason != "checkpoint_recovery" {
 		t.Fatalf("recovery-held Message wait reason=%q", pending.WaitReason)
 	}
-	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID, credential, "", nil), http.StatusOK, &withReply)
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodGet, "/v1/sessions/"+committed.ID, credential, "", nil), http.StatusOK, &withReply)
 	if len(withReply.Sandboxes) != 1 || withReply.Sandboxes[0].DeliveryHold == nil || withReply.Sandboxes[0].DeliveryHold.Reason != "checkpoint_recovery" {
-		t.Fatal("Job inspection omitted the checkpoint recovery hold reason")
+		t.Fatal("Session inspection omitted the checkpoint recovery hold reason")
 	}
 	if err := store.ReleaseSandboxDelivery(ctx, restartedTasks.QueueName(), committed.ID, owned.ID, recoveryHoldID); err != nil {
 		t.Fatal(err)
 	}
 
-	cleanup := controlTestRequest(t, restarted, http.MethodPut, "/v1/jobs/"+committed.ID+"/cleanup", credential, "", nil)
-	var cleaning controlapi.DirectJob
+	cleanup := controlTestRequest(t, restarted, http.MethodPut, "/v1/sessions/"+committed.ID+"/cleanup", credential, "", nil)
+	var cleaning controlapi.Session
 	controlTestJSON(t, cleanup, http.StatusOK, &cleaning)
-	cleaningFact, err := store.Job(ctx, committed.ID)
+	cleaningFact, err := store.Session(ctx, committed.ID)
 	if err != nil || cleaning.Admission.Open || cleaning.Cleanup.State != "running" || cleaningFact.CurrentTaskID == committed.CurrentTaskID {
 		t.Fatalf("cleanup view=%#v durable=%#v err=%v", cleaning, cleaningFact, err)
 	}
@@ -496,9 +496,9 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	// request and one attached task rather than being rescheduled.
 	finalTasks := controlTestTasks(t, store.DB, firstTasks.QueueName(), false)
 	finalHandler := controlTestHandler(store, finalTasks, provider, controlauth.Service{Store: store}, runtimes, blob.Store{Root: t.TempDir()})
-	repeated := controlTestRequest(t, finalHandler, http.MethodPut, "/v1/jobs/"+committed.ID+"/cleanup", credential, "", nil)
+	repeated := controlTestRequest(t, finalHandler, http.MethodPut, "/v1/sessions/"+committed.ID+"/cleanup", credential, "", nil)
 	controlTestJSON(t, repeated, http.StatusOK, &cleaning)
-	finalFact, err := store.Job(ctx, committed.ID)
+	finalFact, err := store.Session(ctx, committed.ID)
 	if err != nil || finalFact.CurrentTaskID != cleaningFact.CurrentTaskID || finalFact.CleanupState != core.CleanupScheduled {
 		t.Fatalf("replayed cleanup durable=%#v err=%v", finalFact, err)
 	}
@@ -511,13 +511,13 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	controlTestJSON(t, controlTestRequest(t, finalHandler, http.MethodGet, "/v1/jobs/"+committed.ID, credential, "", nil), http.StatusOK, &cleaning)
+	controlTestJSON(t, controlTestRequest(t, finalHandler, http.MethodGet, "/v1/sessions/"+committed.ID, credential, "", nil), http.StatusOK, &cleaning)
 	if len(cleaning.Sandboxes) != 1 || len(cleaning.Sandboxes[0].Resources) != 1 || cleaning.Sandboxes[0].Resources[0].DeletedAt == nil {
-		t.Fatal("Job inspection lost the resource deletion receipt after API restart")
+		t.Fatal("Session inspection lost the resource deletion receipt after API restart")
 	}
 }
 
-func TestControlAPIJobListKeepsKeysetContinuity(t *testing.T) {
+func TestControlAPISessionListKeepsKeysetContinuity(t *testing.T) {
 	ctx := context.Background()
 	store, _, profileName := controlTestStore(t)
 	auth := controlauth.Service{Store: store}
@@ -551,13 +551,13 @@ func TestControlAPIJobListKeepsKeysetContinuity(t *testing.T) {
 	insert := func(fixture listedFixture) {
 		t.Helper()
 		_, err := store.DB.ExecContext(ctx, `
-insert into dorf.jobs(
+insert into dorf.sessions(
     id,admission_key,workflow_name,workflow_revision,
     sandbox_profile,sandbox_profile_revision,provider_connection,model,reasoning_effort,admitted_at
 ) values($1,$2,$3,$4,$5,(select candidate_revision from dorf.sandbox_profiles where name=$5),'primary','model-test','high',$6)
 `, fixture.id, "admission-"+fixture.id, fixture.workflow, fixture.revision, profileName, fixture.at)
 		if err != nil {
-			t.Fatalf("insert Job list fixture %s: %v", fixture.id, err)
+			t.Fatalf("insert Session list fixture %s: %v", fixture.id, err)
 		}
 	}
 	for _, fixture := range fixtures {
@@ -565,31 +565,31 @@ insert into dorf.jobs(
 	}
 	t.Cleanup(func() {
 		for _, fixture := range fixtures {
-			if _, err := store.DB.ExecContext(context.Background(), `delete from dorf.jobs where id=$1`, fixture.id); err != nil {
-				t.Errorf("delete Job list fixture %s: %v", fixture.id, err)
+			if _, err := store.DB.ExecContext(context.Background(), `delete from dorf.sessions where id=$1`, fixture.id); err != nil {
+				t.Errorf("delete Session list fixture %s: %v", fixture.id, err)
 			}
 		}
 	})
 
-	handler := controlapi.NewServer(controlapi.Discovery{Product: "dorf"}, auth, controlAPIJobs{store: store}, controlAPIProfiles{store: store}).Handler
-	firstResponse := controlTestRequest(t, handler, http.MethodGet, "/v1/jobs?limit=2", credential, "", nil)
-	var first controlapi.JobList
+	handler := controlapi.NewServer(controlapi.Discovery{Product: "dorf"}, auth, controlAPISessions{store: store}, controlAPIProfiles{store: store}).Handler
+	firstResponse := controlTestRequest(t, handler, http.MethodGet, "/v1/sessions?limit=2", credential, "", nil)
+	var first controlapi.SessionList
 	controlTestJSON(t, firstResponse, http.StatusOK, &first)
-	if len(first.Jobs) != 2 || first.Jobs[0].ID != fixtures[0].id || first.Jobs[0].Kind != controlapi.JobKindDirect ||
-		first.Jobs[1].ID != fixtures[1].id || first.Jobs[1].Kind != controlapi.JobKindDirect || first.NextCursor == nil {
-		t.Fatalf("first Job page=%#v", first)
+	if len(first.Sessions) != 2 || first.Sessions[0].ID != fixtures[0].id ||
+		first.Sessions[1].ID != fixtures[1].id || first.NextCursor == nil {
+		t.Fatalf("first Session page=%#v", first)
 	}
 
 	newer := listedFixture{base + "-new", "", "", tiedAt.Add(3 * time.Second)}
 	fixtures = append(fixtures, newer)
 	insert(newer)
 	secondResponse := controlTestRequest(t, handler, http.MethodGet,
-		"/v1/jobs?limit=2&cursor="+url.QueryEscape(*first.NextCursor), credential, "", nil)
-	var second controlapi.JobList
+		"/v1/sessions?limit=2&cursor="+url.QueryEscape(*first.NextCursor), credential, "", nil)
+	var second controlapi.SessionList
 	controlTestJSON(t, secondResponse, http.StatusOK, &second)
-	if len(second.Jobs) != 2 || second.Jobs[0].ID != fixtures[2].id || second.Jobs[0].Kind != controlapi.JobKindDirect ||
-		second.Jobs[1].ID != fixtures[3].id || second.Jobs[1].Kind != controlapi.JobKindDirect {
-		t.Fatalf("second Job page=%#v", second)
+	if len(second.Sessions) != 2 || second.Sessions[0].ID != fixtures[2].id ||
+		second.Sessions[1].ID != fixtures[3].id {
+		t.Fatalf("second Session page=%#v", second)
 	}
 
 	payload, err := base64.RawURLEncoding.DecodeString(*first.NextCursor)
@@ -602,7 +602,7 @@ insert into dorf.jobs(
 		t.Fatal("cursor version tamper did not change the token")
 	}
 	tampered := controlTestRequest(t, handler, http.MethodGet,
-		"/v1/jobs?cursor="+url.QueryEscape(tamperedCursor), credential, "", nil)
+		"/v1/sessions?cursor="+url.QueryEscape(tamperedCursor), credential, "", nil)
 	var problem controlapi.Problem
 	controlTestJSON(t, tampered, http.StatusBadRequest, &problem)
 	if problem.Code != "invalid_cursor" {
@@ -718,7 +718,7 @@ func controlTestHandler(store postgres.Store, tasks *absurd.Client, provider gat
 	reader := controlreader.Service{Store: store, Runtimes: runtimes, Provider: provider}
 	messageImages, _ := runtimes.(messageImageCapability)
 	return controlapi.NewServer(controlapi.Discovery{Product: "dorf"}, auth,
-		controlAPIJobs{
+		controlAPISessions{
 			store: store, tasks: tasks,
 			directAdmissions: direct.NewAdmissionService(store, queueName, reader),
 			reader:           reader, blobs: evidence, messageImages: messageImages,
@@ -741,7 +741,7 @@ func (r controlTestRuntimes) SupportsMessageImages(_ context.Context, profile co
 	return profile.Name == r.profile, nil
 }
 
-func (r controlTestRuntimes) ReadSandboxFile(context.Context, core.Job, core.Sandbox, string) ([]byte, error) {
+func (r controlTestRuntimes) ReadSandboxFile(context.Context, core.Session, core.Sandbox, string) ([]byte, error) {
 	return append([]byte(nil), r.contents...), nil
 }
 
@@ -768,7 +768,7 @@ func controlTestRequest(t *testing.T, handler http.Handler, method, path, creden
 	return response
 }
 
-func controlTestMultipartMessage(t *testing.T, handler http.Handler, jobID, credential, key, text, intent string, attachments []controlapi.SendMessageAttachment) *httptest.ResponseRecorder {
+func controlTestMultipartMessage(t *testing.T, handler http.Handler, sessionID, credential, key, text, intent string, attachments []controlapi.SendMessageAttachment) *httptest.ResponseRecorder {
 	t.Helper()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -792,7 +792,7 @@ func controlTestMultipartMessage(t *testing.T, handler http.Handler, jobID, cred
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/v1/jobs/"+jobID+"/messages", &body)
+	request := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+sessionID+"/messages", &body)
 	request.Header.Set("Content-Type", writer.FormDataContentType())
 	request.Header.Set("Authorization", "Bearer "+credential)
 	request.Header.Set("Idempotency-Key", key)
@@ -834,19 +834,19 @@ func TestSkillRefreshRejectsUnsupportedProfileBeforeAdmission(t *testing.T) {
 	if err := store.RecordSandboxProfileVerificationCleanup(ctx, verification); err != nil {
 		t.Fatal(err)
 	}
-	job, _, err := store.AdmitDirect(ctx, core.JobAdmission{AdmissionKey: profile.Name, SandboxProfile: profile.Name, ProviderConnection: "primary", Model: "test-model", ReasoningEffort: "high"}, tasks.QueueName())
+	session, _, err := store.AdmitDirect(ctx, core.SessionAdmission{AdmissionKey: profile.Name, SandboxProfile: profile.Name, ProviderConnection: "primary", Model: "test-model", ReasoningEffort: "high"}, tasks.QueueName())
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "refresh", Input: "continue", Intent: core.MessageAuto, RefreshSkills: true}
+	input := core.MessageAdmission{SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), FromKind: core.MessageFromHuman, FromID: "refresh", Input: "continue", Intent: core.MessageAuto, RefreshSkills: true}
 	if _, err := (composedMessageAdmissions{store: store}).AdmitAgentMessage(ctx, input); err != controlapi.ErrSkillRefreshUnavailable {
 		t.Fatalf("Go refresh rejection=%v", err)
 	}
-	api := controlAPIJobs{store: store, tasks: tasks}
-	if _, _, err := api.SendMessage(ctx, job.ID, "refresh", controlapi.SendMessageRequest{Text: "continue", RefreshSkills: true}); err != controlapi.ErrSkillRefreshUnavailable {
+	api := controlAPISessions{store: store, tasks: tasks}
+	if _, _, err := api.SendMessage(ctx, session.ID, "refresh", controlapi.SendMessageRequest{Text: "continue", RefreshSkills: true}); err != controlapi.ErrSkillRefreshUnavailable {
 		t.Fatalf("HTTP refresh rejection=%v", err)
 	}
-	messages, err := store.Deliveries(ctx, job.ID)
+	messages, err := store.Deliveries(ctx, session.ID)
 	if err != nil || len(messages) != 0 {
 		t.Fatalf("unsupported refresh was retained: messages=%v err=%v", messages, err)
 	}

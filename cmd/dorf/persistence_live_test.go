@@ -79,15 +79,15 @@ func TestLivePersistenceRecovery(t *testing.T) {
 	proof := &livePersistenceProof{t: t, ctx: ctx, store: store, tasks: tasks, sandbox: sandbox, agent: agent, fixture: fixture}
 	proof.installRuntime(profile.Ref())
 
-	job, _, err := store.AdmitDirect(ctx, core.JobAdmission{
+	session, _, err := store.AdmitDirect(ctx, core.SessionAdmission{
 		AdmissionKey: "checkpoint-proof-" + receipt.RunID, SandboxProfile: profile.Name,
 		ProviderConnection: "synthetic-local", Model: "synthetic-model", ReasoningEffort: "low", KeepRunning: true,
 	}, tasks.QueueName())
 	if err != nil {
 		t.Fatal(err)
 	}
-	proof.job = job
-	proof.sandboxID = core.MainSandboxName(job.ID)
+	proof.session = session
+	proof.sandboxID = core.MainSandboxName(session.ID)
 	proof.registerEventExport()
 	proof.registerCleanup()
 
@@ -213,7 +213,7 @@ func TestLivePersistenceRecovery(t *testing.T) {
 
 	workerStop()
 	request := persistence.RecoveryRequest{
-		ID: "recover-" + receipt.RunID, JobID: job.ID, SandboxID: proof.sandboxID,
+		ID: "recover-" + receipt.RunID, SessionID: session.ID, SandboxID: proof.sandboxID,
 		Repository: checkpoint.Repository, SnapshotID: checkpoint.SnapshotID,
 	}
 	if _, err := store.RequestCheckpointRecovery(ctx, tasks.QueueName(), request); err != nil {
@@ -237,7 +237,7 @@ func TestLivePersistenceRecovery(t *testing.T) {
 		Queue: tasks.QueueName(), Claim: func(context.Context) error { return nil },
 	}
 	for attempt := 0; attempt < 8; attempt++ {
-		progressed, reconcileErr := recovery.Reconcile(ctx, job.ID)
+		progressed, reconcileErr := recovery.Reconcile(ctx, session.ID)
 		if errors.Is(reconcileErr, errLivePersistenceLostVerificationReceipt) && !progressed {
 			continue
 		}
@@ -262,11 +262,11 @@ func TestLivePersistenceRecovery(t *testing.T) {
 	recoveredExecution, recoveredLatency := proof.waitMessage(queued)
 	workerStop()
 	if recoveredExecution.AgentRun.ThreadID != threadID || proof.turnOutput(recoveredExecution) == "" ||
-		recoveredExecution.Message.Input != queued.Input || recoveredExecution.Job.Model != job.Model || recoveredExecution.Job.ReasoningEffort != job.ReasoningEffort {
+		recoveredExecution.Message.Input != queued.Input || recoveredExecution.Session.Model != session.Model || recoveredExecution.Session.ReasoningEffort != session.ReasoningEffort {
 		t.Fatal("replacement did not continue the original Codex thread with substantive output")
 	}
 	proof.requireRestoredConversation("CHECKPOINT_CONTEXT_154")
-	resources, err := store.SandboxResources(ctx, job.ID)
+	resources, err := store.SandboxResources(ctx, session.ID)
 	if err != nil || len(resources) != 2 {
 		t.Fatalf("proof created %d resource records, want exactly source and replacement: %v", len(resources), err)
 	}
@@ -483,7 +483,7 @@ type livePersistenceProof struct {
 	sandbox   provider.Sandbox
 	agent     codex.Agent
 	fixture   []byte
-	job       core.Job
+	session   core.Session
 	sandboxID string
 	eventsMu  sync.Mutex
 	events    []telemetry.Event
@@ -560,8 +560,8 @@ type livePersistenceExternals struct {
 	fixture []byte
 }
 
-func (e livePersistenceExternals) RouteCreate(ctx context.Context, job core.Job, sandbox core.Sandbox, route core.Route) error {
-	if job.ID != sandbox.JobID || route.SandboxID != sandbox.ID || route.ID == "" {
+func (e livePersistenceExternals) RouteCreate(ctx context.Context, session core.Session, sandbox core.Sandbox, route core.Route) error {
+	if session.ID != sandbox.SessionID || route.SandboxID != sandbox.ID || route.ID == "" {
 		return fmt.Errorf("synthetic route has the wrong owner")
 	}
 	return installLivePersistenceFixture(ctx, e.Sandbox, livePersistenceOwner(sandbox), e.fixture, "synthetic-source-route")
@@ -602,11 +602,11 @@ func (p *livePersistenceProof) startWorker() func() {
 
 func (p *livePersistenceProof) admit(key, input string) core.Message {
 	p.t.Helper()
-	job, err := coreApplication(p.store, p.tasks).OpenJob(p.ctx, p.job.ID)
+	session, err := coreApplication(p.store, p.tasks).OpenSession(p.ctx, p.session.ID)
 	if err != nil {
 		p.t.Fatal(err)
 	}
-	sandbox, err := job.DefaultSandbox(p.ctx)
+	sandbox, err := session.DefaultSandbox(p.ctx)
 	if err != nil {
 		p.t.Fatal(err)
 	}
@@ -926,13 +926,13 @@ func (p *livePersistenceProof) registerCleanup() {
 	p.t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
-		resources, err := p.store.SandboxResources(cleanupCtx, p.job.ID)
+		resources, err := p.store.SandboxResources(cleanupCtx, p.session.ID)
 		if err != nil {
 			p.t.Errorf("load live proof resources for cleanup: %v", err)
 			return
 		}
 		for _, resource := range resources {
-			owner := provider.Ownership{JobID: p.job.ID, SandboxID: p.sandboxID, OwnershipNonce: resource.OwnershipNonce}
+			owner := provider.Ownership{SessionID: p.session.ID, SandboxID: p.sandboxID, OwnershipNonce: resource.OwnershipNonce}
 			if err := p.sandbox.DeleteOwned(cleanupCtx, owner); err != nil {
 				p.t.Errorf("delete live proof resource: %v", err)
 				continue
@@ -982,7 +982,7 @@ func (p *livePersistenceProof) registerEventExport() {
 }
 
 func livePersistenceOwner(owned core.Sandbox) provider.Ownership {
-	return provider.Ownership{JobID: owned.JobID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce}
+	return provider.Ownership{SessionID: owned.SessionID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce}
 }
 
 func installLivePersistenceFixture(ctx context.Context, sandbox provider.Sandbox, owner provider.Ownership, fixture []byte, routeKey string) error {

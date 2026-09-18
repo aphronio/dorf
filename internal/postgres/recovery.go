@@ -15,20 +15,20 @@ import (
 )
 
 // RequestCheckpointRecovery atomically retains exact checkpoint intent, holds
-// new native delivery, and wakes the Job's existing task. Accepted Messages
+// new native delivery, and wakes the Session's existing task. Accepted Messages
 // remain durable behind the hold.
 func (s Store) RequestCheckpointRecovery(ctx context.Context, queue string, request persistence.RecoveryRequest) (persistence.RecoveryReceipt, error) {
 	if err := request.Validate(); err != nil {
 		return persistence.RecoveryReceipt{}, err
 	}
 	var result persistence.RecoveryReceipt
-	err := s.withDeliveryHold(ctx, request.JobID, request.SandboxID, request.ID, func(tx *sql.Tx, q *dbsql.Queries, job dbsql.GetJobAdmissionForUpdateRow) error {
+	err := s.withDeliveryHold(ctx, request.SessionID, request.SandboxID, request.ID, func(tx *sql.Tx, q *dbsql.Queries, session dbsql.GetSessionAdmissionForUpdateRow) error {
 		var err error
 		if result, err = replayCheckpointRecovery(ctx, q, request); err != nil || result.ID != "" {
 			return err
 		}
-		if !job.AdmissionOpen || job.CleanupState != core.CleanupPending || job.WorkflowName != "" || job.WorkflowRevision != "" {
-			return fmt.Errorf("checkpoint recovery requires an open direct Job")
+		if !session.AdmissionOpen || session.CleanupState != core.CleanupPending || session.WorkflowName != "" || session.WorkflowRevision != "" {
+			return fmt.Errorf("checkpoint recovery requires an open direct Session")
 		}
 		owned, err := authorizeCheckpointRecoveryRequest(ctx, q, request)
 		if err != nil {
@@ -40,7 +40,7 @@ func (s Store) RequestCheckpointRecovery(ctx context.Context, queue string, requ
 		if err := insertCheckpointRecoveryRequest(ctx, q, request, owned.ActiveResourceID); err != nil {
 			return err
 		}
-		if _, err := signalJobExecutionWakeTx(ctx, tx, queue, request.JobID, "recovery:"+request.ID); err != nil {
+		if _, err := signalSessionExecutionWakeTx(ctx, tx, queue, request.SessionID, "recovery:"+request.ID); err != nil {
 			return err
 		}
 		row, err := q.GetCheckpointRecovery(ctx, request.ID)
@@ -68,7 +68,7 @@ func replayCheckpointRecovery(ctx context.Context, q *dbsql.Queries, request per
 }
 
 func authorizeCheckpointRecoveryRequest(ctx context.Context, q *dbsql.Queries, request persistence.RecoveryRequest) (dbsql.GetSandboxRow, error) {
-	job, err := q.GetJob(ctx, request.JobID)
+	session, err := q.GetSession(ctx, request.SessionID)
 	if err != nil {
 		return dbsql.GetSandboxRow{}, err
 	}
@@ -81,10 +81,10 @@ func authorizeCheckpointRecoveryRequest(ctx context.Context, q *dbsql.Queries, r
 	if err != nil {
 		return dbsql.GetSandboxRow{}, err
 	}
-	if checkpoint.JobID != request.JobID || checkpoint.SandboxID != request.SandboxID {
-		return dbsql.GetSandboxRow{}, fmt.Errorf("checkpoint belongs to a different Job Sandbox")
+	if checkpoint.SessionID != request.SessionID || checkpoint.SandboxID != request.SandboxID {
+		return dbsql.GetSandboxRow{}, fmt.Errorf("checkpoint belongs to a different Session Sandbox")
 	}
-	if checkpoint.ProfileName != job.SandboxProfile || checkpoint.ProfileRevision != job.SandboxProfileRevision {
+	if checkpoint.ProfileName != session.SandboxProfile || checkpoint.ProfileRevision != session.SandboxProfileRevision {
 		return dbsql.GetSandboxRow{}, fmt.Errorf("checkpoint requires a different Sandbox profile revision")
 	}
 	owned, err := q.GetSandbox(ctx, request.SandboxID)
@@ -114,8 +114,8 @@ func insertCheckpointRecoveryRequest(ctx context.Context, q *dbsql.Queries, requ
 	})
 }
 
-func (s Store) JobRecoveries(ctx context.Context, jobID string) ([]persistence.RecoveryReceipt, error) {
-	rows, err := dbsql.New(s.DB).ListJobCheckpointRecoveries(ctx, jobID)
+func (s Store) SessionRecoveries(ctx context.Context, sessionID string) ([]persistence.RecoveryReceipt, error) {
+	rows, err := dbsql.New(s.DB).ListSessionCheckpointRecoveries(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -128,13 +128,13 @@ func (s Store) JobRecoveries(ctx context.Context, jobID string) ([]persistence.R
 
 func recoveryReceipt(row dbsql.GetCheckpointRecoveryRow) persistence.RecoveryReceipt {
 	checkpoint := checkpointFromValues(
-		row.JobID, row.SandboxID, row.CheckpointResourceID, row.ProfileName, row.ProfileRevision,
+		row.SessionID, row.SandboxID, row.CheckpointResourceID, row.ProfileName, row.ProfileRevision,
 		row.EffectiveUpgradeID, row.LastActivityAt, row.MessageSequence, row.CompletedTurnSequence,
 		row.DeliveryHoldCount, row.Cleanup, row.CheckpointRepository, row.CheckpointSnapshotID, row.PublishedAt,
 	)
 	return persistence.RecoveryReceipt{
 		RecoveryRequest: persistence.RecoveryRequest{
-			ID: row.ID, JobID: row.JobID, SandboxID: row.SandboxID,
+			ID: row.ID, SessionID: row.SessionID, SandboxID: row.SandboxID,
 			Repository: row.CheckpointRepository, SnapshotID: row.CheckpointSnapshotID,
 		},
 		Checkpoint: checkpoint, SourceResourceID: row.SourceResourceID, SourceProviderID: row.SourceProviderID,
@@ -156,7 +156,7 @@ func (s Store) RecoveryNativeStateSafe(ctx context.Context, receipt persistence.
 }
 
 // RecordRecoveryRestored binds the replacement only after exact restore succeeds.
-// The resource binding itself is the restore receipt; caller holds the Job fence.
+// The resource binding itself is the restore receipt; caller holds the Session fence.
 func (s Store) RecordRecoveryRestored(ctx context.Context, receipt persistence.RecoveryReceipt, providerID string) error {
 	if providerID == "" || providerID != strings.TrimSpace(providerID) {
 		return fmt.Errorf("recovery omitted provider resource identity")
@@ -171,7 +171,7 @@ func (s Store) RecordRecoveryVerified(ctx context.Context, id string) error {
 }
 
 // AbandonCheckpointRecoveryForCleanup releases the recovery hold only after
-// scheduled cleanup has removed its replacement. Caller holds the Job fence.
+// scheduled cleanup has removed its replacement. Caller holds the Session fence.
 func (s Store) AbandonCheckpointRecoveryForCleanup(ctx context.Context, receipt persistence.RecoveryReceipt) error {
 	q := dbsql.New(s.DB)
 	quiet, err := q.UpgradeQuiescent(ctx, receipt.SandboxID)
@@ -185,7 +185,7 @@ func (s Store) AbandonCheckpointRecoveryForCleanup(ctx context.Context, receipt 
 }
 
 // FinishCheckpointRecovery atomically adopts verified custody, releases its
-// exact hold, and wakes queued delivery. Caller holds the Job effect fence.
+// exact hold, and wakes queued delivery. Caller holds the Session effect fence.
 func (s Store) FinishCheckpointRecovery(ctx context.Context, queue string, expected persistence.RecoveryReceipt) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -193,14 +193,14 @@ func (s Store) FinishCheckpointRecovery(ctx context.Context, queue string, expec
 	}
 	defer tx.Rollback()
 	q := dbsql.New(tx)
-	job, err := q.GetJobAdmissionForUpdate(ctx, expected.JobID)
+	session, err := q.GetSessionAdmissionForUpdate(ctx, expected.SessionID)
 	if err != nil {
 		return err
 	}
-	if !job.AdmissionOpen || job.CleanupState != core.CleanupPending {
+	if !session.AdmissionOpen || session.CleanupState != core.CleanupPending {
 		return fmt.Errorf("recovery release requires open admission")
 	}
-	fullJob, err := q.GetJob(ctx, expected.JobID)
+	fullSession, err := q.GetSession(ctx, expected.SessionID)
 	if err != nil {
 		return err
 	}
@@ -215,7 +215,7 @@ func (s Store) FinishCheckpointRecovery(ctx context.Context, queue string, expec
 	if !receipt.FinishedAt.IsZero() {
 		return nil
 	}
-	if err := authorizeRecoveryRelease(ctx, q, fullJob.SandboxProfile, fullJob.SandboxProfileRevision, receipt); err != nil {
+	if err := authorizeRecoveryRelease(ctx, q, fullSession.SandboxProfile, fullSession.SandboxProfileRevision, receipt); err != nil {
 		return err
 	}
 	if err := switchAndReleaseRecovery(ctx, tx, q, queue, receipt); err != nil {
@@ -237,7 +237,7 @@ func switchAndReleaseRecovery(ctx context.Context, tx *sql.Tx, q *dbsql.Queries,
 	if err := expectOneRows(q.ReleaseSandboxDeliveryHold(ctx, dbsql.ReleaseSandboxDeliveryHoldParams{ID: receipt.ID, SandboxID: receipt.SandboxID})); err != nil {
 		return err
 	}
-	if _, err := signalJobExecutionWakeTx(ctx, tx, queue, receipt.JobID, "recovery-finished:"+receipt.ID); err != nil {
+	if _, err := signalSessionExecutionWakeTx(ctx, tx, queue, receipt.SessionID, "recovery-finished:"+receipt.ID); err != nil {
 		return err
 	}
 	return nil

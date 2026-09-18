@@ -16,13 +16,13 @@ import (
 
 // RequestSandboxUpgrade commits exact package intent and its delivery hold with
 // the execution wake. The retained direct task executes it; no second task owns
-// the same Job lifecycle.
+// the same Session lifecycle.
 func (s Store) RequestSandboxUpgrade(ctx context.Context, queue string, request upgrade.Request) (upgrade.Receipt, error) {
 	if err := request.Validate(); err != nil {
 		return upgrade.Receipt{}, err
 	}
 	var result upgrade.Receipt
-	err := s.withDeliveryHold(ctx, request.JobID, request.SandboxID, request.ID, func(tx *sql.Tx, q *dbsql.Queries, job dbsql.GetJobAdmissionForUpdateRow) error {
+	err := s.withDeliveryHold(ctx, request.SessionID, request.SandboxID, request.ID, func(tx *sql.Tx, q *dbsql.Queries, session dbsql.GetSessionAdmissionForUpdateRow) error {
 		row, err := q.GetSandboxUpgrade(ctx, request.ID)
 		if err == nil {
 			result = upgradeReceipt(row)
@@ -34,8 +34,8 @@ func (s Store) RequestSandboxUpgrade(ctx context.Context, queue string, request 
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		if !job.AdmissionOpen || job.CleanupState != core.CleanupPending || job.WorkflowName != "" || job.WorkflowRevision != "" {
-			return fmt.Errorf("upgrade requires an open direct Job")
+		if !session.AdmissionOpen || session.CleanupState != core.CleanupPending || session.WorkflowName != "" || session.WorkflowRevision != "" {
+			return fmt.Errorf("upgrade requires an open direct Session")
 		}
 		if err := requireSandboxDeliveryUnheld(ctx, q, request.SandboxID); err != nil {
 			return err
@@ -53,7 +53,7 @@ func (s Store) RequestSandboxUpgrade(ctx context.Context, queue string, request 
 		if err := q.InsertSandboxUpgrade(ctx, dbsql.InsertSandboxUpgradeParams{ID: request.ID, SandboxID: request.SandboxID, SourceResourceID: owned.ActiveResourceID, PackagePath: request.PackagePath, Version: request.Version}); err != nil {
 			return err
 		}
-		if _, err := signalJobExecutionWakeTx(ctx, tx, queue, request.JobID, "upgrade:"+request.ID); err != nil {
+		if _, err := signalSessionExecutionWakeTx(ctx, tx, queue, request.SessionID, "upgrade:"+request.ID); err != nil {
 			return err
 		}
 		row, err = q.GetSandboxUpgrade(ctx, request.ID)
@@ -63,8 +63,8 @@ func (s Store) RequestSandboxUpgrade(ctx context.Context, queue string, request 
 	return result, err
 }
 
-func (s Store) JobUpgrades(ctx context.Context, jobID string) ([]upgrade.Receipt, error) {
-	rows, err := dbsql.New(s.DB).ListJobUpgrades(ctx, jobID)
+func (s Store) SessionUpgrades(ctx context.Context, sessionID string) ([]upgrade.Receipt, error) {
+	rows, err := dbsql.New(s.DB).ListSessionUpgrades(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +77,7 @@ func (s Store) JobUpgrades(ctx context.Context, jobID string) ([]upgrade.Receipt
 
 func upgradeReceipt(row dbsql.GetSandboxUpgradeRow) upgrade.Receipt {
 	return upgrade.Receipt{
-		Request:          upgrade.Request{ID: row.ID, JobID: row.JobID, SandboxID: row.SandboxID, PackagePath: row.PackagePath, Version: row.Version},
+		Request:          upgrade.Request{ID: row.ID, SessionID: row.SessionID, SandboxID: row.SandboxID, PackagePath: row.PackagePath, Version: row.Version},
 		SourceResourceID: row.SourceResourceID, SourceProviderID: row.SourceProviderID, DestinationProviderID: row.DestinationProviderID, DestinationResourceID: row.DestinationResourceID.String,
 		RequestedAt: row.RequestedAt, PreviousVersion: row.PreviousVersion.String, QuiescedAt: timeValue(row.QuiescedAt),
 		Checkpoint:  provider.Checkpoint{Key: row.CheckpointKey.String, Reference: row.CheckpointReference.String, SourceID: row.CheckpointSourceID.String},
@@ -90,7 +90,7 @@ func (s Store) UpgradeQuiescent(ctx context.Context, sandboxID string) (bool, er
 	return dbsql.New(s.DB).UpgradeQuiescent(ctx, sandboxID)
 }
 
-// Upgrade receipt writers run only under the executor's Job fence and current
+// Upgrade receipt writers run only under the executor's Session fence and current
 // claim. They never take another fence on a different database connection.
 func (s Store) RecordUpgradePreparation(ctx context.Context, id, version string) error {
 	return expectOneRows(dbsql.New(s.DB).RecordUpgradePreparation(ctx, dbsql.RecordUpgradePreparationParams{ID: id, PreviousVersion: version}))
@@ -166,7 +166,7 @@ func (s Store) RecordUpgradeCheckpointDeleted(ctx context.Context, id string) er
 }
 
 // FinishSandboxUpgrade atomically adopts verified custody, releases its exact
-// hold, and wakes the existing task. Caller holds the Job fence across native
+// hold, and wakes the existing task. Caller holds the Session fence across native
 // verification and this commit. A failed wake rolls the whole transaction back.
 func (s Store) FinishSandboxUpgrade(ctx context.Context, queue string, expected upgrade.Receipt) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
@@ -175,11 +175,11 @@ func (s Store) FinishSandboxUpgrade(ctx context.Context, queue string, expected 
 	}
 	defer tx.Rollback()
 	q := dbsql.New(tx)
-	job, err := q.GetJobAdmissionForUpdate(ctx, expected.JobID)
+	session, err := q.GetSessionAdmissionForUpdate(ctx, expected.SessionID)
 	if err != nil {
 		return err
 	}
-	if !job.AdmissionOpen || job.CleanupState != core.CleanupPending {
+	if !session.AdmissionOpen || session.CleanupState != core.CleanupPending {
 		return fmt.Errorf("upgrade release requires open admission")
 	}
 	row, err := q.GetSandboxUpgrade(ctx, expected.ID)
@@ -217,7 +217,7 @@ func authorizeUpgradeRelease(ctx context.Context, q *dbsql.Queries, receipt upgr
 	if !quiet {
 		return fmt.Errorf("native delivery is not quiescent")
 	}
-	resources, err := q.ListSandboxResources(ctx, receipt.JobID)
+	resources, err := q.ListSandboxResources(ctx, receipt.SessionID)
 	if err != nil {
 		return err
 	}
@@ -238,7 +238,7 @@ func switchAndReleaseUpgrade(ctx context.Context, tx *sql.Tx, q *dbsql.Queries, 
 	if err := expectOneRows(q.ReleaseSandboxDeliveryHold(ctx, dbsql.ReleaseSandboxDeliveryHoldParams{ID: receipt.ID, SandboxID: receipt.SandboxID})); err != nil {
 		return err
 	}
-	if _, err := signalJobExecutionWakeTx(ctx, tx, queue, receipt.JobID, "upgrade-finished:"+receipt.ID); err != nil {
+	if _, err := signalSessionExecutionWakeTx(ctx, tx, queue, receipt.SessionID, "upgrade-finished:"+receipt.ID); err != nil {
 		return err
 	}
 	return nil

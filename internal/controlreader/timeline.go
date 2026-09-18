@@ -11,9 +11,9 @@ import (
 	"github.com/aphronio/dorf/internal/postgres"
 )
 
-const TimelinePath = "/v1/jobs/timeline"
+const TimelinePath = "/v1/sessions/timeline"
 
-var ErrJobNotFound = errors.New("control reader Job not found")
+var ErrSessionNotFound = errors.New("control reader Session not found")
 
 type timelineStore interface {
 	Sandboxes(context.Context, string) ([]core.Sandbox, error)
@@ -21,14 +21,14 @@ type timelineStore interface {
 }
 
 type timelineRequest struct {
-	JobID     string `json:"job_id"`
+	SessionID string `json:"session_id"`
 	TurnID    string `json:"turn_id,omitempty"`
 	MessageID string `json:"message_id,omitempty"`
 }
 
-func (s Service) ReadTimeline(ctx context.Context, jobID, turnID string) (core.HarnessTimeline, error) {
-	if !validIdentity(jobID) {
-		return core.HarnessTimeline{}, ErrJobNotFound
+func (s Service) ReadTimeline(ctx context.Context, sessionID, turnID string) (core.HarnessTimeline, error) {
+	if !validIdentity(sessionID) {
+		return core.HarnessTimeline{}, ErrSessionNotFound
 	}
 	if turnID != "" && !validIdentity(turnID) {
 		return core.HarnessTimeline{}, ErrInvalidRequest
@@ -39,29 +39,29 @@ func (s Service) ReadTimeline(ctx context.Context, jobID, turnID string) (core.H
 	}
 	var result core.HarnessTimeline
 	var idleRuntime core.Execution
-	defer func() { core.ReconcileIdle(ctx, idleRuntime, jobID) }()
-	err := s.Store.WithJobFence(ctx, jobID, func() error {
-		job, err := s.Store.Job(ctx, jobID)
+	defer func() { core.ReconcileIdle(ctx, idleRuntime, sessionID) }()
+	err := s.Store.WithSessionFence(ctx, sessionID, func() error {
+		session, err := s.Store.Session(ctx, sessionID)
 		if errors.Is(err, postgres.ErrNotFound) {
-			return ErrJobNotFound
+			return ErrSessionNotFound
 		}
 		if err != nil {
 			return err
 		}
-		if job.ID != jobID || job.CleanupState != core.CleanupPending {
+		if session.ID != sessionID || session.CleanupState != core.CleanupPending {
 			return core.ErrTimelineUnavailable
 		}
-		owned, harness, threadID, err := timelineBinding(ctx, store, job)
+		owned, harness, threadID, err := timelineBinding(ctx, store, session)
 		if err != nil {
 			return err
 		}
-		runtime, job, err := s.sandboxAuthority(ctx, owned)
+		runtime, session, err := s.sandboxAuthority(ctx, owned)
 		if err != nil || runtime.Timeline == nil {
 			return core.ErrTimelineUnavailable
 		}
 		idleRuntime = runtime.Execution
-		err = core.WithSandboxActivity(ctx, s.Store, job.ID, func() error {
-			result, err = runtime.Timeline.ReadTimeline(ctx, job, owned, threadID, turnID)
+		err = core.WithSandboxActivity(ctx, s.Store, session.ID, func() error {
+			result, err = runtime.Timeline.ReadTimeline(ctx, session, owned, threadID, turnID)
 			return err
 		})
 		if err != nil {
@@ -76,20 +76,20 @@ func (s Service) ReadTimeline(ctx context.Context, jobID, turnID string) (core.H
 	return result, nil
 }
 
-func timelineBinding(ctx context.Context, store timelineStore, job core.Job) (core.Sandbox, string, string, error) {
-	if !validIdentity(job.ThreadHarness) || !validIdentity(job.ThreadID) {
+func timelineBinding(ctx context.Context, store timelineStore, session core.Session) (core.Sandbox, string, string, error) {
+	if !validIdentity(session.Harness) || !validIdentity(session.ThreadID) {
 		return core.Sandbox{}, "", "", core.ErrTimelineUnavailable
 	}
-	sandboxes, err := store.Sandboxes(ctx, job.ID)
+	sandboxes, err := store.Sandboxes(ctx, session.ID)
 	if err != nil {
 		return core.Sandbox{}, "", "", err
 	}
-	owned, err := defaultTimelineSandbox(sandboxes, job.ID)
-	return owned, job.ThreadHarness, job.ThreadID, err
+	owned, err := defaultTimelineSandbox(sandboxes, session.ID)
+	return owned, session.Harness, session.ThreadID, err
 }
 
-func (c Client) ReadTimeline(ctx context.Context, jobID, turnID string) (core.HarnessTimeline, error) {
-	response, err := c.request(ctx, TimelinePath, timelineRequest{JobID: jobID, TurnID: turnID})
+func (c Client) ReadTimeline(ctx context.Context, sessionID, turnID string) (core.HarnessTimeline, error) {
+	response, err := c.request(ctx, TimelinePath, timelineRequest{SessionID: sessionID, TurnID: turnID})
 	if err != nil {
 		return core.HarnessTimeline{}, err
 	}
@@ -114,13 +114,13 @@ func validateTimeline(result core.HarnessTimeline, harness, threadID, turnID str
 	return nil
 }
 
-func defaultTimelineSandbox(sandboxes []core.Sandbox, jobID string) (core.Sandbox, error) {
+func defaultTimelineSandbox(sandboxes []core.Sandbox, sessionID string) (core.Sandbox, error) {
 	var owned core.Sandbox
 	for _, candidate := range sandboxes {
 		if candidate.Name != core.DefaultSandbox {
 			continue
 		}
-		if owned.ID != "" || candidate.JobID != jobID || !validIdentity(candidate.ID) || !validIdentity(candidate.OwnershipNonce) {
+		if owned.ID != "" || candidate.SessionID != sessionID || !validIdentity(candidate.ID) || !validIdentity(candidate.OwnershipNonce) {
 			return core.Sandbox{}, core.ErrTimelineUnavailable
 		}
 		owned = candidate
@@ -131,15 +131,15 @@ func defaultTimelineSandbox(sandboxes []core.Sandbox, jobID string) (core.Sandbo
 	return owned, nil
 }
 
-func (s Service) ReadMessageTimeline(ctx context.Context, jobID, messageID string) (core.HarnessTimeline, error) {
+func (s Service) ReadMessageTimeline(ctx context.Context, sessionID, messageID string) (core.HarnessTimeline, error) {
 	store, ok := s.Store.(timelineStore)
 	if !ok || s.Runtimes == nil {
 		return core.HarnessTimeline{}, core.ErrTimelineUnavailable
 	}
 	var result core.HarnessTimeline
 	var idleRuntime core.Execution
-	defer func() { core.ReconcileIdle(ctx, idleRuntime, jobID) }()
-	err := s.Store.WithJobFence(ctx, jobID, func() error {
+	defer func() { core.ReconcileIdle(ctx, idleRuntime, sessionID) }()
+	err := s.Store.WithSessionFence(ctx, sessionID, func() error {
 		execution, err := s.Store.AgentMessageExecution(ctx, messageID)
 		if errors.Is(err, postgres.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
 			return core.ErrTimelineUnavailable
@@ -147,17 +147,17 @@ func (s Service) ReadMessageTimeline(ctx context.Context, jobID, messageID strin
 		if err != nil {
 			return err
 		}
-		job, run, owned := execution.Job, execution.AgentRun, execution.Sandbox
-		if err := validateMessageTimelineBinding(execution, jobID, messageID); err != nil {
+		session, run, owned := execution.Session, execution.AgentRun, execution.Sandbox
+		if err := validateMessageTimelineBinding(execution, sessionID, messageID); err != nil {
 			return err
 		}
-		runtime, job, err := s.sandboxAuthority(ctx, owned)
+		runtime, session, err := s.sandboxAuthority(ctx, owned)
 		if err != nil || runtime.Timeline == nil {
 			return core.ErrTimelineUnavailable
 		}
 		idleRuntime = runtime.Execution
-		err = core.WithSandboxActivity(ctx, s.Store, job.ID, func() error {
-			result, err = runtime.Timeline.ReadTimeline(ctx, job, owned, run.ThreadID, run.TurnID)
+		err = core.WithSandboxActivity(ctx, s.Store, session.ID, func() error {
+			result, err = runtime.Timeline.ReadTimeline(ctx, session, owned, run.ThreadID, run.TurnID)
 			return err
 		})
 		if err != nil {
@@ -167,9 +167,9 @@ func (s Service) ReadMessageTimeline(ctx context.Context, jobID, messageID strin
 			return err
 		}
 		if s.Replies != nil {
-			s.Replies.Seed(codex.ReplyBinding{JobID: jobID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce, Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID}, result.CompletedItems, terminalMessageOutcome(result.Status))
+			s.Replies.Seed(codex.ReplyBinding{SessionID: sessionID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce, Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID}, result.CompletedItems, terminalMessageOutcome(result.Status))
 		}
-		deliveries, err := store.Deliveries(ctx, jobID)
+		deliveries, err := store.Deliveries(ctx, sessionID)
 		if err != nil {
 			return err
 		}
@@ -185,8 +185,8 @@ func (s Service) ReadMessageTimeline(ctx context.Context, jobID, messageID strin
 	return result, nil
 }
 
-func (c Client) ReadMessageTimeline(ctx context.Context, jobID, messageID string) (core.HarnessTimeline, error) {
-	response, err := c.request(ctx, TimelinePath, timelineRequest{JobID: jobID, MessageID: messageID})
+func (c Client) ReadMessageTimeline(ctx context.Context, sessionID, messageID string) (core.HarnessTimeline, error) {
+	response, err := c.request(ctx, TimelinePath, timelineRequest{SessionID: sessionID, MessageID: messageID})
 	if err != nil {
 		return core.HarnessTimeline{}, err
 	}
@@ -201,9 +201,9 @@ func (c Client) ReadMessageTimeline(ctx context.Context, jobID, messageID string
 	return result, nil
 }
 
-func validateMessageTimelineBinding(execution core.AgentMessageExecution, jobID, messageID string) error {
-	job, run, owned := execution.Job, execution.AgentRun, execution.Sandbox
-	if job.ID != jobID || job.CleanupState != core.CleanupPending || execution.Message.ID != messageID || execution.Message.JobID != jobID || run.JobID != jobID || run.MessageID != messageID || run.SandboxID != owned.ID || owned.JobID != jobID {
+func validateMessageTimelineBinding(execution core.AgentMessageExecution, sessionID, messageID string) error {
+	session, run, owned := execution.Session, execution.AgentRun, execution.Sandbox
+	if session.ID != sessionID || session.CleanupState != core.CleanupPending || execution.Message.ID != messageID || execution.Message.SessionID != sessionID || run.SessionID != sessionID || run.MessageID != messageID || run.SandboxID != owned.ID || owned.SessionID != sessionID {
 		return core.ErrTimelineUnavailable
 	}
 	for _, identity := range []string{owned.ID, owned.OwnershipNonce, run.ID, run.Harness, run.ThreadID, run.TurnID} {
@@ -221,7 +221,7 @@ func bindTimelineInputs(result *core.HarnessTimeline, deliveries []core.Delivery
 	sources := make(map[string]string)
 	for _, delivery := range deliveries {
 		source := delivery.AgentRun
-		if source.JobID == run.JobID && delivery.Message.JobID == run.JobID && source.MessageID == delivery.Message.ID && source.SandboxID == run.SandboxID && source.Harness == run.Harness && source.ThreadID == run.ThreadID && source.TurnID == run.TurnID {
+		if source.SessionID == run.SessionID && delivery.Message.SessionID == run.SessionID && source.MessageID == delivery.Message.ID && source.SandboxID == run.SandboxID && source.Harness == run.Harness && source.ThreadID == run.ThreadID && source.TurnID == run.TurnID {
 			sources[source.ID] = delivery.Message.ID
 		}
 	}

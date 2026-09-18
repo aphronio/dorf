@@ -19,10 +19,10 @@ import (
 // immutable closure; ordinary API clients cannot install arbitrary packages.
 func upgradeCommand(ctx context.Context, store postgres.Store, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
 	if len(args) < 2 {
-		return fmt.Errorf("upgrade requires show JOB or request JOB --id ID --package NIX_PATH --version VERSION")
+		return fmt.Errorf("upgrade requires show SESSION or request SESSION --id ID --package NIX_PATH --version VERSION")
 	}
 	if args[0] == "show" && len(args) == 2 {
-		records, err := store.JobUpgrades(ctx, args[1])
+		records, err := store.SessionUpgrades(ctx, args[1])
 		if err != nil {
 			return err
 		}
@@ -31,7 +31,7 @@ func upgradeCommand(ctx context.Context, store postgres.Store, client *absurd.Cl
 	if args[0] != "request" {
 		return fmt.Errorf("unknown upgrade operation")
 	}
-	request := upgrade.Request{JobID: args[1], SandboxID: core.MainSandboxName(args[1])}
+	request := upgrade.Request{SessionID: args[1], SandboxID: core.MainSandboxName(args[1])}
 	flags := flag.NewFlagSet("upgrade request", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.StringVar(&request.ID, "id", "", "stable operator request ID")
@@ -46,12 +46,12 @@ func upgradeCommand(ctx context.Context, store postgres.Store, client *absurd.Cl
 	if err := request.Validate(); err != nil {
 		return err
 	}
-	job, err := store.Job(ctx, request.JobID)
+	session, err := store.Session(ctx, request.SessionID)
 	if err != nil {
 		return err
 	}
 	resolver := profileRuntimeResolver{cfg: cfg, store: store, client: client}
-	base, err := resolver.resolveBase(ctx, job.ProfileRef())
+	base, err := resolver.resolveBase(ctx, session.ProfileRef())
 	if err != nil {
 		return err
 	}

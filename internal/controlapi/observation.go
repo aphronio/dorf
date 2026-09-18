@@ -21,7 +21,7 @@ type ObservationBinding struct {
 
 type MessageObservation struct {
 	Attention           *Attention            `json:"attention"`
-	JobID               string                `json:"job_id"`
+	SessionID           string                `json:"session_id"`
 	MessageID           string                `json:"message_id"`
 	Intent              string                `json:"intent"`
 	InterruptRequested  bool                  `json:"interrupt_requested"`
@@ -36,7 +36,7 @@ type MessageObservation struct {
 	State               string                `json:"state"`
 }
 
-type MessageObservationJobs interface {
+type MessageObservationSessions interface {
 	ReadMessageObservation(context.Context, string, string, string) (MessageObservation, error)
 	StreamMessageObservation(context.Context, string, string, string, func(MessageObservation) error) error
 }
@@ -79,13 +79,13 @@ func (h *handler) messageObservationRoute(w http.ResponseWriter, r *http.Request
 		h.fail(w, problem("invalid_cursor"))
 		return
 	}
-	reader, ok := h.jobs.(MessageObservationJobs)
+	reader, ok := h.sessions.(MessageObservationSessions)
 	if !ok {
 		h.fail(w, problem("timeline_unavailable"))
 		return
 	}
 	if !stream {
-		value, err := reader.ReadMessageObservation(r.Context(), r.PathValue("job"), r.PathValue("message"), cursor)
+		value, err := reader.ReadMessageObservation(r.Context(), r.PathValue("session"), r.PathValue("message"), cursor)
 		if err != nil {
 			h.serviceError(w, r, err)
 			return
@@ -101,13 +101,13 @@ func (h *handler) messageObservationRoute(w http.ResponseWriter, r *http.Request
 	h.streamMessageObservation(w, r, client, reader, cursor)
 }
 
-func (h *handler) streamMessageObservation(w http.ResponseWriter, r *http.Request, client controlauth.Client, reader MessageObservationJobs, cursor string) {
+func (h *handler) streamMessageObservation(w http.ResponseWriter, r *http.Request, client controlauth.Client, reader MessageObservationSessions, cursor string) {
 	deadline := streamAuthenticationDeadline(client)
 	ctx, cancel := context.WithDeadline(r.Context(), deadline)
 	defer cancel()
 	stop := context.AfterFunc(h.shutdown, cancel)
 	defer stop()
-	frames := observationFrames(ctx, reader, r.PathValue("job"), r.PathValue("message"), cursor)
+	frames := observationFrames(ctx, reader, r.PathValue("session"), r.PathValue("message"), cursor)
 	controller := http.NewResponseController(w)
 	started := false
 	heartbeat := time.NewTicker(watchKeepaliveInterval)
@@ -155,11 +155,11 @@ type observationFrame struct {
 
 // One pending frame bounds a slow consumer. Cancellation propagates through
 // the private worker request and ordered closure never drops its last frame.
-func observationFrames(ctx context.Context, reader MessageObservationJobs, jobID, messageID, cursor string) <-chan observationFrame {
+func observationFrames(ctx context.Context, reader MessageObservationSessions, sessionID, messageID, cursor string) <-chan observationFrame {
 	frames := make(chan observationFrame, 1)
 	go func() {
 		defer close(frames)
-		err := reader.StreamMessageObservation(ctx, jobID, messageID, cursor, func(value MessageObservation) error {
+		err := reader.StreamMessageObservation(ctx, sessionID, messageID, cursor, func(value MessageObservation) error {
 			select {
 			case frames <- observationFrame{value: value}:
 				return nil

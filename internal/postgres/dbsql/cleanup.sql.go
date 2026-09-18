@@ -13,7 +13,7 @@ import (
 
 const completeCleanup = `-- name: CompleteCleanup :one
 with completed as (
-    update dorf.jobs j0
+    update dorf.sessions j0
     set cleanup_state='complete',cleanup_attention=null,
         workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null,
         cleaned_at=coalesce(cleaned_at,clock_timestamp())
@@ -21,14 +21,14 @@ with completed as (
     returning j0.id
 ), released as (
     update dorf.sandbox_delivery_holds h set released_at=clock_timestamp()
-    from dorf.sandboxes s join completed j on j.id=s.job_id
+    from dorf.sandboxes s join completed j on j.id=s.session_id
     where h.sandbox_id=s.id and h.released_at is null
 )
 select count(*) from completed
 `
 
-func (q *Queries) CompleteCleanup(ctx context.Context, jobID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, completeCleanup, jobID)
+func (q *Queries) CompleteCleanup(ctx context.Context, sessionID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, completeCleanup, sessionID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -37,41 +37,41 @@ func (q *Queries) CompleteCleanup(ctx context.Context, jobID string) (int64, err
 const countUnsettledSandboxCleanupActions = `-- name: CountUnsettledSandboxCleanupActions :one
 select count(*)
 from dorf.sandboxes s
-where s.job_id=$1
+where s.session_id=$1
   and (
-    not exists(select 1 from dorf.actions a where a.job_id=s.job_id and a.kind='provider-route-revoke' and a.scope_key=s.id and a.state='succeeded')
-    or not exists(select 1 from dorf.actions a where a.job_id=s.job_id and a.kind='sandbox-delete' and a.scope_key=s.id and a.state='succeeded')
+    not exists(select 1 from dorf.actions a where a.session_id=s.session_id and a.kind='provider-route-revoke' and a.scope_key=s.id and a.state='succeeded')
+    or not exists(select 1 from dorf.actions a where a.session_id=s.session_id and a.kind='sandbox-delete' and a.scope_key=s.id and a.state='succeeded')
     or exists(select 1 from dorf.sandbox_resources r where r.sandbox_id=s.id and r.deleted_at is null)
     or exists(select 1 from dorf.sandbox_upgrades u where u.sandbox_id=s.id and u.checkpoint_reference is not null and u.checkpoint_deleted_at is null)
   )
 `
 
-func (q *Queries) CountUnsettledSandboxCleanupActions(ctx context.Context, jobID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countUnsettledSandboxCleanupActions, jobID)
+func (q *Queries) CountUnsettledSandboxCleanupActions(ctx context.Context, sessionID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countUnsettledSandboxCleanupActions, sessionID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
 }
 
-const getCleanupJobForUpdate = `-- name: GetCleanupJobForUpdate :one
+const getCleanupSessionForUpdate = `-- name: GetCleanupSessionForUpdate :one
 select admission_open,cleanup_state,
-       coalesce((select task_id from dorf.job_tasks where job_id=dorf.jobs.id order by sequence desc limit 1),'') as current_task_id,
+       coalesce((select task_id from dorf.session_tasks where session_id=dorf.sessions.id order by sequence desc limit 1),'') as current_task_id,
        coalesce(cleanup_attention,'') as cleanup_attention
-from dorf.jobs
+from dorf.sessions
 where id=$1
 for update
 `
 
-type GetCleanupJobForUpdateRow struct {
+type GetCleanupSessionForUpdateRow struct {
 	AdmissionOpen    bool
 	CleanupState     core.CleanupState
 	CurrentTaskID    interface{}
 	CleanupAttention string
 }
 
-func (q *Queries) GetCleanupJobForUpdate(ctx context.Context, jobID string) (GetCleanupJobForUpdateRow, error) {
-	row := q.db.QueryRowContext(ctx, getCleanupJobForUpdate, jobID)
-	var i GetCleanupJobForUpdateRow
+func (q *Queries) GetCleanupSessionForUpdate(ctx context.Context, sessionID string) (GetCleanupSessionForUpdateRow, error) {
+	row := q.db.QueryRowContext(ctx, getCleanupSessionForUpdate, sessionID)
+	var i GetCleanupSessionForUpdateRow
 	err := row.Scan(
 		&i.AdmissionOpen,
 		&i.CleanupState,
@@ -82,7 +82,7 @@ func (q *Queries) GetCleanupJobForUpdate(ctx context.Context, jobID string) (Get
 }
 
 const listCleanupRequests = `-- name: ListCleanupRequests :many
-select id from dorf.jobs where not admission_open and cleanup_state='requested' order by id
+select id from dorf.sessions where not admission_open and cleanup_state='requested' order by id
 `
 
 func (q *Queries) ListCleanupRequests(ctx context.Context) ([]string, error) {
@@ -109,14 +109,14 @@ func (q *Queries) ListCleanupRequests(ctx context.Context) ([]string, error) {
 }
 
 const requestCleanup = `-- name: RequestCleanup :execrows
-update dorf.jobs
+update dorf.sessions
 set admission_open=false,
     cleanup_state=case when cleanup_state='pending' then 'requested' else cleanup_state end
 where id=$1 and cleanup_state in ('pending','requested')
 `
 
-func (q *Queries) RequestCleanup(ctx context.Context, jobID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, requestCleanup, jobID)
+func (q *Queries) RequestCleanup(ctx context.Context, sessionID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, requestCleanup, sessionID)
 	if err != nil {
 		return 0, err
 	}

@@ -18,7 +18,7 @@ import (
 type timelineControlRuntime struct {
 	profile         string
 	calls           int
-	expectedJob     string
+	expectedSession string
 	expectedSandbox core.Sandbox
 	block           chan struct{}
 	entered         chan struct{}
@@ -31,9 +31,9 @@ func (r *timelineControlRuntime) ResolveSandbox(_ context.Context, profile core.
 	}
 	return core.SandboxRuntime{SandboxProfile: profile, Timeline: r}, nil
 }
-func (r *timelineControlRuntime) ReadTimeline(ctx context.Context, job core.Job, owned core.Sandbox, threadID, turnID string) (core.HarnessTimeline, error) {
+func (r *timelineControlRuntime) ReadTimeline(ctx context.Context, session core.Session, owned core.Sandbox, threadID, turnID string) (core.HarnessTimeline, error) {
 	r.calls++
-	if job.ID != r.expectedJob || owned != r.expectedSandbox || threadID != "native-thread" {
+	if session.ID != r.expectedSession || owned != r.expectedSandbox || threadID != "native-thread" {
 		return core.HarnessTimeline{}, fmt.Errorf("wrong persisted custody")
 	}
 	if turnID == "missing" {
@@ -68,9 +68,9 @@ func TestControlTimelineUsesPostgresCustodyAndCleanupFence(t *testing.T) {
 	runtime := &timelineControlRuntime{profile: profile}
 	handler := controlTestHandler(store, tasks, gateway, auth, runtime, blob.Store{Root: t.TempDir()})
 	key := fmt.Sprintf("timeline-%d", time.Now().UnixNano())
-	var job controlapi.DirectJob
-	controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, "/v1/jobs", credential, key, controlapi.AdmitJobRequest{AIConnection: "primary", Model: "model-test", Reasoning: "high"}), http.StatusCreated, &job)
-	path := "/v1/jobs/" + job.ID + "/timeline"
+	var session controlapi.Session
+	controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, "/v1/sessions", credential, key, controlapi.CreateSessionRequest{AIConnection: "primary", Model: "model-test", Reasoning: "high"}), http.StatusCreated, &session)
+	path := "/v1/sessions/" + session.ID + "/timeline"
 	problemCode := func(path, credential string, status int, code string) {
 		t.Helper()
 		var problem controlapi.Problem
@@ -80,7 +80,7 @@ func TestControlTimelineUsesPostgresCustodyAndCleanupFence(t *testing.T) {
 		}
 	}
 	problemCode(path, "", 401, "unauthenticated")
-	problemCode("/v1/jobs/no-such-job/timeline", credential, 404, "job_not_found")
+	problemCode("/v1/sessions/no-such-session/timeline", credential, 404, "session_not_found")
 	problemCode(path, credential, 409, "timeline_unavailable")
 	for _, query := range []string{"?turn_id=", "?turn_id=one&turn_id=two", "?thread_id=foreign"} {
 		problemCode(path+query, credential, 400, "invalid_query")
@@ -89,11 +89,11 @@ func TestControlTimelineUsesPostgresCustodyAndCleanupFence(t *testing.T) {
 		t.Fatal("unbound or unauthorized read reached native reader")
 	}
 	var message controlapi.Message
-	controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, "/v1/jobs/"+job.ID+"/messages", credential, key+"-message", controlapi.SendMessageRequest{Text: "Retained work"}), http.StatusCreated, &message)
-	messagePath := "/v1/jobs/" + job.ID + "/messages/" + message.ID + "/timeline"
+	controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, "/v1/sessions/"+session.ID+"/messages", credential, key+"-message", controlapi.SendMessageRequest{Text: "Retained work"}), http.StatusCreated, &message)
+	messagePath := "/v1/sessions/" + session.ID + "/messages/" + message.ID + "/timeline"
 	problemCode(messagePath, "", 401, "unauthenticated")
 	problemCode(messagePath, credential, 409, "timeline_unavailable")
-	problemCode("/v1/jobs/"+job.ID+"/messages/not-ours/timeline", credential, 404, "message_not_found")
+	problemCode("/v1/sessions/"+session.ID+"/messages/not-ours/timeline", credential, 404, "message_not_found")
 	for _, query := range []string{"?turn_id=foreign", "?message_id=other"} {
 		problemCode(messagePath+query, credential, 400, "invalid_query")
 	}
@@ -108,27 +108,27 @@ func TestControlTimelineUsesPostgresCustodyAndCleanupFence(t *testing.T) {
 	if err := store.BindAgentRun(ctx, runID, "codex", "native-thread", "native-turn", "inProgress"); err != nil {
 		t.Fatal(err)
 	}
-	owned, err := store.Sandbox(ctx, core.MainSandboxName(job.ID))
+	owned, err := store.Sandbox(ctx, core.MainSandboxName(session.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime.expectedJob, runtime.expectedSandbox = job.ID, owned
-	before, err := store.Deliveries(ctx, job.ID)
+	runtime.expectedSession, runtime.expectedSandbox = session.ID, owned
+	before, err := store.Deliveries(ctx, session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	beforeJob, err := store.Job(ctx, job.ID)
+	beforeSession, err := store.Session(ctx, session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var messageTimeline controlapi.MessageTimeline
 	controlTestJSON(t, controlTestRequest(t, handler, http.MethodGet, messagePath, credential, "", nil), 200, &messageTimeline)
-	if messageTimeline.MessageID != message.ID || messageTimeline.JobID != job.ID || messageTimeline.TurnID != "native-turn" || messageTimeline.Status != "inProgress" || len(messageTimeline.Items) != 2 || messageTimeline.Items[0].MessageID != message.ID || messageTimeline.Items[0].Text != nil || messageTimeline.Items[1].Text == nil || *messageTimeline.Items[1].Text != "[PDF](sandbox:/report.pdf)" {
+	if messageTimeline.MessageID != message.ID || messageTimeline.SessionID != session.ID || messageTimeline.TurnID != "native-turn" || messageTimeline.Status != "inProgress" || len(messageTimeline.Items) != 2 || messageTimeline.Items[0].MessageID != message.ID || messageTimeline.Items[0].Text != nil || messageTimeline.Items[1].Text == nil || *messageTimeline.Items[1].Text != "[PDF](sandbox:/report.pdf)" {
 		t.Fatalf("message timeline=%+v", messageTimeline)
 	}
 	var timeline controlapi.Timeline
 	controlTestJSON(t, controlTestRequest(t, handler, http.MethodGet, path, credential, "", nil), 200, &timeline)
-	if timeline.JobID != job.ID || timeline.TurnID != "latest-native-turn" || timeline.ThreadID != "native-thread" || len(timeline.Items) != 1 {
+	if timeline.SessionID != session.ID || timeline.TurnID != "latest-native-turn" || timeline.ThreadID != "native-thread" || len(timeline.Items) != 1 {
 		t.Fatalf("timeline=%+v", timeline)
 	}
 	controlTestJSON(t, controlTestRequest(t, handler, http.MethodGet, path+"?turn_id=old-native-turn", credential, "", nil), 200, &timeline)
@@ -136,15 +136,15 @@ func TestControlTimelineUsesPostgresCustodyAndCleanupFence(t *testing.T) {
 		t.Fatalf("explicit turn=%+v", timeline)
 	}
 	problemCode(path+"?turn_id=missing", credential, 404, "turn_not_found")
-	after, err := store.Deliveries(ctx, job.ID)
+	after, err := store.Deliveries(ctx, session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	afterJob, err := store.Job(ctx, job.ID)
+	afterSession, err := store.Session(ctx, session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(before, after) || !reflect.DeepEqual(beforeJob, afterJob) {
+	if !reflect.DeepEqual(before, after) || !reflect.DeepEqual(beforeSession, afterSession) {
 		t.Fatal("timeline read changed retained work")
 	}
 	runtime.block, runtime.entered = make(chan struct{}), make(chan struct{})
@@ -154,7 +154,7 @@ func TestControlTimelineUsesPostgresCustodyAndCleanupFence(t *testing.T) {
 	}()
 	<-runtime.entered
 	cleanupDone := make(chan error, 1)
-	go func() { cleanupDone <- store.ScheduleCleanup(ctx, tasks.QueueName(), job.ID, "") }()
+	go func() { cleanupDone <- store.ScheduleCleanup(ctx, tasks.QueueName(), session.ID, "") }()
 	select {
 	case err := <-cleanupDone:
 		t.Fatalf("cleanup crossed active read fence: %v", err)

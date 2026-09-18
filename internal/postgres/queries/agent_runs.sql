@@ -1,33 +1,37 @@
 -- name: InsertAdmittedAgentRun :execrows
 insert into dorf.agent_runs(
-    id,job_id,message_id,harness,thread_id,role,state,input_revision,capability,sandbox_id
+    id,session_id,message_id,harness,thread_id,role,state,input_revision,capability,sandbox_id
 )
 select sqlc.arg(id),j.id,sqlc.arg(message_id),sqlc.arg(harness),sqlc.arg(thread_id),
        sqlc.arg(role),'pending',sqlc.arg(input_revision),sqlc.arg(capability),sqlc.arg(sandbox_id)
-from dorf.jobs j
-where j.id=sqlc.arg(job_id)
+from dorf.sessions j
+where j.id=sqlc.arg(session_id)
 on conflict do nothing;
 
--- name: BindPendingFollowToJobThread :execrows
+-- name: BindPendingFollowToSessionThread :execrows
 update dorf.agent_runs ar
-set harness=j.thread_harness,thread_id=j.thread_id
-from dorf.jobs j, dorf.job_messages m
+set harness=p.harness,thread_id=j.thread_id
+from dorf.sessions j
+join dorf.sandbox_profile_revisions p on p.name=j.sandbox_profile and p.definition_hash=j.sandbox_profile_revision,
+     dorf.session_messages m
 where ar.message_id=sqlc.arg(message_id) and m.id=ar.message_id
-  and j.id=ar.job_id and m.delivery_intent='follow'
+  and j.id=ar.session_id and m.delivery_intent='follow'
   and ar.state='pending' and ar.baseline_turn_id is null and ar.thread_id is null
   and j.thread_id is not null
-  and (ar.harness is null or ar.harness=j.thread_harness);
+  and (ar.harness is null or ar.harness=p.harness);
 
--- name: BindJobThread :execrows
-update dorf.jobs j
-set thread_harness=sqlc.arg(harness),thread_id=sqlc.arg(thread_id)
-from dorf.agent_runs ar
-where ar.id=sqlc.arg(run_id) and j.id=ar.job_id
+-- name: BindSessionThread :execrows
+update dorf.sessions j
+set thread_id=sqlc.arg(thread_id)
+from dorf.agent_runs ar,dorf.sandbox_profile_revisions p
+where ar.id=sqlc.arg(run_id) and j.id=ar.session_id
+  and p.name=j.sandbox_profile and p.definition_hash=j.sandbox_profile_revision
+  and p.harness=sqlc.arg(harness)
   and j.workflow_name='' and j.workflow_revision=''
-  and (j.thread_id is null or (j.thread_harness=sqlc.arg(harness) and j.thread_id=sqlc.arg(thread_id)));
+  and (j.thread_id is null or j.thread_id=sqlc.arg(thread_id));
 
 -- name: GetAgentRunByMessage :one
-select id,job_id,message_id,state,
+select id,session_id,message_id,state,
        coalesce(harness,'') as harness,coalesce(thread_id,'') as thread_id,
        (baseline_turn_id is not null)::boolean as baseline_recorded,
        coalesce(baseline_turn_id,'') as baseline_turn_id,
@@ -39,7 +43,7 @@ from dorf.agent_runs
 where message_id=sqlc.arg(message_id)::text;
 
 -- name: GetAgentRunForBinding :one
-select job_id,sandbox_id,role,state,coalesce(harness,'') as harness,
+select session_id,sandbox_id,role,state,coalesce(harness,'') as harness,
        coalesce(thread_id,'') as thread_id,coalesce(turn_id,'') as turn_id,
        coalesce(turn_outcome,'') as turn_outcome
 from dorf.agent_runs
@@ -80,9 +84,9 @@ where id=sqlc.arg(run_id) and harness=sqlc.arg(harness) and thread_id=sqlc.arg(t
 -- name: PropagateTurnOutcomeToSteers :exec
 update dorf.agent_runs accepted
 set turn_outcome=sqlc.arg(turn_outcome)
-from dorf.job_messages message,dorf.agent_runs source
+from dorf.session_messages message,dorf.agent_runs source
 where source.id=sqlc.arg(run_id) and accepted.id<>source.id
-  and accepted.job_id=source.job_id and accepted.harness=source.harness and accepted.thread_id=source.thread_id
+  and accepted.session_id=source.session_id and accepted.harness=source.harness and accepted.thread_id=source.thread_id
   and accepted.message_id=message.id and message.delivery_intent='steer'
   and message.steer_target_turn_id=sqlc.arg(turn_id)
   and accepted.turn_id=sqlc.arg(turn_id)
@@ -101,7 +105,7 @@ returning coalesce(turn_outcome,'') as turn_outcome;
 -- name: RequeueAutoMessageAsFollow :execrows
 with eligible as (
     select m.id
-    from dorf.job_messages m
+    from dorf.session_messages m
     join dorf.agent_runs ar on ar.message_id=m.id
     where ar.id=sqlc.arg(run_id)
       and m.requested_intent='auto' and m.delivery_intent='steer'
@@ -111,7 +115,7 @@ with eligible as (
       and (ar.baseline_turn_id is null or ar.baseline_turn_id=m.steer_target_turn_id)
     for update of m,ar
 ), requeued_message as (
-    update dorf.job_messages m
+    update dorf.session_messages m
     set delivery_intent='follow',steer_target_turn_id=null
     from eligible e
     where m.id=e.id
@@ -154,24 +158,24 @@ where id=sqlc.arg(run_id);
 
 -- name: ListUnsettledAgentMessages :many
 select m.id as message_id,ar.sandbox_id
-from dorf.job_messages m
+from dorf.session_messages m
 join dorf.agent_runs ar on ar.message_id=m.id
-where m.job_id=sqlc.arg(job_id)
+where m.session_id=sqlc.arg(session_id)
   and (ar.state in ('submitting','active','uncertain')
        or (ar.baseline_turn_id is not null and ar.state not in ('completed','failed','interrupted')))
 order by m.sequence,ar.id;
 
 -- name: GetMessageInterruptTarget :one
-select source.id,source.job_id,source.state,source.interrupt_requested
+select source.id,source.session_id,source.state,source.interrupt_requested
 from dorf.agent_runs requested
-join dorf.agent_runs source on source.job_id=requested.job_id
+join dorf.agent_runs source on source.session_id=requested.session_id
     and source.sandbox_id=requested.sandbox_id and source.harness=requested.harness
     and source.thread_id=requested.thread_id
     and source.turn_id=coalesce(requested.turn_id, (
-        select steer_target_turn_id from dorf.job_messages where id=requested.message_id
+        select steer_target_turn_id from dorf.session_messages where id=requested.message_id
     ))
-join dorf.job_messages origin on origin.id=source.message_id and origin.delivery_intent='follow'
-where requested.job_id=sqlc.arg(job_id) and requested.message_id=sqlc.arg(message_id);
+join dorf.session_messages origin on origin.id=source.message_id and origin.delivery_intent='follow'
+where requested.session_id=sqlc.arg(session_id) and requested.message_id=sqlc.arg(message_id);
 
 -- name: RequestAgentRunInterrupt :execrows
 update dorf.agent_runs set interrupt_requested=true

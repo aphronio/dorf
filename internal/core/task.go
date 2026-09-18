@@ -11,95 +11,95 @@ import (
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
-// MessageWakeV1 is persisted by Absurd under one immutable Job-local FIFO event.
+// MessageWakeV1 is persisted by Absurd under one immutable Session-local FIFO event.
 type MessageWakeV1 struct {
-	JobID    string `json:"job_id"`
-	Sequence int64  `json:"sequence"`
+	SessionID string `json:"job_id"`
+	Sequence  int64  `json:"sequence"`
 }
 
-// JobExecutionWakeV1 is a disposable hint that asks a Job's current task to
+// SessionExecutionWakeV1 is a disposable hint that asks a Session's current task to
 // reload authoritative workflow and Harness state.
-type JobExecutionWakeV1 struct {
-	JobID    string `json:"job_id"`
-	Revision int64  `json:"revision"`
-	CauseKey string `json:"cause_key"`
+type SessionExecutionWakeV1 struct {
+	SessionID string `json:"job_id"`
+	Revision  int64  `json:"revision"`
+	CauseKey  string `json:"cause_key"`
 }
 
 // NativeTerminalWakeTarget carries the exact native coordinates already
 // authenticated by a Harness observer. It authorizes only a wake hint.
 type NativeTerminalWakeTarget struct {
-	JobID      string
+	SessionID  string
 	SandboxID  string
 	AgentRunID string
 	ThreadID   string
 	TurnID     string
 }
 
-type jobExecutionWakeRevisionStore interface {
-	JobExecutionWakeRevision(context.Context, string) (int64, error)
+type sessionExecutionWakeRevisionStore interface {
+	SessionExecutionWakeRevision(context.Context, string) (int64, error)
 }
 
-type jobExecutionWakeSignalStore interface {
-	SignalJobExecutionWake(context.Context, string, string, string) (int64, error)
+type sessionExecutionWakeSignalStore interface {
+	SignalSessionExecutionWake(context.Context, string, string, string) (int64, error)
 }
 
 type nativeTerminalWakeStore interface {
 	SignalNativeTerminalWake(context.Context, string, NativeTerminalWakeTarget) (bool, error)
 }
 
-func MessageWakeEvent(jobID string, sequence int64) string {
-	return fmt.Sprintf("dorf.job-message:%s:%020d", jobID, sequence)
+func MessageWakeEvent(sessionID string, sequence int64) string {
+	return fmt.Sprintf("dorf.job-message:%s:%020d", sessionID, sequence)
 }
 
-func JobExecutionWakeEvent(jobID string, revision int64) string {
-	return fmt.Sprintf("dorf.job-execution:v1:%s:%020d", jobID, revision)
+func SessionExecutionWakeEvent(sessionID string, revision int64) string {
+	return fmt.Sprintf("dorf.job-execution:v1:%s:%020d", sessionID, revision)
 }
 
-// ScheduleJobTask reconciles one consumer-owned task with the Job's durable
+// ScheduleSessionTask reconciles one consumer-owned task with the Session's durable
 // current attachment. The concrete consumer owns the task name and idempotency key.
-func (a Application) ScheduleJobTask(ctx context.Context, job Job, taskName, taskKey string) (Job, error) {
+func (a Application) ScheduleSessionTask(ctx context.Context, session Session, taskName, taskKey string) (Session, error) {
 	if a.Tasks == nil {
-		return Job{}, fmt.Errorf("Job task scheduling is not configured")
+		return Session{}, fmt.Errorf("Session task scheduling is not configured")
 	}
-	if err := a.Store.ScheduleJobTask(ctx, a.Tasks.QueueName(), job.ID, taskName, taskKey); err != nil {
-		return Job{}, err
+	if err := a.Store.ScheduleSessionTask(ctx, a.Tasks.QueueName(), session.ID, taskName, taskKey); err != nil {
+		return Session{}, err
 	}
-	return a.Store.Job(ctx, job.ID)
+	return a.Store.Session(ctx, session.ID)
 }
 
 // EmitMessageWake emits a disposable wake hint for one durably accepted FIFO
 // Message. Re-emission is safe because the event identity is deterministic.
 func (a Application) EmitMessageWake(ctx context.Context, message Message) error {
-	if err := a.Tasks.EmitEvent(ctx, a.Tasks.QueueName(), MessageWakeEvent(message.JobID, message.Sequence), MessageWakeV1{JobID: message.JobID, Sequence: message.Sequence}); err != nil {
+	if err := a.Tasks.EmitEvent(ctx, a.Tasks.QueueName(), MessageWakeEvent(message.SessionID, message.Sequence), MessageWakeV1{SessionID: message.SessionID, Sequence: message.Sequence}); err != nil {
 		return fmt.Errorf("message %s sequence %d was accepted, but its wake hint failed; retry the same send key and complete Message request: %w", message.ID, message.Sequence, err)
 	}
-	if _, err := a.signalJobExecutionWake(ctx, message.JobID, "message:"+message.ID); err != nil {
+	if _, err := a.signalSessionExecutionWake(ctx, message.SessionID, "message:"+message.ID); err != nil {
 		return fmt.Errorf("message %s sequence %d was accepted and its FIFO wake emitted, but its execution wake hint failed; retry the same send key and complete Message request: %w", message.ID, message.Sequence, err)
 	}
 	return nil
 }
 
-func (a Application) JobExecutionWakeRevision(ctx context.Context, jobID string) (int64, error) {
-	wakes, ok := a.Store.(jobExecutionWakeRevisionStore)
+func (a Application) SessionExecutionWakeRevision(ctx context.Context, sessionID string) (int64, error) {
+	wakes, ok := a.Store.(sessionExecutionWakeRevisionStore)
 	if !ok {
-		return 0, fmt.Errorf("Job execution wake storage is not configured")
+		return 0, fmt.Errorf("Session execution wake storage is not configured")
 	}
-	revision, err := wakes.JobExecutionWakeRevision(ctx, jobID)
+	revision, err := wakes.SessionExecutionWakeRevision(ctx, sessionID)
 	if err != nil {
 		return 0, err
 	}
 	if revision < 0 || revision == math.MaxInt64 {
-		return 0, fmt.Errorf("Job %s execution wake revision cannot advance", jobID)
+		return 0, fmt.Errorf("Session %s execution wake revision cannot advance", sessionID)
 	}
 	return revision, nil
 }
 
-func (a Application) signalJobExecutionWake(ctx context.Context, jobID, causeKey string) (int64, error) {
-	wakes, ok := a.Store.(jobExecutionWakeSignalStore)
+func (a Application) signalSessionExecutionWake(ctx context.Context, sessionID, causeKey string) (int64, error) {
+	wakes, ok := a.Store.(sessionExecutionWakeSignalStore)
 	if !ok || a.Tasks == nil {
-		return 0, fmt.Errorf("Job execution wake is not configured")
+		return 0, fmt.Errorf("Session execution wake is not configured")
 	}
-	return wakes.SignalJobExecutionWake(ctx, a.Tasks.QueueName(), jobID, causeKey)
+	return wakes.SignalSessionExecutionWake(ctx, a.Tasks.QueueName(), sessionID, causeKey)
 }
 
 // SignalNativeTerminalWake turns one exact observer binding into a wake hint.
@@ -113,14 +113,14 @@ func (a Application) SignalNativeTerminalWake(ctx context.Context, target Native
 	return err
 }
 
-// AwaitJobExecutionWake waits for one fresh per-Job revision. Timeout asks the
+// AwaitSessionExecutionWake waits for one fresh per-Session revision. Timeout asks the
 // consumer to reload authority without checkpointing a stale emitted event.
-func (a Application) AwaitJobExecutionWake(ctx context.Context, jobID string, expectedRevision int64, stepName string, timeout time.Duration) error {
-	wake, err := absurd.AwaitEvent[JobExecutionWakeV1](ctx, JobExecutionWakeEvent(jobID, expectedRevision), absurd.AwaitEventOptions{StepName: stepName, Timeout: timeout})
-	return resolveJobExecutionWake(jobID, expectedRevision, wake, err)
+func (a Application) AwaitSessionExecutionWake(ctx context.Context, sessionID string, expectedRevision int64, stepName string, timeout time.Duration) error {
+	wake, err := absurd.AwaitEvent[SessionExecutionWakeV1](ctx, SessionExecutionWakeEvent(sessionID, expectedRevision), absurd.AwaitEventOptions{StepName: stepName, Timeout: timeout})
+	return resolveSessionExecutionWake(sessionID, expectedRevision, wake, err)
 }
 
-func resolveJobExecutionWake(jobID string, revision int64, wake JobExecutionWakeV1, err error) error {
+func resolveSessionExecutionWake(sessionID string, revision int64, wake SessionExecutionWakeV1, err error) error {
 	if err != nil {
 		var timeout *absurd.TimeoutError
 		if errors.As(err, &timeout) {
@@ -128,21 +128,21 @@ func resolveJobExecutionWake(jobID string, revision int64, wake JobExecutionWake
 		}
 		return err
 	}
-	if wake.JobID != jobID || wake.Revision != revision || wake.CauseKey == "" {
-		return fmt.Errorf("execution wake payload conflicts with Job %s revision %d", jobID, revision)
+	if wake.SessionID != sessionID || wake.Revision != revision || wake.CauseKey == "" {
+		return fmt.Errorf("execution wake payload conflicts with Session %s revision %d", sessionID, revision)
 	}
 	return nil
 }
 
-// AwaitMessageWake waits for one Job's exact next FIFO Message hint. A timeout
+// AwaitMessageWake waits for one Session's exact next FIFO Message hint. A timeout
 // asks the consumer to reload durable facts; only an event with the expected
-// Job and sequence is accepted as a wake.
-func (a Application) AwaitMessageWake(ctx context.Context, jobID string, sequence int64, stepName string, timeout time.Duration) error {
-	wake, err := absurd.AwaitEvent[MessageWakeV1](ctx, MessageWakeEvent(jobID, sequence), absurd.AwaitEventOptions{StepName: stepName, Timeout: timeout})
-	return resolveMessageWake(jobID, sequence, wake, err)
+// Session and sequence is accepted as a wake.
+func (a Application) AwaitMessageWake(ctx context.Context, sessionID string, sequence int64, stepName string, timeout time.Duration) error {
+	wake, err := absurd.AwaitEvent[MessageWakeV1](ctx, MessageWakeEvent(sessionID, sequence), absurd.AwaitEventOptions{StepName: stepName, Timeout: timeout})
+	return resolveMessageWake(sessionID, sequence, wake, err)
 }
 
-func resolveMessageWake(jobID string, sequence int64, wake MessageWakeV1, err error) error {
+func resolveMessageWake(sessionID string, sequence int64, wake MessageWakeV1, err error) error {
 	if err != nil {
 		var timeout *absurd.TimeoutError
 		if errors.As(err, &timeout) {
@@ -150,17 +150,17 @@ func resolveMessageWake(jobID string, sequence int64, wake MessageWakeV1, err er
 		}
 		return err
 	}
-	if wake.JobID != jobID || wake.Sequence != sequence {
-		return fmt.Errorf("message wake payload conflicts with Job %s sequence %d", jobID, sequence)
+	if wake.SessionID != sessionID || wake.Sequence != sequence {
+		return fmt.Errorf("message wake payload conflicts with Session %s sequence %d", sessionID, sequence)
 	}
 	return nil
 }
 
 // RetryReceipt reports only facts committed by Absurd. It is not a claim that
-// a worker has resumed or completed the Job.
+// a worker has resumed or completed the Session.
 type RetryReceipt struct {
 	RequestKey string `json:"request_key"`
-	JobID      string `json:"job_id"`
+	SessionID  string `json:"job_id"`
 	TaskID     string `json:"task_id"`
 	Retry      string `json:"retry"`
 	RunID      string `json:"run_id"`
@@ -168,25 +168,25 @@ type RetryReceipt struct {
 	Created    bool   `json:"created"`
 }
 
-type atomicJobRetry interface {
-	RetryFailedJob(context.Context, string, string, string) (RetryReceipt, error)
+type atomicSessionRetry interface {
+	RetryFailedSession(context.Context, string, string, string) (RetryReceipt, error)
 }
 
-// RetryFailedJob schedules one additional bounded attempt on the Job's current
+// RetryFailedSession schedules one additional bounded attempt on the Session's current
 // attached execution task. The caller-retained request key and Absurd retry are
 // committed atomically by the durable Store.
-func (a Application) RetryFailedJob(ctx context.Context, jobID, requestKey string) (RetryReceipt, error) {
-	jobID = strings.TrimSpace(jobID)
+func (a Application) RetryFailedSession(ctx context.Context, sessionID, requestKey string) (RetryReceipt, error) {
+	sessionID = strings.TrimSpace(sessionID)
 	requestKey = strings.TrimSpace(requestKey)
-	if jobID == "" || requestKey == "" {
-		return RetryReceipt{}, fmt.Errorf("retry requires one Job ID and caller-retained request key")
+	if sessionID == "" || requestKey == "" {
+		return RetryReceipt{}, fmt.Errorf("retry requires one Session ID and caller-retained request key")
 	}
 	if len(requestKey) > 255 {
 		return RetryReceipt{}, fmt.Errorf("retry request key must be at most 255 characters")
 	}
-	retries, ok := a.Store.(atomicJobRetry)
+	retries, ok := a.Store.(atomicSessionRetry)
 	if !ok || a.Tasks == nil {
-		return RetryReceipt{}, fmt.Errorf("atomic Job retry is not configured")
+		return RetryReceipt{}, fmt.Errorf("atomic Session retry is not configured")
 	}
-	return retries.RetryFailedJob(ctx, a.Tasks.QueueName(), jobID, requestKey)
+	return retries.RetryFailedSession(ctx, a.Tasks.QueueName(), sessionID, requestKey)
 }

@@ -17,8 +17,8 @@ var (
 	ErrAttachmentImageTooLarge        = errors.New("attachment image exceeds the decoded pixel limit")
 	ErrInvalidInput                   = errors.New("invalid control API input")
 	ErrProfileNotFound                = errors.New("control API Sandbox profile not found")
-	ErrInvalidCursor                  = errors.New("invalid control API Job cursor")
-	ErrJobNotFound                    = errors.New("control API Job not found")
+	ErrInvalidCursor                  = errors.New("invalid control API Session cursor")
+	ErrSessionNotFound                = errors.New("control API Session not found")
 	ErrMessageNotFound                = errors.New("control API Message not found")
 	ErrSandboxStatusUnavailable       = errors.New("Sandbox status is unavailable")
 	ErrSandboxExecUnavailable         = errors.New("Sandbox command is unavailable")
@@ -33,7 +33,7 @@ var (
 	ErrSkillRefreshUnavailable        = errors.New("control API skill refresh is unsupported for this profile")
 	ErrMessageImageUnsupported        = errors.New("control API image attachments are unsupported for this profile")
 	ErrInterruptUnavailable           = errors.New("control API interrupt cannot be accepted")
-	ErrRetryUnavailable               = errors.New("control API Job retry unavailable")
+	ErrRetryUnavailable               = errors.New("control API Session retry unavailable")
 	ErrIdempotencyConflict            = errors.New("idempotency key is bound to different input")
 )
 
@@ -82,7 +82,7 @@ type RedeemRequest struct {
 	Credential     string `json:"credential"`
 }
 
-type AdmitJobRequest struct {
+type CreateSessionRequest struct {
 	KeepRunning     bool   `json:"keep_running,omitempty"`
 	ClientReference string `json:"client_reference,omitempty"`
 	AgentsMD        string `json:"agents_md,omitempty"`
@@ -92,62 +92,41 @@ type AdmitJobRequest struct {
 	Reasoning       string `json:"reasoning,omitempty"`
 }
 
-const (
-	JobKindDirect = "direct"
-)
-
-type JobCreator struct {
+type SessionCreator struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
 
-// JobSummary is the deliberately narrow representation returned by the Job
-// index. Mutable execution and cleanup state belong to canonical Job reads.
-type JobSummary struct {
-	CreatedByClient *JobCreator `json:"created_by_client"`
-	ClientReference string      `json:"client_reference"`
-	ID              string      `json:"id"`
-	Kind            string      `json:"kind"`
-	AdmittedAt      time.Time   `json:"admitted_at"`
+// SessionSummary is the deliberately narrow representation returned by the Session
+// index. Mutable execution and cleanup state belong to canonical Session reads.
+type SessionSummary struct {
+	CreatedByClient *SessionCreator `json:"created_by_client"`
+	ClientReference string          `json:"client_reference"`
+	ID              string          `json:"id"`
+	AdmittedAt      time.Time       `json:"admitted_at"`
 }
 
-type JobList struct {
-	Jobs       []JobSummary `json:"jobs"`
-	NextCursor *string      `json:"next_cursor"`
+type SessionList struct {
+	Sessions   []SessionSummary `json:"sessions"`
+	NextCursor *string          `json:"next_cursor"`
 }
 
-// Job contains only the fields common to every supported public Job kind.
-// Canonical reads return one of the concrete JobView implementations below.
-type Job struct {
-	KeepRunning     bool        `json:"keep_running"`
-	LatestReplyID   string      `json:"latest_reply_id,omitempty"`
-	CreatedByClient *JobCreator `json:"created_by_client"`
-	ClientReference string      `json:"client_reference"`
-	ID              string      `json:"id"`
-	Kind            string      `json:"kind"`
-	Profile         string      `json:"profile"`
-	Model           string      `json:"model"`
-	Reasoning       string      `json:"reasoning"`
-	Admission       Admission   `json:"admission"`
-	Execution       State       `json:"execution"`
-	Attention       *Attention  `json:"attention"`
-	Cleanup         State       `json:"cleanup"`
-	Sandboxes       []Sandbox   `json:"sandboxes"`
+// Session is the canonical public execution context.
+type Session struct {
+	KeepRunning     bool            `json:"keep_running"`
+	LatestReplyID   string          `json:"latest_reply_id,omitempty"`
+	CreatedByClient *SessionCreator `json:"created_by_client"`
+	ClientReference string          `json:"client_reference"`
+	ID              string          `json:"id"`
+	Profile         string          `json:"profile"`
+	Model           string          `json:"model"`
+	Reasoning       string          `json:"reasoning"`
+	Admission       Admission       `json:"admission"`
+	Execution       State           `json:"execution"`
+	Attention       *Attention      `json:"attention"`
+	Cleanup         State           `json:"cleanup"`
+	Sandboxes       []Sandbox       `json:"sandboxes"`
 }
-
-// JobView is the closed discriminated union returned by Job inspection and
-// watch. It deliberately has no generic workflow payload or extension map.
-type JobView interface {
-	Common() Job
-	jobKind() string
-}
-
-type DirectJob struct {
-	Job
-}
-
-func (j DirectJob) Common() Job   { return j.Job }
-func (DirectJob) jobKind() string { return JobKindDirect }
 
 type Admission struct {
 	Open bool `json:"open"`
@@ -224,7 +203,7 @@ type Message struct {
 	WaitReason         string         `json:"wait_reason,omitempty"`
 	InterruptRequested bool           `json:"interrupt_requested"`
 	ID                 string         `json:"id"`
-	JobID              string         `json:"job_id"`
+	SessionID          string         `json:"session_id"`
 	Sequence           int64          `json:"sequence"`
 	Intent             string         `json:"intent"`
 	Delivery           State          `json:"delivery"`
@@ -238,11 +217,11 @@ type MessageResult struct {
 	Output  string `json:"output"`
 }
 
-// Retry acknowledges one caller-keyed request against the Job's existing
+// Retry acknowledges one caller-keyed request against the Session's existing
 // execution authority. Internal task and run identities remain private.
 type Retry struct {
-	JobID string `json:"job_id"`
-	State string `json:"state"`
+	SessionID string `json:"session_id"`
+	State     string `json:"state"`
 }
 
 // Problem is RFC 9457 Problem Details extended with stable Dorf recovery
@@ -263,20 +242,19 @@ type Auth interface {
 	Redeem(context.Context, string, string, string) (controlauth.Client, bool, error)
 }
 
-// Jobs keeps domain admission, projection, and cleanup policy outside HTTP.
-// Implementations compose Core and the fixed workflow seams and return only
-// purpose-built public snapshots.
-type Jobs interface {
+// Sessions keeps domain admission, projection, and cleanup policy outside HTTP.
+// Implementations compose Core and return purpose-built public snapshots.
+type Sessions interface {
 	ReadSandboxStatus(context.Context, string) (provider.Status, error)
 	ExecSandbox(context.Context, string, provider.Command) (provider.CommandResult, error)
-	List(context.Context, int, string) (JobList, error)
-	AdmitDirect(context.Context, string, string, AdmitJobRequest) (DirectJob, bool, error)
-	Get(context.Context, string) (JobView, error)
+	List(context.Context, int, string) (SessionList, error)
+	Create(context.Context, string, string, CreateSessionRequest) (Session, bool, error)
+	Get(context.Context, string) (Session, error)
 	SendMessage(context.Context, string, string, SendMessageRequest) (Message, bool, error)
 	GetMessage(context.Context, string, string) (Message, error)
 	InterruptMessage(context.Context, string, string) (Message, error)
 	Retry(context.Context, string, string) (Retry, bool, error)
 	ReadSandboxFile(context.Context, string, string) ([]byte, error)
 	WriteSandboxFile(context.Context, string, string, []byte, bool) error
-	RequestCleanup(context.Context, string) (JobView, error)
+	RequestCleanup(context.Context, string) (Session, error)
 }

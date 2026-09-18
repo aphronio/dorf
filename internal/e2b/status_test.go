@@ -10,7 +10,7 @@ import (
 )
 
 func TestStatusOnlyReadsProviderMetadata(t *testing.T) {
-	owner := provider.Ownership{JobID: "job", SandboxID: "sandbox", OwnershipNonce: strings.Repeat("a", 64)}
+	owner := provider.Ownership{SessionID: "session", SandboxID: "sandbox", OwnershipNonce: strings.Repeat("a", 64)}
 	for _, state := range []string{"running", "paused", "future-state", "missing"} {
 		t.Run(state, func(t *testing.T) {
 			client := Client{APIURL: "https://e2b.test", APIKey: "key", HTTPClient: &http.Client{Transport: handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

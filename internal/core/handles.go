@@ -11,34 +11,34 @@ import (
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
-// JobHandle is an opaque, immutable binding to one durable Job identity.
-type JobHandle struct {
+// SessionHandle is an opaque, immutable binding to one durable Session identity.
+type SessionHandle struct {
 	id          string
 	application *Application
 }
 
-// SandboxHandle is an opaque, immutable binding to one exact Job-owned
+// SandboxHandle is an opaque, immutable binding to one exact Session-owned
 // Sandbox. Provider ownership material is never exposed through this handle.
 type SandboxHandle struct {
 	id          string
-	jobID       string
+	sessionID   string
 	application *Application
 }
 
 // AgentHandle is a convenience binding to the profile-selected Harness in one
-// exact Job-owned Sandbox. It creates no durable Agent identity.
+// exact Session-owned Sandbox. It creates no durable Agent identity.
 type AgentHandle struct {
-	jobID       string
+	sessionID   string
 	sandboxID   string
 	application *Application
 }
 
 // MessageReceipt is immutable acknowledgement of one durable Message
 // admission. Delivery and AgentRun reconciliation continue asynchronously on
-// the Job's attached Absurd task.
+// the Session's attached Absurd task.
 type MessageReceipt struct {
 	MessageID    string
-	JobID        string
+	SessionID    string
 	SandboxID    string
 	Sequence     int64
 	Intent       MessageDeliveryIntent
@@ -64,57 +64,57 @@ func Steer() MessageOption { return MessageOption{intent: MessageSteer} }
 // without accepting the Message, the same Message returns to FIFO as a Follow.
 func PreferSteer() MessageOption { return MessageOption{intent: MessageAuto} }
 
-func (h JobHandle) ID() string { return h.id }
+func (h SessionHandle) ID() string { return h.id }
 
 func (h SandboxHandle) ID() string { return h.id }
 
 func (h SandboxHandle) Agent() AgentHandle {
-	return AgentHandle{jobID: h.jobID, sandboxID: h.id, application: h.application}
+	return AgentHandle{sessionID: h.sessionID, sandboxID: h.id, application: h.application}
 }
 
 // ReadFile returns at most sandbox.MaxFileReadBytes exact bytes of one regular
-// Sandbox file while holding the Job resource fence. Core does not discover,
+// Sandbox file while holding the Session resource fence. Core does not discover,
 // interpret, or retain the file; callers must read what they need before
 // requesting cleanup.
 func (h SandboxHandle) ReadFile(ctx context.Context, relativePath string) ([]byte, error) {
-	if h.application == nil || h.application.Store == nil || h.application.SandboxRuntimes == nil || h.jobID == "" || h.id == "" {
+	if h.application == nil || h.application.Store == nil || h.application.SandboxRuntimes == nil || h.sessionID == "" || h.id == "" {
 		return nil, fmt.Errorf("Sandbox handle is not bound to Core file access")
 	}
 	if err := provider.ValidateFilePath(relativePath); err != nil {
 		return nil, err
 	}
 	var contents []byte
-	err := h.application.Store.WithJobFence(ctx, h.jobID, func() error {
-		job, err := h.application.Store.Job(ctx, h.jobID)
+	err := h.application.Store.WithSessionFence(ctx, h.sessionID, func() error {
+		session, err := h.application.Store.Session(ctx, h.sessionID)
 		if err != nil {
 			return err
 		}
-		if job.CleanupState != CleanupPending {
-			return fmt.Errorf("%w for Job %s", ErrSandboxFileCleanupFenced, job.ID)
+		if session.CleanupState != CleanupPending {
+			return fmt.Errorf("%w for Session %s", ErrSandboxFileCleanupFenced, session.ID)
 		}
 		owned, err := h.application.Store.Sandbox(ctx, h.id)
 		if err != nil {
 			return err
 		}
-		if owned.JobID != job.ID || owned.ID != h.id {
-			return fmt.Errorf("Sandbox %s does not belong to Job %s", h.id, job.ID)
+		if owned.SessionID != session.ID || owned.ID != h.id {
+			return fmt.Errorf("Sandbox %s does not belong to Session %s", h.id, session.ID)
 		}
-		runtime, err := h.application.SandboxRuntimes.ResolveSandbox(ctx, job.ProfileRef())
+		runtime, err := h.application.SandboxRuntimes.ResolveSandbox(ctx, session.ProfileRef())
 		if err != nil {
-			return fmt.Errorf("resolve Sandbox profile %q for file read: %w", job.SandboxProfile, err)
+			return fmt.Errorf("resolve Sandbox profile %q for file read: %w", session.SandboxProfile, err)
 		}
-		if runtime.SandboxProfile != job.ProfileRef() || runtime.Files == nil {
-			return fmt.Errorf("Sandbox runtime does not provide file access for Job profile %q", job.SandboxProfile)
+		if runtime.SandboxProfile != session.ProfileRef() || runtime.Files == nil {
+			return fmt.Errorf("Sandbox runtime does not provide file access for Session profile %q", session.SandboxProfile)
 		}
-		contents, err = readBoundedSandboxFile(ctx, h.application.Store, runtime.Files, job, owned, relativePath)
+		contents, err = readBoundedSandboxFile(ctx, h.application.Store, runtime.Files, session, owned, relativePath)
 		return err
 	})
 	return contents, err
 }
 
-func readBoundedSandboxFile(ctx context.Context, store SandboxActivityStore, files SandboxFileReader, job Job, owned Sandbox, relativePath string) (contents []byte, err error) {
-	err = WithSandboxActivity(ctx, store, job.ID, func() error {
-		contents, err = files.ReadSandboxFile(ctx, job, owned, relativePath)
+func readBoundedSandboxFile(ctx context.Context, store SandboxActivityStore, files SandboxFileReader, session Session, owned Sandbox, relativePath string) (contents []byte, err error) {
+	err = WithSandboxActivity(ctx, store, session.ID, func() error {
+		contents, err = files.ReadSandboxFile(ctx, session, owned, relativePath)
 		if err != nil {
 			contents = nil
 			return err
@@ -128,24 +128,24 @@ func readBoundedSandboxFile(ctx context.Context, store SandboxActivityStore, fil
 	return contents, err
 }
 
-func (a Application) OpenJob(ctx context.Context, id string) (JobHandle, error) {
+func (a Application) OpenSession(ctx context.Context, id string) (SessionHandle, error) {
 	id = strings.TrimSpace(id)
-	job, err := a.Store.Job(ctx, id)
+	session, err := a.Store.Session(ctx, id)
 	if err != nil {
-		return JobHandle{}, err
+		return SessionHandle{}, err
 	}
-	return a.jobHandle(job.ID), nil
+	return a.sessionHandle(session.ID), nil
 }
 
-func (a Application) jobHandle(id string) JobHandle {
-	return JobHandle{id: id, application: &a}
+func (a Application) sessionHandle(id string) SessionHandle {
+	return SessionHandle{id: id, application: &a}
 }
 
-func (h JobHandle) EnsureDefaultSandbox(ctx context.Context) (SandboxHandle, error) {
+func (h SessionHandle) EnsureDefaultSandbox(ctx context.Context) (SandboxHandle, error) {
 	return h.ensureSandbox(ctx, DefaultSandbox)
 }
 
-func (h JobHandle) EnsureNamedSandbox(ctx context.Context, name string) (SandboxHandle, error) {
+func (h SessionHandle) EnsureNamedSandbox(ctx context.Context, name string) (SandboxHandle, error) {
 	name = strings.TrimSpace(name)
 	if name == "" || name == DefaultSandbox {
 		return SandboxHandle{}, fmt.Errorf("named Sandbox requires a nonempty name other than %q", DefaultSandbox)
@@ -156,34 +156,34 @@ func (h JobHandle) EnsureNamedSandbox(ctx context.Context, name string) (Sandbox
 // DefaultSandbox returns the already-owned default Sandbox without creating
 // infrastructure. Message callers use this read-only acquisition path outside
 // an Absurd task claim.
-func (h JobHandle) DefaultSandbox(ctx context.Context) (SandboxHandle, error) {
+func (h SessionHandle) DefaultSandbox(ctx context.Context) (SandboxHandle, error) {
 	return h.Sandbox(ctx, MainSandboxName(h.id))
 }
 
 // Sandbox returns one already-owned exact Sandbox without exposing provider
 // custody. It is the read-only bridge from a workflow-selected Message fact to
 // the Sandbox-bound Agent convenience handle.
-func (h JobHandle) Sandbox(ctx context.Context, id string) (SandboxHandle, error) {
+func (h SessionHandle) Sandbox(ctx context.Context, id string) (SandboxHandle, error) {
 	if h.application == nil || h.application.Store == nil || h.id == "" || strings.TrimSpace(id) == "" {
-		return SandboxHandle{}, fmt.Errorf("Job handle is not bound to Core")
+		return SandboxHandle{}, fmt.Errorf("Session handle is not bound to Core")
 	}
 	owned, err := h.application.Store.Sandbox(ctx, id)
 	if err != nil {
 		return SandboxHandle{}, err
 	}
-	if owned.JobID != h.id {
-		return SandboxHandle{}, fmt.Errorf("Sandbox %s does not belong to Job %s", owned.ID, h.id)
+	if owned.SessionID != h.id {
+		return SandboxHandle{}, fmt.Errorf("Sandbox %s does not belong to Session %s", owned.ID, h.id)
 	}
 	return h.sandboxHandle(owned.ID), nil
 }
 
-func (h JobHandle) sandboxHandle(id string) SandboxHandle {
-	return SandboxHandle{id: id, jobID: h.id, application: h.application}
+func (h SessionHandle) sandboxHandle(id string) SandboxHandle {
+	return SandboxHandle{id: id, sessionID: h.id, application: h.application}
 }
 
-func (h JobHandle) ensureSandbox(ctx context.Context, name string) (SandboxHandle, error) {
+func (h SessionHandle) ensureSandbox(ctx context.Context, name string) (SandboxHandle, error) {
 	if h.application == nil || h.application.Store == nil || h.id == "" {
-		return SandboxHandle{}, fmt.Errorf("Job handle is not bound to Core")
+		return SandboxHandle{}, fmt.Errorf("Session handle is not bound to Core")
 	}
 	task, claimed := absurd.TaskFromContext(ctx)
 	if !claimed {
@@ -193,16 +193,16 @@ func (h JobHandle) ensureSandbox(ctx context.Context, name string) (SandboxHandl
 		return SandboxHandle{}, fmt.Errorf("verify attached task before ensuring Sandbox: %w", err)
 	}
 
-	var job Job
+	var session Session
 	var owned Sandbox
-	err := h.application.Store.WithJobFence(ctx, h.id, func() error {
+	err := h.application.Store.WithSessionFence(ctx, h.id, func() error {
 		var err error
-		job, err = h.application.Store.Job(ctx, h.id)
+		session, err = h.application.Store.Session(ctx, h.id)
 		if err != nil {
 			return err
 		}
-		if !job.AdmissionOpen || job.CleanupState != CleanupPending {
-			return fmt.Errorf("Job %s cannot ensure Sandbox %q after cleanup begins", h.id, name)
+		if !session.AdmissionOpen || session.CleanupState != CleanupPending {
+			return fmt.Errorf("Session %s cannot ensure Sandbox %q after cleanup begins", h.id, name)
 		}
 		owned, err = h.application.Store.EnsureSandbox(ctx, h.id, name)
 		if err != nil {
@@ -214,7 +214,7 @@ func (h JobHandle) ensureSandbox(ctx context.Context, name string) (SandboxHandl
 		return SandboxHandle{}, err
 	}
 	handle := h.sandboxHandle(owned.ID)
-	if err := h.executeSandboxEnsure(ctx, job, owned); err != nil {
+	if err := h.executeSandboxEnsure(ctx, session, owned); err != nil {
 		return SandboxHandle{}, err
 	}
 	return handle, nil
@@ -224,8 +224,8 @@ func (h JobHandle) ensureSandbox(ctx context.Context, name string) (SandboxHandl
 // Its consumer resolves the execution envelope in the supplied transaction; Core owns the
 // caller-retained key, default-follow option semantics, receipt, and wake.
 func (h AgentHandle) Message(ctx context.Context, key string, input MessageInput, options ...MessageOption) (MessageReceipt, error) {
-	if h.application == nil || h.application.Store == nil || h.jobID == "" || h.sandboxID == "" {
-		return MessageReceipt{}, fmt.Errorf("Agent handle is not bound to a Job Sandbox")
+	if h.application == nil || h.application.Store == nil || h.sessionID == "" || h.sandboxID == "" {
+		return MessageReceipt{}, fmt.Errorf("Agent handle is not bound to a Session Sandbox")
 	}
 	if h.application.AgentMessages == nil {
 		return MessageReceipt{}, fmt.Errorf("Agent Message execution-envelope resolution is not configured")
@@ -248,7 +248,7 @@ func (h AgentHandle) Message(ctx context.Context, key string, input MessageInput
 		return MessageReceipt{}, fmt.Errorf("observations require text-only follow or auto delivery")
 	}
 	request := MessageAdmission{
-		JobID: h.jobID, SandboxID: h.sandboxID, FromKind: MessageFromHuman,
+		SessionID: h.sessionID, SandboxID: h.sandboxID, FromKind: MessageFromHuman,
 		FromID: key, Input: input.Text, Attachments: append([]MessageAttachment(nil), input.Attachments...), Intent: intent,
 		RefreshSkills: refreshSkills, Observation: input.Observation, DeveloperInstructions: input.DeveloperInstructions,
 	}
@@ -279,28 +279,28 @@ func (h AgentHandle) admitMessage(ctx context.Context, key string, request Messa
 	admitted, err := h.application.AgentMessages.AdmitAgentMessage(ctx, request)
 	message := admitted.Message
 	receipt := MessageReceipt{
-		MessageID: message.ID, JobID: message.JobID, SandboxID: admitted.SandboxID, Sequence: message.Sequence,
+		MessageID: message.ID, SessionID: message.SessionID, SandboxID: admitted.SandboxID, Sequence: message.Sequence,
 		Intent: message.Intent, TargetTurnID: message.TargetTurnID,
 		AdmittedAt: message.AdmittedAt, Created: admitted.Created,
 	}
 	if err != nil {
 		return receipt, err
 	}
-	expectedID := MessageID(h.jobID, MessageFromHuman, key)
+	expectedID := MessageID(h.sessionID, MessageFromHuman, key)
 	targetValid := message.Intent == MessageFollow && message.TargetTurnID == "" || message.Intent == MessageSteer && message.TargetTurnID != ""
 	accepted := MessageAdmission{
-		JobID: message.JobID, SandboxID: admitted.SandboxID, FromKind: message.FromKind, FromID: message.FromID,
+		SessionID: message.SessionID, SandboxID: admitted.SandboxID, FromKind: message.FromKind, FromID: message.FromID,
 		Input: message.Input, Attachments: message.Attachments, Intent: request.Intent, RefreshSkills: message.RefreshSkills, Observation: message.Observation, DeveloperInstructions: message.DeveloperInstructions,
 	}
 	if !sameMessageAdmission(accepted, request) || message.ID != expectedID || message.Sequence <= 0 || !request.Intent.accepts(message.Intent) || !targetValid {
 		return MessageReceipt{}, fmt.Errorf("Agent Message admission returned a foreign receipt")
 	}
 	if !admitted.Created {
-		job, err := h.application.Store.Job(ctx, h.jobID)
+		session, err := h.application.Store.Session(ctx, h.sessionID)
 		if err != nil {
-			return receipt, fmt.Errorf("load Job after Message replay: %w", err)
+			return receipt, fmt.Errorf("load Session after Message replay: %w", err)
 		}
-		if job.CleanupState != CleanupPending {
+		if session.CleanupState != CleanupPending {
 			return receipt, nil
 		}
 	}
@@ -314,7 +314,7 @@ func (h AgentHandle) admitMessage(ctx context.Context, key string, request Messa
 }
 
 func sameMessageAdmission(left, right MessageAdmission) bool {
-	if left.Observation != right.Observation || !SameDeveloperInstructions(left.DeveloperInstructions, right.DeveloperInstructions) || left.RefreshSkills != right.RefreshSkills || left.JobID != right.JobID || left.SandboxID != right.SandboxID ||
+	if left.Observation != right.Observation || !SameDeveloperInstructions(left.DeveloperInstructions, right.DeveloperInstructions) || left.RefreshSkills != right.RefreshSkills || left.SessionID != right.SessionID || left.SandboxID != right.SandboxID ||
 		left.FromKind != right.FromKind || left.FromID != right.FromID || left.Input != right.Input || left.Intent != right.Intent ||
 		len(left.Attachments) != len(right.Attachments) {
 		return false
@@ -327,32 +327,32 @@ func sameMessageAdmission(left, right MessageAdmission) bool {
 	return true
 }
 
-func (h JobHandle) executeSandboxEnsure(ctx context.Context, job Job, owned Sandbox) error {
+func (h SessionHandle) executeSandboxEnsure(ctx context.Context, session Session, owned Sandbox) error {
 	if h.application.SandboxRuntimes == nil {
 		return fmt.Errorf("Sandbox runtime resolution is not configured")
 	}
-	runtime, err := h.application.SandboxRuntimes.ResolveSandbox(ctx, job.ProfileRef())
+	runtime, err := h.application.SandboxRuntimes.ResolveSandbox(ctx, session.ProfileRef())
 	if err != nil {
-		return fmt.Errorf("resolve Sandbox profile %q: %w", job.SandboxProfile, err)
+		return fmt.Errorf("resolve Sandbox profile %q: %w", session.SandboxProfile, err)
 	}
-	if runtime.SandboxProfile != job.ProfileRef() || runtime.Execution == nil {
-		return fmt.Errorf("Sandbox runtime does not match Job profile %q", job.SandboxProfile)
+	if runtime.SandboxProfile != session.ProfileRef() || runtime.Execution == nil {
+		return fmt.Errorf("Sandbox runtime does not match Session profile %q", session.SandboxProfile)
 	}
-	actionID := ScopedActionID(job.ID, ActionSandboxCreate, owned.ID)
-	err = runtime.Execution.ExecuteSandboxAction(ctx, job.ID, owned.ID, ActionSandboxCreate)
+	actionID := ScopedActionID(session.ID, ActionSandboxCreate, owned.ID)
+	err = runtime.Execution.ExecuteSandboxAction(ctx, session.ID, owned.ID, ActionSandboxCreate)
 	if err == nil || !provider.IsArtifactUnavailable(err) {
 		return err
 	}
-	attentionErr := h.application.Store.RecordSandboxProfileUnavailable(ctx, job.ID, job.SandboxProfile, actionID, err)
+	attentionErr := h.application.Store.RecordSandboxProfileUnavailable(ctx, session.ID, session.SandboxProfile, actionID, err)
 	if attentionErr != nil {
-		return errors.Join(err, fmt.Errorf("record unavailable Sandbox profile %q: %w", job.SandboxProfile, attentionErr))
+		return errors.Join(err, fmt.Errorf("record unavailable Sandbox profile %q: %w", session.SandboxProfile, attentionErr))
 	}
 	return err
 }
 
-func (h JobHandle) RequestCleanup(ctx context.Context) error {
+func (h SessionHandle) RequestCleanup(ctx context.Context) error {
 	if h.application == nil || h.application.Store == nil || h.id == "" {
-		return fmt.Errorf("Job handle is not bound to Core")
+		return fmt.Errorf("Session handle is not bound to Core")
 	}
 	_, err := h.application.requestCleanup(ctx, h.id)
 	return err

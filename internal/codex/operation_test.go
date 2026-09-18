@@ -118,9 +118,9 @@ func newOperationFixture(t *testing.T, drop bool) *operationFixture {
 }
 func (f *operationFixture) operation(t *testing.T) (terminalapp.AgentRunOperation, core.AgentRun) {
 	t.Helper()
-	run := core.AgentRun{ID: "run", State: core.AgentRunPending, MessageID: "message", JobID: f.owner.JobID, SandboxID: f.owner.SandboxID, ThreadID: "thread"}
+	run := core.AgentRun{ID: "run", State: core.AgentRunPending, MessageID: "message", SessionID: f.owner.SessionID, SandboxID: f.owner.SandboxID, ThreadID: "thread"}
 	op, err := terminalapp.NewAgentRunOperation(terminalapp.Externals{Agent: f.agent, Sandbox: f.sandbox, Ownership: func(context.Context, string) (provider.Ownership, error) { return f.owner, nil }}, core.AgentMessageExecution{
-		Job: core.Job{ID: f.owner.JobID}, Sandbox: core.Sandbox{ID: f.owner.SandboxID, JobID: f.owner.JobID}, AgentRun: run, Message: core.Message{ID: "message", Intent: core.MessageFollow},
+		Session: core.Session{ID: f.owner.SessionID}, Sandbox: core.Sandbox{ID: f.owner.SandboxID, SessionID: f.owner.SessionID}, AgentRun: run, Message: core.Message{ID: "message", Intent: core.MessageFollow},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -203,7 +203,7 @@ func TestNativeOperationRejectsCancellationForeignBindingAndEscapedScope(t *test
 	err := f.agent.WithOperation(ctx, f.owner, "thread", func(ctx context.Context, bound terminalapp.Harness) error {
 		escaped = bound
 		foreign := f.owner
-		foreign.JobID = "other"
+		foreign.SessionID = "other"
 		if _, err := bound.ReadTurns(ctx, foreign, "thread"); err == nil {
 			t.Fatal("foreign owner accepted")
 		}
@@ -257,7 +257,7 @@ func TestNativeOperationHandsAcceptedObservationOffAfterScope(t *testing.T) {
 	release := make(chan struct{})
 	session := &instructionSession{runID: "run", closed: make(chan struct{}), release: release}
 	f.sessions <- session
-	ctx, cancel := context.WithCancel(telemetry.WithExecution(context.Background(), core.AgentRun{ID: "run", JobID: owner.JobID, SandboxID: owner.SandboxID, MessageID: "message"}))
+	ctx, cancel := context.WithCancel(telemetry.WithExecution(context.Background(), core.AgentRun{ID: "run", SessionID: owner.SessionID, SandboxID: owner.SandboxID, MessageID: "message"}))
 	defer cancel()
 	err := f.agent.WithOperation(ctx, owner, "retained-thread", func(ctx context.Context, bound terminalapp.Harness) error {
 		if _, err := bound.ReadTurns(ctx, owner, "retained-thread"); err != nil {
@@ -277,7 +277,7 @@ func TestNativeOperationHandsAcceptedObservationOffAfterScope(t *testing.T) {
 		t.Fatal("observation did not survive scope cancellation and settle")
 	}
 	f.agent.Observations.wg.Wait()
-	key := instructionScope{jobID: owner.JobID, sandboxID: owner.SandboxID, threadID: "retained-thread"}
+	key := instructionScope{sessionID: owner.SessionID, sandboxID: owner.SandboxID, threadID: "retained-thread"}
 	f.agent.Observations.mu.Lock()
 	_, known := f.agent.Observations.instructions[key]
 	f.agent.Observations.mu.Unlock()

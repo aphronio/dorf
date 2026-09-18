@@ -1,16 +1,16 @@
 -- name: GetSandboxUpgrade :one
-select u.*,s.job_id,coalesce(src.provider_id,'') as source_provider_id,coalesce(dst.provider_id,'') as destination_provider_id from dorf.sandbox_upgrades u join dorf.sandboxes s on s.id=u.sandbox_id join dorf.sandbox_resources src on src.id=u.source_resource_id left join dorf.sandbox_resources dst on dst.id=u.destination_resource_id where u.id=sqlc.arg(id);
+select u.*,s.session_id,coalesce(src.provider_id,'') as source_provider_id,coalesce(dst.provider_id,'') as destination_provider_id from dorf.sandbox_upgrades u join dorf.sandboxes s on s.id=u.sandbox_id join dorf.sandbox_resources src on src.id=u.source_resource_id left join dorf.sandbox_resources dst on dst.id=u.destination_resource_id where u.id=sqlc.arg(id);
 
--- name: ListJobUpgrades :many
-select u.*,s.job_id,coalesce(src.provider_id,'') as source_provider_id,coalesce(dst.provider_id,'') as destination_provider_id from dorf.sandbox_upgrades u join dorf.sandboxes s on s.id=u.sandbox_id join dorf.sandbox_resources src on src.id=u.source_resource_id left join dorf.sandbox_resources dst on dst.id=u.destination_resource_id
-where s.job_id=sqlc.arg(job_id) order by u.requested_at,u.id;
+-- name: ListSessionUpgrades :many
+select u.*,s.session_id,coalesce(src.provider_id,'') as source_provider_id,coalesce(dst.provider_id,'') as destination_provider_id from dorf.sandbox_upgrades u join dorf.sandboxes s on s.id=u.sandbox_id join dorf.sandbox_resources src on src.id=u.source_resource_id left join dorf.sandbox_resources dst on dst.id=u.destination_resource_id
+where s.session_id=sqlc.arg(session_id) order by u.requested_at,u.id;
 
 -- name: InsertSandboxUpgrade :exec
 insert into dorf.sandbox_upgrades(id,sandbox_id,source_resource_id,package_path,version)
 values(sqlc.arg(id),sqlc.arg(sandbox_id),sqlc.arg(source_resource_id),sqlc.arg(package_path),sqlc.arg(version));
 
 -- name: UpgradeQuiescent :one
-select coalesce(not exists(select 1 from dorf.agent_runs ar join dorf.job_messages m on m.id=ar.message_id
+select coalesce(not exists(select 1 from dorf.agent_runs ar join dorf.session_messages m on m.id=ar.message_id
 where ar.sandbox_id=sqlc.arg(sandbox_id) and ar.state not in ('completed','failed','interrupted')
 and (ar.state <> 'pending' or ar.baseline_turn_id is not null or m.delivery_intent='steer')),false)::boolean as quiet;
 

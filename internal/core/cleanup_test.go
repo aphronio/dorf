@@ -4,8 +4,8 @@ import "testing"
 
 func TestCleanupActionOrderIsExactAndStable(t *testing.T) {
 	targets := cleanupTargets([]Sandbox{
-		{ID: "sandbox-b", JobID: "job-1"},
-		{ID: "sandbox-a", JobID: "job-1"},
+		{ID: "sandbox-b", SessionID: "job-1"},
+		{ID: "sandbox-a", SessionID: "job-1"},
 	})
 	want := []struct {
 		sandbox string

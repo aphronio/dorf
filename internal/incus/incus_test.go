@@ -160,7 +160,7 @@ func ownedInstance(owner OwnershipMetadata) Instance {
 }
 
 func TestCreateClassifiesOnlyMissingImageAsUnavailableProfileArtifact(t *testing.T) {
-	owner := OwnershipMetadata{JobID: "job-1", SandboxID: "dorf-owned", OwnershipNonce: strings.Repeat("b", 64)}
+	owner := OwnershipMetadata{SessionID: "job-1", SandboxID: "dorf-owned", OwnershipNonce: strings.Repeat("b", 64)}
 	for _, test := range []struct {
 		name        string
 		createErr   error
@@ -182,7 +182,7 @@ func TestCreateClassifiesOnlyMissingImageAsUnavailableProfileArtifact(t *testing
 }
 
 func TestSandboxRequiresExactDurableOwnership(t *testing.T) {
-	owner := OwnershipMetadata{JobID: "job-1", SandboxID: "dorf-owned", OwnershipNonce: strings.Repeat("b", 64)}
+	owner := OwnershipMetadata{SessionID: "job-1", SandboxID: "dorf-owned", OwnershipNonce: strings.Repeat("b", 64)}
 	client := newFakeClient(ownedInstance(owner))
 	sandbox := Sandbox{ClientFactory: &fakeFactory{client: client}}
 	if err := sandbox.AttestOwnership(context.Background(), owner); err != nil {
@@ -202,7 +202,7 @@ func TestSandboxRequiresExactDurableOwnership(t *testing.T) {
 }
 
 func TestSandboxDeletionIsRetrySafeButNeverDeletesForeignMetadata(t *testing.T) {
-	owner := OwnershipMetadata{JobID: "job-1", SandboxID: "dorf-owned", OwnershipNonce: strings.Repeat("b", 64)}
+	owner := OwnershipMetadata{SessionID: "job-1", SandboxID: "dorf-owned", OwnershipNonce: strings.Repeat("b", 64)}
 	client := newFakeClient()
 	sandbox := Sandbox{ClientFactory: &fakeFactory{client: client}}
 	for range 2 {
@@ -220,7 +220,7 @@ func TestOwnedSandboxCreationUsesRecordedIdentityAndCredentialFreeBoundary(t *te
 	client := newFakeClient()
 	factory := &fakeFactory{client: client}
 	sandbox := Sandbox{Config: Config{Image: "dorf-codex", Network: "incusbr0", DiskSize: "40GiB", Workspace: "/workspace/job"}, ClientFactory: factory, Sleep: func(time.Duration) {}}
-	owner := OwnershipMetadata{JobID: "job-1", SandboxID: "dorf-sandbox-exact", OwnershipNonce: strings.Repeat("a", 64)}
+	owner := OwnershipMetadata{SessionID: "job-1", SandboxID: "dorf-sandbox-exact", OwnershipNonce: strings.Repeat("a", 64)}
 	if err := sandbox.ReconcileOwnedCreate(context.Background(), owner); err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +265,7 @@ func TestDefaultConnectionUsesDedicatedRestrictedProject(t *testing.T) {
 }
 
 func TestPortForwardEndpointIsFailClosedAndOpensAFreshOwnedStream(t *testing.T) {
-	owner := OwnershipMetadata{JobID: "job-1", SandboxID: "dorf-owned", OwnershipNonce: strings.Repeat("b", 64)}
+	owner := OwnershipMetadata{SessionID: "job-1", SandboxID: "dorf-owned", OwnershipNonce: strings.Repeat("b", 64)}
 	client := newFakeClient(ownedInstance(owner))
 	var peers []net.Conn
 	client.forward = func(context.Context) (net.Conn, error) {
@@ -306,7 +306,7 @@ func TestPortForwardEndpointIsFailClosedAndOpensAFreshOwnedStream(t *testing.T) 
 }
 
 func TestPortForwardEndpointPropagatesDialCancellation(t *testing.T) {
-	owner := OwnershipMetadata{JobID: "job-1", SandboxID: "dorf-owned", OwnershipNonce: strings.Repeat("b", 64)}
+	owner := OwnershipMetadata{SessionID: "job-1", SandboxID: "dorf-owned", OwnershipNonce: strings.Repeat("b", 64)}
 	client := newFakeClient(ownedInstance(owner))
 	client.forward = func(ctx context.Context) (net.Conn, error) {
 		<-ctx.Done()

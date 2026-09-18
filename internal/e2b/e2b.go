@@ -25,7 +25,7 @@ const (
 
 const (
 	metadataOwner          = "dorf.owner"
-	metadataJob            = "dorf.job"
+	metadataSession        = "dorf.job"
 	metadataSandbox        = "dorf.sandbox"
 	metadataOwnershipNonce = "dorf.ownership_nonce"
 )
@@ -43,7 +43,7 @@ type Client struct {
 // Ownership is Dorf's durable identity for a provider Sandbox. Provider IDs
 // are opaque locators and are deliberately not part of this identity.
 type Ownership struct {
-	JobID          string
+	SessionID      string
 	SandboxID      string
 	OwnershipNonce string
 }
@@ -412,7 +412,7 @@ func missingTemplate(apiErr *APIError) bool {
 }
 
 func validateOwnership(owner Ownership) error {
-	if strings.TrimSpace(owner.JobID) == "" || strings.TrimSpace(owner.SandboxID) == "" || len(owner.OwnershipNonce) != 64 {
+	if strings.TrimSpace(owner.SessionID) == "" || strings.TrimSpace(owner.SandboxID) == "" || len(owner.OwnershipNonce) != 64 {
 		return fmt.Errorf("E2B Sandbox requires complete host-owned identity metadata")
 	}
 	return nil
@@ -421,7 +421,7 @@ func validateOwnership(owner Ownership) error {
 func (o Ownership) metadata() map[string]string {
 	return map[string]string{
 		metadataOwner:          "sandbox",
-		metadataJob:            o.JobID,
+		metadataSession:        o.SessionID,
 		metadataSandbox:        o.SandboxID,
 		metadataOwnershipNonce: o.OwnershipNonce,
 	}

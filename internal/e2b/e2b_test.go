@@ -19,7 +19,7 @@ import (
 func TestLifecycleReconcilesLostCreateResponseAndDeletesOnlyOwnedSandbox(t *testing.T) {
 	api := newFakeAPI(t)
 
-	owner := Ownership{JobID: "job-1", SandboxID: "dorf-job-1", OwnershipNonce: strings.Repeat("a", 64)}
+	owner := Ownership{SessionID: "job-1", SandboxID: "dorf-job-1", OwnershipNonce: strings.Repeat("a", 64)}
 	client := Client{
 		APIURL: "https://e2b.test",
 		APIKey: "test-key",
@@ -39,7 +39,7 @@ func TestLifecycleReconcilesLostCreateResponseAndDeletesOnlyOwnedSandbox(t *test
 	if discovered == nil || discovered.ProviderID != "provider-1" {
 		t.Fatalf("discovered Sandbox = %#v", discovered)
 	}
-	commonOwner := provider.Ownership{JobID: owner.JobID, SandboxID: owner.SandboxID, OwnershipNonce: owner.OwnershipNonce}
+	commonOwner := provider.Ownership{SessionID: owner.SessionID, SandboxID: owner.SandboxID, OwnershipNonce: owner.OwnershipNonce}
 	adapter := Adapter{Client: client, Config: AdapterConfig{SandboxTimeout: 10 * time.Minute, Workspace: "/workspace/job"}}
 	if present, err := adapter.OwnedPresent(context.Background(), commonOwner); err != nil || !present {
 		t.Fatalf("common Sandbox presence = %v, %v", present, err)
@@ -82,13 +82,13 @@ func TestLifecycleReconcilesLostCreateResponseAndDeletesOnlyOwnedSandbox(t *test
 func TestAdapterEndpointRequiresOwnershipAndBuildsScopedProviderDial(t *testing.T) {
 	api := newFakeAPI(t)
 	client := Client{APIURL: "https://e2b.test", APIKey: "test-key", HTTPClient: &http.Client{Transport: handlerTransport{handler: api}}}
-	owner := Ownership{JobID: "job-endpoint", SandboxID: "dorf-job-endpoint", OwnershipNonce: strings.Repeat("e", 64)}
+	owner := Ownership{SessionID: "job-endpoint", SandboxID: "dorf-job-endpoint", OwnershipNonce: strings.Repeat("e", 64)}
 	if _, err := client.Create(context.Background(), CreateRequest{
 		Template: "template:build", Timeout: 10 * time.Minute, Owner: owner, AllowedHostnames: []string{"gateway.example"},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	commonOwner := provider.Ownership{JobID: owner.JobID, SandboxID: owner.SandboxID, OwnershipNonce: owner.OwnershipNonce}
+	commonOwner := provider.Ownership{SessionID: owner.SessionID, SandboxID: owner.SandboxID, OwnershipNonce: owner.OwnershipNonce}
 	adapter := Adapter{Client: client, Config: AdapterConfig{SandboxTimeout: 10 * time.Minute}}
 	foreign := commonOwner
 	foreign.OwnershipNonce = strings.Repeat("f", 64)
@@ -135,7 +135,7 @@ func TestProviderRouteURLRequiresExactHTTPSV1Endpoint(t *testing.T) {
 func TestCreateCanExplicitlyUseProfileInternetAccess(t *testing.T) {
 	api := newFakeAPI(t)
 	client := Client{APIURL: "https://e2b.test", APIKey: "test-key", HTTPClient: &http.Client{Transport: handlerTransport{handler: api}}}
-	owner := Ownership{JobID: "job-internet", SandboxID: "dorf-job-internet", OwnershipNonce: strings.Repeat("d", 64)}
+	owner := Ownership{SessionID: "job-internet", SandboxID: "dorf-job-internet", OwnershipNonce: strings.Repeat("d", 64)}
 	if _, err := client.Create(context.Background(), CreateRequest{Template: "template:build", Timeout: 10 * time.Minute, Owner: owner, AllowedHostnames: []string{"gateway.example"}, AllowInternet: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestCreateClassifiesMissingTemplateAsUnavailableProfileArtifact(t *testing.
 		_, _ = io.WriteString(response, `{"code":404,"message":"template not found"}`)
 	})
 	client := Client{APIURL: "https://e2b.test", APIKey: "test-key", HTTPClient: &http.Client{Transport: handlerTransport{handler: handler}}}
-	owner := Ownership{JobID: "job-missing", SandboxID: "sandbox-missing", OwnershipNonce: strings.Repeat("f", 64)}
+	owner := Ownership{SessionID: "job-missing", SandboxID: "sandbox-missing", OwnershipNonce: strings.Repeat("f", 64)}
 	_, err := client.Create(context.Background(), CreateRequest{Template: "dorf/missing:build", Timeout: time.Minute, Owner: owner})
 	if !provider.IsArtifactUnavailable(err) || !strings.Contains(err.Error(), `E2B template "dorf/missing:build" is unavailable`) {
 		t.Fatalf("missing template error = %v", err)
@@ -176,7 +176,7 @@ func TestCreateDoesNotClassifyUnrelated404AsMissingTemplate(t *testing.T) {
 		_, _ = io.WriteString(response, `{"code":404,"message":"route not found"}`)
 	})
 	client := Client{APIURL: "https://e2b.test", APIKey: "test-key", HTTPClient: &http.Client{Transport: handlerTransport{handler: handler}}}
-	owner := Ownership{JobID: "job-missing", SandboxID: "sandbox-missing", OwnershipNonce: strings.Repeat("f", 64)}
+	owner := Ownership{SessionID: "job-missing", SandboxID: "sandbox-missing", OwnershipNonce: strings.Repeat("f", 64)}
 	_, err := client.Create(context.Background(), CreateRequest{Template: "dorf/standard:build", Timeout: time.Minute, Owner: owner})
 	if err == nil || provider.IsArtifactUnavailable(err) {
 		t.Fatalf("unrelated 404 error = %v", err)
@@ -220,7 +220,7 @@ func TestCredentialCheckIsReadOnlyAndAuthenticated(t *testing.T) {
 }
 
 func TestFindOwnedPaginatesRunningAndPausedAndRejectsDuplicates(t *testing.T) {
-	owner := Ownership{JobID: "job-2", SandboxID: "dorf-job-2", OwnershipNonce: strings.Repeat("c", 64)}
+	owner := Ownership{SessionID: "job-2", SandboxID: "dorf-job-2", OwnershipNonce: strings.Repeat("c", 64)}
 	requests := 0
 	handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		requests++

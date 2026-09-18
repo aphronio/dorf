@@ -11,8 +11,8 @@ import (
 // PrepareCleanup resolves a possibly lost checkpoint acknowledgement before
 // the normal cleanup path deletes its source. It removes every inactive owned
 // resource, including a replacement reserved before a lost create response.
-func (s Service) PrepareCleanup(ctx context.Context, jobID string) error {
-	return s.cleanup(ctx, jobID, func(r Receipt, source core.Sandbox) error {
+func (s Service) PrepareCleanup(ctx context.Context, sessionID string) error {
+	return s.cleanup(ctx, sessionID, func(r Receipt, source core.Sandbox) error {
 		if !r.QuiescedAt.IsZero() && r.Checkpoint.Reference == "" {
 			if err := s.perform(ctx, r, "checkpoint-reconcile", func() error {
 				checkpoint, err := s.Driver.Capture(ctx, source, r.ID)
@@ -32,14 +32,14 @@ func (s Service) PrepareCleanup(ctx context.Context, jobID string) error {
 			if id == "" || id == active.ResourceID {
 				continue
 			}
-			deleted, err := s.resourceDeleted(ctx, jobID, id)
+			deleted, err := s.resourceDeleted(ctx, sessionID, id)
 			if err != nil {
 				return err
 			}
 			if deleted {
 				continue
 			}
-			owned, err := s.Store.SandboxResource(ctx, jobID, r.SandboxID, id)
+			owned, err := s.Store.SandboxResource(ctx, sessionID, r.SandboxID, id)
 			if err != nil {
 				return err
 			}
@@ -53,35 +53,35 @@ func (s Service) PrepareCleanup(ctx context.Context, jobID string) error {
 
 // CompleteCleanup runs after current-resource deletion. E2B's backing snapshot
 // can only be removed after its replacement VM has been deleted.
-func (s Service) CompleteCleanup(ctx context.Context, jobID string) error {
-	return s.cleanup(ctx, jobID, func(r Receipt, source core.Sandbox) error {
+func (s Service) CompleteCleanup(ctx context.Context, sessionID string) error {
+	return s.cleanup(ctx, sessionID, func(r Receipt, source core.Sandbox) error {
 		if r.Checkpoint.Reference == "" || !r.CheckpointDeletedAt.IsZero() {
 			return nil
 		}
 		return s.deleteCheckpoint(ctx, r, source)
 	})
 }
-func (s Service) cleanup(ctx context.Context, jobID string, fn func(Receipt, core.Sandbox) error) error {
-	return s.Store.WithJobFence(ctx, jobID, func() error {
-		job, err := s.Store.Job(ctx, jobID)
+func (s Service) cleanup(ctx context.Context, sessionID string, fn func(Receipt, core.Sandbox) error) error {
+	return s.Store.WithSessionFence(ctx, sessionID, func() error {
+		session, err := s.Store.Session(ctx, sessionID)
 		if err != nil {
 			return err
 		}
-		if task, ok := absurd.TaskFromContext(ctx); ok && task.TaskID() != job.CurrentTaskID {
-			return fmt.Errorf("upgrade cleanup no longer owns the Job task")
+		if task, ok := absurd.TaskFromContext(ctx); ok && task.TaskID() != session.CurrentTaskID {
+			return fmt.Errorf("upgrade cleanup no longer owns the Session task")
 		}
-		if job.AdmissionOpen || job.CleanupState != core.CleanupScheduled {
-			return fmt.Errorf("upgrade cleanup requires the scheduled Job cleanup owner")
+		if session.AdmissionOpen || session.CleanupState != core.CleanupScheduled {
+			return fmt.Errorf("upgrade cleanup requires the scheduled Session cleanup owner")
 		}
 		if err := s.requireClaim(ctx); err != nil {
 			return err
 		}
-		receipts, err := s.Store.JobUpgrades(ctx, jobID)
+		receipts, err := s.Store.SessionUpgrades(ctx, sessionID)
 		if err != nil {
 			return err
 		}
 		for _, r := range receipts {
-			source, err := s.Store.SandboxResource(ctx, jobID, r.SandboxID, r.SourceResourceID)
+			source, err := s.Store.SandboxResource(ctx, sessionID, r.SandboxID, r.SourceResourceID)
 			if err != nil {
 				return err
 			}

@@ -239,7 +239,7 @@ func (s Store) ActiveSandboxProfile(ctx context.Context, name string) (core.Sand
 
 func (s Store) SandboxProfileRevision(ctx context.Context, ref core.SandboxProfileRef) (core.SandboxProfile, error) {
 	if ref.Name == "" || ref.Revision == "" {
-		return core.SandboxProfile{}, fmt.Errorf("Job requires an exact Sandbox profile revision")
+		return core.SandboxProfile{}, fmt.Errorf("Session requires an exact Sandbox profile revision")
 	}
 	row, err := dbsql.New(s.DB).GetSandboxProfileRevision(ctx, dbsql.GetSandboxProfileRevisionParams{Name: ref.Name, DefinitionHash: ref.Revision})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -419,12 +419,12 @@ func (s Store) RecordSandboxProfileVerificationError(ctx context.Context, verifi
 }
 
 // RecordSandboxProfileUnavailable atomically fences new admission through an
-// exact verified profile and leaves the affected Job at its current fact.
+// exact verified profile and leaves the affected Session at its current fact.
 // Existing resources remain recoverable by cleanup through the pinned profile.
-func (s Store) RecordSandboxProfileUnavailable(ctx context.Context, jobID, profileName, source string, failure error) error {
-	jobID, profileName, source = strings.TrimSpace(jobID), strings.TrimSpace(profileName), strings.TrimSpace(source)
-	if jobID == "" || profileName == "" || source == "" || failure == nil {
-		return fmt.Errorf("unavailable Sandbox profile requires Job ID, profile, exact source, and failure")
+func (s Store) RecordSandboxProfileUnavailable(ctx context.Context, sessionID, profileName, source string, failure error) error {
+	sessionID, profileName, source = strings.TrimSpace(sessionID), strings.TrimSpace(profileName), strings.TrimSpace(source)
+	if sessionID == "" || profileName == "" || source == "" || failure == nil {
+		return fmt.Errorf("unavailable Sandbox profile requires Session ID, profile, exact source, and failure")
 	}
 	detail := strings.TrimSpace(failure.Error())
 	if detail == "" {
@@ -444,15 +444,15 @@ func (s Store) RecordSandboxProfileUnavailable(ctx context.Context, jobID, profi
 	} else if err != nil {
 		return err
 	}
-	jobProfile, err := queries.GetJobSandboxProfileForUpdate(ctx, jobID)
+	sessionProfile, err := queries.GetSessionSandboxProfileForUpdate(ctx, sessionID)
 	if err != nil {
 		return err
 	}
-	if jobProfile != profileName {
-		return fmt.Errorf("Job %s pins Sandbox profile %q, not %q", jobID, jobProfile, profileName)
+	if sessionProfile != profileName {
+		return fmt.Errorf("Session %s pins Sandbox profile %q, not %q", sessionID, sessionProfile, profileName)
 	}
 	rows, err := queries.MarkSandboxProfileUnavailable(ctx, dbsql.MarkSandboxProfileUnavailableParams{
-		LastError: nullableString(detail), ProfileName: profileName, JobID: jobID, ContractVersion: core.BaseProfileContract,
+		LastError: nullableString(detail), ProfileName: profileName, SessionID: sessionID, ContractVersion: core.BaseProfileContract,
 	})
 	if err != nil {
 		return err
@@ -461,13 +461,13 @@ func (s Store) RecordSandboxProfileUnavailable(ctx context.Context, jobID, profi
 		return fmt.Errorf("Sandbox profile %q has no settled Dorf %s verification to invalidate", profileName, core.BaseProfileContract)
 	}
 	rows, err = queries.SetWorkflowAttention(ctx, dbsql.SetWorkflowAttentionParams{
-		JobID: jobID, Source: nullableString(source), Detail: nullableString(detail),
+		SessionID: sessionID, Source: nullableString(source), Detail: nullableString(detail),
 	})
 	if err != nil {
 		return err
 	}
 	if rows != 1 {
-		return fmt.Errorf("Job %s already has attention owned by a different fact", jobID)
+		return fmt.Errorf("Session %s already has attention owned by a different fact", sessionID)
 	}
 	return tx.Commit()
 }

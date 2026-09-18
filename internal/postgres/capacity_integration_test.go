@@ -21,7 +21,7 @@ import (
 const (
 	capacityProviderDelay = 40 * time.Millisecond
 	capacityNativeDelay   = 60 * time.Millisecond
-	capacityWaveJobs      = 8
+	capacityWaveSessions  = 8
 )
 
 type capacityTracker struct {
@@ -68,28 +68,28 @@ func (t *capacityTracker) external(ctx context.Context, delay time.Duration, eff
 
 type capacityExternals struct{ tracker *capacityTracker }
 
-func (e capacityExternals) provider(ctx context.Context, job core.Job) error {
+func (e capacityExternals) provider(ctx context.Context, session core.Session) error {
 	return e.tracker.external(ctx, capacityProviderDelay, func() {
 		e.tracker.mu.Lock()
-		e.tracker.providerCalls[job.ID]++
+		e.tracker.providerCalls[session.ID]++
 		e.tracker.mu.Unlock()
 	})
 }
 
-func (e capacityExternals) SandboxCreate(ctx context.Context, job core.Job, owned core.Sandbox) (string, error) {
-	return owned.ID, e.provider(ctx, job)
+func (e capacityExternals) SandboxCreate(ctx context.Context, session core.Session, owned core.Sandbox) (string, error) {
+	return owned.ID, e.provider(ctx, session)
 }
-func (e capacityExternals) RouteCreate(ctx context.Context, job core.Job, _ core.Sandbox, _ core.Route) error {
-	return e.provider(ctx, job)
+func (e capacityExternals) RouteCreate(ctx context.Context, session core.Session, _ core.Sandbox, _ core.Route) error {
+	return e.provider(ctx, session)
 }
-func (capacityExternals) RouteRevoke(context.Context, core.Job, core.Sandbox, core.Route) error {
+func (capacityExternals) RouteRevoke(context.Context, core.Session, core.Sandbox, core.Route) error {
 	return nil
 }
-func (capacityExternals) SandboxDelete(context.Context, core.Job, core.Sandbox) error { return nil }
-func (capacityExternals) SteerHistory(context.Context, core.Job, string, string) (core.HarnessHistory, error) {
+func (capacityExternals) SandboxDelete(context.Context, core.Session, core.Sandbox) error { return nil }
+func (capacityExternals) SteerHistory(context.Context, core.Session, string, string) (core.HarnessHistory, error) {
 	return core.HarnessHistory{}, nil
 }
-func (capacityExternals) AgentSteer(context.Context, core.Job, core.Delivery) (string, error) {
+func (capacityExternals) AgentSteer(context.Context, core.Session, core.Delivery) (string, error) {
 	return "", errors.New("capacity proof does not admit Steer messages")
 }
 
@@ -110,17 +110,17 @@ type capacityOperation struct {
 func (capacityOperation) Harness() string { return "capacity-fake" }
 func (o capacityOperation) binding(run core.AgentRun) core.HarnessBinding {
 	return core.HarnessBinding{
-		Harness: "capacity-fake", ThreadID: "capacity-thread-" + o.execution.Job.ID,
+		Harness: "capacity-fake", ThreadID: "capacity-thread-" + o.execution.Session.ID,
 		Turn: core.HarnessTurn{ID: "capacity-turn-" + run.ID, Status: "completed"},
 	}
 }
 func (o capacityOperation) Submit(ctx context.Context, run core.AgentRun, _ string) (core.HarnessBinding, error) {
 	err := o.tracker.external(ctx, capacityNativeDelay, func() {
 		o.tracker.mu.Lock()
-		if _, exists := o.tracker.dispatched[o.execution.Job.ID]; !exists {
-			o.tracker.dispatched[o.execution.Job.ID] = time.Now()
+		if _, exists := o.tracker.dispatched[o.execution.Session.ID]; !exists {
+			o.tracker.dispatched[o.execution.Session.ID] = time.Now()
 		}
-		o.tracker.submissions[o.execution.Job.ID]++
+		o.tracker.submissions[o.execution.Session.ID]++
 		o.tracker.mu.Unlock()
 	})
 	return o.binding(run), err
@@ -136,11 +136,11 @@ func (o capacityOperation) History(_ context.Context, run core.AgentRun) (core.H
 type capacityWaveResult struct {
 	Concurrency               int       `json:"concurrency"`
 	Wave                      int       `json:"wave"`
-	Jobs                      int       `json:"jobs"`
+	Sessions                  int       `json:"sessions"`
 	RequestStartToDispatchMS  []float64 `json:"request_start_to_dispatch_ms"`
 	RequestStartToDispatchP50 float64   `json:"request_start_to_dispatch_p50_ms"`
 	RequestStartToDispatchP95 float64   `json:"request_start_to_dispatch_p95_ms"`
-	ElapsedAllJobsMS          float64   `json:"elapsed_all_jobs_ms"`
+	ElapsedAllSessionsMS      float64   `json:"elapsed_all_sessions_ms"`
 	PeakExternalOperations    int       `json:"peak_external_operations"`
 	PeakDBOpenConnections     int       `json:"peak_db_open_connections"`
 	PeakDBInUseConnections    int       `json:"peak_db_in_use_connections"`
@@ -199,7 +199,7 @@ func TestDirectWorkerCapacityProof(t *testing.T) {
 }
 
 func runCapacityWave(t *testing.T, ctx context.Context, db *sql.DB, store interface {
-	AdmitDirect(context.Context, core.JobAdmission, string) (core.Job, bool, error)
+	AdmitDirect(context.Context, core.SessionAdmission, string) (core.Session, bool, error)
 	AdmitDirectMessage(context.Context, core.MessageAdmission) (core.MessageAdmissionResult, error)
 	Deliveries(context.Context, string) ([]core.Delivery, error)
 }, client *absurd.Client, application core.Application, tracker *capacityTracker, concurrency, wave int) capacityWaveResult {
@@ -227,51 +227,51 @@ func runCapacityWave(t *testing.T, ctx context.Context, db *sql.DB, store interf
 	defer stopSampling()
 
 	type admitted struct {
-		job core.Job
-		err error
+		session core.Session
+		err     error
 	}
 	ready := make(chan struct{})
-	jobs := make(chan admitted, capacityWaveJobs)
-	for index := range capacityWaveJobs {
+	sessions := make(chan admitted, capacityWaveSessions)
+	for index := range capacityWaveSessions {
 		go func(index int) {
 			<-ready
 			requestStart := time.Now()
-			job, created, err := store.AdmitDirect(ctx, core.JobAdmission{
+			session, created, err := store.AdmitDirect(ctx, core.SessionAdmission{
 				AdmissionKey:   fmt.Sprintf("capacity-%d-%d-%d-%d", concurrency, wave, index, start.UnixNano()),
 				SandboxProfile: "incus", ProviderConnection: "primary", Model: "fake", ReasoningEffort: "low",
 			}, client.QueueName())
 			if err == nil && !created {
-				err = errors.New("capacity Job replayed unexpectedly")
+				err = errors.New("capacity Session replayed unexpectedly")
 			}
 			if err == nil {
 				tracker.mu.Lock()
-				tracker.requestStarted[job.ID] = requestStart
+				tracker.requestStarted[session.ID] = requestStart
 				tracker.mu.Unlock()
-				message, messageErr := store.AdmitDirectMessage(ctx, fixtureMessage(job.ID))
+				message, messageErr := store.AdmitDirectMessage(ctx, fixtureMessage(session.ID))
 				if messageErr != nil {
 					err = messageErr
 				} else {
 					err = application.EmitMessageWake(ctx, message.Message)
 				}
 			}
-			jobs <- admitted{job: job, err: err}
+			sessions <- admitted{session: session, err: err}
 		}(index)
 	}
 	close(ready)
-	waveJobs := make([]core.Job, 0, capacityWaveJobs)
-	for range capacityWaveJobs {
-		item := <-jobs
+	waveSessions := make([]core.Session, 0, capacityWaveSessions)
+	for range capacityWaveSessions {
+		item := <-sessions
 		if item.err != nil {
 			t.Fatal(item.err)
 		}
-		waveJobs = append(waveJobs, item.job)
+		waveSessions = append(waveSessions, item.session)
 	}
-	waitCapacitySettled(t, ctx, store, waveJobs)
+	waitCapacitySettled(t, ctx, store, waveSessions)
 	elapsed := time.Since(start)
-	sleeping := waitCapacitySleeping(t, ctx, client, waveJobs)
+	sleeping := waitCapacitySleeping(t, ctx, client, waveSessions)
 
 	freshStart := time.Now()
-	fresh, created, err := store.AdmitDirect(ctx, core.JobAdmission{
+	fresh, created, err := store.AdmitDirect(ctx, core.SessionAdmission{
 		AdmissionKey:   fmt.Sprintf("capacity-fresh-%d-%d-%d", concurrency, wave, freshStart.UnixNano()),
 		SandboxProfile: "incus", ProviderConnection: "primary", Model: "fake", ReasoningEffort: "low",
 	}, client.QueueName())
@@ -288,22 +288,22 @@ func runCapacityWave(t *testing.T, ctx context.Context, db *sql.DB, store interf
 	if err := application.EmitMessageWake(ctx, message.Message); err != nil {
 		t.Fatal(err)
 	}
-	waitCapacitySettled(t, ctx, store, []core.Job{fresh})
+	waitCapacitySettled(t, ctx, store, []core.Session{fresh})
 
 	stopSampling()
 	after := db.Stats()
 	tracker.mu.Lock()
-	latencies := make([]float64, 0, len(waveJobs))
+	latencies := make([]float64, 0, len(waveSessions))
 	var invalid string
-	for _, job := range waveJobs {
-		if tracker.submissions[job.ID] != 1 || tracker.providerCalls[job.ID] != 2 {
-			invalid = fmt.Sprintf("Job %s submissions=%d provider_calls=%d", job.ID, tracker.submissions[job.ID], tracker.providerCalls[job.ID])
+	for _, session := range waveSessions {
+		if tracker.submissions[session.ID] != 1 || tracker.providerCalls[session.ID] != 2 {
+			invalid = fmt.Sprintf("Session %s submissions=%d provider_calls=%d", session.ID, tracker.submissions[session.ID], tracker.providerCalls[session.ID])
 			break
 		}
-		latencies = append(latencies, float64(tracker.dispatched[job.ID].Sub(tracker.requestStarted[job.ID]))/float64(time.Millisecond))
+		latencies = append(latencies, float64(tracker.dispatched[session.ID].Sub(tracker.requestStarted[session.ID]))/float64(time.Millisecond))
 	}
 	if invalid == "" && (tracker.submissions[fresh.ID] != 1 || tracker.providerCalls[fresh.ID] != 2) {
-		invalid = fmt.Sprintf("fresh Job submissions=%d provider_calls=%d", tracker.submissions[fresh.ID], tracker.providerCalls[fresh.ID])
+		invalid = fmt.Sprintf("fresh Session submissions=%d provider_calls=%d", tracker.submissions[fresh.ID], tracker.providerCalls[fresh.ID])
 	}
 	freshLatency := float64(tracker.dispatched[fresh.ID].Sub(tracker.requestStarted[fresh.ID])) / float64(time.Millisecond)
 	externalPeak := tracker.peak
@@ -316,9 +316,9 @@ func runCapacityWave(t *testing.T, ctx context.Context, db *sql.DB, store interf
 	}
 	sort.Float64s(latencies)
 	return capacityWaveResult{
-		Concurrency: concurrency, Wave: wave, Jobs: len(waveJobs), RequestStartToDispatchMS: latencies,
+		Concurrency: concurrency, Wave: wave, Sessions: len(waveSessions), RequestStartToDispatchMS: latencies,
 		RequestStartToDispatchP50: capacityMedian(latencies), RequestStartToDispatchP95: capacityNearestRank(latencies, .95),
-		ElapsedAllJobsMS: float64(elapsed) / float64(time.Millisecond), PeakExternalOperations: externalPeak,
+		ElapsedAllSessionsMS: float64(elapsed) / float64(time.Millisecond), PeakExternalOperations: externalPeak,
 		PeakDBOpenConnections: peak[0], PeakDBInUseConnections: peak[1], DBPoolWaitCountDelta: after.WaitCount - before.WaitCount,
 		DBPoolWaitDurationMS:  float64(after.WaitDuration-before.WaitDuration) / float64(time.Millisecond),
 		SleepingRetainedTasks: sleeping, FreshRequestToDispatchMS: freshLatency,
@@ -340,22 +340,22 @@ func capacityNearestRank(ordered []float64, quantile float64) float64 {
 
 func waitCapacitySettled(t *testing.T, ctx context.Context, store interface {
 	Deliveries(context.Context, string) ([]core.Delivery, error)
-}, jobs []core.Job) {
+}, sessions []core.Session) {
 	t.Helper()
 	for {
 		settled := 0
-		for _, job := range jobs {
-			deliveries, err := store.Deliveries(ctx, job.ID)
+		for _, session := range sessions {
+			deliveries, err := store.Deliveries(ctx, session.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if len(deliveries) == 1 && deliveries[0].AgentRun.State == core.AgentRunCompleted {
 				settled++
 			} else if len(deliveries) > 1 {
-				t.Fatalf("Job %s has %d deliveries", job.ID, len(deliveries))
+				t.Fatalf("Session %s has %d deliveries", session.ID, len(deliveries))
 			}
 		}
-		if settled == len(jobs) {
+		if settled == len(sessions) {
 			return
 		}
 		select {
@@ -366,12 +366,12 @@ func waitCapacitySettled(t *testing.T, ctx context.Context, store interface {
 	}
 }
 
-func waitCapacitySleeping(t *testing.T, ctx context.Context, client *absurd.Client, jobs []core.Job) int {
+func waitCapacitySleeping(t *testing.T, ctx context.Context, client *absurd.Client, sessions []core.Session) int {
 	t.Helper()
 	for {
 		sleeping := 0
-		for _, job := range jobs {
-			snapshot, err := client.FetchTaskResult(ctx, client.QueueName(), job.CurrentTaskID)
+		for _, session := range sessions {
+			snapshot, err := client.FetchTaskResult(ctx, client.QueueName(), session.CurrentTaskID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -379,7 +379,7 @@ func waitCapacitySleeping(t *testing.T, ctx context.Context, client *absurd.Clie
 				sleeping++
 			}
 		}
-		if sleeping == len(jobs) {
+		if sleeping == len(sessions) {
 			return sleeping
 		}
 		select {

@@ -138,7 +138,7 @@ func (r profileRuntimeResolver) SupportsMessageImages(ctx context.Context, ref c
 	return profile.Harness == codex.Harness, nil
 }
 
-// Runtime resolution is downstream of Job admission. The Job's immutable
+// Runtime resolution is downstream of Session admission. The Session's immutable
 // reference to this definition remains usable while a later verification
 // receipt is unsettled or failed; only new admission and default selection
 // consult that live eligibility receipt.
@@ -165,7 +165,7 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, ref core.Sandbo
 		if err != nil {
 			return provider.Ownership{}, err
 		}
-		return provider.Ownership{JobID: owned.JobID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce}, nil
+		return provider.Ownership{SessionID: owned.SessionID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce}, nil
 	}
 	externals := terminal.Externals{
 		Sandbox: sandbox, Gateway: configuredProviderGateway(r.cfg),
@@ -199,9 +199,9 @@ func (s composedAgentExecution) ResolveAgentRunOperation(_ context.Context, exec
 	return terminal.NewAgentRunOperation(s.externals, execution)
 }
 func validateDirectAgentExecution(execution core.AgentMessageExecution) error {
-	job, run := execution.Job, execution.AgentRun
-	if job.Workflow != "" || job.WorkflowRevision != "" || run.Role != direct.DirectAgentRole ||
-		run.Capability != "" || run.InputRevision != "" || run.SandboxID != core.MainSandboxName(job.ID) ||
+	session, run := execution.Session, execution.AgentRun
+	if session.Workflow != "" || session.WorkflowRevision != "" || run.Role != direct.DirectAgentRole ||
+		run.Capability != "" || run.InputRevision != "" || run.SandboxID != core.MainSandboxName(session.ID) ||
 		execution.Sandbox.Name != core.DefaultSandbox {
 		return fmt.Errorf("Message %s conflicts with the exact client-directed Agent contract", execution.Message.ID)
 	}

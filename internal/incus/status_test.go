@@ -8,7 +8,7 @@ import (
 )
 
 func TestStatusDoesNotStartOrExecuteAndRejectsForeignOwnership(t *testing.T) {
-	owner := provider.Ownership{JobID: "job", SandboxID: "sandbox", OwnershipNonce: strings.Repeat("a", 64)}
+	owner := provider.Ownership{SessionID: "session", SandboxID: "sandbox", OwnershipNonce: strings.Repeat("a", 64)}
 	for raw, want := range map[string]string{"Running": "running", "Frozen": "paused", "Stopped": "stopped", "Starting": "unknown"} {
 		client := newFakeClient(Instance{Name: owner.SandboxID, Config: ownershipConfig(owner), Status: raw})
 		sandbox := Sandbox{ClientFactory: &fakeFactory{client: client}}

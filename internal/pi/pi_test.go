@@ -23,7 +23,7 @@ func testReviewSandbox(runner incustest.Runner) incus.Adapter {
 type ordinaryReviewSandbox struct{ provider.Sandbox }
 
 func testOwner(sandboxID string) provider.Ownership {
-	return provider.Ownership{JobID: "job-" + sandboxID, SandboxID: sandboxID, OwnershipNonce: strings.Repeat("a", 64)}
+	return provider.Ownership{SessionID: "job-" + sandboxID, SandboxID: sandboxID, OwnershipNonce: strings.Repeat("a", 64)}
 }
 
 type recordingRunner struct {
@@ -80,7 +80,7 @@ func (r *progressingHistoryRunner) Run(_ context.Context, _ string, _ []byte, _ 
 		stopReason = "stop"
 		content = `[{"type":"text","text":"done"}]`
 	}
-	return incus.Result{Stdout: `{"type":"session","version":3,"id":"dorf-job"}
+	return incus.Result{Stdout: `{"type":"session","version":3,"id":"dorf-session"}
 {"type":"message","id":"user0001","parentId":null,"message":{"role":"user","content":"inspect"}}
 {"type":"message","id":"assist01","parentId":"user0001","message":{"role":"assistant","content":` + content + `,"stopReason":"` + stopReason + `"}}`}, nil
 }
@@ -128,7 +128,7 @@ func TestInstallRouteUsesScopedGatewayKeyWithResponsesAPI(t *testing.T) {
 }
 
 func TestParseSessionMapsOnePromptToOneHarnessTurn(t *testing.T) {
-	raw := `{"type":"session","version":3,"id":"dorf-job","timestamp":"2026-08-13T00:00:00Z","cwd":"/workspace/job"}
+	raw := `{"type":"session","version":3,"id":"dorf-session","timestamp":"2026-08-13T00:00:00Z","cwd":"/workspace/job"}
 {"type":"message","id":"user0001","parentId":null,"timestamp":"2026-08-13T00:00:01Z","message":{"role":"user","content":"make the change"}}
 {"type":"message","id":"assist01","parentId":"user0001","timestamp":"2026-08-13T00:00:02Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"call","name":"bash","arguments":{}}],"stopReason":"toolUse"}}
 {"type":"message","id":"tool0001","parentId":"assist01","timestamp":"2026-08-13T00:00:03Z","message":{"role":"toolResult","toolCallId":"call","toolName":"bash","content":[{"type":"text","text":"ok"}],"isError":false}}
@@ -138,13 +138,13 @@ func TestParseSessionMapsOnePromptToOneHarnessTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if threadID != "dorf-job" || len(turns) != 1 || turns[0].ID != "user0001" || turns[0].Status != "completed" || turns[0].Output != "done" {
+	if threadID != "dorf-session" || len(turns) != 1 || turns[0].ID != "user0001" || turns[0].Status != "completed" || turns[0].Output != "done" {
 		t.Fatalf("thread=%q turns=%#v", threadID, turns)
 	}
 }
 
 func TestParseSessionKeepsQueuedSteerInsideActiveHarnessTurn(t *testing.T) {
-	raw := `{"type":"session","version":3,"id":"dorf-job"}
+	raw := `{"type":"session","version":3,"id":"dorf-session"}
 {"type":"message","id":"user0001","parentId":null,"message":{"role":"user","content":"first"}}
 	{"type":"message","id":"assist01","parentId":"user0001","message":{"role":"assistant","content":[],"stopReason":"toolUse"}}
 	{"type":"message","id":"user0002","parentId":"assist01","message":{"role":"user","content":"steer active work"}}
@@ -159,16 +159,16 @@ func TestParseSessionKeepsQueuedSteerInsideActiveHarnessTurn(t *testing.T) {
 }
 
 func TestReadInitialTurnsAdoptsNativeTurnAfterLostBinding(t *testing.T) {
-	runner := &recordingRunner{result: incus.Result{Stdout: `{"type":"session","version":3,"id":"dorf-job"}
+	runner := &recordingRunner{result: incus.Result{Stdout: `{"type":"session","version":3,"id":"dorf-session"}
 {"type":"message","id":"user0001","parentId":null,"message":{"role":"user","content":"inspect"}}
 {"type":"message","id":"assist01","parentId":"user0001","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"stop"}}`}}
-	agent := Agent{Sandbox: testSandbox(runner, testOwner("dorf-job"))}
+	agent := Agent{Sandbox: testSandbox(runner, testOwner("dorf-session"))}
 
-	history, err := agent.ReadInitialTurns(context.Background(), testOwner("dorf-job"), "/workspace/job")
+	history, err := agent.ReadInitialTurns(context.Background(), testOwner("dorf-session"), "/workspace/job")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runner.calls != 1 || history.Harness != Harness || history.ThreadID != "dorf-job" || len(history.Turns) != 1 {
+	if runner.calls != 1 || history.Harness != Harness || history.ThreadID != "dorf-session" || len(history.Turns) != 1 {
 		t.Fatalf("calls=%d history=%#v", runner.calls, history)
 	}
 	if turn := history.Turns[0]; turn.ID != "user0001" || turn.Status != "completed" || turn.Output != "done" {
@@ -180,7 +180,7 @@ func TestReadInitialTurnsAdoptsNativeTurnAfterLostBinding(t *testing.T) {
 }
 
 func TestStartTurnAppendsExactlyOneNativeTurn(t *testing.T) {
-	oneTurn := `{"type":"session","version":3,"id":"dorf-job"}
+	oneTurn := `{"type":"session","version":3,"id":"dorf-session"}
 {"type":"message","id":"user0001","parentId":null,"message":{"role":"user","content":"first"}}
 {"type":"message","id":"assist01","parentId":"user0001","message":{"role":"assistant","content":[{"type":"text","text":"first done"}],"stopReason":"stop"}}`
 	twoTurns := oneTurn + `
@@ -189,11 +189,11 @@ func TestStartTurnAppendsExactlyOneNativeTurn(t *testing.T) {
 	runner := &acceptedRPCPromptRunner{before: oneTurn, after: twoTurns, requestID: "run-2"}
 	agent := Agent{Sandbox: testSandbox(runner, testOwner("sandbox"))}
 
-	binding, err := agent.StartTurn(context.Background(), testOwner("sandbox"), "/workspace/job", "dorf-job", "run-2", core.HarnessInput{Text: "second"}, "gpt-test", "low", false)
+	binding, err := agent.StartTurn(context.Background(), testOwner("sandbox"), "/workspace/job", "dorf-session", "run-2", core.HarnessInput{Text: "second"}, "gpt-test", "low", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if binding.Harness != Harness || binding.ThreadID != "dorf-job" {
+	if binding.Harness != Harness || binding.ThreadID != "dorf-session" {
 		t.Fatalf("binding=%#v", binding)
 	}
 	if binding.Turn.ID != "user0002" || binding.Turn.Status != "completed" || binding.Turn.Output != "second done" {
@@ -234,11 +234,11 @@ func TestWaitTurnObservesExactNativeTurnUntilTerminal(t *testing.T) {
 	runner := &progressingHistoryRunner{}
 	agent := Agent{Sandbox: testSandbox(runner, testOwner("sandbox")), Timeout: time.Second}
 
-	binding, err := agent.WaitTurn(context.Background(), testOwner("sandbox"), "dorf-job", "user0001")
+	binding, err := agent.WaitTurn(context.Background(), testOwner("sandbox"), "dorf-session", "user0001")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runner.reads != 2 || binding.ThreadID != "dorf-job" || binding.Turn.ID != "user0001" || binding.Turn.Status != "completed" || binding.Turn.Output != "done" {
+	if runner.reads != 2 || binding.ThreadID != "dorf-session" || binding.Turn.ID != "user0001" || binding.Turn.Status != "completed" || binding.Turn.Output != "done" {
 		t.Fatalf("reads=%d binding=%#v", runner.reads, binding)
 	}
 }

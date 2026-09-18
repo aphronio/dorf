@@ -11,19 +11,20 @@ import (
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
+// Persisted task names and payload keys remain stable across the Session rename.
 const CleanupTaskName = "dorf-job-cleanup-v3"
 
-type JobTaskParams struct {
-	JobID          string `json:"job_id"`
+type SessionTaskParams struct {
+	SessionID      string `json:"job_id"`
 	PreviousTaskID string `json:"previous_task_id,omitempty"`
 }
 
 type TaskResultV1 struct {
-	JobID   string `json:"job_id"`
-	Outcome string `json:"outcome"`
+	SessionID string `json:"job_id"`
+	Outcome   string `json:"outcome"`
 }
 
-// CleanupRuntime is the provider-neutral capability resolved from one Job's
+// CleanupRuntime is the provider-neutral capability resolved from one Session's
 // durably pinned Sandbox profile after cleanup has been requested.
 type CleanupRuntime struct {
 	Execution      CleanupExecution
@@ -35,7 +36,7 @@ type CleanupRuntimeResolver interface {
 }
 
 type SandboxStatusReader interface {
-	ReadSandboxStatus(context.Context, Job, Sandbox) (provider.Status, error)
+	ReadSandboxStatus(context.Context, Session, Sandbox) (provider.Status, error)
 }
 
 type SandboxRuntime struct {
@@ -48,15 +49,15 @@ type SandboxRuntime struct {
 }
 
 type SandboxFileReader interface {
-	ReadSandboxFile(context.Context, Job, Sandbox, string) ([]byte, error)
+	ReadSandboxFile(context.Context, Session, Sandbox, string) ([]byte, error)
 }
 
 type SandboxFileWriter interface {
-	WriteSandboxFile(context.Context, Job, Sandbox, string, []byte, bool) error
+	WriteSandboxFile(context.Context, Session, Sandbox, string, []byte, bool) error
 }
 
 type SandboxCommandExecutor interface {
-	ExecSandbox(context.Context, Job, Sandbox, provider.Command) (provider.CommandResult, error)
+	ExecSandbox(context.Context, Session, Sandbox, provider.Command) (provider.CommandResult, error)
 }
 
 type SandboxRuntimeResolver interface {
@@ -67,15 +68,15 @@ type SandboxRuntimeResolver interface {
 // PostgreSQL is the current implementation, not part of the consumer contract.
 type ApplicationStore interface {
 	SandboxActivityStore
-	Job(context.Context, string) (Job, error)
+	Session(context.Context, string) (Session, error)
 	Sandbox(context.Context, string) (Sandbox, error)
 	EnsureSandbox(context.Context, string, string) (Sandbox, error)
-	JobTasks(context.Context, string) ([]JobTask, error)
+	SessionTasks(context.Context, string) ([]SessionTask, error)
 	CleanupRequests(context.Context) ([]string, error)
-	WithJobFence(context.Context, string, func() error) error
-	AttachJobTask(context.Context, string, string, string, string) error
+	WithSessionFence(context.Context, string, func() error) error
+	AttachSessionTask(context.Context, string, string, string, string) error
 	ScheduleCleanup(context.Context, string, string, string) error
-	ScheduleJobTask(context.Context, string, string, string, string) error
+	ScheduleSessionTask(context.Context, string, string, string, string) error
 	AttachCleanupTask(context.Context, string, string, string, string) error
 	RecordSandboxProfileUnavailable(context.Context, string, string, string, error) error
 	SetCleanupAttention(context.Context, string, string) error
@@ -84,18 +85,18 @@ type ApplicationStore interface {
 // StopForUnavailableSandboxProfile turns one definitive provider artifact
 // failure into durable attention instead of asking Absurd to retry an input
 // that cannot succeed. The concrete consumer supplies the exact current fact identity.
-func (a Application) StopForUnavailableSandboxProfile(ctx context.Context, jobID, source string, cause error) (TaskResultV1, bool, error) {
+func (a Application) StopForUnavailableSandboxProfile(ctx context.Context, sessionID, source string, cause error) (TaskResultV1, bool, error) {
 	if !sandbox.IsArtifactUnavailable(cause) {
 		return TaskResultV1{}, false, nil
 	}
-	job, err := a.Store.Job(ctx, jobID)
+	session, err := a.Store.Session(ctx, sessionID)
 	if err != nil {
 		return TaskResultV1{}, true, err
 	}
-	if err := a.Store.RecordSandboxProfileUnavailable(ctx, job.ID, job.SandboxProfile, source, cause); err != nil {
-		return TaskResultV1{}, true, errors.Join(cause, fmt.Errorf("record unavailable Sandbox profile %q: %w", job.SandboxProfile, err))
+	if err := a.Store.RecordSandboxProfileUnavailable(ctx, session.ID, session.SandboxProfile, source, cause); err != nil {
+		return TaskResultV1{}, true, errors.Join(cause, fmt.Errorf("record unavailable Sandbox profile %q: %w", session.SandboxProfile, err))
 	}
-	return TaskResultV1{JobID: job.ID, Outcome: "sandbox-profile-unavailable"}, true, nil
+	return TaskResultV1{SessionID: session.ID, Outcome: "sandbox-profile-unavailable"}, true, nil
 }
 
 type Application struct {
@@ -106,26 +107,26 @@ type Application struct {
 	CleanupRuntimes CleanupRuntimeResolver
 }
 
-func (a Application) requestCleanup(ctx context.Context, jobID string) (Job, error) {
+func (a Application) requestCleanup(ctx context.Context, sessionID string) (Session, error) {
 	if a.Tasks == nil {
-		return Job{}, fmt.Errorf("cleanup scheduling is not configured")
+		return Session{}, fmt.Errorf("cleanup scheduling is not configured")
 	}
-	if err := a.Store.ScheduleCleanup(ctx, a.Tasks.QueueName(), jobID, currentTaskID(ctx)); err != nil {
-		return Job{}, err
+	if err := a.Store.ScheduleCleanup(ctx, a.Tasks.QueueName(), sessionID, currentTaskID(ctx)); err != nil {
+		return Session{}, err
 	}
-	return a.Store.Job(ctx, jobID)
+	return a.Store.Session(ctx, sessionID)
 }
 
 // RecoverCleanupRequests completes retained requests from deployments that
 // recorded cleanup before scheduling and attachment became atomic.
 func (a Application) RecoverCleanupRequests(ctx context.Context) error {
-	jobIDs, err := a.Store.CleanupRequests(ctx)
+	sessionIDs, err := a.Store.CleanupRequests(ctx)
 	if err != nil {
 		return err
 	}
-	for _, jobID := range jobIDs {
-		if _, err := a.requestCleanup(ctx, jobID); err != nil {
-			return fmt.Errorf("recover cleanup request for Job %s: %w", jobID, err)
+	for _, sessionID := range sessionIDs {
+		if _, err := a.requestCleanup(ctx, sessionID); err != nil {
+			return fmt.Errorf("recover cleanup request for Session %s: %w", sessionID, err)
 		}
 	}
 	return nil
@@ -160,25 +161,25 @@ func currentTaskID(ctx context.Context) string {
 }
 
 // VerifyAttachedTask reconciles the public Absurd task identity with the
-// exact durable Job attachment before any task is allowed to act.
-func (a Application) VerifyAttachedTask(ctx context.Context, jobID, taskName, expectedPreviousTaskID string) error {
-	return a.Store.WithJobFence(ctx, jobID, func() error {
+// exact durable Session attachment before any task is allowed to act.
+func (a Application) VerifyAttachedTask(ctx context.Context, sessionID, taskName, expectedPreviousTaskID string) error {
+	return a.Store.WithSessionFence(ctx, sessionID, func() error {
 		task, ok := absurd.TaskFromContext(ctx)
 		if !ok {
 			return absurd.ErrNoTaskContext
 		}
-		job, err := a.Store.Job(ctx, jobID)
+		session, err := a.Store.Session(ctx, sessionID)
 		if err != nil {
 			return err
 		}
 		if taskName == CleanupTaskName {
-			if job.AdmissionOpen || (job.CleanupState != CleanupRequested && job.CleanupState != CleanupScheduled) {
+			if session.AdmissionOpen || (session.CleanupState != CleanupRequested && session.CleanupState != CleanupScheduled) {
 				return fmt.Errorf("cleanup task %s cannot act before cleanup is requested", task.TaskID())
 			}
-		} else if !job.AdmissionOpen || job.CleanupState != CleanupPending {
+		} else if !session.AdmissionOpen || session.CleanupState != CleanupPending {
 			return fmt.Errorf("ordinary task %s cannot act after cleanup begins", task.TaskID())
 		}
-		attachments, err := a.Store.JobTasks(ctx, jobID)
+		attachments, err := a.Store.SessionTasks(ctx, sessionID)
 		if err != nil {
 			return err
 		}
@@ -186,8 +187,8 @@ func (a Application) VerifyAttachedTask(ctx context.Context, jobID, taskName, ex
 			if attachment.TaskID != task.TaskID() {
 				continue
 			}
-			if attachment.TaskID != job.CurrentTaskID {
-				return fmt.Errorf("%s task %s is no longer the Job's current attachment", taskName, task.TaskID())
+			if attachment.TaskID != session.CurrentTaskID {
+				return fmt.Errorf("%s task %s is no longer the Session's current attachment", taskName, task.TaskID())
 			}
 			if attachment.TaskName != taskName {
 				return fmt.Errorf("task %s is durably attached as %s, not %s", task.TaskID(), attachment.TaskName, taskName)
@@ -201,11 +202,11 @@ func (a Application) VerifyAttachedTask(ctx context.Context, jobID, taskName, ex
 			}
 			return verifyTaskContext(ctx, attachment.TaskID, attachment.TaskName)
 		}
-		if job.CurrentTaskID != task.TaskID() {
+		if session.CurrentTaskID != task.TaskID() {
 			if taskName == CleanupTaskName {
-				err = a.Store.AttachCleanupTask(ctx, jobID, expectedPreviousTaskID, task.TaskID(), taskName)
+				err = a.Store.AttachCleanupTask(ctx, sessionID, expectedPreviousTaskID, task.TaskID(), taskName)
 			} else {
-				err = a.Store.AttachJobTask(ctx, jobID, expectedPreviousTaskID, task.TaskID(), taskName)
+				err = a.Store.AttachSessionTask(ctx, sessionID, expectedPreviousTaskID, task.TaskID(), taskName)
 			}
 			if err != nil {
 				return fmt.Errorf("recover public Spawn attachment for %s: %w", taskName, err)
@@ -215,52 +216,52 @@ func (a Application) VerifyAttachedTask(ctx context.Context, jobID, taskName, ex
 	})
 }
 
-func (a Application) verifyCurrentTask(ctx context.Context, jobID, taskName string) error {
-	return a.Store.WithJobFence(ctx, jobID, func() error {
-		job, err := exactCurrentAttachedTask(ctx, a.Store, jobID, taskName)
+func (a Application) verifyCurrentTask(ctx context.Context, sessionID, taskName string) error {
+	return a.Store.WithSessionFence(ctx, sessionID, func() error {
+		session, err := exactCurrentAttachedTask(ctx, a.Store, sessionID, taskName)
 		if err != nil {
 			return err
 		}
-		if !job.AdmissionOpen || job.CleanupState != CleanupPending {
-			return fmt.Errorf("task %s is not the exact current open Job attachment", job.CurrentTaskID)
+		if !session.AdmissionOpen || session.CleanupState != CleanupPending {
+			return fmt.Errorf("task %s is not the exact current open Session attachment", session.CurrentTaskID)
 		}
 		return nil
 	})
 }
 
 type currentTaskStore interface {
-	Job(context.Context, string) (Job, error)
-	JobTasks(context.Context, string) ([]JobTask, error)
+	Session(context.Context, string) (Session, error)
+	SessionTasks(context.Context, string) ([]SessionTask, error)
 }
 
-// exactCurrentAttachedTask is the one authority check shared by Core's Job
-// effects. It proves that the running Absurd task is both the Job's current
+// exactCurrentAttachedTask is the one authority check shared by Core's Session
+// effects. It proves that the running Absurd task is both the Session's current
 // task and the exact durably attached task name.
-func exactCurrentAttachedTask(ctx context.Context, store currentTaskStore, jobID, taskName string) (Job, error) {
+func exactCurrentAttachedTask(ctx context.Context, store currentTaskStore, sessionID, taskName string) (Session, error) {
 	task, ok := absurd.TaskFromContext(ctx)
 	if !ok {
-		return Job{}, absurd.ErrNoTaskContext
+		return Session{}, absurd.ErrNoTaskContext
 	}
 	if taskName == "" {
 		taskName = task.TaskName()
 	}
-	job, err := store.Job(ctx, jobID)
+	session, err := store.Session(ctx, sessionID)
 	if err != nil {
-		return Job{}, err
+		return Session{}, err
 	}
-	if task.TaskName() != taskName || job.CurrentTaskID != task.TaskID() {
-		return Job{}, fmt.Errorf("task %s is not the exact current %s attachment for Job %s", task.TaskID(), taskName, jobID)
+	if task.TaskName() != taskName || session.CurrentTaskID != task.TaskID() {
+		return Session{}, fmt.Errorf("task %s is not the exact current %s attachment for Session %s", task.TaskID(), taskName, sessionID)
 	}
-	attachments, err := store.JobTasks(ctx, jobID)
+	attachments, err := store.SessionTasks(ctx, sessionID)
 	if err != nil {
-		return Job{}, err
+		return Session{}, err
 	}
 	for _, attachment := range attachments {
 		if attachment.TaskID == task.TaskID() && attachment.TaskName == taskName {
-			return job, verifyTaskContext(ctx, attachment.TaskID, attachment.TaskName)
+			return session, verifyTaskContext(ctx, attachment.TaskID, attachment.TaskName)
 		}
 	}
-	return Job{}, fmt.Errorf("task %s has no exact durable %s attachment for Job %s", task.TaskID(), taskName, jobID)
+	return Session{}, fmt.Errorf("task %s has no exact durable %s attachment for Session %s", task.TaskID(), taskName, sessionID)
 }
 
 func verifyTaskContext(ctx context.Context, attachedID, taskName string) error {

@@ -21,20 +21,20 @@ func (h *timelineHarness) ReadTimeline(_ context.Context, owner provider.Ownersh
 }
 
 func TestTimelineUsesOptionalHarnessAndExactSandboxOwnership(t *testing.T) {
-	job := core.Job{ID: "job"}
-	owned := core.Sandbox{ID: "sandbox", JobID: job.ID, OwnershipNonce: "owned"}
+	session := core.Session{ID: "session"}
+	owned := core.Sandbox{ID: "sandbox", SessionID: session.ID, OwnershipNonce: "owned"}
 	e := Externals{Agent: &attachmentHarness{}}
-	if _, err := e.ReadTimeline(context.Background(), job, owned, "thread", "turn"); !errors.Is(err, core.ErrTimelineUnavailable) {
+	if _, err := e.ReadTimeline(context.Background(), session, owned, "thread", "turn"); !errors.Is(err, core.ErrTimelineUnavailable) {
 		t.Fatalf("unsupported harness error=%v", err)
 	}
 	native := &timelineHarness{}
 	e.Agent = native
-	result, err := e.ReadTimeline(context.Background(), job, owned, "thread", "turn")
-	if err != nil || result.TurnID != "turn" || native.owner != (provider.Ownership{JobID: "job", SandboxID: "sandbox", OwnershipNonce: "owned"}) || native.threadID != "thread" || native.turnID != "turn" {
+	result, err := e.ReadTimeline(context.Background(), session, owned, "thread", "turn")
+	if err != nil || result.TurnID != "turn" || native.owner != (provider.Ownership{SessionID: "session", SandboxID: "sandbox", OwnershipNonce: "owned"}) || native.threadID != "thread" || native.turnID != "turn" {
 		t.Fatalf("result=%+v harness=%+v error=%v", result, native, err)
 	}
-	owned.JobID = "foreign"
-	if _, err := e.ReadTimeline(context.Background(), job, owned, "thread", "turn"); !errors.Is(err, core.ErrTimelineUnavailable) {
+	owned.SessionID = "foreign"
+	if _, err := e.ReadTimeline(context.Background(), session, owned, "thread", "turn"); !errors.Is(err, core.ErrTimelineUnavailable) {
 		t.Fatalf("foreign sandbox error=%v", err)
 	}
 }

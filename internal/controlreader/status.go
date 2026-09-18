@@ -16,12 +16,12 @@ type statusRequest struct {
 func (s Service) ReadSandboxStatus(ctx context.Context, sandboxID string) (provider.Status, error) {
 	var result provider.Status
 	// Observation is fenced against cleanup but must never reconcile idle or wake the VM.
-	err := s.accessSandbox(ctx, sandboxID, false, func(runtime core.SandboxRuntime, job core.Job, owned core.Sandbox) error {
+	err := s.accessSandbox(ctx, sandboxID, false, func(runtime core.SandboxRuntime, session core.Session, owned core.Sandbox) error {
 		if runtime.Status == nil {
 			return ErrUnavailable
 		}
 		var err error
-		result, err = runtime.Status.ReadSandboxStatus(ctx, job, owned)
+		result, err = runtime.Status.ReadSandboxStatus(ctx, session, owned)
 		return err
 	})
 	return result, err

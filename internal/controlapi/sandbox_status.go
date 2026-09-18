@@ -9,7 +9,7 @@ func (h *handler) sandboxStatusRoute(w http.ResponseWriter, r *http.Request, _ c
 	if !h.exact(w, r, http.MethodGet, false) {
 		return
 	}
-	result, err := h.jobs.ReadSandboxStatus(r.Context(), r.PathValue("sandbox"))
+	result, err := h.sessions.ReadSandboxStatus(r.Context(), r.PathValue("sandbox"))
 	if err != nil {
 		h.serviceError(w, r, err)
 		return

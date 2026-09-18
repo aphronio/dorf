@@ -10,7 +10,7 @@ import (
 )
 
 const beginSandboxActivity = `-- name: BeginSandboxActivity :execrows
-update dorf.jobs set sandbox_last_active_at=null where id=$1
+update dorf.sessions set sandbox_last_active_at=null where id=$1
 `
 
 func (q *Queries) BeginSandboxActivity(ctx context.Context, id string) (int64, error) {
@@ -22,7 +22,7 @@ func (q *Queries) BeginSandboxActivity(ctx context.Context, id string) (int64, e
 }
 
 const finishSandboxActivity = `-- name: FinishSandboxActivity :execrows
-update dorf.jobs set sandbox_last_active_at=clock_timestamp() where id=$1
+update dorf.sessions set sandbox_last_active_at=clock_timestamp() where id=$1
 `
 
 func (q *Queries) FinishSandboxActivity(ctx context.Context, id string) (int64, error) {
@@ -34,25 +34,25 @@ func (q *Queries) FinishSandboxActivity(ctx context.Context, id string) (int64, 
 }
 
 const sandboxIdleFor = `-- name: SandboxIdleFor :one
-update dorf.jobs j
+update dorf.sessions j
 set sandbox_last_active_at=coalesce(j.sandbox_last_active_at,clock_timestamp())
 where j.id=$1
 returning coalesce(j.sandbox_last_active_at <= clock_timestamp() - make_interval(secs => $2::double precision) and not exists (
     select 1 from dorf.agent_runs ar
-    where ar.job_id=$1 and ar.state not in ('completed','failed','interrupted')
+    where ar.session_id=$1 and ar.state not in ('completed','failed','interrupted')
 ) and not exists (
     select 1 from dorf.sandbox_delivery_holds h join dorf.sandboxes s on s.id=h.sandbox_id
-    where s.job_id=j.id and h.released_at is null
+    where s.session_id=j.id and h.released_at is null
 ),false)::boolean as idle
 `
 
 type SandboxIdleForParams struct {
-	JobID   string
-	Seconds float64
+	SessionID string
+	Seconds   float64
 }
 
 func (q *Queries) SandboxIdleFor(ctx context.Context, arg SandboxIdleForParams) (bool, error) {
-	row := q.db.QueryRowContext(ctx, sandboxIdleFor, arg.JobID, arg.Seconds)
+	row := q.db.QueryRowContext(ctx, sandboxIdleFor, arg.SessionID, arg.Seconds)
 	var idle bool
 	err := row.Scan(&idle)
 	return idle, err

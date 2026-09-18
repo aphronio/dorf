@@ -106,7 +106,7 @@ run = "scripts/runtime-upgrade/prove.sh"
 
 [tasks."integration:delivery-hold"]
 description = "Prove durable hold, worker restart, FIFO release, cleanup, and inspection against PostgreSQL"
-run = "go test -p 1 ./internal/postgres ./internal/controlreader ./cmd/dorf -run 'TestDeliveryHold|TestCommandsUseAuthenticatedJobCustodyAndCleanupFence|TestControlAPIPostgresReplayRestartAndCleanup' -count=1"
+run = "go test -p 1 ./internal/postgres ./internal/controlreader ./cmd/dorf -run 'TestDeliveryHold|TestCommandsUseAuthenticatedSessionCustodyAndCleanupFence|TestControlAPIPostgresReplayRestartAndCleanup' -count=1"
 
 [tasks."integration:upgrade-worker"]
 description = "Prove the retained worker's package activation, rollback, queue, and cleanup on a disposable VM"

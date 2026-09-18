@@ -31,7 +31,7 @@ func (q *Queries) BindUpgradeDestination(ctx context.Context, arg BindUpgradeDes
 }
 
 const getSandboxUpgrade = `-- name: GetSandboxUpgrade :one
-select u.id, u.sandbox_id, u.source_resource_id, u.destination_resource_id, u.package_path, u.version, u.requested_at, u.previous_version, u.quiesced_at, u.checkpoint_key, u.checkpoint_reference, u.checkpoint_source_id, u.activated_at, u.rollback_at, u.failure_code, u.restored_at, u.verified_at, u.checkpoint_deleted_at, u.finished_at,s.job_id,coalesce(src.provider_id,'') as source_provider_id,coalesce(dst.provider_id,'') as destination_provider_id from dorf.sandbox_upgrades u join dorf.sandboxes s on s.id=u.sandbox_id join dorf.sandbox_resources src on src.id=u.source_resource_id left join dorf.sandbox_resources dst on dst.id=u.destination_resource_id where u.id=$1
+select u.id, u.sandbox_id, u.source_resource_id, u.destination_resource_id, u.package_path, u.version, u.requested_at, u.previous_version, u.quiesced_at, u.checkpoint_key, u.checkpoint_reference, u.checkpoint_source_id, u.activated_at, u.rollback_at, u.failure_code, u.restored_at, u.verified_at, u.checkpoint_deleted_at, u.finished_at,s.session_id,coalesce(src.provider_id,'') as source_provider_id,coalesce(dst.provider_id,'') as destination_provider_id from dorf.sandbox_upgrades u join dorf.sandboxes s on s.id=u.sandbox_id join dorf.sandbox_resources src on src.id=u.source_resource_id left join dorf.sandbox_resources dst on dst.id=u.destination_resource_id where u.id=$1
 `
 
 type GetSandboxUpgradeRow struct {
@@ -54,7 +54,7 @@ type GetSandboxUpgradeRow struct {
 	VerifiedAt            sql.NullTime
 	CheckpointDeletedAt   sql.NullTime
 	FinishedAt            sql.NullTime
-	JobID                 string
+	SessionID             string
 	SourceProviderID      string
 	DestinationProviderID string
 }
@@ -82,7 +82,7 @@ func (q *Queries) GetSandboxUpgrade(ctx context.Context, id string) (GetSandboxU
 		&i.VerifiedAt,
 		&i.CheckpointDeletedAt,
 		&i.FinishedAt,
-		&i.JobID,
+		&i.SessionID,
 		&i.SourceProviderID,
 		&i.DestinationProviderID,
 	)
@@ -113,12 +113,12 @@ func (q *Queries) InsertSandboxUpgrade(ctx context.Context, arg InsertSandboxUpg
 	return err
 }
 
-const listJobUpgrades = `-- name: ListJobUpgrades :many
-select u.id, u.sandbox_id, u.source_resource_id, u.destination_resource_id, u.package_path, u.version, u.requested_at, u.previous_version, u.quiesced_at, u.checkpoint_key, u.checkpoint_reference, u.checkpoint_source_id, u.activated_at, u.rollback_at, u.failure_code, u.restored_at, u.verified_at, u.checkpoint_deleted_at, u.finished_at,s.job_id,coalesce(src.provider_id,'') as source_provider_id,coalesce(dst.provider_id,'') as destination_provider_id from dorf.sandbox_upgrades u join dorf.sandboxes s on s.id=u.sandbox_id join dorf.sandbox_resources src on src.id=u.source_resource_id left join dorf.sandbox_resources dst on dst.id=u.destination_resource_id
-where s.job_id=$1 order by u.requested_at,u.id
+const listSessionUpgrades = `-- name: ListSessionUpgrades :many
+select u.id, u.sandbox_id, u.source_resource_id, u.destination_resource_id, u.package_path, u.version, u.requested_at, u.previous_version, u.quiesced_at, u.checkpoint_key, u.checkpoint_reference, u.checkpoint_source_id, u.activated_at, u.rollback_at, u.failure_code, u.restored_at, u.verified_at, u.checkpoint_deleted_at, u.finished_at,s.session_id,coalesce(src.provider_id,'') as source_provider_id,coalesce(dst.provider_id,'') as destination_provider_id from dorf.sandbox_upgrades u join dorf.sandboxes s on s.id=u.sandbox_id join dorf.sandbox_resources src on src.id=u.source_resource_id left join dorf.sandbox_resources dst on dst.id=u.destination_resource_id
+where s.session_id=$1 order by u.requested_at,u.id
 `
 
-type ListJobUpgradesRow struct {
+type ListSessionUpgradesRow struct {
 	ID                    string
 	SandboxID             string
 	SourceResourceID      string
@@ -138,20 +138,20 @@ type ListJobUpgradesRow struct {
 	VerifiedAt            sql.NullTime
 	CheckpointDeletedAt   sql.NullTime
 	FinishedAt            sql.NullTime
-	JobID                 string
+	SessionID             string
 	SourceProviderID      string
 	DestinationProviderID string
 }
 
-func (q *Queries) ListJobUpgrades(ctx context.Context, jobID string) ([]ListJobUpgradesRow, error) {
-	rows, err := q.db.QueryContext(ctx, listJobUpgrades, jobID)
+func (q *Queries) ListSessionUpgrades(ctx context.Context, sessionID string) ([]ListSessionUpgradesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionUpgrades, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListJobUpgradesRow
+	var items []ListSessionUpgradesRow
 	for rows.Next() {
-		var i ListJobUpgradesRow
+		var i ListSessionUpgradesRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.SandboxID,
@@ -172,7 +172,7 @@ func (q *Queries) ListJobUpgrades(ctx context.Context, jobID string) ([]ListJobU
 			&i.VerifiedAt,
 			&i.CheckpointDeletedAt,
 			&i.FinishedAt,
-			&i.JobID,
+			&i.SessionID,
 			&i.SourceProviderID,
 			&i.DestinationProviderID,
 		); err != nil {
@@ -333,7 +333,7 @@ func (q *Queries) RequestUpgradeRollback(ctx context.Context, arg RequestUpgrade
 }
 
 const upgradeQuiescent = `-- name: UpgradeQuiescent :one
-select coalesce(not exists(select 1 from dorf.agent_runs ar join dorf.job_messages m on m.id=ar.message_id
+select coalesce(not exists(select 1 from dorf.agent_runs ar join dorf.session_messages m on m.id=ar.message_id
 where ar.sandbox_id=$1 and ar.state not in ('completed','failed','interrupted')
 and (ar.state <> 'pending' or ar.baseline_turn_id is not null or m.delivery_intent='steer')),false)::boolean as quiet
 `

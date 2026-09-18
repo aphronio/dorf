@@ -23,7 +23,7 @@ func WithExecution(ctx context.Context, run core.AgentRun) context.Context {
 
 func Execution(ctx context.Context) (core.AgentRun, bool) {
 	run, ok := ctx.Value(executionKey{}).(core.AgentRun)
-	return run, ok && run.JobID != "" && run.MessageID != "" && run.ID != ""
+	return run, ok && run.SessionID != "" && run.MessageID != "" && run.ID != ""
 }
 
 type Event struct {

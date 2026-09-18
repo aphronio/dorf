@@ -25,8 +25,8 @@ func (s *cancellableSandbox) Run(_ context.Context, owner provider.Ownership, re
 }
 
 func TestSandboxCommandUsesCancellationRunnerAndOnlyConfirmsStoppedTimeout(t *testing.T) {
-	job := core.Job{ID: "command-job"}
-	owned := core.Sandbox{ID: "command-sandbox", JobID: job.ID, OwnershipNonce: "owner"}
+	session := core.Session{ID: "command-session"}
+	owned := core.Sandbox{ID: "command-sandbox", SessionID: session.ID, OwnershipNonce: "owner"}
 	command := provider.Command{Argv: []string{"python3", "-c", "import sys; print(sys.stdin.read())"}, Stdin: "literal input", TimeoutSeconds: 10}
 	for _, test := range []struct {
 		name     string
@@ -42,7 +42,7 @@ func TestSandboxCommandUsesCancellationRunnerAndOnlyConfirmsStoppedTimeout(t *te
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			sandbox := &cancellableSandbox{result: provider.RunResult{Result: provider.Result{Stdout: "out", Stderr: "stage"}, Stopped: test.stopped}, err: test.err}
-			result, err := (Externals{Sandbox: sandbox}).ExecSandbox(t.Context(), job, owned, command)
+			result, err := (Externals{Sandbox: sandbox}).ExecSandbox(t.Context(), session, owned, command)
 			if (err != nil) != test.wantErr || result.ExitCode != test.wantCode {
 				t.Fatalf("exit=%d error=%v", result.ExitCode, err)
 			}

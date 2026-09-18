@@ -39,10 +39,10 @@ func ownershipErrorf(format string, args ...any) error {
 	return provider.OwnershipErrorf(format, args...)
 }
 
-func (s Sandbox) Name(jobID string) string { return core.MainSandboxName(jobID) }
+func (s Sandbox) Name(sessionID string) string { return core.MainSandboxName(sessionID) }
 
 func validateOwnership(metadata OwnershipMetadata) error {
-	if metadata.JobID == "" || metadata.SandboxID == "" || len(metadata.OwnershipNonce) != 64 {
+	if metadata.SessionID == "" || metadata.SandboxID == "" || len(metadata.OwnershipNonce) != 64 {
 		return fmt.Errorf("Sandbox requires complete host-owned identity metadata")
 	}
 	return nil
@@ -146,7 +146,7 @@ func missingImage(err error) bool {
 func ownershipConfig(metadata OwnershipMetadata) map[string]string {
 	return map[string]string{
 		"user.dorf.owner":           "sandbox",
-		"user.dorf.job":             metadata.JobID,
+		"user.dorf.job":             metadata.SessionID,
 		"user.dorf.sandbox":         metadata.SandboxID,
 		"user.dorf.ownership_nonce": metadata.OwnershipNonce,
 	}
@@ -188,7 +188,7 @@ func attestOwnershipIn(instances []Instance, metadata OwnershipMetadata) error {
 	for _, instance := range instances {
 		if instance.Config["user.dorf.sandbox"] == metadata.SandboxID {
 			matches++
-			if instance.Name != metadata.SandboxID || instance.Config["user.dorf.owner"] != "sandbox" || instance.Config["user.dorf.job"] != metadata.JobID || instance.Config["user.dorf.ownership_nonce"] != metadata.OwnershipNonce {
+			if instance.Name != metadata.SandboxID || instance.Config["user.dorf.owner"] != "sandbox" || instance.Config["user.dorf.job"] != metadata.SessionID || instance.Config["user.dorf.ownership_nonce"] != metadata.OwnershipNonce {
 				return ownershipErrorf("Sandbox metadata does not match its durable owner")
 			}
 		}
@@ -199,7 +199,7 @@ func attestOwnershipIn(instances []Instance, metadata OwnershipMetadata) error {
 	return nil
 }
 
-// Job/Sandbox ownership has been verified. These labels are not consulted by
+// Session/Sandbox ownership has been verified. These labels are not consulted by
 // cleanup.
 
 func (s Sandbox) OwnedPresent(ctx context.Context, metadata OwnershipMetadata) (bool, error) {

@@ -20,11 +20,11 @@ const (
 	CleanupComplete  CleanupState = "complete"
 )
 
-// JobTask is one immutable attachment from a Dorf Job to an Absurd task.
+// SessionTask is one immutable attachment from a Dorf Session to an Absurd task.
 // Sequence expresses handoff order; Absurd remains authoritative for task
 // execution, attempts, checkpoints, and terminal state.
-type JobTask struct {
-	JobID      string    `json:"job_id"`
+type SessionTask struct {
+	SessionID  string    `json:"job_id"`
 	Sequence   int64     `json:"sequence"`
 	TaskID     string    `json:"task_id"`
 	TaskName   string    `json:"task_name"`
@@ -80,7 +80,7 @@ func (p SandboxProfile) Ref() SandboxProfileRef {
 	return SandboxProfileRef{Name: p.Name, Revision: p.DefinitionHash}
 }
 
-func (j Job) ProfileRef() SandboxProfileRef {
+func (j Session) ProfileRef() SandboxProfileRef {
 	return SandboxProfileRef{Name: j.SandboxProfile, Revision: j.SandboxProfileRevision}
 }
 
@@ -157,17 +157,18 @@ func (p SandboxProfile) CurrentDefinitionHash() string {
 	return hex.EncodeToString(digest[:])
 }
 
-type Job struct {
-	KeepRunning             bool         `json:"keep_running"`
-	CreatedByClientID       string       `json:"created_by_client_id,omitempty"`
-	CreatedByClientName     string       `json:"created_by_client_name,omitempty"`
-	ClientReference         string       `json:"client_reference,omitempty"`
-	ID                      string       `json:"id"`
-	AdmissionKey            string       `json:"admission_key"`
-	Workflow                WorkflowName `json:"workflow"`
-	WorkflowRevision        string       `json:"workflow_revision"`
-	AgentsMD                string       `json:"agents_md,omitempty"`
-	ThreadHarness           string       `json:"-"`
+type Session struct {
+	KeepRunning         bool         `json:"keep_running"`
+	CreatedByClientID   string       `json:"created_by_client_id,omitempty"`
+	CreatedByClientName string       `json:"created_by_client_name,omitempty"`
+	ClientReference     string       `json:"client_reference,omitempty"`
+	ID                  string       `json:"id"`
+	AdmissionKey        string       `json:"admission_key"`
+	Workflow            WorkflowName `json:"workflow"`
+	WorkflowRevision    string       `json:"workflow_revision"`
+	AgentsMD            string       `json:"agents_md,omitempty"`
+	// Harness is read from the immutable admitted profile, never stored on Session.
+	Harness                 string       `json:"-"`
 	ThreadID                string       `json:"-"`
 	SandboxProfile          string       `json:"sandbox_profile"`
 	SandboxProfileRevision  string       `json:"sandbox_profile_revision"`
@@ -185,11 +186,11 @@ type Job struct {
 	CleanedAt               time.Time    `json:"cleaned_at,omitempty"`
 }
 
-// Sandbox is infrastructure owned for the lifetime of a Job. AgentRuns use a
+// Sandbox is infrastructure owned for the lifetime of a Session. AgentRuns use a
 // Sandbox, but never own it.
 type Sandbox struct {
 	ID             string `json:"id"`
-	JobID          string `json:"job_id"`
+	SessionID      string `json:"job_id"`
 	Name           string `json:"name"`
 	OwnershipNonce string `json:"-"`
 	ResourceID     string `json:"resource_id"`
@@ -247,7 +248,7 @@ type Message struct {
 	RefreshSkills         bool                  `json:"refresh_skills,omitempty"`
 	RequestedIntent       MessageDeliveryIntent `json:"-"`
 	ID                    string                `json:"id"`
-	JobID                 string                `json:"job_id"`
+	SessionID             string                `json:"job_id"`
 	FromKind              MessageFromKind       `json:"from_kind"`
 	FromID                string                `json:"from_id"`
 	Sequence              int64                 `json:"sequence"`
@@ -276,7 +277,7 @@ func (intent MessageDeliveryIntent) accepts(resolved MessageDeliveryIntent) bool
 // when Core proves that its selected Steer target is terminal.
 type AgentRun struct {
 	ID                 string        `json:"id"`
-	JobID              string        `json:"job_id"`
+	SessionID          string        `json:"job_id"`
 	MessageID          string        `json:"message_id"`
 	Harness            string        `json:"harness,omitempty"`
 	ThreadID           string        `json:"thread_id,omitempty"`
@@ -300,7 +301,7 @@ type AgentRun struct {
 // MessageInterruptTarget is the original Turn-starting run selected by Stop.
 type MessageInterruptTarget struct {
 	AgentRunID         string
-	JobID              string
+	SessionID          string
 	InterruptRequested bool
 }
 
@@ -311,10 +312,10 @@ type Delivery struct {
 
 // AgentMessageExecution is Core's authoritative private execution aggregate.
 // Consumers address work by Message identity; Core reloads the internal
-// AgentRun and exact Job-owned Sandbox before touching the Harness.
+// AgentRun and exact Session-owned Sandbox before touching the Harness.
 type AgentMessageExecution struct {
 	RefreshSkills bool
-	Job           Job
+	Session       Session
 	Message       Message
 	AgentRun      AgentRun
 	Sandbox       Sandbox
@@ -333,7 +334,7 @@ func (r MessageResult) Terminal() bool { return r.Outcome != "" }
 
 // AgentMessageWork is the opaque static-composition result that one exact
 // Message in one exact Sandbox still needs Core reconciliation. Core consumes
-// it inside the Job fence; workflow coordinators never receive it.
+// it inside the Session fence; workflow coordinators never receive it.
 type AgentMessageWork struct {
 	MessageID string `json:"message_id"`
 	SandboxID string `json:"sandbox_id"`
@@ -341,7 +342,7 @@ type AgentMessageWork struct {
 
 type Action struct {
 	ID        string      `json:"id"`
-	JobID     string      `json:"job_id"`
+	SessionID string      `json:"job_id"`
 	Kind      ActionKind  `json:"kind"`
 	State     ActionState `json:"state"`
 	Scope     string      `json:"scope"`
@@ -361,7 +362,7 @@ func HasSucceededAction(actions []Action, kind ActionKind, scope string) bool {
 // SandboxActionAuthorization is the authoritative persisted provider-effect
 // tuple, including the exact current Absurd task attachment.
 type SandboxActionAuthorization struct {
-	Job      Job
+	Session  Session
 	Sandbox  Sandbox
 	Action   Action
 	TaskID   string
@@ -399,12 +400,13 @@ type Reconciliation struct {
 	Reason         string
 }
 
-func JobID(admissionKey string) string {
+// SessionID preserves existing opaque admission identities.
+func SessionID(admissionKey string) string {
 	return "job-" + digest(admissionKey, 20)
 }
 
-func MessageID(jobID string, fromKind MessageFromKind, fromID string) string {
-	return "message-" + digest(jobID+"\x00"+string(fromKind)+"\x00"+fromID, 24)
+func MessageID(sessionID string, fromKind MessageFromKind, fromID string) string {
+	return "message-" + digest(sessionID+"\x00"+string(fromKind)+"\x00"+fromID, 24)
 }
 
 func AgentRunID(messageID string) string {
@@ -415,16 +417,16 @@ const DefaultSandbox = "default"
 
 // MainSandboxName and ProviderRouteID are exact resource identities derived
 // before their external create effects. MainSandboxName remains the stable
-// identity of the Job's default Sandbox.
-func MainSandboxName(jobID string) string {
-	return "dorf-" + digest(jobID, 20)
+// identity of the Session's default Sandbox.
+func MainSandboxName(sessionID string) string {
+	return "dorf-" + digest(sessionID, 20)
 }
 
-func NamedSandboxID(jobID, name string) string {
+func NamedSandboxID(sessionID, name string) string {
 	if name == DefaultSandbox {
-		return MainSandboxName(jobID)
+		return MainSandboxName(sessionID)
 	}
-	return "dorf-" + digest(jobID+"\x00sandbox\x00"+name, 20)
+	return "dorf-" + digest(sessionID+"\x00sandbox\x00"+name, 20)
 }
 
 func ProviderRouteID(actionID string) string {
@@ -433,17 +435,17 @@ func ProviderRouteID(actionID string) string {
 
 func RouteForSandbox(sandbox Sandbox) Route {
 	return Route{
-		ID:        ProviderRouteID(ScopedActionID(sandbox.JobID, ActionRouteCreate, sandbox.ID)),
+		ID:        ProviderRouteID(ScopedActionID(sandbox.SessionID, ActionRouteCreate, sandbox.ID)),
 		SandboxID: sandbox.ID,
 	}
 }
 
-func ActionID(jobID string, kind ActionKind) string {
-	return "action-" + digest(jobID+"\x00"+string(kind), 24)
+func ActionID(sessionID string, kind ActionKind) string {
+	return "action-" + digest(sessionID+"\x00"+string(kind), 24)
 }
 
-func ScopedActionID(jobID string, kind ActionKind, scope string) string {
-	return "action-" + digest(jobID+"\x00"+string(kind)+"\x00"+scope, 24)
+func ScopedActionID(sessionID string, kind ActionKind, scope string) string {
+	return "action-" + digest(sessionID+"\x00"+string(kind)+"\x00"+scope, 24)
 }
 
 func digest(value string, length int) string {

@@ -1,4 +1,4 @@
-// Package upgrade coordinates package changes under an existing Job's delivery
+// Package upgrade coordinates package changes under an existing Session's delivery
 // hold. Receipts describe effects; the current operation is derived from them.
 package upgrade
 
@@ -14,7 +14,7 @@ import (
 
 type Request struct {
 	ID          string `json:"id"`
-	JobID       string `json:"job_id"`
+	SessionID   string `json:"job_id"`
 	SandboxID   string `json:"sandbox_id"`
 	PackagePath string `json:"package_path"`
 	Version     string `json:"version"`
@@ -27,8 +27,8 @@ func (r Request) Validate() error {
 	if err := provider.ValidateCheckpointKey(r.ID); err != nil {
 		return err
 	}
-	if r.JobID == "" || r.SandboxID == "" || !packagePath.MatchString(r.PackagePath) || !packageVersion.MatchString(r.Version) {
-		return fmt.Errorf("upgrade requires exact Job, Sandbox, staged Nix path, and package version")
+	if r.SessionID == "" || r.SandboxID == "" || !packagePath.MatchString(r.PackagePath) || !packageVersion.MatchString(r.Version) {
+		return fmt.Errorf("upgrade requires exact Session, Sandbox, staged Nix path, and package version")
 	}
 	return nil
 }

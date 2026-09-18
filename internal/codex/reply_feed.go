@@ -13,7 +13,7 @@ const replyFeedMaxBytes = 16 << 20
 
 // ReplyBinding includes custody, not just native diagnostic identities.
 type ReplyBinding struct {
-	JobID, SandboxID, OwnershipNonce, Harness, ThreadID, TurnID string
+	SessionID, SandboxID, OwnershipNonce, Harness, ThreadID, TurnID string
 }
 
 type ReplySnapshot struct {
@@ -140,7 +140,7 @@ func (f *ReplyFeed) Seed(binding ReplyBinding, items []core.HarnessConversationI
 }
 
 func (p *protocol) replyBinding() ReplyBinding {
-	return ReplyBinding{JobID: p.owner.JobID, SandboxID: p.owner.SandboxID, OwnershipNonce: p.owner.OwnershipNonce, Harness: Harness, ThreadID: p.observed.threadID, TurnID: p.observed.turnID}
+	return ReplyBinding{SessionID: p.owner.SessionID, SandboxID: p.owner.SandboxID, OwnershipNonce: p.owner.OwnershipNonce, Harness: Harness, ThreadID: p.observed.threadID, TurnID: p.observed.turnID}
 }
 
 // item/started establishes native order. Completed events may arrive out of
@@ -289,5 +289,5 @@ func (p *protocol) seedReadTurn(threadID string, turn map[string]any) {
 	if err != nil {
 		return
 	}
-	p.observations.Replies.Seed(ReplyBinding{JobID: p.owner.JobID, SandboxID: p.owner.SandboxID, OwnershipNonce: p.owner.OwnershipNonce, Harness: Harness, ThreadID: threadID, TurnID: full.ID}, items, true)
+	p.observations.Replies.Seed(ReplyBinding{SessionID: p.owner.SessionID, SandboxID: p.owner.SandboxID, OwnershipNonce: p.owner.OwnershipNonce, Harness: Harness, ThreadID: threadID, TurnID: full.ID}, items, true)
 }

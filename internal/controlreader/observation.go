@@ -34,7 +34,7 @@ type ObservationAttention struct {
 
 type MessageObservation struct {
 	Attention          *ObservationAttention `json:"attention"`
-	JobID              string                `json:"job_id"`
+	SessionID          string                `json:"session_id"`
 	MessageID          string                `json:"message_id"`
 	Intent             string                `json:"intent"`
 	InterruptRequested bool                  `json:"interrupt_requested"`
@@ -52,20 +52,20 @@ type MessageObservation struct {
 }
 
 type observationRequest struct {
-	JobID     string `json:"job_id"`
+	SessionID string `json:"session_id"`
 	MessageID string `json:"message_id"`
 	Cursor    string `json:"cursor,omitempty"`
 }
 
 type observationCursor struct {
-	JobID     string             `json:"j"`
+	SessionID string             `json:"j"`
 	MessageID string             `json:"m"`
 	Binding   ObservationBinding `json:"b"`
 	Next      int                `json:"n"`
 	Digest    string             `json:"h"`
 }
 
-func parseObservationCursor(value, jobID, messageID string) (*observationCursor, error) {
+func parseObservationCursor(value, sessionID, messageID string) (*observationCursor, error) {
 	if value == "" {
 		return nil, nil
 	}
@@ -77,7 +77,7 @@ func parseObservationCursor(value, jobID, messageID string) (*observationCursor,
 		return nil, ErrInvalidRequest
 	}
 	var cursor observationCursor
-	if json.Unmarshal(raw, &cursor) != nil || cursor.JobID != jobID || cursor.MessageID != messageID || cursor.Next < 0 || len(cursor.Digest) != 64 || !validIdentity(cursor.Binding.Harness) || !validIdentity(cursor.Binding.ThreadID) || !validIdentity(cursor.Binding.TurnID) {
+	if json.Unmarshal(raw, &cursor) != nil || cursor.SessionID != sessionID || cursor.MessageID != messageID || cursor.Next < 0 || len(cursor.Digest) != 64 || !validIdentity(cursor.Binding.Harness) || !validIdentity(cursor.Binding.ThreadID) || !validIdentity(cursor.Binding.TurnID) {
 		return nil, ErrInvalidRequest
 	}
 	canonical, _ := json.Marshal(cursor)
@@ -87,19 +87,19 @@ func parseObservationCursor(value, jobID, messageID string) (*observationCursor,
 	return &cursor, nil
 }
 
-func (s Service) ReadMessageObservation(ctx context.Context, jobID, messageID, cursor string) (MessageObservation, error) {
+func (s Service) ReadMessageObservation(ctx context.Context, sessionID, messageID, cursor string) (MessageObservation, error) {
 	// Explicit snapshots remain available without a worker event source.
 	if s.Replies == nil {
 		s.Replies = codex.NewReplyFeed()
 	}
-	result, _, err := s.messageObservation(ctx, observationRequest{JobID: jobID, MessageID: messageID, Cursor: cursor}, true)
+	result, _, err := s.messageObservation(ctx, observationRequest{SessionID: sessionID, MessageID: messageID, Cursor: cursor}, true)
 	return result, err
 }
 
 func (s Service) messageObservation(ctx context.Context, input observationRequest, hydrate bool) (MessageObservation, <-chan struct{}, error) {
-	result := MessageObservation{JobID: input.JobID, MessageID: input.MessageID, Items: []core.HarnessConversationItem{}, State: "pending"}
-	cursor, err := parseObservationCursor(input.Cursor, input.JobID, input.MessageID)
-	if err != nil || !validIdentity(input.JobID) || !validIdentity(input.MessageID) {
+	result := MessageObservation{SessionID: input.SessionID, MessageID: input.MessageID, Items: []core.HarnessConversationItem{}, State: "pending"}
+	cursor, err := parseObservationCursor(input.Cursor, input.SessionID, input.MessageID)
+	if err != nil || !validIdentity(input.SessionID) || !validIdentity(input.MessageID) {
 		return result, nil, ErrInvalidRequest
 	}
 	execution, err := s.observationExecution(ctx, input)
@@ -122,7 +122,7 @@ func (s Service) messageObservation(ctx context.Context, input observationReques
 		}
 		return result, nil, nil
 	}
-	if err := validateMessageTimelineBinding(execution, input.JobID, input.MessageID); err != nil {
+	if err := validateMessageTimelineBinding(execution, input.SessionID, input.MessageID); err != nil {
 		return result, nil, err
 	}
 	result.Binding = &ObservationBinding{Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID}
@@ -138,27 +138,27 @@ func (s Service) messageObservation(ctx context.Context, input observationReques
 func (s Service) observationExecution(ctx context.Context, input observationRequest) (core.AgentMessageExecution, error) {
 	execution, err := s.Store.AgentMessageExecution(ctx, input.MessageID)
 	if errors.Is(err, postgres.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
-		return execution, ErrJobNotFound
+		return execution, ErrSessionNotFound
 	}
 	if err != nil {
 		return execution, err
 	}
-	if execution.Job.ID != input.JobID || execution.Message.JobID != input.JobID || execution.Message.ID != input.MessageID || execution.AgentRun.MessageID != input.MessageID {
-		return execution, ErrJobNotFound
+	if execution.Session.ID != input.SessionID || execution.Message.SessionID != input.SessionID || execution.Message.ID != input.MessageID || execution.AgentRun.MessageID != input.MessageID {
+		return execution, ErrSessionNotFound
 	}
 	return execution, nil
 }
 
 func (s Service) readObservationFeed(ctx context.Context, result MessageObservation, cursor *observationCursor, execution core.AgentMessageExecution, hydrate bool) (MessageObservation, <-chan struct{}, error) {
 	run := execution.AgentRun
-	binding := codex.ReplyBinding{JobID: result.JobID, SandboxID: execution.Sandbox.ID, OwnershipNonce: execution.Sandbox.OwnershipNonce, Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID}
+	binding := codex.ReplyBinding{SessionID: result.SessionID, SandboxID: execution.Sandbox.ID, OwnershipNonce: execution.Sandbox.OwnershipNonce, Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID}
 	if s.Replies == nil {
 		result.State = "resync_deferred"
 		return result, nil, nil
 	}
 	snapshot, changed, found := s.Replies.Read(binding)
 	if hydrate && (!found || snapshot.Gap || result.Outcome != nil && !snapshot.Complete) {
-		_, readErr := s.ReadMessageTimeline(ctx, result.JobID, result.MessageID)
+		_, readErr := s.ReadMessageTimeline(ctx, result.SessionID, result.MessageID)
 		if readErr != nil {
 			return result, changed, readErr
 		}
@@ -182,7 +182,7 @@ func (s Service) projectObservationItems(ctx context.Context, result MessageObse
 	}
 	digest := observationPrefixDigest(snapshot.Items)
 	timeline := core.HarnessTimeline{CompletedItems: snapshot.Items}
-	deliveries, err := s.observationInputSources(ctx, result.JobID, snapshot.Items[result.FromIndex:])
+	deliveries, err := s.observationInputSources(ctx, result.SessionID, snapshot.Items[result.FromIndex:])
 	if err != nil {
 		return result, changed, err
 	}
@@ -191,7 +191,7 @@ func (s Service) projectObservationItems(ctx context.Context, result MessageObse
 	}
 	result.Items = append(result.Items, timeline.CompletedItems[result.FromIndex:]...)
 	result.NextIndex = len(timeline.CompletedItems)
-	raw, _ := json.Marshal(observationCursor{JobID: result.JobID, MessageID: result.MessageID, Binding: *result.Binding, Next: result.NextIndex, Digest: digest})
+	raw, _ := json.Marshal(observationCursor{SessionID: result.SessionID, MessageID: result.MessageID, Binding: *result.Binding, Next: result.NextIndex, Digest: digest})
 	next := base64.RawURLEncoding.EncodeToString(raw)
 	result.Cursor, result.State = &next, "observing"
 	if snapshot.Complete && result.Outcome != nil {
@@ -202,8 +202,8 @@ func (s Service) projectObservationItems(ctx context.Context, result MessageObse
 }
 
 // Once the input prefix is acknowledged, status polls and reply-only deltas
-// need no Job delivery history. Input attribution is resolved only when sent.
-func (s Service) observationInputSources(ctx context.Context, jobID string, items []core.HarnessConversationItem) ([]core.Delivery, error) {
+// need no Session delivery history. Input attribution is resolved only when sent.
+func (s Service) observationInputSources(ctx context.Context, sessionID string, items []core.HarnessConversationItem) ([]core.Delivery, error) {
 	for _, item := range items {
 		if item.Kind != "input" {
 			continue
@@ -212,7 +212,7 @@ func (s Service) observationInputSources(ctx context.Context, jobID string, item
 		if !ok {
 			return nil, ErrUnavailable
 		}
-		return store.Deliveries(ctx, jobID)
+		return store.Deliveries(ctx, sessionID)
 	}
 	return nil, nil
 }
@@ -254,13 +254,13 @@ func projectObservationStatus(result *MessageObservation, execution core.AgentMe
 
 // StreamMessageObservation waits on native projection changes. Its compact
 // custody poll settles durable outcome and never calls a Harness or activity API.
-func (s Service) StreamMessageObservation(ctx context.Context, jobID, messageID, cursor string, emit func(MessageObservation) error) error {
+func (s Service) StreamMessageObservation(ctx context.Context, sessionID, messageID, cursor string, emit func(MessageObservation) error) error {
 	if s.Replies == nil {
 		return core.ErrTimelineUnavailable
 	}
 	ctx, cancel := context.WithTimeout(ctx, ObservationStreamTimeout)
 	defer cancel()
-	input := observationRequest{JobID: jobID, MessageID: messageID, Cursor: cursor}
+	input := observationRequest{SessionID: sessionID, MessageID: messageID, Cursor: cursor}
 	ticker := time.NewTicker(observationStatusInterval)
 	defer ticker.Stop()
 	var previous *MessageObservation
@@ -296,14 +296,14 @@ func (s Service) projectObservationAttention(ctx context.Context, result *Messag
 	}
 	code := ""
 	switch {
-	case !execution.Job.AdmissionOpen || execution.Job.CleanupState != core.CleanupPending:
-		code = "job_closed"
-	case execution.Job.WorkflowAttention != "":
-		code = "job_attention"
+	case !execution.Session.AdmissionOpen || execution.Session.CleanupState != core.CleanupPending:
+		code = "session_closed"
+	case execution.Session.WorkflowAttention != "":
+		code = "session_attention"
 	}
 	if code == "" && s.ObservationAttention != nil {
 		var err error
-		code, err = s.ObservationAttention(ctx, execution.Job)
+		code, err = s.ObservationAttention(ctx, execution.Session)
 		if err != nil {
 			return err
 		}

@@ -29,7 +29,7 @@ func TestProofBarrierIsDisabledByDefaultAndRequiresExplicitPhrase(t *testing.T) 
 
 func TestProofBarrierRejectsTimingThatCouldOutliveItsClaim(t *testing.T) {
 	barrier := Barrier{Point: core.BarrierBeforeSubmit, Sequence: 1, Dir: t.TempDir(), Wait: 2 * time.Second, Lease: time.Second}
-	delivery := core.Delivery{Message: core.Message{JobID: "job-proof", Sequence: 1}}
+	delivery := core.Delivery{Message: core.Message{SessionID: "job-proof", Sequence: 1}}
 	err := barrier.Reach(context.Background(), core.BarrierBeforeSubmit, delivery)
 	if err == nil || !strings.Contains(err.Error(), "unsafe proof barrier timing") {
 		t.Fatalf("timing error=%v", err)

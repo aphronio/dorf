@@ -11,60 +11,28 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 )
 
-const ensureJobExecutionWake = `-- name: EnsureJobExecutionWake :exec
-insert into dorf.job_execution_wakes(job_id)
+const ensureSessionExecutionWake = `-- name: EnsureSessionExecutionWake :exec
+insert into dorf.session_execution_wakes(session_id)
 values($1)
-on conflict(job_id) do nothing
+on conflict(session_id) do nothing
 `
 
-func (q *Queries) EnsureJobExecutionWake(ctx context.Context, jobID string) error {
-	_, err := q.db.ExecContext(ctx, ensureJobExecutionWake, jobID)
+func (q *Queries) EnsureSessionExecutionWake(ctx context.Context, sessionID string) error {
+	_, err := q.db.ExecContext(ctx, ensureSessionExecutionWake, sessionID)
 	return err
 }
 
-const getJobExecutionWakeCause = `-- name: GetJobExecutionWakeCause :one
-select revision
-from dorf.job_execution_wake_causes
-where job_id=$1 and cause_key=$2
-`
-
-type GetJobExecutionWakeCauseParams struct {
-	JobID    string
-	CauseKey string
-}
-
-func (q *Queries) GetJobExecutionWakeCause(ctx context.Context, arg GetJobExecutionWakeCauseParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, getJobExecutionWakeCause, arg.JobID, arg.CauseKey)
-	var revision int64
-	err := row.Scan(&revision)
-	return revision, err
-}
-
-const getJobExecutionWakeRevision = `-- name: GetJobExecutionWakeRevision :one
-select coalesce(w.revision,0)::bigint as revision
-from dorf.jobs j
-left join dorf.job_execution_wakes w on w.job_id=j.id
-where j.id=$1
-`
-
-func (q *Queries) GetJobExecutionWakeRevision(ctx context.Context, jobID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, getJobExecutionWakeRevision, jobID)
-	var revision int64
-	err := row.Scan(&revision)
-	return revision, err
-}
-
 const getNativeTerminalWakeBinding = `-- name: GetNativeTerminalWakeBinding :one
-select ar.job_id,ar.sandbox_id,coalesce(ar.thread_id,'') as thread_id,
+select ar.session_id,ar.sandbox_id,coalesce(ar.thread_id,'') as thread_id,
        coalesce(ar.turn_id,'') as turn_id,j.admission_open,j.cleanup_state
 from dorf.agent_runs ar
-join dorf.jobs j on j.id=ar.job_id
-join dorf.sandboxes s on s.id=ar.sandbox_id and s.job_id=ar.job_id
+join dorf.sessions j on j.id=ar.session_id
+join dorf.sandboxes s on s.id=ar.sandbox_id and s.session_id=ar.session_id
 where ar.id=$1
 `
 
 type GetNativeTerminalWakeBindingRow struct {
-	JobID         string
+	SessionID     string
 	SandboxID     string
 	ThreadID      string
 	TurnID        string
@@ -76,7 +44,7 @@ func (q *Queries) GetNativeTerminalWakeBinding(ctx context.Context, runID string
 	row := q.db.QueryRowContext(ctx, getNativeTerminalWakeBinding, runID)
 	var i GetNativeTerminalWakeBindingRow
 	err := row.Scan(
-		&i.JobID,
+		&i.SessionID,
 		&i.SandboxID,
 		&i.ThreadID,
 		&i.TurnID,
@@ -86,49 +54,81 @@ func (q *Queries) GetNativeTerminalWakeBinding(ctx context.Context, runID string
 	return i, err
 }
 
-const insertJobExecutionWakeCause = `-- name: InsertJobExecutionWakeCause :exec
-insert into dorf.job_execution_wake_causes(job_id,cause_key,revision)
-values($1,$2,$3)
-`
-
-type InsertJobExecutionWakeCauseParams struct {
-	JobID    string
-	CauseKey string
-	Revision int64
-}
-
-func (q *Queries) InsertJobExecutionWakeCause(ctx context.Context, arg InsertJobExecutionWakeCauseParams) error {
-	_, err := q.db.ExecContext(ctx, insertJobExecutionWakeCause, arg.JobID, arg.CauseKey, arg.Revision)
-	return err
-}
-
-const lockJobExecutionWake = `-- name: LockJobExecutionWake :one
+const getSessionExecutionWakeCause = `-- name: GetSessionExecutionWakeCause :one
 select revision
-from dorf.job_execution_wakes
-where job_id=$1
-for update
+from dorf.session_execution_wake_causes
+where session_id=$1 and cause_key=$2
 `
 
-func (q *Queries) LockJobExecutionWake(ctx context.Context, jobID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, lockJobExecutionWake, jobID)
+type GetSessionExecutionWakeCauseParams struct {
+	SessionID string
+	CauseKey  string
+}
+
+func (q *Queries) GetSessionExecutionWakeCause(ctx context.Context, arg GetSessionExecutionWakeCauseParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getSessionExecutionWakeCause, arg.SessionID, arg.CauseKey)
 	var revision int64
 	err := row.Scan(&revision)
 	return revision, err
 }
 
-const setJobExecutionWakeRevision = `-- name: SetJobExecutionWakeRevision :execrows
-update dorf.job_execution_wakes
-set revision=$1
-where job_id=$2
+const getSessionExecutionWakeRevision = `-- name: GetSessionExecutionWakeRevision :one
+select coalesce(w.revision,0)::bigint as revision
+from dorf.sessions j
+left join dorf.session_execution_wakes w on w.session_id=j.id
+where j.id=$1
 `
 
-type SetJobExecutionWakeRevisionParams struct {
-	Revision int64
-	JobID    string
+func (q *Queries) GetSessionExecutionWakeRevision(ctx context.Context, sessionID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getSessionExecutionWakeRevision, sessionID)
+	var revision int64
+	err := row.Scan(&revision)
+	return revision, err
 }
 
-func (q *Queries) SetJobExecutionWakeRevision(ctx context.Context, arg SetJobExecutionWakeRevisionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, setJobExecutionWakeRevision, arg.Revision, arg.JobID)
+const insertSessionExecutionWakeCause = `-- name: InsertSessionExecutionWakeCause :exec
+insert into dorf.session_execution_wake_causes(session_id,cause_key,revision)
+values($1,$2,$3)
+`
+
+type InsertSessionExecutionWakeCauseParams struct {
+	SessionID string
+	CauseKey  string
+	Revision  int64
+}
+
+func (q *Queries) InsertSessionExecutionWakeCause(ctx context.Context, arg InsertSessionExecutionWakeCauseParams) error {
+	_, err := q.db.ExecContext(ctx, insertSessionExecutionWakeCause, arg.SessionID, arg.CauseKey, arg.Revision)
+	return err
+}
+
+const lockSessionExecutionWake = `-- name: LockSessionExecutionWake :one
+select revision
+from dorf.session_execution_wakes
+where session_id=$1
+for update
+`
+
+func (q *Queries) LockSessionExecutionWake(ctx context.Context, sessionID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, lockSessionExecutionWake, sessionID)
+	var revision int64
+	err := row.Scan(&revision)
+	return revision, err
+}
+
+const setSessionExecutionWakeRevision = `-- name: SetSessionExecutionWakeRevision :execrows
+update dorf.session_execution_wakes
+set revision=$1
+where session_id=$2
+`
+
+type SetSessionExecutionWakeRevisionParams struct {
+	Revision  int64
+	SessionID string
+}
+
+func (q *Queries) SetSessionExecutionWakeRevision(ctx context.Context, arg SetSessionExecutionWakeRevisionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionExecutionWakeRevision, arg.Revision, arg.SessionID)
 	if err != nil {
 		return 0, err
 	}

@@ -23,27 +23,27 @@ type Externals struct {
 
 func (e Externals) Harness() string { return e.Agent.Name() }
 
-func (e Externals) ReadSandboxFile(ctx context.Context, job core.Job, owned core.Sandbox, relativePath string) ([]byte, error) {
-	if owned.JobID != job.ID {
-		return nil, fmt.Errorf("Sandbox file read requires the exact Job owner")
+func (e Externals) ReadSandboxFile(ctx context.Context, session core.Session, owned core.Sandbox, relativePath string) ([]byte, error) {
+	if owned.SessionID != session.ID {
+		return nil, fmt.Errorf("Sandbox file read requires the exact Session owner")
 	}
 	return e.Sandbox.ReadFile(ctx, ownershipMetadata(owned), relativePath)
 }
 
-func (e Externals) SandboxCreate(ctx context.Context, job core.Job, sandbox core.Sandbox) (string, error) {
-	if sandbox.JobID != job.ID {
-		return "", fmt.Errorf("Sandbox does not belong to exact Job %s", job.ID)
+func (e Externals) SandboxCreate(ctx context.Context, session core.Session, sandbox core.Sandbox) (string, error) {
+	if sandbox.SessionID != session.ID {
+		return "", fmt.Errorf("Sandbox does not belong to exact Session %s", session.ID)
 	}
 	owner := ownershipMetadata(sandbox)
 	if err := e.Sandbox.ReconcileOwnedCreate(ctx, owner); err != nil {
 		return "", err
 	}
-	if job.AgentsMD != "" {
-		if err := e.Sandbox.PutFile(ctx, owner, filepath.Join(e.Sandbox.Workspace(), "AGENTS.md"), []byte(job.AgentsMD)); err != nil {
+	if session.AgentsMD != "" {
+		if err := e.Sandbox.PutFile(ctx, owner, filepath.Join(e.Sandbox.Workspace(), "AGENTS.md"), []byte(session.AgentsMD)); err != nil {
 			return "", err
 		}
 	}
-	status, err := e.ReadSandboxStatus(ctx, job, sandbox)
+	status, err := e.ReadSandboxStatus(ctx, session, sandbox)
 	if err != nil {
 		return "", err
 	}
@@ -54,12 +54,12 @@ func (e Externals) SandboxCreate(ctx context.Context, job core.Job, sandbox core
 }
 
 func ownershipMetadata(sandbox core.Sandbox) provider.Ownership {
-	return provider.Ownership{JobID: sandbox.JobID, SandboxID: sandbox.ID, OwnershipNonce: sandbox.OwnershipNonce}
+	return provider.Ownership{SessionID: sandbox.SessionID, SandboxID: sandbox.ID, OwnershipNonce: sandbox.OwnershipNonce}
 }
 
-func (e Externals) RouteCreate(ctx context.Context, job core.Job, sandbox core.Sandbox, expected core.Route) error {
-	if sandbox.JobID != job.ID || expected.SandboxID != sandbox.ID || expected.ID == "" {
-		return fmt.Errorf("provider Route does not belong to exact Job Sandbox")
+func (e Externals) RouteCreate(ctx context.Context, session core.Session, sandbox core.Sandbox, expected core.Route) error {
+	if sandbox.SessionID != session.ID || expected.SandboxID != sandbox.ID || expected.ID == "" {
+		return fmt.Errorf("provider Route does not belong to exact Session Sandbox")
 	}
 	if err := e.Sandbox.AttestOwnership(ctx, ownershipMetadata(sandbox)); err != nil {
 		return err
@@ -68,23 +68,23 @@ func (e Externals) RouteCreate(ctx context.Context, job core.Job, sandbox core.S
 	if err != nil {
 		return err
 	}
-	route, err := e.Gateway.ReconcileCreate(ctx, job.ProviderConnection, routeConsumer(sandbox), expected.ID)
+	route, err := e.Gateway.ReconcileCreate(ctx, session.ProviderConnection, routeConsumer(sandbox), expected.ID)
 	if err != nil {
 		return err
 	}
 	if route.ID != expected.ID {
 		return fmt.Errorf("provider Gateway returned a foreign Route identity")
 	}
-	if err := e.Gateway.RequireModel(ctx, baseURL, route.APIKey, job.Model); err != nil {
+	if err := e.Gateway.RequireModel(ctx, baseURL, route.APIKey, session.Model); err != nil {
 		return err
 	}
-	if err := e.Agent.InstallRoute(ctx, ownershipMetadata(sandbox), baseURL, route.APIKey, job.Model); err != nil {
+	if err := e.Agent.InstallRoute(ctx, ownershipMetadata(sandbox), baseURL, route.APIKey, session.Model); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (e Externals) SteerHistory(ctx context.Context, _ core.Job, sandboxID, threadID string) (core.HarnessHistory, error) {
+func (e Externals) SteerHistory(ctx context.Context, _ core.Session, sandboxID, threadID string) (core.HarnessHistory, error) {
 	owner, err := e.owner(ctx, sandboxID)
 	if err != nil {
 		return core.HarnessHistory{}, err
@@ -92,16 +92,16 @@ func (e Externals) SteerHistory(ctx context.Context, _ core.Job, sandboxID, thre
 	return e.Agent.ReadTurns(ctx, owner, threadID)
 }
 
-func (e Externals) AgentSteer(ctx context.Context, job core.Job, delivery core.Delivery) (string, error) {
-	if delivery.AgentRun.JobID != job.ID || delivery.AgentRun.MessageID != delivery.Message.ID {
-		return "", fmt.Errorf("steer requires the exact Message and Job-owned AgentRun")
+func (e Externals) AgentSteer(ctx context.Context, session core.Session, delivery core.Delivery) (string, error) {
+	if delivery.AgentRun.SessionID != session.ID || delivery.AgentRun.MessageID != delivery.Message.ID {
+		return "", fmt.Errorf("steer requires the exact Message and Session-owned AgentRun")
 	}
 	owner, err := e.owner(ctx, delivery.AgentRun.SandboxID)
 	if err != nil {
 		return "", err
 	}
-	if owner.JobID != job.ID {
-		return "", fmt.Errorf("steer requires the exact Job-owned Sandbox")
+	if owner.SessionID != session.ID {
+		return "", fmt.Errorf("steer requires the exact Session-owned Sandbox")
 	}
 	input, err := e.messageInput(ctx, owner, delivery.Message.ID, delivery.Message.Input, delivery.Message.Attachments)
 	if err != nil {
@@ -110,11 +110,11 @@ func (e Externals) AgentSteer(ctx context.Context, job core.Job, delivery core.D
 	return e.Agent.SteerTurn(ctx, owner, delivery.AgentRun.ThreadID, delivery.Message.TargetTurnID, delivery.AgentRun.ID, input)
 }
 
-func (e Externals) WithSteerScope(ctx context.Context, job core.Job, delivery core.Delivery, fn func(context.Context, core.SteerExternals) error) error {
+func (e Externals) WithSteerScope(ctx context.Context, session core.Session, delivery core.Delivery, fn func(context.Context, core.SteerExternals) error) error {
 	scoped, ok := e.Agent.(ScopedHarness)
 	run := delivery.AgentRun
 	if !ok || delivery.Message.Intent != core.MessageSteer || run.ThreadID == "" || delivery.Message.TargetTurnID == "" ||
-		run.JobID != job.ID || run.MessageID != delivery.Message.ID || run.SandboxID == "" {
+		run.SessionID != session.ID || run.MessageID != delivery.Message.ID || run.SandboxID == "" {
 		return fn(ctx, e)
 	}
 	if run.Harness != "" && run.Harness != e.Agent.Name() {
@@ -124,7 +124,7 @@ func (e Externals) WithSteerScope(ctx context.Context, job core.Job, delivery co
 	if err != nil {
 		return err
 	}
-	if owner.JobID != job.ID || owner.SandboxID != run.SandboxID {
+	if owner.SessionID != session.ID || owner.SandboxID != run.SandboxID {
 		return fn(ctx, e)
 	}
 	return scoped.WithOperation(ctx, owner, run.ThreadID, func(ctx context.Context, harness Harness) error {
@@ -139,9 +139,9 @@ func (e Externals) WithSteerScope(ctx context.Context, job core.Job, delivery co
 	})
 }
 
-func (e Externals) RouteRevoke(ctx context.Context, job core.Job, sandbox core.Sandbox, route core.Route) error {
-	if sandbox.JobID != job.ID || route.SandboxID != sandbox.ID || route.ID == "" {
-		return fmt.Errorf("Route cleanup has no exact Job-owned identity")
+func (e Externals) RouteRevoke(ctx context.Context, session core.Session, sandbox core.Sandbox, route core.Route) error {
+	if sandbox.SessionID != session.ID || route.SandboxID != sandbox.ID || route.ID == "" {
+		return fmt.Errorf("Route cleanup has no exact Session-owned identity")
 	}
 	if err := e.Gateway.RevokeExact(ctx, routeConsumer(sandbox), route.ID); err != nil {
 		return err
@@ -158,9 +158,9 @@ func (e Externals) RouteRevoke(ctx context.Context, job core.Job, sandbox core.S
 	return nil
 }
 
-func (e Externals) SandboxDelete(ctx context.Context, job core.Job, sandbox core.Sandbox) error {
-	if sandbox.JobID != job.ID || sandbox.ID == "" {
-		return fmt.Errorf("Sandbox cleanup has no exact Job-owned identity")
+func (e Externals) SandboxDelete(ctx context.Context, session core.Session, sandbox core.Sandbox) error {
+	if sandbox.SessionID != session.ID || sandbox.ID == "" {
+		return fmt.Errorf("Sandbox cleanup has no exact Session-owned identity")
 	}
 	return e.Sandbox.DeleteOwned(ctx, ownershipMetadata(sandbox))
 }
@@ -179,16 +179,16 @@ var (
 	_ core.ScopedSteerExternals = Externals{}
 )
 
-func (e Externals) WriteSandboxFile(ctx context.Context, job core.Job, owned core.Sandbox, name string, contents []byte, ifAbsent bool) error {
-	if owned.JobID != job.ID {
-		return fmt.Errorf("Sandbox file write requires the exact Job owner")
+func (e Externals) WriteSandboxFile(ctx context.Context, session core.Session, owned core.Sandbox, name string, contents []byte, ifAbsent bool) error {
+	if owned.SessionID != session.ID {
+		return fmt.Errorf("Sandbox file write requires the exact Session owner")
 	}
 	return provider.WriteFileViaExec(ctx, ownershipMetadata(owned), e.Sandbox.Workspace(), name, contents, ifAbsent, e.Sandbox.Exec)
 }
 
-func (e Externals) ExecSandbox(ctx context.Context, job core.Job, owned core.Sandbox, command provider.Command) (provider.CommandResult, error) {
-	if owned.JobID != job.ID {
-		return provider.CommandResult{}, fmt.Errorf("Sandbox command requires the exact Job owner")
+func (e Externals) ExecSandbox(ctx context.Context, session core.Session, owned core.Sandbox, command provider.Command) (provider.CommandResult, error) {
+	if owned.SessionID != session.ID {
+		return provider.CommandResult{}, fmt.Errorf("Sandbox command requires the exact Session owner")
 	}
 	if err := command.Validate(); err != nil {
 		return provider.CommandResult{}, err
@@ -219,9 +219,9 @@ func (e Externals) ExecSandbox(ctx context.Context, job core.Job, owned core.San
 	return output, nil
 }
 
-func (e Externals) SandboxPause(ctx context.Context, job core.Job, owned core.Sandbox) error {
-	if owned.JobID != job.ID || owned.ID == "" {
-		return fmt.Errorf("Sandbox pause requires its exact Job owner")
+func (e Externals) SandboxPause(ctx context.Context, session core.Session, owned core.Sandbox) error {
+	if owned.SessionID != session.ID || owned.ID == "" {
+		return fmt.Errorf("Sandbox pause requires its exact Session owner")
 	}
 	pauser, ok := e.Sandbox.(provider.MemoryPauser)
 	if !ok {
@@ -230,9 +230,9 @@ func (e Externals) SandboxPause(ctx context.Context, job core.Job, owned core.Sa
 	return pauser.PauseOwned(ctx, ownershipMetadata(owned))
 }
 
-func (e Externals) ReadSandboxStatus(ctx context.Context, job core.Job, owned core.Sandbox) (provider.Status, error) {
-	if owned.JobID != job.ID || owned.ID == "" {
-		return provider.Status{}, fmt.Errorf("Sandbox observation requires its exact Job owner")
+func (e Externals) ReadSandboxStatus(ctx context.Context, session core.Session, owned core.Sandbox) (provider.Status, error) {
+	if owned.SessionID != session.ID || owned.ID == "" {
+		return provider.Status{}, fmt.Errorf("Sandbox observation requires its exact Session owner")
 	}
 	observer, ok := e.Sandbox.(provider.StatusObserver)
 	if !ok {

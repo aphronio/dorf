@@ -26,10 +26,10 @@ cleanup attention rather than publishing a checkpoint whose package-generation r
 match an in-flight activation. Completing that cleanup requires explicit upgrade reconciliation;
 this slice does not infer package state or release the upgrade hold.
 
-For Jobs that normally pause after one minute, ordinary capture stops accepting work 15 seconds
+For Sessions that normally pause after one minute, ordinary capture stops accepting work 15 seconds
 before that pause deadline so remote cancellation has time to finish. A missed window retains the
 previous checkpoint. Capture does not extend the idle pause policy. Cleanup and `keep_running`
-Jobs use the configured backup timeout instead.
+Sessions use the configured backup timeout instead.
 
 ## Boundaries
 
@@ -51,7 +51,7 @@ Jobs use the configured backup timeout instead.
   content hashes alone can miss temporary changes read by a backup before the source reverts.
   One native-file inventory owns selection and validation. Diagnostics retain bounded failure classes;
   completed watcher control files are removed after process termination is confirmed.
-- Publication uses a short Job fence plus the admission transaction lock. There is no Job fence
+- Publication uses a short Session fence plus the admission transaction lock. There is no Session fence
   held across hashing, uploads, or remote cancellation. Accepted input, new activity, package
   maintenance, or resource replacement invalidate an older boundary.
 - Recovery accepts an exact checkpoint and reserves its replacement with the delivery hold in one
@@ -102,18 +102,18 @@ Changing the logical identity, password key or path derivation can strand existi
 Preserve the old configuration for recovery. The normal continuous worker discovers checkpoints;
 `worker --once` does not run the background checkpoint queue.
 
-`dorf checkpoint show JOB` lists retained references and recovery receipts. To recover an open Job,
+`dorf checkpoint show SESSION` lists retained references and recovery receipts. To recover an open Session,
 select the full snapshot ID from that output and run:
 
 ```sh
-dorf checkpoint recover JOB --id UNIQUE_REQUEST_ID --repository REPOSITORY_ID --snapshot FULL_SNAPSHOT_ID
+dorf checkpoint recover SESSION --id UNIQUE_REQUEST_ID --repository REPOSITORY_ID --snapshot FULL_SNAPSHOT_ID
 ```
 
 The worker performs recovery under a retained delivery hold. Repeating the same request reconciles
 the same operation. A checkpoint that predates accepted or ambiguous native execution is rejected;
-an operator must investigate that gap. Cleanup closes admission, so a cleaned-up Job is not reopened
+an operator must investigate that gap. Cleanup closes admission, so a cleaned-up Session is not reopened
 by this command. Investigation of retained cleanup state requires an isolated restore procedure;
-the disposable cleanup proof verifies this procedure without reopening the Job.
+the disposable cleanup proof verifies this procedure without reopening the Session.
 
 Only one unfinished maintenance operation may own a Sandbox. Recovery and package-upgrade requests
 preserve exact same-request replay but reject a distinct request while delivery is held. A typed
@@ -149,7 +149,7 @@ The smaller recovery implementation was subsequently rechecked with the same nat
 - Source deletion, fresh-VM restore, same native Thread continuation, and file/Git/SQLite WAL checks.
 - Fresh route credentials and retry after a lost verification acknowledgement.
 - Failed pre-cleanup backup retaining the source; successful retry publishing before deletion;
-  isolated restore recovering final edits while the original Job remains closed.
+  isolated restore recovering final edits while the original Session remains closed.
 - A separate R2 proof verified incremental reuse, old/latest exact restore, full repository check,
   a following backup after cancellation, and cross-session read/write/delete denial.
 

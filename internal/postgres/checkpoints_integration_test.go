@@ -18,7 +18,7 @@ func TestCheckpointPublicationIsImmutableIdempotentAndBoundaryChecked(t *testing
 	db, store, _ := testDatabase(t)
 	ctx := context.Background()
 	_, sandboxID, boundary := completedCheckpointFixture(t, store, ctx, "publication")
-	firstRef := checkpointReference("test-repository", boundary.JobID+":first")
+	firstRef := checkpointReference("test-repository", boundary.SessionID+":first")
 
 	first, err := store.PublishCheckpoint(ctx, boundary, firstRef)
 	if err != nil {
@@ -29,7 +29,7 @@ func TestCheckpointPublicationIsImmutableIdempotentAndBoundaryChecked(t *testing
 		t.Fatalf("lost acknowledgement replay changed checkpoint: checkpoint=%#v err=%v", replayed, err)
 	}
 
-	if _, err := db.ExecContext(ctx, `update dorf.jobs set sandbox_last_active_at=sandbox_last_active_at-interval '1 second' where id=$1`, boundary.JobID); err != nil {
+	if _, err := db.ExecContext(ctx, `update dorf.sessions set sandbox_last_active_at=sandbox_last_active_at-interval '1 second' where id=$1`, boundary.SessionID); err != nil {
 		t.Fatal(err)
 	}
 	current, err := store.Boundary(ctx, sandboxID, false)
@@ -42,7 +42,7 @@ func TestCheckpointPublicationIsImmutableIdempotentAndBoundaryChecked(t *testing
 	if err != nil || replayed != first {
 		t.Fatalf("stale acknowledgement replay was not idempotent: checkpoint=%#v err=%v", replayed, err)
 	}
-	if _, err := store.PublishCheckpoint(ctx, boundary, checkpointReference("test-repository", boundary.JobID+":obsolete")); !errors.Is(err, persistence.ErrCheckpointSuperseded) {
+	if _, err := store.PublishCheckpoint(ctx, boundary, checkpointReference("test-repository", boundary.SessionID+":obsolete")); !errors.Is(err, persistence.ErrCheckpointSuperseded) {
 		t.Fatalf("obsolete upload publication error=%v", err)
 	}
 	last, err := store.LastCheckpoint(ctx, sandboxID)
@@ -50,7 +50,7 @@ func TestCheckpointPublicationIsImmutableIdempotentAndBoundaryChecked(t *testing
 		t.Fatalf("obsolete attempt moved authoritative checkpoint: last=%#v err=%v", last, err)
 	}
 
-	second, err := store.PublishCheckpoint(ctx, current, checkpointReference("test-repository", boundary.JobID+":second"))
+	second, err := store.PublishCheckpoint(ctx, current, checkpointReference("test-repository", boundary.SessionID+":second"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestCheckpointPublicationRejectsSettledConcurrentChanges(t *testing.T) {
 			name: "activity",
 			mutate: func(t *testing.T, ctx context.Context, store postgres.Store, _ string, boundary persistence.CaptureBoundary) {
 				t.Helper()
-				if _, err := store.DB.ExecContext(ctx, `update dorf.jobs set sandbox_last_active_at=sandbox_last_active_at-interval '1 second' where id=$1`, boundary.JobID); err != nil {
+				if _, err := store.DB.ExecContext(ctx, `update dorf.sessions set sandbox_last_active_at=sandbox_last_active_at-interval '1 second' where id=$1`, boundary.SessionID); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -86,7 +86,7 @@ func TestCheckpointPublicationRejectsSettledConcurrentChanges(t *testing.T) {
 			mutate: func(t *testing.T, ctx context.Context, store postgres.Store, sandboxID string, boundary persistence.CaptureBoundary) {
 				t.Helper()
 				admitted, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{
-					JobID: boundary.JobID, SandboxID: sandboxID, FromKind: core.MessageFromHuman,
+					SessionID: boundary.SessionID, SandboxID: sandboxID, FromKind: core.MessageFromHuman,
 					FromID: "concurrent-input", Input: "new accepted work", Intent: core.MessageFollow,
 				})
 				if err != nil {
@@ -107,7 +107,7 @@ func TestCheckpointPublicationRejectsSettledConcurrentChanges(t *testing.T) {
 				t.Helper()
 				replacementID := sandboxID + ":replacement"
 				if _, err := store.DB.ExecContext(ctx, `insert into dorf.sandbox_resources(id,sandbox_id,ownership_nonce,provider_id,observed_at)
-values($1,$2,$3,'provider-replacement',clock_timestamp())`, replacementID, sandboxID, fmt.Sprintf("%x", sha256.Sum256([]byte(boundary.JobID+":replacement")))); err != nil {
+values($1,$2,$3,'provider-replacement',clock_timestamp())`, replacementID, sandboxID, fmt.Sprintf("%x", sha256.Sum256([]byte(boundary.SessionID+":replacement")))); err != nil {
 					t.Fatal(err)
 				}
 				if _, err := store.DB.ExecContext(ctx, `update dorf.sandboxes set active_resource_id=$1 where id=$2`, replacementID, sandboxID); err != nil {
@@ -135,7 +135,7 @@ values($1,$2,'workspace_upgrade',clock_timestamp())`, "hold-"+sandboxID, sandbox
 			if err != nil || !current.Eligible || current == expected {
 				t.Fatalf("settled mutation did not produce a new eligible boundary: current=%#v err=%v", current, err)
 			}
-			_, err = store.PublishCheckpoint(ctx, expected, checkpointReference("race-repository", expected.JobID))
+			_, err = store.PublishCheckpoint(ctx, expected, checkpointReference("race-repository", expected.SessionID))
 			if !errors.Is(err, persistence.ErrCheckpointSuperseded) {
 				t.Fatalf("late publication error=%v", err)
 			}
@@ -169,12 +169,12 @@ values($1,$2,'workspace_upgrade',clock_timestamp())`, upgradeID, sandboxID); err
 	if err != nil || upgraded.EffectiveUpgradeID != upgradeID || upgraded.DeliveryHoldCount != 1 || !upgraded.Eligible {
 		t.Fatalf("effective package generation boundary=%#v err=%v", upgraded, err)
 	}
-	checkpoint, err := store.PublishCheckpoint(ctx, upgraded, checkpointReference("generation-repository", upgraded.JobID+":upgrade"))
+	checkpoint, err := store.PublishCheckpoint(ctx, upgraded, checkpointReference("generation-repository", upgraded.SessionID+":upgrade"))
 	if err != nil || checkpoint.EffectiveUpgradeID != upgradeID {
 		t.Fatalf("published package generation=%#v err=%v", checkpoint, err)
 	}
 
-	if _, err := db.ExecContext(ctx, `update dorf.jobs set admission_open=false,cleanup_state='requested' where id=$1`, upgraded.JobID); err != nil {
+	if _, err := db.ExecContext(ctx, `update dorf.sessions set admission_open=false,cleanup_state='requested' where id=$1`, upgraded.SessionID); err != nil {
 		t.Fatal(err)
 	}
 	normal, err := store.Boundary(ctx, sandboxID, false)
@@ -185,7 +185,7 @@ values($1,$2,'workspace_upgrade',clock_timestamp())`, upgradeID, sandboxID); err
 	if err != nil || !cleanup.Eligible {
 		t.Fatalf("settled cleanup boundary was not eligible: boundary=%#v err=%v", cleanup, err)
 	}
-	final, err := store.PublishCheckpoint(ctx, cleanup, checkpointReference("generation-repository", upgraded.JobID+":cleanup"))
+	final, err := store.PublishCheckpoint(ctx, cleanup, checkpointReference("generation-repository", upgraded.SessionID+":cleanup"))
 	if err != nil || !final.Cleanup || final.EffectiveUpgradeID != upgradeID {
 		t.Fatalf("cleanup did not use ordinary checkpoint history: checkpoint=%#v err=%v", final, err)
 	}
@@ -198,14 +198,14 @@ values($1,$2,'workspace_upgrade',clock_timestamp())`, upgradeID, sandboxID); err
 func TestEmptyNativeCleanupCanCheckpointAfterLostActivityReceipt(t *testing.T) {
 	db, store, client := testDatabase(t)
 	ctx := context.Background()
-	job, created, err := store.AdmitDirect(ctx, core.JobAdmission{
+	session, created, err := store.AdmitDirect(ctx, core.SessionAdmission{
 		AdmissionKey:   "empty-native-cleanup-" + fmt.Sprint(time.Now().UnixNano()),
 		SandboxProfile: "incus", ProviderConnection: "primary", Model: "model-test", ReasoningEffort: "low",
 	}, client.QueueName())
 	if err != nil || !created {
-		t.Fatalf("admit empty native Job: created=%t err=%v", created, err)
+		t.Fatalf("admit empty native Session: created=%t err=%v", created, err)
 	}
-	sandboxID := core.MainSandboxName(job.ID)
+	sandboxID := core.MainSandboxName(session.ID)
 	owned, err := store.Sandbox(ctx, sandboxID)
 	if err != nil {
 		t.Fatal(err)
@@ -213,10 +213,10 @@ func TestEmptyNativeCleanupCanCheckpointAfterLostActivityReceipt(t *testing.T) {
 	if err := store.BindSandboxResource(ctx, owned, "provider-empty-native"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.BeginSandboxActivity(ctx, job.ID); err != nil {
+	if err := store.BeginSandboxActivity(ctx, session.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `update dorf.jobs set admission_open=false,cleanup_state='requested' where id=$1`, job.ID); err != nil {
+	if _, err := db.ExecContext(ctx, `update dorf.sessions set admission_open=false,cleanup_state='requested' where id=$1`, session.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -232,7 +232,7 @@ func TestEmptyNativeCleanupCanCheckpointAfterLostActivityReceipt(t *testing.T) {
 	if err != nil || replayed != cleanup {
 		t.Fatalf("cleanup fallback boundary changed: first=%#v replay=%#v err=%v", cleanup, replayed, err)
 	}
-	checkpoint, err := store.PublishCheckpoint(ctx, cleanup, checkpointReference("empty-native-cleanup-repository", job.ID))
+	checkpoint, err := store.PublishCheckpoint(ctx, cleanup, checkpointReference("empty-native-cleanup-repository", session.ID))
 	if err != nil || !checkpoint.Cleanup || checkpoint.MessageSequence != 0 || checkpoint.CompletedTurnSequence != 0 {
 		t.Fatalf("empty native cleanup checkpoint=%#v err=%v", checkpoint, err)
 	}
@@ -244,12 +244,12 @@ func TestCheckpointCandidateScanReturnsOnlyChangedIdleBoundaries(t *testing.T) {
 	_, sandboxID, boundary := completedCheckpointFixture(t, store, ctx, "candidate")
 	assertCheckpointCandidate(t, store, ctx, sandboxID, boundary, true)
 
-	if _, err := store.PublishCheckpoint(ctx, boundary, checkpointReference("candidate-repository", boundary.JobID)); err != nil {
+	if _, err := store.PublishCheckpoint(ctx, boundary, checkpointReference("candidate-repository", boundary.SessionID)); err != nil {
 		t.Fatal(err)
 	}
 	assertCheckpointCandidate(t, store, ctx, sandboxID, boundary, false)
 
-	if _, err := store.DB.ExecContext(ctx, `update dorf.jobs set sandbox_last_active_at=sandbox_last_active_at-interval '1 second' where id=$1`, boundary.JobID); err != nil {
+	if _, err := store.DB.ExecContext(ctx, `update dorf.sessions set sandbox_last_active_at=sandbox_last_active_at-interval '1 second' where id=$1`, boundary.SessionID); err != nil {
 		t.Fatal(err)
 	}
 	changed, err := store.Boundary(ctx, sandboxID, false)
@@ -259,16 +259,16 @@ func TestCheckpointCandidateScanReturnsOnlyChangedIdleBoundaries(t *testing.T) {
 	assertCheckpointCandidate(t, store, ctx, sandboxID, changed, true)
 }
 
-func completedCheckpointFixture(t *testing.T, store postgres.Store, ctx context.Context, suffix string) (core.Job, string, persistence.CaptureBoundary) {
+func completedCheckpointFixture(t *testing.T, store postgres.Store, ctx context.Context, suffix string) (core.Session, string, persistence.CaptureBoundary) {
 	t.Helper()
-	job, _, err := admitDirectFixture(t, store, ctx, core.JobAdmission{
+	session, _, err := admitDirectFixture(t, store, ctx, core.SessionAdmission{
 		AdmissionKey:   "checkpoint-" + suffix + "-" + fmt.Sprint(time.Now().UnixNano()),
 		SandboxProfile: "incus", ProviderConnection: "primary", Model: "model-test", ReasoningEffort: "low",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	sandboxID := core.MainSandboxName(job.ID)
+	sandboxID := core.MainSandboxName(session.ID)
 	owned, err := store.Sandbox(ctx, sandboxID)
 	if err != nil {
 		t.Fatal(err)
@@ -276,7 +276,7 @@ func completedCheckpointFixture(t *testing.T, store postgres.Store, ctx context.
 	if err := store.BindSandboxResource(ctx, owned, "provider-original"); err != nil {
 		t.Fatal(err)
 	}
-	delivery, err := nextDelivery(ctx, store, job.ID)
+	delivery, err := nextDelivery(ctx, store, session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +286,7 @@ func completedCheckpointFixture(t *testing.T, store postgres.Store, ctx context.
 	if err := store.BindAgentRun(ctx, delivery.AgentRun.ID, "codex", "thread-retained", "turn-initial", "completed"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.FinishSandboxActivity(ctx, job.ID); err != nil {
+	if err := store.FinishSandboxActivity(ctx, session.ID); err != nil {
 		t.Fatal(err)
 	}
 	boundary, err := store.Boundary(ctx, sandboxID, false)
@@ -296,7 +296,7 @@ func completedCheckpointFixture(t *testing.T, store postgres.Store, ctx context.
 	if !boundary.Eligible || boundary.MessageSequence != 1 || boundary.CompletedTurnSequence != 1 || boundary.DeliveryHoldCount != 0 {
 		t.Fatalf("completed fixture boundary=%#v", boundary)
 	}
-	return job, sandboxID, boundary
+	return session, sandboxID, boundary
 }
 
 func checkpointReference(repository, seed string) persistence.Reference {

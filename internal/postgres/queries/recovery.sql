@@ -3,7 +3,7 @@ select
     recovery.*,
     source.deleted_at as source_deleted_at,
     destination.deleted_at as destination_deleted_at,
-    sandbox.job_id,
+    sandbox.session_id,
     coalesce(source.provider_id,'') as source_provider_id,
     coalesce(destination.provider_id,'') as destination_provider_id,
     checkpoint.resource_id as checkpoint_resource_id,
@@ -28,12 +28,12 @@ join dorf.sandbox_checkpoints checkpoint
 left join dorf.sandbox_upgrades package on package.id=checkpoint.effective_upgrade_id
 where recovery.id=sqlc.arg(id);
 
--- name: ListJobCheckpointRecoveries :many
+-- name: ListSessionCheckpointRecoveries :many
 select
     recovery.*,
     source.deleted_at as source_deleted_at,
     destination.deleted_at as destination_deleted_at,
-    sandbox.job_id,
+    sandbox.session_id,
     coalesce(source.provider_id,'') as source_provider_id,
     coalesce(destination.provider_id,'') as destination_provider_id,
     checkpoint.resource_id as checkpoint_resource_id,
@@ -56,7 +56,7 @@ join dorf.sandbox_checkpoints checkpoint
   on checkpoint.repository=recovery.checkpoint_repository
  and checkpoint.snapshot_id=recovery.checkpoint_snapshot_id
 left join dorf.sandbox_upgrades package on package.id=checkpoint.effective_upgrade_id
-where sandbox.job_id=sqlc.arg(job_id)
+where sandbox.session_id=sqlc.arg(session_id)
 order by recovery.requested_at,recovery.id;
 
 -- name: InsertCheckpointRecoveryHold :exec
@@ -76,7 +76,7 @@ values(
 select not exists (
     select 1
     from dorf.agent_runs run
-    join dorf.job_messages message on message.id=run.message_id
+    join dorf.session_messages message on message.id=run.message_id
     where run.sandbox_id=sqlc.arg(sandbox_id)
       and message.sequence>sqlc.arg(message_sequence)
       and (
@@ -104,10 +104,10 @@ update dorf.sandbox_delivery_holds hold
 set released_at=coalesce(hold.released_at,clock_timestamp())
 from dorf.sandbox_recoveries recovery
 join dorf.sandboxes sandbox on sandbox.id=recovery.sandbox_id
-join dorf.jobs job on job.id=sandbox.job_id
+join dorf.sessions session on session.id=sandbox.session_id
 join dorf.sandbox_resources destination on destination.id=recovery.destination_resource_id
 where recovery.id=sqlc.arg(id) and hold.id=recovery.id
   and hold.reason='checkpoint_recovery' and hold.sandbox_id=sandbox.id
   and recovery.finished_at is null and sandbox.active_resource_id=recovery.source_resource_id
   and destination.deleted_at is not null
-  and not job.admission_open and job.cleanup_state='scheduled';
+  and not session.admission_open and session.cleanup_state='scheduled';

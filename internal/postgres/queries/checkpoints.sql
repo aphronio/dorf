@@ -1,6 +1,6 @@
 -- name: GetCheckpointBoundary :one
 select
-    j.id as job_id,
+    j.id as session_id,
     s.id as sandbox_id,
     s.active_resource_id as resource_id,
     j.sandbox_profile as profile_name,
@@ -16,13 +16,13 @@ select
     coalesce((
         select max(m.sequence)
         from dorf.agent_runs ar
-        join dorf.job_messages m on m.id=ar.message_id
+        join dorf.session_messages m on m.id=ar.message_id
         where ar.sandbox_id=s.id
     ),0)::bigint as message_sequence,
     coalesce((
         select max(m.sequence)
         from dorf.agent_runs ar
-        join dorf.job_messages m on m.id=ar.message_id
+        join dorf.session_messages m on m.id=ar.message_id
         where ar.sandbox_id=s.id and ar.state='completed'
           and ar.turn_id is not null and ar.turn_outcome='completed'
     ),0)::bigint as completed_turn_sequence,
@@ -47,7 +47,7 @@ select
         )
     )::boolean as eligible
 from dorf.sandboxes s
-join dorf.jobs j on j.id=s.job_id
+join dorf.sessions j on j.id=s.session_id
 join dorf.sandbox_resources r on r.sandbox_id=s.id and r.id=s.active_resource_id
 where s.id=sqlc.arg(sandbox_id);
 
@@ -66,13 +66,13 @@ values(
 on conflict do nothing;
 
 -- name: GetSandboxCheckpointByReference :one
-select c.*,s.job_id
+select c.*,s.session_id
 from dorf.sandbox_checkpoints c
 join dorf.sandboxes s on s.id=c.sandbox_id
 where c.repository=sqlc.arg(repository) and c.snapshot_id=sqlc.arg(snapshot_id);
 
 -- name: GetLastSandboxCheckpoint :one
-select c.*,s.job_id
+select c.*,s.session_id
 from dorf.sandbox_checkpoints c
 join dorf.sandboxes s on s.id=c.sandbox_id
 where c.sandbox_id=sqlc.arg(sandbox_id)
@@ -80,7 +80,7 @@ order by c.publication_sequence desc
 limit 1;
 
 -- name: ListSandboxCheckpoints :many
-select c.*,s.job_id
+select c.*,s.session_id
 from dorf.sandbox_checkpoints c
 join dorf.sandboxes s on s.id=c.sandbox_id
 where c.sandbox_id=sqlc.arg(sandbox_id)
@@ -89,7 +89,7 @@ order by c.publication_sequence desc;
 -- name: ListIdleCheckpointSandboxIDs :many
 select s.id
 from dorf.sandboxes s
-join dorf.jobs j on j.id=s.job_id
+join dorf.sessions j on j.id=s.session_id
 join dorf.sandbox_resources r on r.sandbox_id=s.id and r.id=s.active_resource_id
 where j.workflow_name='' and j.workflow_revision=''
   and j.admission_open and j.cleanup_state='pending'
@@ -125,13 +125,13 @@ where j.workflow_name='' and j.workflow_revision=''
           and c.message_sequence=coalesce((
               select max(m.sequence)
               from dorf.agent_runs ar
-              join dorf.job_messages m on m.id=ar.message_id
+              join dorf.session_messages m on m.id=ar.message_id
               where ar.sandbox_id=s.id
           ),0)
           and c.completed_turn_sequence=coalesce((
               select max(m.sequence)
               from dorf.agent_runs ar
-              join dorf.job_messages m on m.id=ar.message_id
+              join dorf.session_messages m on m.id=ar.message_id
               where ar.sandbox_id=s.id and ar.state='completed'
                 and ar.turn_id is not null and ar.turn_outcome='completed'
           ),0)

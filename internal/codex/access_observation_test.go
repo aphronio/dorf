@@ -66,7 +66,7 @@ func TestScopedAccessCompletionPreservesNativeObservationAndInstructions(t *test
 	session := &instructionSession{runID: "scoped-run", initial: true, closed: make(chan struct{}), release: release}
 	f.sessions <- session
 	ctx, cancel := context.WithCancel(telemetry.WithExecution(context.Background(), core.AgentRun{
-		ID: session.runID, JobID: owner.JobID, SandboxID: owner.SandboxID, MessageID: "scoped-message",
+		ID: session.runID, SessionID: owner.SessionID, SandboxID: owner.SandboxID, MessageID: "scoped-message",
 	}))
 	defer cancel()
 	binding, err := f.agent.StartInitialTurn(ctx, owner, "/workspace/job", session.runID, core.HarnessInput{Text: "hello"}, "model", "high", false)
@@ -77,7 +77,7 @@ func TestScopedAccessCompletionPreservesNativeObservationAndInstructions(t *test
 		t.Fatal("native submission did not finish its single provider scope")
 	}
 	cancel()
-	key := observationKey{scope: instructionScope{jobID: owner.JobID, sandboxID: owner.SandboxID, threadID: "retained-thread"}, turnID: binding.Turn.ID}
+	key := observationKey{scope: instructionScope{sessionID: owner.SessionID, sandboxID: owner.SandboxID, threadID: "retained-thread"}, turnID: binding.Turn.ID}
 	observations := f.agent.Observations
 	observations.mu.Lock()
 	active := observations.active[key]

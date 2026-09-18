@@ -14,30 +14,30 @@ type messageObservationReader interface {
 	StreamMessageObservation(context.Context, string, string, string, func(controlreader.MessageObservation) error) error
 }
 
-func (a controlAPIJobs) ReadMessageObservation(ctx context.Context, jobID, messageID, cursor string) (controlapi.MessageObservation, error) {
-	if _, err := a.supportedJob(ctx, jobID); err != nil {
+func (a controlAPISessions) ReadMessageObservation(ctx context.Context, sessionID, messageID, cursor string) (controlapi.MessageObservation, error) {
+	if _, err := a.loadSession(ctx, sessionID); err != nil {
 		return controlapi.MessageObservation{}, err
 	}
 	reader, ok := a.reader.(messageObservationReader)
 	if !ok {
 		return controlapi.MessageObservation{}, controlapi.ErrTimelineUnavailable
 	}
-	result, err := reader.ReadMessageObservation(ctx, jobID, messageID, cursor)
+	result, err := reader.ReadMessageObservation(ctx, sessionID, messageID, cursor)
 	if err != nil {
 		return controlapi.MessageObservation{}, observationError(err)
 	}
 	return publicMessageObservation(result), nil
 }
 
-func (a controlAPIJobs) StreamMessageObservation(ctx context.Context, jobID, messageID, cursor string, emit func(controlapi.MessageObservation) error) error {
-	if _, err := a.supportedJob(ctx, jobID); err != nil {
+func (a controlAPISessions) StreamMessageObservation(ctx context.Context, sessionID, messageID, cursor string, emit func(controlapi.MessageObservation) error) error {
+	if _, err := a.loadSession(ctx, sessionID); err != nil {
 		return err
 	}
 	reader, ok := a.reader.(messageObservationReader)
 	if !ok {
 		return controlapi.ErrTimelineUnavailable
 	}
-	return observationError(reader.StreamMessageObservation(ctx, jobID, messageID, cursor, func(value controlreader.MessageObservation) error { return emit(publicMessageObservation(value)) }))
+	return observationError(reader.StreamMessageObservation(ctx, sessionID, messageID, cursor, func(value controlreader.MessageObservation) error { return emit(publicMessageObservation(value)) }))
 }
 
 func observationError(err error) error {
@@ -46,7 +46,7 @@ func observationError(err error) error {
 		return controlapi.ErrTimelineUnavailable
 	case errors.Is(err, controlreader.ErrInvalidRequest):
 		return controlapi.ErrInvalidCursor
-	case errors.Is(err, controlreader.ErrJobNotFound):
+	case errors.Is(err, controlreader.ErrSessionNotFound):
 		return controlapi.ErrMessageNotFound
 	default:
 		return err
@@ -54,7 +54,7 @@ func observationError(err error) error {
 }
 
 func publicMessageObservation(value controlreader.MessageObservation) controlapi.MessageObservation {
-	result := controlapi.MessageObservation{JobID: value.JobID, MessageID: value.MessageID, Intent: value.Intent, InterruptRequested: value.InterruptRequested, Delivery: controlapi.State{State: value.Delivery.State}, Outcome: value.Outcome, Cursor: value.Cursor, FromIndex: value.FromIndex, NextIndex: value.NextIndex, CompletionWatermark: value.CompletionWatermark, State: value.State, Items: []controlapi.MessageTimelineItem{}}
+	result := controlapi.MessageObservation{SessionID: value.SessionID, MessageID: value.MessageID, Intent: value.Intent, InterruptRequested: value.InterruptRequested, Delivery: controlapi.State{State: value.Delivery.State}, Outcome: value.Outcome, Cursor: value.Cursor, FromIndex: value.FromIndex, NextIndex: value.NextIndex, CompletionWatermark: value.CompletionWatermark, State: value.State, Items: []controlapi.MessageTimelineItem{}}
 	if value.Attention != nil {
 		result.Attention = &controlapi.Attention{Code: value.Attention.Code, Detail: value.Attention.Detail}
 	}

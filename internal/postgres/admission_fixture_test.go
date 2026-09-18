@@ -13,33 +13,33 @@ import (
 // Existing custody proofs start with the persisted, unscheduled shape written
 // by older releases. Manufacture it only in fixtures; production admission now
 // always includes scheduling. Public admission tests exercise the atomic path.
-func legacyAdmissionFixture(t *testing.T, store postgres.Store, ctx context.Context, admit func(string) (core.Job, bool, error)) (core.Job, bool, error) {
+func legacyAdmissionFixture(t *testing.T, store postgres.Store, ctx context.Context, admit func(string) (core.Session, bool, error)) (core.Session, bool, error) {
 	t.Helper()
 	client := newFaultClient(t, store, fmt.Sprintf("dorf_legacy_fixture_%d", time.Now().UnixNano()))
-	job, created, err := admit(client.QueueName())
-	if err != nil || !job.AdmissionOpen || job.CurrentTaskID == "" {
-		return job, created, err
+	session, created, err := admit(client.QueueName())
+	if err != nil || !session.AdmissionOpen || session.CurrentTaskID == "" {
+		return session, created, err
 	}
-	if err := client.CancelTask(ctx, client.QueueName(), job.CurrentTaskID); err != nil {
+	if err := client.CancelTask(ctx, client.QueueName(), session.CurrentTaskID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB.ExecContext(ctx, `delete from dorf.job_tasks where job_id=$1 and task_id=$2`, job.ID, job.CurrentTaskID); err != nil {
+	if _, err := store.DB.ExecContext(ctx, `delete from dorf.session_tasks where session_id=$1 and task_id=$2`, session.ID, session.CurrentTaskID); err != nil {
 		t.Fatal(err)
 	}
-	job.CurrentTaskID = ""
-	return job, created, nil
+	session.CurrentTaskID = ""
+	return session, created, nil
 }
 
-func admitDirectFixture(t *testing.T, store postgres.Store, ctx context.Context, input core.JobAdmission) (core.Job, bool, error) {
-	return legacyAdmissionFixture(t, store, ctx, func(queue string) (core.Job, bool, error) {
-		job, created, err := store.AdmitDirect(ctx, input, queue)
+func admitDirectFixture(t *testing.T, store postgres.Store, ctx context.Context, input core.SessionAdmission) (core.Session, bool, error) {
+	return legacyAdmissionFixture(t, store, ctx, func(queue string) (core.Session, bool, error) {
+		session, created, err := store.AdmitDirect(ctx, input, queue)
 		if err == nil {
-			_, err = store.AdmitDirectMessage(ctx, fixtureMessage(job.ID))
+			_, err = store.AdmitDirectMessage(ctx, fixtureMessage(session.ID))
 		}
-		return job, created, err
+		return session, created, err
 	})
 }
 
-func fixtureMessage(jobID string) core.MessageAdmission {
-	return core.MessageAdmission{JobID: jobID, SandboxID: core.MainSandboxName(jobID), FromKind: core.MessageFromHuman, FromID: "fixture-message", Input: "initial input", Intent: core.MessageFollow}
+func fixtureMessage(sessionID string) core.MessageAdmission {
+	return core.MessageAdmission{SessionID: sessionID, SandboxID: core.MainSandboxName(sessionID), FromKind: core.MessageFromHuman, FromID: "fixture-message", Input: "initial input", Intent: core.MessageFollow}
 }

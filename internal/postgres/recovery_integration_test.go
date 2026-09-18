@@ -22,7 +22,7 @@ type recoveryDriver struct {
 	deleted          map[string]bool
 }
 
-func (d *recoveryDriver) Restore(_ context.Context, _ core.Job, destination core.Sandbox, checkpoint persistence.Checkpoint) (string, error) {
+func (d *recoveryDriver) Restore(_ context.Context, _ core.Session, destination core.Sandbox, checkpoint persistence.Checkpoint) (string, error) {
 	d.restoredSnapshot = checkpoint.SnapshotID
 	d.restoredResource = destination.ResourceID
 	if d.afterRestore != nil {
@@ -31,7 +31,7 @@ func (d *recoveryDriver) Restore(_ context.Context, _ core.Job, destination core
 	return "provider-replacement", nil
 }
 
-func (d *recoveryDriver) VerifyAndRenew(_ context.Context, _ core.Job, destination core.Sandbox, _ persistence.Checkpoint, pkg persistence.EffectivePackage, runs []core.AgentRun) error {
+func (d *recoveryDriver) VerifyAndRenew(_ context.Context, _ core.Session, destination core.Sandbox, _ persistence.Checkpoint, pkg persistence.EffectivePackage, runs []core.AgentRun) error {
 	if destination.ProviderID != "provider-replacement" {
 		return errors.New("replacement was not attested")
 	}
@@ -48,7 +48,7 @@ func (d *recoveryDriver) DeleteResource(_ context.Context, owned core.Sandbox) e
 func TestCheckpointRecoveryReplacesCustodyAndReleasesExactHold(t *testing.T) {
 	db, store, client := testDatabase(t)
 	ctx := context.Background()
-	job, sandboxID, boundary := completedCheckpointFixture(t, store, ctx, "exact-recovery")
+	session, sandboxID, boundary := completedCheckpointFixture(t, store, ctx, "exact-recovery")
 	upgradeID := "upgrade-recovery-" + fmt.Sprint(time.Now().UnixNano())
 	packagePath := "/nix/store/" + fmt.Sprintf("%032x", time.Now().UnixNano()) + "-runner-1.2.3"
 	if _, err := db.ExecContext(ctx, `insert into dorf.sandbox_delivery_holds(id,sandbox_id,reason,released_at)
@@ -70,13 +70,13 @@ values($1,$2,'workspace_upgrade',clock_timestamp())`, upgradeID, sandboxID); err
 	if err != nil || boundary.EffectiveUpgradeID != upgradeID {
 		t.Fatalf("effective package boundary=%#v err=%v", boundary, err)
 	}
-	reference := persistence.Reference{Repository: "recovery-repository", SnapshotID: checkpointTestID(job.ID + ":exact")}
+	reference := persistence.Reference{Repository: "recovery-repository", SnapshotID: checkpointTestID(session.ID + ":exact")}
 	checkpoint, err := store.PublishCheckpoint(ctx, boundary, reference)
 	if err != nil {
 		t.Fatal(err)
 	}
 	request := persistence.RecoveryRequest{
-		ID: "recover-" + job.ID[len(job.ID)-24:], JobID: job.ID, SandboxID: sandboxID,
+		ID: "recover-" + session.ID[len(session.ID)-24:], SessionID: session.ID, SandboxID: sandboxID,
 		Repository: reference.Repository, SnapshotID: reference.SnapshotID,
 	}
 	receipt, err := store.RequestCheckpointRecovery(ctx, client.QueueName(), request)
@@ -88,16 +88,16 @@ values($1,$2,'workspace_upgrade',clock_timestamp())`, upgradeID, sandboxID); err
 		t.Fatalf("request replay: receipt=%#v err=%v", replay, err)
 	}
 	changed := request
-	changed.SnapshotID = checkpointTestID(job.ID + ":changed")
+	changed.SnapshotID = checkpointTestID(session.ID + ":changed")
 	if _, err := store.RequestCheckpointRecovery(ctx, client.QueueName(), changed); err == nil {
 		t.Fatal("changed request reused recovery identity")
 	}
-	if err := store.ReleaseSandboxDelivery(ctx, client.QueueName(), job.ID, sandboxID, request.ID); err == nil {
+	if err := store.ReleaseSandboxDelivery(ctx, client.QueueName(), session.ID, sandboxID, request.ID); err == nil {
 		t.Fatal("generic release bypassed recovery verification")
 	}
 
 	queued, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{
-		JobID: job.ID, SandboxID: sandboxID, FromKind: core.MessageFromHuman,
+		SessionID: session.ID, SandboxID: sandboxID, FromKind: core.MessageFromHuman,
 		FromID: "queued-after-checkpoint", Input: "continue after recovery", Intent: core.MessageAuto,
 	})
 	if err != nil || queued.Message.Intent != core.MessageFollow {
@@ -113,10 +113,10 @@ values($1,$2,'workspace_upgrade',clock_timestamp())`, upgradeID, sandboxID); err
 	var claimFailure error
 	service.Claim = func(context.Context) error { return claimFailure }
 	driver.afterRestore = func() { claimFailure = claimErr }
-	if _, err := service.Reconcile(ctx, job.ID); !errors.Is(err, claimErr) {
+	if _, err := service.Reconcile(ctx, session.ID); !errors.Is(err, claimErr) {
 		t.Fatalf("lost claim: %v", err)
 	}
-	partial, err := store.JobRecoveries(ctx, job.ID)
+	partial, err := store.SessionRecoveries(ctx, session.ID)
 	if err != nil || partial[0].DestinationProviderID != "" {
 		t.Fatalf("stale executor published restore: %#v / %v", partial, err)
 	}
@@ -126,7 +126,7 @@ values($1,$2,'workspace_upgrade',clock_timestamp())`, upgradeID, sandboxID); err
 	service.Queue = "missing_queue"
 	var adoptionErr error
 	for range 8 {
-		if _, adoptionErr = service.Reconcile(ctx, job.ID); adoptionErr != nil {
+		if _, adoptionErr = service.Reconcile(ctx, session.ID); adoptionErr != nil {
 			break
 		}
 	}
@@ -141,10 +141,10 @@ values($1,$2,'workspace_upgrade',clock_timestamp())`, upgradeID, sandboxID); err
 		t.Fatalf("failed wake released delivery: held=%v err=%v", held, err)
 	}
 	service.Queue = client.QueueName()
-	if _, err := service.Reconcile(ctx, job.ID); err != nil {
+	if _, err := service.Reconcile(ctx, session.ID); err != nil {
 		t.Fatal(err)
 	}
-	receipts, err := store.JobRecoveries(ctx, job.ID)
+	receipts, err := store.SessionRecoveries(ctx, session.ID)
 	if err != nil || len(receipts) != 1 || receipts[0].FinishedAt.IsZero() {
 		t.Fatalf("finished recovery receipts=%#v err=%v", receipts, err)
 	}
@@ -168,7 +168,7 @@ values($1,$2,'workspace_upgrade',clock_timestamp())`, upgradeID, sandboxID); err
 	if held, err := store.SandboxDeliveryHeld(ctx, sandboxID); err != nil || held {
 		t.Fatalf("verified recovery retained hold: held=%v err=%v", held, err)
 	}
-	next, err := store.AgentMessage(ctx, job.ID)
+	next, err := store.AgentMessage(ctx, session.ID)
 	if err != nil || next == nil || next.MessageID != queued.Message.ID {
 		t.Fatalf("queued input did not resume: delivery=%#v err=%v", next, err)
 	}
@@ -187,20 +187,20 @@ values($1,$2,'workspace_upgrade',clock_timestamp())`, upgradeID, sandboxID); err
 func TestCheckpointRecoveryHoldsForPostBoundaryNativeSubmission(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
-	job, sandboxID, boundary := completedCheckpointFixture(t, store, ctx, "unsafe-recovery")
-	reference := persistence.Reference{Repository: "unsafe-repository", SnapshotID: checkpointTestID(job.ID + ":unsafe")}
+	session, sandboxID, boundary := completedCheckpointFixture(t, store, ctx, "unsafe-recovery")
+	reference := persistence.Reference{Repository: "unsafe-repository", SnapshotID: checkpointTestID(session.ID + ":unsafe")}
 	if _, err := store.PublishCheckpoint(ctx, boundary, reference); err != nil {
 		t.Fatal(err)
 	}
 	request := persistence.RecoveryRequest{
-		ID: "recover-unsafe-" + fmt.Sprint(time.Now().UnixNano()), JobID: job.ID, SandboxID: sandboxID,
+		ID: "recover-unsafe-" + fmt.Sprint(time.Now().UnixNano()), SessionID: session.ID, SandboxID: sandboxID,
 		Repository: reference.Repository, SnapshotID: reference.SnapshotID,
 	}
 	if _, err := store.RequestCheckpointRecovery(ctx, client.QueueName(), request); err != nil {
 		t.Fatal(err)
 	}
 	queued, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{
-		JobID: job.ID, SandboxID: sandboxID, FromKind: core.MessageFromHuman,
+		SessionID: session.ID, SandboxID: sandboxID, FromKind: core.MessageFromHuman,
 		FromID: "ambiguous-native", Input: "ambiguous native input", Intent: core.MessageFollow,
 	})
 	if err != nil {
@@ -211,7 +211,7 @@ func TestCheckpointRecoveryHoldsForPostBoundaryNativeSubmission(t *testing.T) {
 	if err := store.PrepareAgentRun(ctx, core.AgentRunID(queued.Message.ID), "codex", "turn-initial"); err != nil {
 		t.Fatal(err)
 	}
-	receipts, err := store.JobRecoveries(ctx, job.ID)
+	receipts, err := store.SessionRecoveries(ctx, session.ID)
 	if err != nil || len(receipts) != 1 {
 		t.Fatalf("recovery receipt=%#v err=%v", receipts, err)
 	}
@@ -222,7 +222,7 @@ func TestCheckpointRecoveryHoldsForPostBoundaryNativeSubmission(t *testing.T) {
 	service := persistence.RecoveryService{
 		Store: store, Driver: driver, Queue: client.QueueName(), Claim: func(context.Context) error { return nil },
 	}
-	if _, err := service.Reconcile(ctx, job.ID); err == nil {
+	if _, err := service.Reconcile(ctx, session.ID); err == nil {
 		t.Fatal("unsafe recovery progressed")
 	}
 	if driver.restoredSnapshot != "" || len(driver.deleted) != 0 {
@@ -231,9 +231,9 @@ func TestCheckpointRecoveryHoldsForPostBoundaryNativeSubmission(t *testing.T) {
 	if held, err := store.SandboxDeliveryHeld(ctx, sandboxID); err != nil || !held {
 		t.Fatalf("unsafe recovery released delivery: held=%v err=%v", held, err)
 	}
-	attention, err := store.Job(ctx, job.ID)
+	attention, err := store.Session(ctx, session.ID)
 	if err != nil || attention.WorkflowAttentionSource != "recovery:"+request.ID || attention.WorkflowAttention == "" {
-		t.Fatalf("unsafe recovery omitted attention: job=%#v err=%v", attention, err)
+		t.Fatalf("unsafe recovery omitted attention: session=%#v err=%v", attention, err)
 	}
 }
 
@@ -244,19 +244,19 @@ func TestCheckpointRecoveryExcludesConcurrentMaintenance(t *testing.T) {
 		t.Run(competing, func(t *testing.T) {
 			_, store, client := testDatabase(t)
 			ctx := context.Background()
-			job, sandboxID, boundary := completedCheckpointFixture(t, store, ctx, "maintenance-race")
-			reference := persistence.Reference{Repository: "race-repository", SnapshotID: checkpointTestID(job.ID)}
+			session, sandboxID, boundary := completedCheckpointFixture(t, store, ctx, "maintenance-race")
+			reference := persistence.Reference{Repository: "race-repository", SnapshotID: checkpointTestID(session.ID)}
 			if _, err := store.PublishCheckpoint(ctx, boundary, reference); err != nil {
 				t.Fatal(err)
 			}
-			request := persistence.RecoveryRequest{ID: "recover-" + job.ID, JobID: job.ID, SandboxID: sandboxID,
+			request := persistence.RecoveryRequest{ID: "recover-" + session.ID, SessionID: session.ID, SandboxID: sandboxID,
 				Repository: reference.Repository, SnapshotID: reference.SnapshotID}
 			recover := func() error {
 				_, err := store.RequestCheckpointRecovery(ctx, client.QueueName(), request)
 				return err
 			}
 			other := func() error {
-				id := "competing-" + job.ID
+				id := "competing-" + session.ID
 				switch competing {
 				case "recovery":
 					r := request
@@ -265,12 +265,12 @@ func TestCheckpointRecoveryExcludesConcurrentMaintenance(t *testing.T) {
 					return err
 				case "upgrade":
 					_, err := store.RequestSandboxUpgrade(ctx, client.QueueName(), upgrade.Request{
-						ID: id, JobID: job.ID, SandboxID: sandboxID,
+						ID: id, SessionID: session.ID, SandboxID: sandboxID,
 						PackagePath: "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-runner-0.155.0", Version: "0.155.0",
 					})
 					return err
 				default:
-					_, err := store.HoldSandboxDelivery(ctx, client.QueueName(), job.ID, sandboxID, id)
+					_, err := store.HoldSandboxDelivery(ctx, client.QueueName(), session.ID, sandboxID, id)
 					return err
 				}
 			}
@@ -290,15 +290,15 @@ func TestCheckpointRecoveryExcludesConcurrentMaintenance(t *testing.T) {
 			if (first == nil) == (second == nil) {
 				t.Fatalf("expected exactly one maintenance owner: %v / %v", first, second)
 			}
-			holds, err := store.JobDeliveryHolds(ctx, job.ID)
+			holds, err := store.SessionDeliveryHolds(ctx, session.ID)
 			if err != nil || len(holds) != 1 || !holds[0].ReleasedAt.IsZero() {
 				t.Fatalf("maintenance holds=%#v err=%v", holds, err)
 			}
-			receipts, err := store.JobRecoveries(ctx, job.ID)
+			receipts, err := store.SessionRecoveries(ctx, session.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
-			resources, err := store.SandboxResources(ctx, job.ID)
+			resources, err := store.SandboxResources(ctx, session.ID)
 			if err != nil || len(resources) != 1+len(receipts) {
 				t.Fatalf("losing request leaked a resource: resources=%d recoveries=%d err=%v", len(resources), len(receipts), err)
 			}
@@ -309,13 +309,13 @@ func TestCheckpointRecoveryExcludesConcurrentMaintenance(t *testing.T) {
 func TestCheckpointRecoveryCleanupRemovesAbandonedDestination(t *testing.T) {
 	db, store, client := testDatabase(t)
 	ctx := context.Background()
-	job, sandboxID, boundary := completedCheckpointFixture(t, store, ctx, "recovery-cleanup")
-	reference := persistence.Reference{Repository: "cleanup-repository", SnapshotID: checkpointTestID(job.ID + ":cleanup")}
+	session, sandboxID, boundary := completedCheckpointFixture(t, store, ctx, "recovery-cleanup")
+	reference := persistence.Reference{Repository: "cleanup-repository", SnapshotID: checkpointTestID(session.ID + ":cleanup")}
 	if _, err := store.PublishCheckpoint(ctx, boundary, reference); err != nil {
 		t.Fatal(err)
 	}
 	request := persistence.RecoveryRequest{
-		ID: "recover-cleanup-" + fmt.Sprint(time.Now().UnixNano()), JobID: job.ID, SandboxID: sandboxID,
+		ID: "recover-cleanup-" + fmt.Sprint(time.Now().UnixNano()), SessionID: session.ID, SandboxID: sandboxID,
 		Repository: reference.Repository, SnapshotID: reference.SnapshotID,
 	}
 	if _, err := store.RequestCheckpointRecovery(ctx, client.QueueName(), request); err != nil {
@@ -325,16 +325,16 @@ func TestCheckpointRecoveryCleanupRemovesAbandonedDestination(t *testing.T) {
 	service := persistence.RecoveryService{
 		Store: store, Driver: driver, Queue: client.QueueName(), Claim: func(context.Context) error { return nil },
 	}
-	// Cleanup owns the Job after a possible lost provider-create response.
-	receipts, err := store.JobRecoveries(ctx, job.ID)
+	// Cleanup owns the Session after a possible lost provider-create response.
+	receipts, err := store.SessionRecoveries(ctx, session.ID)
 	if err != nil || len(receipts) != 1 || receipts[0].DestinationResourceID == "" || receipts[0].DestinationProviderID != "" {
 		t.Fatalf("reserved recovery receipt=%#v err=%v", receipts, err)
 	}
 	destinationID := receipts[0].DestinationResourceID
-	if _, err := db.ExecContext(ctx, `update dorf.jobs set admission_open=false,cleanup_state='scheduled' where id=$1`, job.ID); err != nil {
+	if _, err := db.ExecContext(ctx, `update dorf.sessions set admission_open=false,cleanup_state='scheduled' where id=$1`, session.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.PrepareCleanup(ctx, job.ID); err != nil {
+	if err := service.PrepareCleanup(ctx, session.ID); err != nil {
 		t.Fatal(err)
 	}
 	if !driver.deleted[destinationID] {
@@ -347,16 +347,16 @@ func TestCheckpointRecoveryCleanupRemovesAbandonedDestination(t *testing.T) {
 	if err != nil || !cleanupBoundary.Eligible {
 		t.Fatalf("ordinary cleanup checkpoint remained ineligible: boundary=%#v err=%v", cleanupBoundary, err)
 	}
-	if progressed, err := service.Reconcile(ctx, job.ID); err != nil || progressed {
+	if progressed, err := service.Reconcile(ctx, session.ID); err != nil || progressed {
 		t.Fatalf("cleanup resumed abandoned recovery: progressed=%v err=%v", progressed, err)
 	}
 	if driver.restoredSnapshot != "" {
 		t.Fatalf("cleanup restored abandoned recovery snapshot %q", driver.restoredSnapshot)
 	}
-	if err := service.PrepareCleanup(ctx, job.ID); err != nil {
+	if err := service.PrepareCleanup(ctx, session.ID); err != nil {
 		t.Fatalf("cleanup recovery reconciliation was not idempotent: %v", err)
 	}
-	resources, err := store.SandboxResources(ctx, job.ID)
+	resources, err := store.SandboxResources(ctx, session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

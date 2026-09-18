@@ -148,15 +148,25 @@ values('run-queued','job-current','message-queued','direct','pending','sandbox-c
 			t.Fatal(err)
 		}
 	}
+	if _, err := tx.ExecContext(ctx, `savepoint profile_mismatch;
+update dorf.agent_runs set harness='pi' where id='run-current'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateDorf(ctx, tx); err == nil || !strings.Contains(err.Error(), "Thread Harness disagrees with its admitted profile") {
+		t.Fatalf("profile mismatch migration: %v", err)
+	}
+	if _, err := tx.ExecContext(ctx, `rollback to savepoint profile_mismatch`); err != nil {
+		t.Fatal(err)
+	}
 	if err := migrateDorf(ctx, tx); err != nil {
 		t.Fatalf("baseline replay: %v", err)
 	}
 	var retiredInput string
 	if err := tx.QueryRowContext(ctx, `select m.input
-from dorf.jobs j join dorf.job_messages m on m.job_id=j.id where j.id='job-retired'`).Scan(&retiredInput); err != nil || retiredInput != "inspect source" {
+from dorf.sessions j join dorf.session_messages m on m.session_id=j.id where j.id='job-retired'`).Scan(&retiredInput); err != nil || retiredInput != "inspect source" {
 		t.Fatalf("retirement changed retained input: input=%q err=%v", retiredInput, err)
 	}
-	if err := tx.QueryRowContext(ctx, `select input from dorf.job_messages where job_id='job-coding-retired'`).Scan(&retiredInput); err != nil || retiredInput != "edit source" {
+	if err := tx.QueryRowContext(ctx, `select input from dorf.session_messages where session_id='job-coding-retired'`).Scan(&retiredInput); err != nil || retiredInput != "edit source" {
 		t.Fatalf("coding retirement changed retained input: input=%q err=%v", retiredInput, err)
 	}
 	var resourceID, retainedNonce string
@@ -166,32 +176,32 @@ from dorf.jobs j join dorf.job_messages m on m.job_id=j.id where j.id='job-retir
  where s.id='sandbox-current'`).Scan(&resourceID, &retainedNonce, &providerID); err != nil || resourceID != "sandbox-current:initial" || retainedNonce != strings.Repeat("d", 64) || providerID.Valid {
 		t.Fatalf("migrated resource=%q provider=%v ownership preserved=%t err=%v", resourceID, providerID, retainedNonce == strings.Repeat("d", 64), err)
 	}
-	var jobRevision, candidateRevision, artifact string
+	var sessionRevision, candidateRevision, artifact string
 	var activeRevision sql.NullString
 	if err := tx.QueryRowContext(ctx, `select j.sandbox_profile_revision,p.candidate_revision,p.active_revision,r.artifact
- from dorf.jobs j join dorf.sandbox_profiles p on p.name=j.sandbox_profile
+ from dorf.sessions j join dorf.sandbox_profiles p on p.name=j.sandbox_profile
  join dorf.sandbox_profile_revisions r on (r.name,r.definition_hash)=(j.sandbox_profile,j.sandbox_profile_revision)
- where j.id='job-current'`).Scan(&jobRevision, &candidateRevision, &activeRevision, &artifact); err != nil || jobRevision != strings.Repeat("b", 64) || candidateRevision != jobRevision || activeRevision.Valid || artifact != strings.Repeat("a", 64) {
-		t.Fatalf("migrated binding=%q candidate=%q active=%v artifact=%q err=%v", jobRevision, candidateRevision, activeRevision, artifact, err)
+ where j.id='job-current'`).Scan(&sessionRevision, &candidateRevision, &activeRevision, &artifact); err != nil || sessionRevision != strings.Repeat("b", 64) || candidateRevision != sessionRevision || activeRevision.Valid || artifact != strings.Repeat("a", 64) {
+		t.Fatalf("migrated binding=%q candidate=%q active=%v artifact=%q err=%v", sessionRevision, candidateRevision, activeRevision, artifact, err)
 	}
 	var creatorID sql.NullString
 	var reference string
-	if err := tx.QueryRowContext(ctx, `select created_by_client_id,client_reference from dorf.jobs where id='job-current'`).Scan(&creatorID, &reference); err != nil || creatorID.Valid || reference != "" {
+	if err := tx.QueryRowContext(ctx, `select created_by_client_id,client_reference from dorf.sessions where id='job-current'`).Scan(&creatorID, &reference); err != nil || creatorID.Valid || reference != "" {
 		t.Fatalf("legacy attribution was invented: creator=%v reference=%q err=%v", creatorID, reference, err)
 	}
 	if err := migrateDorf(ctx, tx); err != nil {
 		t.Fatalf("attribution migration replay: %v", err)
 	}
 	var harness, thread string
-	if err := tx.QueryRowContext(ctx, `select thread_harness,thread_id from dorf.jobs where id='job-current'`).Scan(&harness, &thread); err != nil || harness != "codex" || thread != "thread-current" {
-		t.Fatalf("migrated Job Thread=%s/%s err=%v", harness, thread, err)
+	if err := tx.QueryRowContext(ctx, `select p.harness,j.thread_id from dorf.sessions j join dorf.sandbox_profile_revisions p on p.name=j.sandbox_profile and p.definition_hash=j.sandbox_profile_revision where j.id='job-current'`).Scan(&harness, &thread); err != nil || harness != "codex" || thread != "thread-current" {
+		t.Fatalf("migrated Session Thread=%s/%s err=%v", harness, thread, err)
 	}
 	var queuedThread sql.NullString
 	if err := tx.QueryRowContext(ctx, `select thread_id from dorf.agent_runs where id='run-queued'`).Scan(&queuedThread); err != nil || queuedThread.Valid {
 		t.Fatalf("migration changed queued delivery attribution: thread=%v err=%v", queuedThread, err)
 	}
 	var retainedInput string
-	if err := tx.QueryRowContext(ctx, `select input from dorf.job_messages where id='message-current'`).Scan(&retainedInput); err != nil || retainedInput != "run direct caller intent" {
+	if err := tx.QueryRowContext(ctx, `select input from dorf.session_messages where id='message-current'`).Scan(&retainedInput); err != nil || retainedInput != "run direct caller intent" {
 		t.Fatalf("original Message changed during migration: %q err=%v", retainedInput, err)
 	}
 	var migrationCount int

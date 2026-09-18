@@ -99,11 +99,12 @@ docker compose restart worker control-api
 docker compose logs --tail=200 worker control-api
 ```
 
-When upgrading a deployment that predates Job-owned Thread bindings, stop its old worker with
-`docker compose stop worker` from this directory before running the updated `dorf setup`.
-Setup applies the migration and starts the updated worker. Do not restart an old worker against
-the migrated database: it cannot maintain the new binding. Existing native conversations are
-retained. See [D145](project/decisions/D145-direct-job-owns-its-thread.md) for migration behavior.
+When upgrading from the Job API to the Session API, stop both old processes with
+`docker compose stop worker control-api` before running updated `dorf setup`. Setup applies the
+migration and starts the updated services. Update clients to the Session API in the same deployment;
+the old routes and CLI names are removed. Existing IDs, input, queue work, native conversations,
+and resource ownership are retained. Do not run old binaries against the renamed schema.
+See [D146](project/decisions/D146-name-the-execution-context-session.md).
 
 Do not edit the generated `.env`; rerun setup to change and apply its source facts.
 
@@ -181,7 +182,7 @@ sudo -- "$HOME/.local/bin/dorf-incus-remote.sh" prepare \
   --acknowledge-firewall-impact
 ```
 
-The helper preserves unrelated Incus projects, networks, and instances. It gives Job VMs public
+The helper preserves unrelated Incus projects, networks, and instances. It gives Session VMs public
 IPv4 egress through NAT, disables IPv6, isolates VM peers, and blocks the workstation, LAN,
 link-local, and tailnet ranges. It binds no listener during `prepare`.
 
@@ -247,7 +248,7 @@ Use `profile create` to adopt an exact existing provider artifact, `profile inst
 official Incus release, and `profile update` to stage a replacement definition. `profile verify`
 checks that candidate and promotes it only after the probe and its Sandbox cleanup succeed. The
 previous active revision and default selection remain usable during a replacement's verification;
-running Jobs keep their original revision. No Job cleanup is required to update a profile.
+running Sessions keep their original revision. No Session cleanup is required to update a profile.
 `profile show` reports the candidate definition and `active_revision`; `profile list` reports the
 active definition where one exists. Rerunning `profile verify` on an unchanged active revision
 refreshes its proof and temporarily fences new admissions. These commands remain the automation
@@ -293,7 +294,7 @@ managed Compose project. A remote client machine needs only the Dorf CLI, the HT
 origin printed by guided setup or supplied by the operator, and one short-lived Enrollment; it does
 not run `dorf setup`.
 
-Remote Clients can discover Sandbox profiles for Job selection; profile administration stays on
+Remote Clients can discover Sandbox profiles for Session selection; profile administration stays on
 the deployment host.
 
 The Control API service listens on container port `8745`. Guided Cloudflare reaches it over the
@@ -342,65 +343,65 @@ to use the deployment default. An unknown name returns `profile_not_found`; list
 current name. The same listing commands work on the deployment host through its enrolled Client.
 `profile show NAME` remains a deployment-host command for inspecting the full configuration.
 
-Save the complete prompt in `goal.txt`, then use the same CLI to admit a direct Job and perform the
+Save the complete prompt in `goal.txt`, then use the same CLI to admit a direct Session and perform the
 operations needed for this walkthrough:
 
 ```bash
 dorf run --input-file message.txt --ai-connection AI_CONNECTION --reasoning high
 dorf run --attach diagram.png --attach notes.txt --ai-connection AI_CONNECTION
-dorf job list
-dorf job list --limit 25 --output json
-dorf job inspect JOB_ID
-dorf job watch JOB_ID
-dorf job watch --output jsonl JOB_ID
-dorf job message --input-file follow-up.txt JOB_ID
-dorf job message --attach screenshot.png JOB_ID
-dorf job message --intent follow --input-file queued.txt JOB_ID
-dorf job message --intent steer --input-file correction.txt JOB_ID
-dorf job message inspect JOB_ID MESSAGE_ID
-dorf job message inspect JOB_ID
-dorf job message interrupt JOB_ID MESSAGE_ID
-dorf job retry JOB_ID
-dorf job evidence JOB_ID
+dorf session list
+dorf session list --limit 25 --output json
+dorf session inspect SESSION_ID
+dorf session watch SESSION_ID
+dorf session watch --output jsonl SESSION_ID
+dorf session message --input-file follow-up.txt SESSION_ID
+dorf session message --attach screenshot.png SESSION_ID
+dorf session message --intent follow --input-file queued.txt SESSION_ID
+dorf session message --intent steer --input-file correction.txt SESSION_ID
+dorf session message inspect SESSION_ID MESSAGE_ID
+dorf session message inspect SESSION_ID
+dorf session message interrupt SESSION_ID MESSAGE_ID
+dorf session retry SESSION_ID
+dorf session evidence SESSION_ID
 dorf sandbox file get SANDBOX_ID PATH --output DESTINATION
-dorf job abandon JOB_ID
-dorf job cleanup JOB_ID
+dorf session abandon SESSION_ID
+dorf session cleanup SESSION_ID
 ```
 
 Use `--client-reference REFERENCE` with `dorf run` to
-attach your thread or task reference. `dorf job list` and `dorf job inspect` show the creating
-Client and reference. An older Job shows an unknown creator. Use that information when choosing
+attach your thread or task reference. `dorf session list` and `dorf session inspect` show the creating
+Client and reference. An older Session shows an unknown creator. Use that information when choosing
 cleanup targets; attribution does not request cleanup or define a retention policy.
-Client configuration may set `client_reference` as the default for new Jobs; an explicit flag
-overrides it. Omitting `MESSAGE_ID` from `dorf job message inspect` reads the latest settled reply
-in the Job's main Sandbox. Pending follow-ups and steer delivery acknowledgements do not replace
+Client configuration may set `client_reference` as the default for new Sessions; an explicit flag
+overrides it. Omitting `MESSAGE_ID` from `dorf session message inspect` reads the latest settled reply
+in the Session's main Sandbox. Pending follow-ups and steer delivery acknowledgements do not replace
 that reply.
 
-For repository investigation, create a direct Job and use `dorf sandbox exec` for your repository
-setup, then send your instructions through `dorf job message send`. Choose and retrieve any report
+For repository investigation, create a direct Session and use `dorf sandbox exec` for your repository
+setup, then send your instructions through `dorf session message send`. Choose and retrieve any report
 files before cleanup. The former built-in `codebase-investigation` command is retired. Before
 upgrading a deployment that used it, finish cleanup with the previous version and export any
 application source data you need. The migration removes its source table while retaining generic
-Job, Message, and resource receipts; it does not convert investigation Jobs into direct Jobs.
+Session, Message, and resource receipts; it does not convert investigation Sessions into direct Sessions.
 
-`run` receipts include the accepted Job and Message. `job inspect` reports the Job ID and exact Sandbox IDs. Follow may queue
+`run` receipts include the accepted Session and Message. `session inspect` reports the Session ID and exact Sandbox IDs. Follow may queue
 before current work settles. Explicit steer targets only the exact active Turn and never becomes a Follow.
-`job watch` reconnects from the canonical snapshot, and Ctrl-C stops only the view. Retry is
+`session watch` reconnects from the canonical snapshot, and Ctrl-C stops only the view. Retry is
 accepted only for eligible failed execution. Sandbox file retrieval
 returns exact bytes and must happen before cleanup, which closes Message admission and file reads.
 The requested file path can be absolute inside the Sandbox, relative to its workspace root, or
 relative to its execution user's home with `~/`. Traversal, symlinks, and directories are rejected.
 
-Human Job and Message output uses `Queued` for accepted work waiting to start, `Working` for active
-execution, and `Needs attention` for failures or required intervention. Job setup reports `Starting`
-or `Connecting`. A direct Job with no outstanding work reports `Idle`. A successful Message result
+Human Session and Message output uses `Queued` for accepted work waiting to start, `Working` for active
+execution, and `Needs attention` for failures or required intervention. Session setup reports `Starting`
+or `Connecting`. A direct Session with no outstanding work reports `Idle`. A successful Message result
 reports `Finished`; a steer delivery acknowledgement without a result reports
 `Delivered; awaiting result`. These labels do not report progress within an agent Turn.
 
-Use `--output json` on Job, Message, and retry operations and `--output jsonl` on watch for
+Use `--output json` on Session, Message, and retry operations and `--output jsonl` on watch for
 stable machine output. The ordinary mutation flow creates retry identity internally and retries the
 exact request once after a retryable transport or HTTP server failure; a human does not need to
-configure a key. A direct Job remains open and idle after a successful Turn until the caller
+configure a key. A direct Session remains open and idle after a successful Turn until the caller
 requests cleanup.
 
 The deployment operator can inspect the host-owned Client inventory and revoke exactly one Client at
@@ -414,7 +415,7 @@ dorf client revoke CLIENT_ID
 
 All three commands accept `--output json` before the Client ID where applicable. Revocation is
 idempotent and makes subsequent authenticated requests from that Client fail without changing other
-Clients or Jobs. Client administration is deliberately not a remote API.
+Clients or Sessions. Client administration is deliberately not a remote API.
 
 For an unattended integration, issue a dedicated key on the deployment host:
 
@@ -435,7 +436,7 @@ If database registration fails, the command retains the protected file because t
 may be uncertain. Inspect the Client inventory and revoke any unwanted Client before retrying with
 a new file. A failed file write never registers a Client.
 
-## 4. Run a direct Job on the deployment host
+## 4. Run a direct Session on the deployment host
 
 Setup enrolls an ordinary deployment-host Client after the Compose API becomes ready. The Client
 uses the fixed loopback origin and the same API as a remote CLI. A saved remote `client.json` takes
@@ -449,29 +450,29 @@ dorf run \
   --ai-connection AI_CONNECTION \
   --reasoning high
 
-dorf job watch JOB_ID
+dorf session watch SESSION_ID
 ```
 
-The Compose-managed worker claims the Job; do not start a competing foreground worker in the ordinary
+The Compose-managed worker claims the Session; do not start a competing foreground worker in the ordinary
 deployment flow.
 
 For a human invocation, `--key` is optional. Dorf generates a key and retries one ambiguous API
 failure with the same request. Automation or deliberate replay should pass a stable `--key`.
 
 The verified deployment-default Sandbox profile and AI connection are used unless explicitly
-selected. After a successful Turn, the Job remains open and idle so the caller can continue the same
+selected. After a successful Turn, the Session remains open and idle so the caller can continue the same
 Harness Thread, retrieve an exact workspace file, or request cleanup:
 
 ```bash
-dorf job message --key follow-1 --input-file follow-up.txt JOB_ID
-dorf job message --key files-1 --attach screenshot.png --attach notes.txt JOB_ID
+dorf session message --key follow-1 --input-file follow-up.txt SESSION_ID
+dorf session message --key files-1 --attach screenshot.png --attach notes.txt SESSION_ID
 dorf sandbox file get SANDBOX_ID PATH --output DESTINATION
-dorf job cleanup JOB_ID
+dorf session cleanup SESSION_ID
 ```
 
 Repeat `--attach LOCAL_FILE` to send ordered files with the first Message or a later Message. The
 CLI checks local file names,
-regular-file status, and byte limits before creating a Job or sending a Message. The server
+regular-file status, and byte limits before creating a Session or sending a Message. The server
 validates image contents and profile support during Message admission. You may omit `--input-file`
 for a Message that has at least one attachment. Dorf sends each file by value, so later local
 changes do not change an accepted Message. The [Remote Control API](control-api.md#resources) links
@@ -489,46 +490,46 @@ After changing installed skills, add `--refresh-skills` to the next Codex Messag
 uses the [Message delivery rules](control-api.md#resources) and survives steering until a
 fresh Turn can start.
 
-For a direct Codex Job, `dorf job message interrupt JOB_ID MESSAGE_ID` requests Stop for that
+For a direct Codex Session, `dorf session message interrupt SESSION_ID MESSAGE_ID` requests Stop for that
 Message's exact Turn. It also accepts a Steer Message attached to the Turn. Inspect the Message
 until its result reports the observed outcome; `interrupt_requested` records acceptance, not
 completion. Repeating Stop is safe, including after a successor Turn starts. An already settled
 target is a no-op. A Message without a bound Turn cannot yet be interrupted.
 
-An open direct Job retains its Sandbox and native conversation between messages. A worker restart
+An open direct Session retains its Sandbox and native conversation between messages. A worker restart
 reconnects to the retained runtime. Codex session files remain on the Sandbox disk; losing that
 disk loses the session. There is no backup or Sandbox replacement recovery. Request cleanup only
 when the retained workspace and conversation are no longer needed.
 
 The CLI owns the raw prompt and the meaning of any resulting prose or files;
 Dorf owns durable delivery, recovery, the exact
-Job-owned Sandbox, and execution of explicit cleanup. No workflow identity, Git repository, or
+Session-owned Sandbox, and execution of explicit cleanup. No workflow identity, Git repository, or
 GitHub integration is required.
 
-## 5. Continue and release a Job
+## 5. Continue and release a Session
 
-Use `dorf job watch JOB_ID` to observe current facts. Stopping the watcher leaves work running.
+Use `dorf session watch SESSION_ID` to observe current facts. Stopping the watcher leaves work running.
 The Compose-managed worker recovers after process loss; use [Support](support.md) when operator
-action is needed. `dorf job retry JOB_ID` schedules one more attempt for eligible failed execution.
-`dorf job cleanup JOB_ID` closes admission and reconciles resource release.
+action is needed. `dorf session retry SESSION_ID` schedules one more attempt for eligible failed execution.
+`dorf session cleanup SESSION_ID` closes admission and reconciles resource release.
 
 Clients own repository setup, reviews, publication credentials, and external outcomes. Dorf no
 longer supplies a coding workflow, GitHub App setup, abandonment policy, or application Evidence API.
-Before upgrading a deployment with old workflow Jobs, complete their cleanup using the previous
+Before upgrading a deployment with old workflow Sessions, complete their cleanup using the previous
 version and export any application records needed. The new migration removes coding inputs,
-revisions, review plans, proposals, outcomes, and application evidence. Generic Job, Message,
+revisions, review plans, proposals, outcomes, and application evidence. Generic Session, Message,
 AgentRun, resource ownership, lifecycle, and recovery receipts remain.
 
 ### Keep a worker running between turns
 
-New E2B-backed Jobs pause their Sandboxes when idle. Add `--keep-running` to `dorf run` when background work
-must continue between turns. The override is saved with the Job and must match on an explicit
+New E2B-backed Sessions pause their Sandboxes when idle. Add `--keep-running` to `dorf run` when background work
+must continue between turns. The override is saved with the Session and must match on an explicit
 admission replay. It does not disable provider timeout limits. Other providers keep their
 existing lifecycle until their pause capability is supported.
 
 ## Upgrade a retained Codex workspace
 
-For an existing direct Job, first stage a verified immutable Nix closure inside its Sandbox. New
+For an existing direct Session, first stage a verified immutable Nix closure inside its Sandbox. New
 images include `dorf-packages stage VERSION`, which downloads a supported pinned version using the
 guest's existing Internet access without changing the active Codex. Its retained store path is
 available through `readlink -f /usr/local/share/dorf/packages/generations/VERSION`. Older images
@@ -537,16 +538,16 @@ require the one-time Nix bootstrap described by the
 policy. Then request activation with an exact reusable ID:
 
 ```bash
-dorf upgrade request JOB --id upgrade-20260915-example --package /nix/store/HASH-codex-VERSION --version VERSION
-dorf upgrade show JOB
+dorf upgrade request SESSION --id upgrade-20260915-example --package /nix/store/HASH-codex-VERSION --version VERSION
+dorf upgrade show SESSION
 ```
 
-Replace the placeholders with the real Job ID, full staged store path, and exact package version.
+Replace the placeholders with the real Session ID, full staged store path, and exact package version.
 The retained worker saves incoming messages during the hold, checkpoints local state, activates the
 package, and verifies the retained conversation. Failed verification restores the checkpoint before
-resuming. A failed recovery retains the hold and exposes attention; retry the existing failed Job
+resuming. A failed recovery retains the hold and exposes attention; retry the existing failed Session
 using its ordinary retry command after addressing the reported cause. Repeating the same upgrade ID
 never changes its package or reopens a completed hold.
 
-The Job and logical Sandbox IDs stay stable. E2B rollback can replace the underlying VM; Job
+The Session and logical Sandbox IDs stay stable. E2B rollback can replace the underlying VM; Session
 inspection retains both resources. Automatic distribution and fleet rollout are not implemented.

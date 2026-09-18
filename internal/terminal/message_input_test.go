@@ -26,21 +26,21 @@ func TestMessageAttachmentsReachInitialFollowAndSteerAndRestoreWorkingFiles(t *t
 				storeAttachment(t, store, "screen пример.png", "image/png", core.MessageAttachmentImage, image),
 				storeAttachment(t, store, "../report\n.csv", "text/csv", core.MessageAttachmentFile, document),
 			}
-			owner := provider.Ownership{JobID: "job", SandboxID: "sandbox", OwnershipNonce: "owned"}
+			owner := provider.Ownership{SessionID: "session", SandboxID: "sandbox", OwnershipNonce: "owned"}
 			externals := Externals{Sandbox: files, Agent: agent, Blobs: store, Ownership: func(context.Context, string) (provider.Ownership, error) { return owner, nil }}
-			job := core.Job{ID: owner.JobID}
-			run := core.AgentRun{ID: "run", MessageID: "message", JobID: job.ID, SandboxID: owner.SandboxID}
+			session := core.Session{ID: owner.SessionID}
+			run := core.AgentRun{ID: "run", MessageID: "message", SessionID: session.ID, SandboxID: owner.SandboxID}
 			message := core.Message{ID: "message", Input: "Read both.\n", Attachments: attachments, TargetTurnID: "active"}
 			if route != "initial" {
 				run.ThreadID = "thread"
 			}
-			operation, err := NewAgentRunOperation(externals, core.AgentMessageExecution{Job: job, AgentRun: run, Message: message, Sandbox: core.Sandbox{ID: owner.SandboxID, JobID: job.ID}})
+			operation, err := NewAgentRunOperation(externals, core.AgentMessageExecution{Session: session, AgentRun: run, Message: message, Sandbox: core.Sandbox{ID: owner.SandboxID, SessionID: session.ID}})
 			if err != nil {
 				t.Fatal(err)
 			}
 			submit := func() error {
 				if route == "steer" {
-					_, err := externals.AgentSteer(context.Background(), job, core.Delivery{AgentRun: run, Message: message})
+					_, err := externals.AgentSteer(context.Background(), session, core.Delivery{AgentRun: run, Message: message})
 					return err
 				}
 				_, err := operation.Submit(context.Background(), run, message.Input)
@@ -86,11 +86,11 @@ func TestMessageAttachmentsReachInitialFollowAndSteerAndRestoreWorkingFiles(t *t
 func TestAttachmentFailurePreventsNativeSubmitButDoesNotPreventRecovery(t *testing.T) {
 	files := &attachmentSandbox{workspace: t.TempDir()}
 	agent := &attachmentHarness{}
-	owner := provider.Ownership{JobID: "job", SandboxID: "sandbox"}
+	owner := provider.Ownership{SessionID: "session", SandboxID: "sandbox"}
 	externals := Externals{Sandbox: files, Agent: agent, Blobs: blob.Store{Root: t.TempDir()}, Ownership: func(context.Context, string) (provider.Ownership, error) { return owner, nil }}
-	run := core.AgentRun{ID: "run", MessageID: "message", JobID: owner.JobID, SandboxID: owner.SandboxID}
-	operation, err := NewAgentRunOperation(externals, core.AgentMessageExecution{Job: core.Job{ID: owner.JobID}, AgentRun: run,
-		Sandbox: core.Sandbox{ID: owner.SandboxID, JobID: owner.JobID}, Message: core.Message{ID: "message", Attachments: []core.MessageAttachment{{Filename: "missing.png", Digest: strings.Repeat("0", 64), ByteSize: 10, Kind: core.MessageAttachmentImage}}}})
+	run := core.AgentRun{ID: "run", MessageID: "message", SessionID: owner.SessionID, SandboxID: owner.SandboxID}
+	operation, err := NewAgentRunOperation(externals, core.AgentMessageExecution{Session: core.Session{ID: owner.SessionID}, AgentRun: run,
+		Sandbox: core.Sandbox{ID: owner.SandboxID, SessionID: owner.SessionID}, Message: core.Message{ID: "message", Attachments: []core.MessageAttachment{{Filename: "missing.png", Digest: strings.Repeat("0", 64), ByteSize: 10, Kind: core.MessageAttachmentImage}}}})
 	if err != nil {
 		t.Fatal(err)
 	}

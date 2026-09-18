@@ -16,13 +16,13 @@ import (
 
 const agentMessageNeedsSkillRefresh = `-- name: AgentMessageNeedsSkillRefresh :one
 with current_message as (
-    select m.id,m.job_id,m.sequence,m.delivery_intent,ar.sandbox_id,ar.role
-    from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id
+    select m.id,m.session_id,m.sequence,m.delivery_intent,ar.sandbox_id,ar.role
+    from dorf.session_messages m join dorf.agent_runs ar on ar.message_id=m.id
     where m.id=$1
 ), previous_turn as (
     select m.sequence,ar.turn_id
     from current_message current
-    join dorf.job_messages m on m.job_id=current.job_id and m.sequence<current.sequence
+    join dorf.session_messages m on m.session_id=current.session_id and m.sequence<current.sequence
     join dorf.agent_runs ar on ar.message_id=m.id
     where m.delivery_intent='follow' and ar.turn_id is not null
       and ar.sandbox_id=current.sandbox_id and ar.role=current.role
@@ -31,7 +31,7 @@ with current_message as (
 select exists (
     select 1
     from current_message current
-    join dorf.job_messages requested on requested.job_id=current.job_id
+    join dorf.session_messages requested on requested.session_id=current.session_id
     join dorf.agent_runs request_run on request_run.message_id=requested.id
     where current.delivery_intent='follow' and requested.refresh_skills
       and request_run.sandbox_id=current.sandbox_id and request_run.role=current.role
@@ -55,18 +55,18 @@ const getActiveAgentTurn = `-- name: GetActiveAgentTurn :one
 select coalesce(turn_id,'') as turn_id,coalesce(harness,'') as harness,
        coalesce(thread_id,'') as thread_id
 from dorf.agent_runs ar
-where ar.job_id=$1 and ar.state='active' and ar.turn_id is not null
+where ar.session_id=$1 and ar.state='active' and ar.turn_id is not null
   and not ar.interrupt_requested
   and ar.role=$2 and ar.sandbox_id=$3
   and (
     select count(*) from dorf.agent_runs active
-    where active.job_id=$1 and active.state='active' and active.turn_id is not null
+    where active.session_id=$1 and active.state='active' and active.turn_id is not null
       and active.role=$2 and active.sandbox_id=$3
   )=1
 `
 
 type GetActiveAgentTurnParams struct {
-	JobID     string
+	SessionID string
 	Role      string
 	SandboxID string
 }
@@ -78,22 +78,22 @@ type GetActiveAgentTurnRow struct {
 }
 
 func (q *Queries) GetActiveAgentTurn(ctx context.Context, arg GetActiveAgentTurnParams) (GetActiveAgentTurnRow, error) {
-	row := q.db.QueryRowContext(ctx, getActiveAgentTurn, arg.JobID, arg.Role, arg.SandboxID)
+	row := q.db.QueryRowContext(ctx, getActiveAgentTurn, arg.SessionID, arg.Role, arg.SandboxID)
 	var i GetActiveAgentTurnRow
 	err := row.Scan(&i.TurnID, &i.Harness, &i.ThreadID)
 	return i, err
 }
 
 const getMessage = `-- name: GetMessage :one
-select id,job_id,from_kind,from_id,sequence,input,attachments,delivery_intent,
+select id,session_id,from_kind,from_id,sequence,input,attachments,delivery_intent,
        requested_intent,coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at,refresh_skills,developer_instructions,observation
-from dorf.job_messages
+from dorf.session_messages
 where id=$1
 `
 
 type GetMessageRow struct {
 	ID                    string
-	JobID                 string
+	SessionID             string
 	FromKind              core.MessageFromKind
 	FromID                string
 	Sequence              int64
@@ -113,7 +113,7 @@ func (q *Queries) GetMessage(ctx context.Context, messageID string) (GetMessageR
 	var i GetMessageRow
 	err := row.Scan(
 		&i.ID,
-		&i.JobID,
+		&i.SessionID,
 		&i.FromKind,
 		&i.FromID,
 		&i.Sequence,
@@ -131,22 +131,22 @@ func (q *Queries) GetMessage(ctx context.Context, messageID string) (GetMessageR
 }
 
 const getMessageBySender = `-- name: GetMessageBySender :one
-select id,job_id,from_kind,from_id,sequence,input,attachments,delivery_intent,requested_intent,
+select id,session_id,from_kind,from_id,sequence,input,attachments,delivery_intent,requested_intent,
        coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at,refresh_skills,developer_instructions,observation
-from dorf.job_messages
-where job_id=$1 and from_kind=$2
+from dorf.session_messages
+where session_id=$1 and from_kind=$2
   and from_id=$3
 `
 
 type GetMessageBySenderParams struct {
-	JobID    string
-	FromKind core.MessageFromKind
-	FromID   string
+	SessionID string
+	FromKind  core.MessageFromKind
+	FromID    string
 }
 
 type GetMessageBySenderRow struct {
 	ID                    string
-	JobID                 string
+	SessionID             string
 	FromKind              core.MessageFromKind
 	FromID                string
 	Sequence              int64
@@ -162,11 +162,11 @@ type GetMessageBySenderRow struct {
 }
 
 func (q *Queries) GetMessageBySender(ctx context.Context, arg GetMessageBySenderParams) (GetMessageBySenderRow, error) {
-	row := q.db.QueryRowContext(ctx, getMessageBySender, arg.JobID, arg.FromKind, arg.FromID)
+	row := q.db.QueryRowContext(ctx, getMessageBySender, arg.SessionID, arg.FromKind, arg.FromID)
 	var i GetMessageBySenderRow
 	err := row.Scan(
 		&i.ID,
-		&i.JobID,
+		&i.SessionID,
 		&i.FromKind,
 		&i.FromID,
 		&i.Sequence,
@@ -184,8 +184,8 @@ func (q *Queries) GetMessageBySender(ctx context.Context, arg GetMessageBySender
 }
 
 const insertMessage = `-- name: InsertMessage :exec
-insert into dorf.job_messages(
-    id,job_id,from_kind,from_id,sequence,input,attachments,delivery_intent,steer_target_turn_id,requested_intent,refresh_skills,developer_instructions,observation
+insert into dorf.session_messages(
+    id,session_id,from_kind,from_id,sequence,input,attachments,delivery_intent,steer_target_turn_id,requested_intent,refresh_skills,developer_instructions,observation
 )
 values(
     $1,$2,$3,$4,
@@ -196,7 +196,7 @@ values(
 
 type InsertMessageParams struct {
 	ID                    string
-	JobID                 string
+	SessionID             string
 	FromKind              core.MessageFromKind
 	FromID                string
 	Sequence              int64
@@ -213,7 +213,7 @@ type InsertMessageParams struct {
 func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) error {
 	_, err := q.db.ExecContext(ctx, insertMessage,
 		arg.ID,
-		arg.JobID,
+		arg.SessionID,
 		arg.FromKind,
 		arg.FromID,
 		arg.Sequence,
@@ -230,11 +230,11 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) er
 }
 
 const listDeliveries = `-- name: ListDeliveries :many
-select m.id as message_id,m.job_id as message_job_id,m.from_kind,m.from_id,m.sequence,m.input,m.attachments,m.delivery_intent,
+select m.id as message_id,m.session_id as message_session_id,m.from_kind,m.from_id,m.sequence,m.input,m.attachments,m.delivery_intent,
        m.requested_intent,coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,m.refresh_skills,m.developer_instructions,m.observation,
        m.admitted_at,
        (ar.id is not null)::boolean as agent_run_present,
-       coalesce(ar.id,'') as agent_run_id,coalesce(ar.job_id,'') as agent_run_job_id,
+       coalesce(ar.id,'') as agent_run_id,coalesce(ar.session_id,'') as agent_run_session_id,
        coalesce(ar.message_id,'') as agent_run_message_id,coalesce(ar.state,'') as state,
        coalesce(ar.harness,'') as harness,coalesce(ar.thread_id,'') as thread_id,
        (ar.baseline_turn_id is not null)::boolean as baseline_recorded,
@@ -244,25 +244,25 @@ select m.id as message_id,m.job_id as message_job_id,m.from_kind,m.from_id,m.seq
        coalesce(ar.capability,'') as capability,coalesce(ar.sandbox_id,'') as sandbox_id,
        coalesce(ar.submission_nonce,'') as submission_nonce,ar.started_at,ar.finished_at,
        -- Uncorrelated membership lets generic prepared plans hash identities once
-       -- instead of scanning the Job's runs again for every Delivery.
+       -- instead of scanning the Session's runs again for every Delivery.
        case when ar.harness is not null and ar.thread_id is not null
          and coalesce(ar.turn_id,m.steer_target_turn_id) is not null then
-           (ar.job_id,ar.sandbox_id,ar.harness,ar.thread_id,coalesce(ar.turn_id,m.steer_target_turn_id)) in (
-               select source.job_id,source.sandbox_id,source.harness,source.thread_id,source.turn_id
+           (ar.session_id,ar.sandbox_id,ar.harness,ar.thread_id,coalesce(ar.turn_id,m.steer_target_turn_id)) in (
+               select source.session_id,source.sandbox_id,source.harness,source.thread_id,source.turn_id
                from dorf.agent_runs source
-               where source.job_id=$1 and source.interrupt_requested
+               where source.session_id=$1 and source.interrupt_requested
            )
          else false
        end as interrupt_requested
-from dorf.job_messages m
+from dorf.session_messages m
 left join dorf.agent_runs ar on ar.message_id=m.id
-where m.job_id=$1
+where m.session_id=$1
 order by m.sequence
 `
 
 type ListDeliveriesRow struct {
 	MessageID             string
-	MessageJobID          string
+	MessageSessionID      string
 	FromKind              core.MessageFromKind
 	FromID                string
 	Sequence              int64
@@ -277,7 +277,7 @@ type ListDeliveriesRow struct {
 	AdmittedAt            time.Time
 	AgentRunPresent       bool
 	AgentRunID            string
-	AgentRunJobID         string
+	AgentRunSessionID     string
 	AgentRunMessageID     string
 	State                 core.AgentRunState
 	Harness               string
@@ -297,8 +297,8 @@ type ListDeliveriesRow struct {
 	InterruptRequested    bool
 }
 
-func (q *Queries) ListDeliveries(ctx context.Context, jobID string) ([]ListDeliveriesRow, error) {
-	rows, err := q.db.QueryContext(ctx, listDeliveries, jobID)
+func (q *Queries) ListDeliveries(ctx context.Context, sessionID string) ([]ListDeliveriesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listDeliveries, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -308,7 +308,7 @@ func (q *Queries) ListDeliveries(ctx context.Context, jobID string) ([]ListDeliv
 		var i ListDeliveriesRow
 		if err := rows.Scan(
 			&i.MessageID,
-			&i.MessageJobID,
+			&i.MessageSessionID,
 			&i.FromKind,
 			&i.FromID,
 			&i.Sequence,
@@ -323,7 +323,7 @@ func (q *Queries) ListDeliveries(ctx context.Context, jobID string) ([]ListDeliv
 			&i.AdmittedAt,
 			&i.AgentRunPresent,
 			&i.AgentRunID,
-			&i.AgentRunJobID,
+			&i.AgentRunSessionID,
 			&i.AgentRunMessageID,
 			&i.State,
 			&i.Harness,
@@ -357,12 +357,12 @@ func (q *Queries) ListDeliveries(ctx context.Context, jobID string) ([]ListDeliv
 
 const nextMessageSequence = `-- name: NextMessageSequence :one
 select (coalesce(max(sequence),0)+1)::bigint
-from dorf.job_messages
-where job_id=$1
+from dorf.session_messages
+where session_id=$1
 `
 
-func (q *Queries) NextMessageSequence(ctx context.Context, jobID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, nextMessageSequence, jobID)
+func (q *Queries) NextMessageSequence(ctx context.Context, sessionID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, nextMessageSequence, sessionID)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -372,24 +372,24 @@ const nextWakeSequence = `-- name: NextWakeSequence :one
 select coalesce(
     (
         select min(m.sequence)
-        from dorf.job_messages m
+        from dorf.session_messages m
         join dorf.agent_runs ar on ar.message_id=m.id
-        where m.job_id=$1
+        where m.session_id=$1
           and ar.state='pending' and ar.turn_id is null
           and not exists (
               select 1
-              from dorf.job_messages earlier
+              from dorf.session_messages earlier
               join dorf.agent_runs earlier_run on earlier_run.message_id=earlier.id
-              where earlier.job_id=m.job_id and earlier.sequence<m.sequence
+              where earlier.session_id=m.session_id and earlier.sequence<m.sequence
                 and earlier_run.state not in ('completed','failed','interrupted')
           )
     ),
-    (select coalesce(max(sequence),0)+1 from dorf.job_messages where job_id=$1)
+    (select coalesce(max(sequence),0)+1 from dorf.session_messages where session_id=$1)
 )::bigint
 `
 
-func (q *Queries) NextWakeSequence(ctx context.Context, jobID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, nextWakeSequence, jobID)
+func (q *Queries) NextWakeSequence(ctx context.Context, sessionID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, nextWakeSequence, sessionID)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err

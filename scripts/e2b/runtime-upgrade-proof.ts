@@ -21,7 +21,7 @@ const evidence = resolve(root, '.dorf/runtime-upgrade', id);
 const guest = '/opt/dorf-upgrade-proof';
 const project = 'dorf-runtime-upgrade-proof';
 const owner = 'dorf-runtime-upgrade-proof-v1';
-const sourceOwner = { job_id: id, sandbox_id: id, ownership_nonce: randomBytes(32).toString('hex') };
+const sourceOwner = { session_id: id, sandbox_id: id, ownership_nonce: randomBytes(32).toString('hex') };
 const destinationOwner = { ...sourceOwner, ownership_nonce: provider === 'incus' ? sourceOwner.ownership_nonce : randomBytes(32).toString('hex') };
 const manifestPath = resolve(root, 'dist/release-0.10.1/dorf-incus-vm-v5-x86_64.json');
 const templatePath = resolve(root, 'dist/e2b-template/profile.json');

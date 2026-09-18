@@ -26,14 +26,14 @@ func (r *statusControlRuntime) ResolveSandbox(_ context.Context, profile core.Sa
 	}
 	return core.SandboxRuntime{SandboxProfile: profile, Status: r}, nil
 }
-func (r *statusControlRuntime) ReadSandboxStatus(_ context.Context, job core.Job, owned core.Sandbox) (provider.Status, error) {
-	if owned != r.owned || job.ID != owned.JobID {
+func (r *statusControlRuntime) ReadSandboxStatus(_ context.Context, session core.Session, owned core.Sandbox) (provider.Status, error) {
+	if owned != r.owned || session.ID != owned.SessionID {
 		return provider.Status{}, fmt.Errorf("foreign custody")
 	}
 	r.calls++
 	return provider.Status{Provider: "e2b", State: "paused"}, nil
 }
-func TestControlStatusUsesPostgresCustodyAndLeavesJobUnchanged(t *testing.T) {
+func TestControlStatusUsesPostgresCustodyAndLeavesSessionUnchanged(t *testing.T) {
 	ctx := context.Background()
 	store, tasks, profile := controlTestStore(t)
 	auth := controlauth.Service{Store: store}
@@ -46,9 +46,9 @@ func TestControlStatusUsesPostgresCustodyAndLeavesJobUnchanged(t *testing.T) {
 	}
 	runtime := &statusControlRuntime{profile: profile}
 	handler := controlTestHandler(store, tasks, controlTestGateway(t), auth, runtime, blob.Store{Root: t.TempDir()})
-	var job controlapi.DirectJob
-	controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, "/v1/jobs", credential, fmt.Sprintf("status-%d", time.Now().UnixNano()), controlapi.AdmitJobRequest{AIConnection: "primary", Model: "model-test", Reasoning: "high"}), 201, &job)
-	owned, err := store.Sandbox(ctx, core.MainSandboxName(job.ID))
+	var session controlapi.Session
+	controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, "/v1/sessions", credential, fmt.Sprintf("status-%d", time.Now().UnixNano()), controlapi.CreateSessionRequest{AIConnection: "primary", Model: "model-test", Reasoning: "high"}), 201, &session)
+	owned, err := store.Sandbox(ctx, core.MainSandboxName(session.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,20 +63,20 @@ func TestControlStatusUsesPostgresCustodyAndLeavesJobUnchanged(t *testing.T) {
 			t.Fatalf("status=%d calls=%d", response.Code, runtime.calls)
 		}
 	}
-	before, err := store.Job(ctx, job.ID)
+	before, err := store.Session(ctx, session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var result provider.Status
 	controlTestJSON(t, controlTestRequest(t, handler, http.MethodGet, path, credential, "", nil), 200, &result)
-	after, err := store.Job(ctx, job.ID)
+	after, err := store.Session(ctx, session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.State != "paused" || result.Provider != "e2b" || !reflect.DeepEqual(before, after) {
-		t.Fatalf("observation changed Job or lost status: %+v", result)
+		t.Fatalf("observation changed Session or lost status: %+v", result)
 	}
-	if err := store.RequestCleanup(ctx, job.ID); err != nil {
+	if err := store.RequestCleanup(ctx, session.ID); err != nil {
 		t.Fatal(err)
 	}
 	response := controlTestRequest(t, handler, http.MethodGet, path, credential, "", nil)

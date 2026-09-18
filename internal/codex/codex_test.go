@@ -13,11 +13,11 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/incus"
 	incustest "github.com/aphronio/dorf/internal/incus/testkit"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/coder/websocket"
-	"github.com/aphronio/dorf/internal/core"
 )
 
 func testSandbox(runner incustest.Runner, owner provider.Ownership) incus.Adapter {
@@ -25,7 +25,7 @@ func testSandbox(runner incustest.Runner, owner provider.Ownership) incus.Adapte
 }
 
 func testOwner(sandboxID string) provider.Ownership {
-	return provider.Ownership{JobID: "job-" + sandboxID, SandboxID: sandboxID, OwnershipNonce: strings.Repeat("a", 64)}
+	return provider.Ownership{SessionID: "job-" + sandboxID, SandboxID: sandboxID, OwnershipNonce: strings.Repeat("a", 64)}
 }
 
 type probeRunner struct {

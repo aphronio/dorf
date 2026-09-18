@@ -24,7 +24,7 @@ func (s Store) Boundary(ctx context.Context, sandboxID string, cleanup bool) (pe
 		return persistence.CaptureBoundary{}, err
 	}
 	return captureBoundary(
-		row.JobID, row.SandboxID, row.ResourceID, row.ProfileName, row.ProfileRevision,
+		row.SessionID, row.SandboxID, row.ResourceID, row.ProfileName, row.ProfileRevision,
 		row.EffectiveUpgradeID, row.LastActivityAt, row.MessageSequence,
 		row.CompletedTurnSequence, row.DeliveryHoldCount, cleanup, row.Eligible,
 	), nil
@@ -32,21 +32,21 @@ func (s Store) Boundary(ctx context.Context, sandboxID string, cleanup bool) (pe
 
 // PublishCheckpoint records a successful upload only after the exact execution
 // boundary remains current. Hashing and upload happen before this short fence.
-// The Job row lock serializes the recheck with Message admission, which does not
+// The Session row lock serializes the recheck with Message admission, which does not
 // take the external-effect fence.
 func (s Store) PublishCheckpoint(ctx context.Context, expected persistence.CaptureBoundary, reference persistence.Reference) (persistence.Checkpoint, error) {
 	if err := validateCheckpoint(expected, reference); err != nil {
 		return persistence.Checkpoint{}, err
 	}
 	var checkpoint persistence.Checkpoint
-	err := s.WithJobFence(ctx, expected.JobID, func() error {
+	err := s.WithSessionFence(ctx, expected.SessionID, func() error {
 		tx, err := s.DB.BeginTx(ctx, nil)
 		if err != nil {
 			return err
 		}
 		defer tx.Rollback()
 		q := dbsql.New(tx)
-		if _, err := q.GetJobAdmissionForUpdate(ctx, expected.JobID); err != nil {
+		if _, err := q.GetSessionAdmissionForUpdate(ctx, expected.SessionID); err != nil {
 			return err
 		}
 		stored, err := q.GetSandboxCheckpointByReference(ctx, dbsql.GetSandboxCheckpointByReferenceParams{
@@ -54,7 +54,7 @@ func (s Store) PublishCheckpoint(ctx context.Context, expected persistence.Captu
 		})
 		if err == nil {
 			checkpoint = checkpointFromValues(
-				stored.JobID, stored.SandboxID, stored.ResourceID, stored.ProfileName,
+				stored.SessionID, stored.SandboxID, stored.ResourceID, stored.ProfileName,
 				stored.ProfileRevision, stored.EffectiveUpgradeID.String, stored.LastActivityAt,
 				stored.MessageSequence, stored.CompletedTurnSequence, stored.DeliveryHoldCount,
 				stored.Cleanup, stored.Repository, stored.SnapshotID, stored.PublishedAt,
@@ -72,7 +72,7 @@ func (s Store) PublishCheckpoint(ctx context.Context, expected persistence.Captu
 			return err
 		}
 		current := captureBoundary(
-			row.JobID, row.SandboxID, row.ResourceID, row.ProfileName, row.ProfileRevision,
+			row.SessionID, row.SandboxID, row.ResourceID, row.ProfileName, row.ProfileRevision,
 			row.EffectiveUpgradeID, row.LastActivityAt, row.MessageSequence,
 			row.CompletedTurnSequence, row.DeliveryHoldCount, expected.Cleanup, row.Eligible,
 		)
@@ -100,7 +100,7 @@ func (s Store) PublishCheckpoint(ctx context.Context, expected persistence.Captu
 			return err
 		}
 		checkpoint = checkpointFromValues(
-			stored.JobID, stored.SandboxID, stored.ResourceID, stored.ProfileName,
+			stored.SessionID, stored.SandboxID, stored.ResourceID, stored.ProfileName,
 			stored.ProfileRevision, stored.EffectiveUpgradeID.String, stored.LastActivityAt,
 			stored.MessageSequence, stored.CompletedTurnSequence, stored.DeliveryHoldCount,
 			stored.Cleanup, stored.Repository, stored.SnapshotID, stored.PublishedAt,
@@ -125,7 +125,7 @@ func (s Store) LastCheckpoint(ctx context.Context, sandboxID string) (persistenc
 		return persistence.Checkpoint{}, err
 	}
 	return checkpointFromValues(
-		row.JobID, row.SandboxID, row.ResourceID, row.ProfileName, row.ProfileRevision,
+		row.SessionID, row.SandboxID, row.ResourceID, row.ProfileName, row.ProfileRevision,
 		row.EffectiveUpgradeID.String, row.LastActivityAt, row.MessageSequence,
 		row.CompletedTurnSequence, row.DeliveryHoldCount, row.Cleanup,
 		row.Repository, row.SnapshotID, row.PublishedAt,
@@ -143,7 +143,7 @@ func (s Store) ListCheckpoints(ctx context.Context, sandboxID string) ([]persist
 	checkpoints := make([]persistence.Checkpoint, 0, len(rows))
 	for _, row := range rows {
 		checkpoints = append(checkpoints, checkpointFromValues(
-			row.JobID, row.SandboxID, row.ResourceID, row.ProfileName, row.ProfileRevision,
+			row.SessionID, row.SandboxID, row.ResourceID, row.ProfileName, row.ProfileRevision,
 			row.EffectiveUpgradeID.String, row.LastActivityAt, row.MessageSequence,
 			row.CompletedTurnSequence, row.DeliveryHoldCount, row.Cleanup,
 			row.Repository, row.SnapshotID, row.PublishedAt,
@@ -186,9 +186,9 @@ func (s Store) ListCheckpointCandidates(ctx context.Context, idleFor time.Durati
 	return candidates, nil
 }
 
-func captureBoundary(jobID, sandboxID, resourceID, profileName, profileRevision, effectiveUpgradeID string, lastActivityAt time.Time, messageSequence, completedTurnSequence, deliveryHoldCount int64, cleanup, eligible bool) persistence.CaptureBoundary {
+func captureBoundary(sessionID, sandboxID, resourceID, profileName, profileRevision, effectiveUpgradeID string, lastActivityAt time.Time, messageSequence, completedTurnSequence, deliveryHoldCount int64, cleanup, eligible bool) persistence.CaptureBoundary {
 	return persistence.CaptureBoundary{
-		JobID: jobID, SandboxID: sandboxID, ResourceID: resourceID,
+		SessionID: sessionID, SandboxID: sandboxID, ResourceID: resourceID,
 		ProfileName: profileName, ProfileRevision: profileRevision,
 		EffectiveUpgradeID: effectiveUpgradeID, LastActivityAt: lastActivityAt,
 		MessageSequence: messageSequence, CompletedTurnSequence: completedTurnSequence,
@@ -196,10 +196,10 @@ func captureBoundary(jobID, sandboxID, resourceID, profileName, profileRevision,
 	}
 }
 
-func checkpointFromValues(jobID, sandboxID, resourceID, profileName, profileRevision, effectiveUpgradeID string, lastActivityAt time.Time, messageSequence, completedTurnSequence, deliveryHoldCount int64, cleanup bool, repository, snapshotID string, publishedAt time.Time) persistence.Checkpoint {
+func checkpointFromValues(sessionID, sandboxID, resourceID, profileName, profileRevision, effectiveUpgradeID string, lastActivityAt time.Time, messageSequence, completedTurnSequence, deliveryHoldCount int64, cleanup bool, repository, snapshotID string, publishedAt time.Time) persistence.Checkpoint {
 	return persistence.Checkpoint{
 		CaptureBoundary: captureBoundary(
-			jobID, sandboxID, resourceID, profileName, profileRevision, effectiveUpgradeID,
+			sessionID, sandboxID, resourceID, profileName, profileRevision, effectiveUpgradeID,
 			lastActivityAt, messageSequence, completedTurnSequence, deliveryHoldCount, cleanup, true,
 		),
 		Reference:   persistence.Reference{Repository: repository, SnapshotID: snapshotID},
@@ -209,7 +209,7 @@ func checkpointFromValues(jobID, sandboxID, resourceID, profileName, profileRevi
 
 func validateCheckpoint(boundary persistence.CaptureBoundary, reference persistence.Reference) error {
 	for _, id := range []string{
-		boundary.JobID, boundary.SandboxID, boundary.ResourceID,
+		boundary.SessionID, boundary.SandboxID, boundary.ResourceID,
 		boundary.ProfileName, boundary.ProfileRevision,
 	} {
 		if !exactCheckpointIdentity(id) {

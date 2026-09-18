@@ -66,7 +66,7 @@ type temporaryPaths struct {
 }
 
 func (r R2Repository) credentials(_ context.Context, owner provider.Ownership, access RepositoryAccess) (repositoryCredentials, error) {
-	if owner.JobID == "" || owner.SandboxID == "" || owner.OwnershipNonce == "" {
+	if owner.SessionID == "" || owner.SandboxID == "" || owner.OwnershipNonce == "" {
 		return repositoryCredentials{}, provider.OwnershipErrorf("persistence requires complete Sandbox ownership")
 	}
 	if access != RepositoryReadOnly && access != RepositoryReadWrite {
@@ -96,7 +96,7 @@ func (r R2Repository) credentials(_ context.Context, owner provider.Ownership, a
 	}
 	temporarySecret := sha256.Sum256([]byte(token))
 	passwordMAC := hmac.New(sha256.New, r.PasswordKey)
-	_, _ = passwordMAC.Write([]byte("dorf-restic-password-v1\x00" + owner.JobID + "\x00" + owner.SandboxID))
+	_, _ = passwordMAC.Write([]byte("dorf-restic-password-v1\x00" + owner.SessionID + "\x00" + owner.SandboxID))
 	return repositoryCredentials{
 		Repository:      "s3:" + strings.TrimSuffix(r.Endpoint, "/") + "/" + r.Bucket + "/" + strings.TrimSuffix(prefix, "/"),
 		AccessKeyID:     r.ParentAccessKeyID,
@@ -159,7 +159,7 @@ func (r R2Repository) repositoryPrefix(owner provider.Ownership) (string, error)
 	if prefix == "" || path.Clean(prefix) != prefix || strings.HasPrefix(prefix, "../") || strings.ContainsRune(prefix, 0) {
 		return "", fmt.Errorf("R2 repository prefix must be a clean object prefix")
 	}
-	identity := sha256.Sum256([]byte("dorf-restic-repository-v1\x00" + owner.JobID + "\x00" + owner.SandboxID))
+	identity := sha256.Sum256([]byte("dorf-restic-repository-v1\x00" + owner.SessionID + "\x00" + owner.SandboxID))
 	return prefix + "/" + hex.EncodeToString(identity[:]) + "/", nil
 }
 

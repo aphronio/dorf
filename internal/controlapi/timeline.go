@@ -17,15 +17,15 @@ var (
 )
 
 type Timeline struct {
-	JobID    string            `json:"job_id"`
-	Harness  string            `json:"harness"`
-	ThreadID string            `json:"thread_id"`
-	TurnID   string            `json:"turn_id"`
-	Status   string            `json:"status"`
-	Items    []json.RawMessage `json:"items"`
+	SessionID string            `json:"session_id"`
+	Harness   string            `json:"harness"`
+	ThreadID  string            `json:"thread_id"`
+	TurnID    string            `json:"turn_id"`
+	Status    string            `json:"status"`
+	Items     []json.RawMessage `json:"items"`
 }
 
-type TimelineJobs interface {
+type TimelineSessions interface {
 	ReadTimeline(context.Context, string, string) (Timeline, error)
 }
 
@@ -49,12 +49,12 @@ func (h *handler) timelineRoute(w http.ResponseWriter, r *http.Request, _ contro
 		h.fail(w, problem("invalid_query"))
 		return
 	}
-	reader, ok := h.jobs.(TimelineJobs)
+	reader, ok := h.sessions.(TimelineSessions)
 	if !ok {
 		h.fail(w, problem("timeline_unavailable"))
 		return
 	}
-	timeline, err := reader.ReadTimeline(r.Context(), r.PathValue("job"), turnID)
+	timeline, err := reader.ReadTimeline(r.Context(), r.PathValue("session"), turnID)
 	if err != nil {
 		h.serviceError(w, r, err)
 		return
@@ -71,7 +71,7 @@ type MessageTimelineItem struct {
 }
 
 type MessageTimeline struct {
-	JobID     string                `json:"job_id"`
+	SessionID string                `json:"session_id"`
 	MessageID string                `json:"message_id"`
 	Harness   string                `json:"harness"`
 	ThreadID  string                `json:"thread_id"`
@@ -80,7 +80,7 @@ type MessageTimeline struct {
 	Items     []MessageTimelineItem `json:"items"`
 }
 
-type MessageTimelineJobs interface {
+type MessageTimelineSessions interface {
 	ReadMessageTimeline(context.Context, string, string) (MessageTimeline, error)
 }
 
@@ -98,12 +98,12 @@ func (h *handler) messageTimelineRoute(w http.ResponseWriter, r *http.Request, _
 		h.fail(w, problem("invalid_query"))
 		return
 	}
-	reader, ok := h.jobs.(MessageTimelineJobs)
+	reader, ok := h.sessions.(MessageTimelineSessions)
 	if !ok {
 		h.fail(w, problem("timeline_unavailable"))
 		return
 	}
-	timeline, err := reader.ReadMessageTimeline(r.Context(), r.PathValue("job"), r.PathValue("message"))
+	timeline, err := reader.ReadMessageTimeline(r.Context(), r.PathValue("session"), r.PathValue("message"))
 	if err != nil {
 		h.serviceError(w, r, err)
 		return

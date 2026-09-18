@@ -101,9 +101,9 @@ queue holds, controller recovery, live provider routing, or Logfire ingestion. T
 mise run integration:upgrade-worker incus
 mise run integration:upgrade-worker e2b
 # Diagnose the exact retained synthetic VM without admitting input:
-mise run integration:upgrade-worker incus probe JOB
+mise run integration:upgrade-worker incus probe SESSION
 # Delete a failed proof resource only when checkpoint custody is fully settled:
-mise run integration:upgrade-worker incus cleanup-unstarted JOB
+mise run integration:upgrade-worker incus cleanup-unstarted SESSION
 ```
 
 The worker recipe uses the configured disposable PostgreSQL database, the provider artifacts and
@@ -120,8 +120,8 @@ Both versions can resume the fixture; the fault is intentional, not a claim that
 
 Evidence is retained under `.dorf/runtime-upgrade/worker-upgrade-PROVIDER-TIMESTAMP/`. Events come
 from the actual coordinator telemetry sink and can be exported with the publisher above. A failed
-proof retains its VM for diagnosis; the probe restricts access to a synthetic proof Job and takes its
-Job fence. The cleanup probe refuses unsettled checkpoint custody. Use normal coordinated Job
+proof retains its VM for diagnosis; the probe restricts access to a synthetic proof Session and takes its
+Session fence. The cleanup probe refuses unsettled checkpoint custody. Use normal coordinated Session
 cleanup for an interrupted upgrade with retained recovery dependencies.
 
 Live loops found two real guest boundaries: older guest Python lacks pidfd wrappers, so exact

@@ -9,18 +9,18 @@ import (
 	"context"
 )
 
-const getJobRetryRequest = `-- name: GetJobRetryRequest :one
-select request_key,job_id,task_id,run_id,attempt
-from dorf.job_retry_requests
+const getSessionRetryRequest = `-- name: GetSessionRetryRequest :one
+select request_key,session_id,task_id,run_id,attempt
+from dorf.session_retry_requests
 where request_key=$1
 `
 
-func (q *Queries) GetJobRetryRequest(ctx context.Context, requestKey string) (DorfJobRetryRequest, error) {
-	row := q.db.QueryRowContext(ctx, getJobRetryRequest, requestKey)
-	var i DorfJobRetryRequest
+func (q *Queries) GetSessionRetryRequest(ctx context.Context, requestKey string) (DorfSessionRetryRequest, error) {
+	row := q.db.QueryRowContext(ctx, getSessionRetryRequest, requestKey)
+	var i DorfSessionRetryRequest
 	err := row.Scan(
 		&i.RequestKey,
-		&i.JobID,
+		&i.SessionID,
 		&i.TaskID,
 		&i.RunID,
 		&i.Attempt,
@@ -28,23 +28,23 @@ func (q *Queries) GetJobRetryRequest(ctx context.Context, requestKey string) (Do
 	return i, err
 }
 
-const insertJobRetryRequest = `-- name: InsertJobRetryRequest :exec
-insert into dorf.job_retry_requests(request_key,job_id,task_id,run_id,attempt)
+const insertSessionRetryRequest = `-- name: InsertSessionRetryRequest :exec
+insert into dorf.session_retry_requests(request_key,session_id,task_id,run_id,attempt)
 values($1,$2,$3,$4,$5)
 `
 
-type InsertJobRetryRequestParams struct {
+type InsertSessionRetryRequestParams struct {
 	RequestKey string
-	JobID      string
+	SessionID  string
 	TaskID     string
 	RunID      string
 	Attempt    int32
 }
 
-func (q *Queries) InsertJobRetryRequest(ctx context.Context, arg InsertJobRetryRequestParams) error {
-	_, err := q.db.ExecContext(ctx, insertJobRetryRequest,
+func (q *Queries) InsertSessionRetryRequest(ctx context.Context, arg InsertSessionRetryRequestParams) error {
+	_, err := q.db.ExecContext(ctx, insertSessionRetryRequest,
 		arg.RequestKey,
-		arg.JobID,
+		arg.SessionID,
 		arg.TaskID,
 		arg.RunID,
 		arg.Attempt,
@@ -52,11 +52,11 @@ func (q *Queries) InsertJobRetryRequest(ctx context.Context, arg InsertJobRetryR
 	return err
 }
 
-const lockJobRetryRequest = `-- name: LockJobRetryRequest :exec
+const lockSessionRetryRequest = `-- name: LockSessionRetryRequest :exec
 select pg_advisory_xact_lock(hashtextextended('dorf-job-retry:' || $1::text,0))
 `
 
-func (q *Queries) LockJobRetryRequest(ctx context.Context, requestKey string) error {
-	_, err := q.db.ExecContext(ctx, lockJobRetryRequest, requestKey)
+func (q *Queries) LockSessionRetryRequest(ctx context.Context, requestKey string) error {
+	_, err := q.db.ExecContext(ctx, lockSessionRetryRequest, requestKey)
 	return err
 }

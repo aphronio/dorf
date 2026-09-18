@@ -2,7 +2,7 @@ package sandbox
 
 import "context"
 
-// Status is a fresh provider observation, not the Job execution state.
+// Status is a fresh provider observation, not the Session execution state.
 type Status struct {
 	Provider   string `json:"provider"`
 	State      string `json:"state"`

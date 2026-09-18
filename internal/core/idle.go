@@ -19,52 +19,52 @@ type SandboxIdleReconciliation interface {
 
 // ReconcileIdle retries on the next durable wake instead of failing successful
 // work when an optional power-saving operation is temporarily unavailable.
-func ReconcileIdle(ctx context.Context, runtime any, jobID string) {
+func ReconcileIdle(ctx context.Context, runtime any, sessionID string) {
 	idle, ok := runtime.(SandboxIdleReconciliation)
 	if !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	if err := idle.ReconcileIdleSandboxes(ctx, jobID); err != nil {
-		slog.WarnContext(ctx, "Sandbox idle reconciliation will retry", "job_id", jobID, "error", err)
+	if err := idle.ReconcileIdleSandboxes(ctx, sessionID); err != nil {
+		slog.WarnContext(ctx, "Sandbox idle reconciliation will retry", "session_id", sessionID, "error", err)
 	}
 }
 
-func (s ExecutionService) ReconcileIdleSandboxes(ctx context.Context, jobID string) error {
+func (s ExecutionService) ReconcileIdleSandboxes(ctx context.Context, sessionID string) error {
 	pauser, ok := s.externals.(interface {
-		SandboxPause(context.Context, Job, Sandbox) error
+		SandboxPause(context.Context, Session, Sandbox) error
 	})
 	if !ok {
 		return nil
 	}
-	if jobID == "" {
-		return fmt.Errorf("idle reconciliation requires a Job identity")
+	if sessionID == "" {
+		return fmt.Errorf("idle reconciliation requires a Session identity")
 	}
-	return s.store.WithJobFence(ctx, jobID, func() error {
-		job, err := s.store.Job(ctx, jobID)
+	return s.store.WithSessionFence(ctx, sessionID, func() error {
+		session, err := s.store.Session(ctx, sessionID)
 		if err != nil {
 			return err
 		}
-		if job.ID != jobID {
-			return fmt.Errorf("idle reconciliation changed Job identity")
+		if session.ID != sessionID {
+			return fmt.Errorf("idle reconciliation changed Session identity")
 		}
-		if job.KeepRunning || !job.AdmissionOpen || job.CleanupState != CleanupPending {
+		if session.KeepRunning || !session.AdmissionOpen || session.CleanupState != CleanupPending {
 			return nil
 		}
-		idle, err := s.store.SandboxIdleFor(ctx, jobID, SandboxIdleGracePeriod)
+		idle, err := s.store.SandboxIdleFor(ctx, sessionID, SandboxIdleGracePeriod)
 		if err != nil || !idle {
 			return err
 		}
-		sandboxes, err := s.store.Sandboxes(ctx, jobID)
+		sandboxes, err := s.store.Sandboxes(ctx, sessionID)
 		if err != nil {
 			return err
 		}
 		for _, sandbox := range sandboxes {
-			if sandbox.JobID != jobID {
-				return fmt.Errorf("idle Sandbox has a different Job owner")
+			if sandbox.SessionID != sessionID {
+				return fmt.Errorf("idle Sandbox has a different Session owner")
 			}
-			if err := pauser.SandboxPause(ctx, job, sandbox); err != nil {
+			if err := pauser.SandboxPause(ctx, session, sandbox); err != nil {
 				return err
 			}
 		}
@@ -72,21 +72,21 @@ func (s ExecutionService) ReconcileIdleSandboxes(ctx context.Context, jobID stri
 	})
 }
 
-// SandboxActivityStore records access under the caller's Job effect fence.
+// SandboxActivityStore records access under the caller's Session effect fence.
 // A missing finish timestamp starts a fresh grace period after process recovery.
 type SandboxActivityStore interface {
 	BeginSandboxActivity(context.Context, string) error
 	FinishSandboxActivity(context.Context, string) error
 }
 
-func WithSandboxActivity(ctx context.Context, store SandboxActivityStore, jobID string, operation func() error) (err error) {
-	if err := store.BeginSandboxActivity(ctx, jobID); err != nil {
+func WithSandboxActivity(ctx context.Context, store SandboxActivityStore, sessionID string, operation func() error) (err error) {
+	if err := store.BeginSandboxActivity(ctx, sessionID); err != nil {
 		return err
 	}
 	defer func() {
 		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		err = errors.Join(err, store.FinishSandboxActivity(finishCtx, jobID))
+		err = errors.Join(err, store.FinishSandboxActivity(finishCtx, sessionID))
 	}()
 	return operation()
 }

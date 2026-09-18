@@ -71,7 +71,7 @@ func TestInstructionTrackingRefreshesAfterObservationLoss(t *testing.T) {
 }
 
 func TestInstructionTrackingRequiresObservedAcceptance(t *testing.T) {
-	for _, failure := range []string{"missing execution", "wrong run", "wrong job", "wrong sandbox", "rejected", "missing turn ID", "lost acknowledgement", "closed observer"} {
+	for _, failure := range []string{"missing execution", "wrong run", "wrong session", "wrong sandbox", "rejected", "missing turn ID", "lost acknowledgement", "closed observer"} {
 		t.Run(failure, func(t *testing.T) {
 			f := newInstructionFixture(t)
 			owner := testOwner("instructions")
@@ -82,7 +82,7 @@ func TestInstructionTrackingRequiresObservedAcceptance(t *testing.T) {
 			unobserved := &instructionSession{failure: failure}
 			f.submit(t, owner, unobserved, failure)
 			switch failure {
-			case "missing execution", "wrong run", "wrong job", "wrong sandbox", "closed observer":
+			case "missing execution", "wrong run", "wrong session", "wrong sandbox", "closed observer":
 				f.requireInjection(t, unobserved, true, true)
 			}
 			next := &instructionSession{}
@@ -97,8 +97,8 @@ func TestInstructionTrackingIsScopedToOwnerAndWorker(t *testing.T) {
 	owner := testOwner("instructions")
 	f.submit(t, owner, &instructionSession{initial: true}, "exact")
 	for _, other := range []provider.Ownership{
-		{JobID: "other-job", SandboxID: owner.SandboxID},
-		{JobID: owner.JobID, SandboxID: "other-sandbox"},
+		{SessionID: "other-session", SandboxID: owner.SandboxID},
+		{SessionID: owner.SessionID, SandboxID: "other-sandbox"},
 	} {
 		first := &instructionSession{}
 		f.submit(t, other, first, "exact")
@@ -122,7 +122,7 @@ func TestInstructionTrackingForgetsRefusedSubscription(t *testing.T) {
 	f.submit(t, owner, &instructionSession{initial: true}, "exact")
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
-	ctx := telemetry.WithExecution(context.Background(), core.AgentRun{ID: "duplicate", JobID: owner.JobID, SandboxID: owner.SandboxID, MessageID: "message"})
+	ctx := telemetry.WithExecution(context.Background(), core.AgentRun{ID: "duplicate", SessionID: owner.SessionID, SandboxID: owner.SandboxID, MessageID: "message"})
 	for _, held := range []bool{true, false} {
 		s := &instructionSession{runID: "duplicate", closed: make(chan struct{})}
 		if held {
@@ -138,7 +138,7 @@ func TestInstructionTrackingForgetsRefusedSubscription(t *testing.T) {
 	f.nextRun++
 	next.runID, next.closed = fmt.Sprintf("run-%d", f.nextRun), make(chan struct{})
 	f.sessions <- next
-	ctx = telemetry.WithExecution(context.Background(), core.AgentRun{ID: next.runID, JobID: owner.JobID, SandboxID: owner.SandboxID, MessageID: "next"})
+	ctx = telemetry.WithExecution(context.Background(), core.AgentRun{ID: next.runID, SessionID: owner.SessionID, SandboxID: owner.SandboxID, MessageID: "next"})
 	turn, err := f.agent.StartTurn(ctx, owner, "/workspace/job", "retained-thread", next.runID, core.HarnessInput{Text: "follow"}, "model", "high", false)
 	if err != nil || turn.Turn.ID != "native-"+next.runID {
 		t.Fatalf("follow turn=%#v err=%v", turn, err)
@@ -199,12 +199,12 @@ func (f *instructionFixture) submit(t *testing.T, owner provider.Ownership, s *i
 	f.nextRun++
 	s.runID, s.closed = fmt.Sprintf("run-%d", f.nextRun), make(chan struct{})
 	f.sessions <- s
-	run := core.AgentRun{ID: s.runID, JobID: owner.JobID, SandboxID: owner.SandboxID, MessageID: "message", TurnID: "native-" + s.runID}
+	run := core.AgentRun{ID: s.runID, SessionID: owner.SessionID, SandboxID: owner.SandboxID, MessageID: "message", TurnID: "native-" + s.runID}
 	switch attribution {
 	case "wrong run":
 		run.ID = "other-run"
-	case "wrong job":
-		run.JobID = "other-job"
+	case "wrong session":
+		run.SessionID = "other-session"
 	case "wrong sandbox":
 		run.SandboxID = "other-sandbox"
 	}

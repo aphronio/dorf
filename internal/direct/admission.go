@@ -19,7 +19,7 @@ var (
 )
 
 // AdmissionRequest is the caller-owned direct input. Deployment defaults are
-// resolved only for a new Job and retained in its durable admission.
+// resolved only for a new Session and retained in its durable admission.
 type AdmissionRequest struct {
 	KeepRunning        bool
 	CreatedByClientID  string
@@ -34,10 +34,10 @@ type AdmissionRequest struct {
 
 // AdmissionStore is the durable authority needed by direct admission.
 type AdmissionStore interface {
-	JobExists(context.Context, string) (bool, error)
-	Job(context.Context, string) (core.Job, error)
+	SessionExists(context.Context, string) (bool, error)
+	Session(context.Context, string) (core.Session, error)
 	profileapp.SelectionStore
-	AdmitDirect(context.Context, core.JobAdmission, string) (core.Job, bool, error)
+	AdmitDirect(context.Context, core.SessionAdmission, string) (core.Session, bool, error)
 }
 
 // AdmissionProvider owns deployment AI-connection selection and readiness.
@@ -56,86 +56,86 @@ func NewAdmissionService(store AdmissionStore, queueName string, provider Admiss
 	return AdmissionService{store: store, queueName: queueName, provider: provider}
 }
 
-// Admit prepares one direct client Job. All input uses Core Message admission.
-func (s AdmissionService) Admit(ctx context.Context, request AdmissionRequest) (core.Job, bool, error) {
+// Admit prepares one direct client Session. All input uses Core Message admission.
+func (s AdmissionService) Admit(ctx context.Context, request AdmissionRequest) (core.Session, bool, error) {
 	if !core.ValidClientReference(request.ClientReference) {
-		return core.Job{}, false, ErrInvalidAdmission
+		return core.Session{}, false, ErrInvalidAdmission
 	}
 	key, err := admissionKey(request.AdmissionKey)
 	if err != nil {
-		return core.Job{}, false, err
+		return core.Session{}, false, err
 	}
 	request.AdmissionKey = key
 	if s.store == nil {
-		return core.Job{}, false, fmt.Errorf("direct admission store is not configured")
+		return core.Session{}, false, fmt.Errorf("direct admission store is not configured")
 	}
-	exists, err := s.store.JobExists(ctx, core.JobID(key))
+	exists, err := s.store.SessionExists(ctx, core.SessionID(key))
 	if err != nil {
-		return core.Job{}, false, err
+		return core.Session{}, false, err
 	}
 	if exists {
 		return s.replay(ctx, request)
 	}
-	job, created, err := s.admitNew(ctx, request)
+	session, created, err := s.admitNew(ctx, request)
 	if errors.Is(err, ErrAdmissionConflict) {
 		replayed, _, replayErr := s.replay(ctx, request)
 		return replayed, created, replayErr
 	}
-	return job, created, err
+	return session, created, err
 }
 
-func (s AdmissionService) admitNew(ctx context.Context, request AdmissionRequest) (core.Job, bool, error) {
+func (s AdmissionService) admitNew(ctx context.Context, request AdmissionRequest) (core.Session, bool, error) {
 	admission, err := normalizeAdmissionRequest(request)
 	if err != nil {
-		return core.Job{}, false, err
+		return core.Session{}, false, err
 	}
 	profile, err := profileapp.SelectVerified(ctx, s.store, admission.SandboxProfile)
 	if err != nil {
 		if admission.SandboxProfile != "" {
-			return core.Job{}, false, fmt.Errorf("%w: %w", ErrInvalidAdmission, err)
+			return core.Session{}, false, fmt.Errorf("%w: %w", ErrInvalidAdmission, err)
 		}
-		return core.Job{}, false, err
+		return core.Session{}, false, err
 	}
 	admission.SandboxProfile = profile.Name
 	admission.ProviderConnection, admission.Model, err = gateway.ResolveModel(s.provider, admission.ProviderConnection, admission.Model)
 	if err != nil {
-		return core.Job{}, false, err
+		return core.Session{}, false, err
 	}
 	admission.Model = strings.TrimSpace(admission.Model)
 	if invalidAdmissionText(admission.Model, 1024, true) {
-		return core.Job{}, false, fmt.Errorf("%w: AI connection returned invalid default model", ErrInvalidAdmission)
+		return core.Session{}, false, fmt.Errorf("%w: AI connection returned invalid default model", ErrInvalidAdmission)
 	}
 	if err := s.provider.Check(ctx, admission.ProviderConnection); err != nil {
-		return core.Job{}, false, fmt.Errorf("AI connection %q is not ready: %w", admission.ProviderConnection, err)
+		return core.Session{}, false, fmt.Errorf("AI connection %q is not ready: %w", admission.ProviderConnection, err)
 	}
 	return s.store.AdmitDirect(ctx, admission, s.queueName)
 }
 
-func (s AdmissionService) replay(ctx context.Context, request AdmissionRequest) (core.Job, bool, error) {
-	job, err := s.store.Job(ctx, core.JobID(request.AdmissionKey))
+func (s AdmissionService) replay(ctx context.Context, request AdmissionRequest) (core.Session, bool, error) {
+	session, err := s.store.Session(ctx, core.SessionID(request.AdmissionKey))
 	if err != nil {
-		return core.Job{}, false, err
+		return core.Session{}, false, err
 	}
-	if job.Workflow != "" || job.WorkflowRevision != "" {
-		return core.Job{}, false, ErrAdmissionConflict
+	if session.Workflow != "" || session.WorkflowRevision != "" {
+		return core.Session{}, false, ErrAdmissionConflict
 	}
 	admission, err := normalizeAdmissionRequest(request)
 	if err != nil {
-		return core.Job{}, false, fmt.Errorf("%w: %v", ErrAdmissionConflict, err)
+		return core.Session{}, false, fmt.Errorf("%w: %v", ErrAdmissionConflict, err)
 	}
-	if admission.SandboxProfile != "" && admission.SandboxProfile != job.SandboxProfile ||
-		admission.ProviderConnection != "" && admission.ProviderConnection != job.ProviderConnection {
-		return core.Job{}, false, ErrAdmissionConflict
+	if admission.SandboxProfile != "" && admission.SandboxProfile != session.SandboxProfile ||
+		admission.ProviderConnection != "" && admission.ProviderConnection != session.ProviderConnection {
+		return core.Session{}, false, ErrAdmissionConflict
 	}
-	admission.SandboxProfile = job.SandboxProfile
-	admission.ProviderConnection = job.ProviderConnection
+	admission.SandboxProfile = session.SandboxProfile
+	admission.ProviderConnection = session.ProviderConnection
 	if admission.Model == "" {
-		admission.Model = job.Model
+		admission.Model = session.Model
 	}
 	return s.store.AdmitDirect(ctx, admission, s.queueName)
 }
 
-func normalizeAdmissionRequest(request AdmissionRequest) (core.JobAdmission, error) {
+func normalizeAdmissionRequest(request AdmissionRequest) (core.SessionAdmission, error) {
 	request.SandboxProfile = strings.TrimSpace(request.SandboxProfile)
 	request.ProviderConnection = strings.TrimSpace(request.ProviderConnection)
 	request.Model = strings.TrimSpace(request.Model)
@@ -146,9 +146,9 @@ func normalizeAdmissionRequest(request AdmissionRequest) (core.JobAdmission, err
 	if invalidAdmissionText(request.AgentsMD, 1<<20, false) || invalidAdmissionText(request.Model, 1024, false) ||
 		invalidAdmissionText(request.SandboxProfile, 255, false) || invalidAdmissionText(request.ProviderConnection, 255, false) ||
 		(request.ReasoningEffort != "low" && request.ReasoningEffort != "medium" && request.ReasoningEffort != "high" && request.ReasoningEffort != "xhigh") {
-		return core.JobAdmission{}, ErrInvalidAdmission
+		return core.SessionAdmission{}, ErrInvalidAdmission
 	}
-	return core.JobAdmission{
+	return core.SessionAdmission{
 		KeepRunning: request.KeepRunning, CreatedByClientID: request.CreatedByClientID, ClientReference: request.ClientReference,
 		AdmissionKey: request.AdmissionKey, AgentsMD: request.AgentsMD, SandboxProfile: request.SandboxProfile,
 		ProviderConnection: request.ProviderConnection, Model: request.Model, ReasoningEffort: request.ReasoningEffort,

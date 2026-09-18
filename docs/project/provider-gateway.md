@@ -8,7 +8,7 @@ and protocol behavior.
 ## Ownership
 
 The Provider Gateway is a sibling application subsystem. It owns upstream AI Connections and
-revocable consumer-specific Inference Routes. It does not own Job sequencing, Sandbox lifecycle,
+revocable consumer-specific Inference Routes. It does not own Session sequencing, Sandbox lifecycle,
 agent transcripts, review, or repository policy.
 
 An AI Connection retains one upstream authentication method and its default Harness model in
@@ -19,7 +19,7 @@ An Inference Route grants one consumer access through an opaque model name and a
 Sandbox receives only that route and its Harness configuration. It never receives an upstream
 credential or Gateway management authority.
 
-The Dorf Job path creates, observes, and revokes Routes through stable Actions. Dorf retains the
+The Dorf Session path creates, observes, and revokes Routes through stable Actions. Dorf retains the
 Route identity and settlement facts required for reconciliation. The live Gateway remains the
 authority for whether it can route an advertised model.
 
@@ -51,14 +51,14 @@ Getting started owns the current guided and operator-managed ingress procedures.
 
 ## Selection and observation
 
-Setup selects one default AI Connection. A Job may select another named connection when the public
+Setup selects one default AI Connection. A Session may select another named connection when the public
 contract permits it. Admission resolves and retains both the exact connection and the exact model,
-so later default changes cannot reinterpret an existing Job.
+so later default changes cannot reinterpret an existing Session.
 
 New OpenAI and ChatGPT connections use the recommended model defined in
 [`internal/gateway/gateway.go`](../../internal/gateway/gateway.go). Updating that recommendation
 also applies to connections without a saved model; it does not replace a saved connection model.
-An explicit Job model overrides the connection default. Verify the selected model through the live
+An explicit Session model overrides the connection default. Verify the selected model through the live
 Gateway before relying on it, since upstream access can differ by connection.
 
 [Support](../support.md) owns the current readiness command and its interpretation. Observation must

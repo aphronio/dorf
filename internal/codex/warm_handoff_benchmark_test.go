@@ -99,7 +99,7 @@ func newWarmHandoffFixture(b *testing.B, delay time.Duration) *warmHandoffFixtur
 func (f *warmHandoffFixture) handoff(b *testing.B, runID string) {
 	b.Helper()
 	owner := testOwner("benchmark")
-	ctx := telemetry.WithExecution(context.Background(), core.AgentRun{ID: runID, JobID: owner.JobID, SandboxID: owner.SandboxID, MessageID: runID})
+	ctx := telemetry.WithExecution(context.Background(), core.AgentRun{ID: runID, SessionID: owner.SessionID, SandboxID: owner.SandboxID, MessageID: runID})
 	history, err := f.agent.ReadTurns(ctx, owner, "retained-thread")
 	if err != nil || len(history.Turns) != 1 || !history.Turns[0].Terminal() {
 		b.Fatalf("inspect retained history: turns=%d err=%v", len(history.Turns), err)

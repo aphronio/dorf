@@ -11,8 +11,8 @@ import (
 	"github.com/aphronio/dorf/internal/postgres"
 )
 
-func (a controlAPIJobs) ReadTimeline(ctx context.Context, jobID, turnID string) (controlapi.Timeline, error) {
-	job, err := a.supportedJob(ctx, jobID)
+func (a controlAPISessions) ReadTimeline(ctx context.Context, sessionID, turnID string) (controlapi.Timeline, error) {
+	session, err := a.loadSession(ctx, sessionID)
 	if err != nil {
 		return controlapi.Timeline{}, err
 	}
@@ -22,21 +22,21 @@ func (a controlAPIJobs) ReadTimeline(ctx context.Context, jobID, turnID string) 
 	if !ok {
 		return controlapi.Timeline{}, controlapi.ErrTimelineUnavailable
 	}
-	timeline, err := reader.ReadTimeline(ctx, job.ID, turnID)
+	timeline, err := reader.ReadTimeline(ctx, session.ID, turnID)
 	if err != nil {
 		if errors.Is(err, core.ErrTurnNotFound) {
 			return controlapi.Timeline{}, controlapi.ErrTurnNotFound
 		}
-		if errors.Is(err, controlreader.ErrJobNotFound) {
-			return controlapi.Timeline{}, controlapi.ErrJobNotFound
+		if errors.Is(err, controlreader.ErrSessionNotFound) {
+			return controlapi.Timeline{}, controlapi.ErrSessionNotFound
 		}
 		return controlapi.Timeline{}, controlapi.ErrTimelineUnavailable
 	}
-	return controlapi.Timeline{JobID: job.ID, Harness: timeline.Harness, ThreadID: timeline.ThreadID, TurnID: timeline.TurnID, Status: timeline.Status, Items: timeline.Items}, nil
+	return controlapi.Timeline{SessionID: session.ID, Harness: timeline.Harness, ThreadID: timeline.ThreadID, TurnID: timeline.TurnID, Status: timeline.Status, Items: timeline.Items}, nil
 }
 
-func (a controlAPIJobs) ReadMessageTimeline(ctx context.Context, jobID, messageID string) (controlapi.MessageTimeline, error) {
-	job, err := a.supportedJob(ctx, jobID)
+func (a controlAPISessions) ReadMessageTimeline(ctx context.Context, sessionID, messageID string) (controlapi.MessageTimeline, error) {
+	session, err := a.loadSession(ctx, sessionID)
 	if err != nil {
 		return controlapi.MessageTimeline{}, err
 	}
@@ -47,7 +47,7 @@ func (a controlAPIJobs) ReadMessageTimeline(ctx context.Context, jobID, messageI
 	if err != nil {
 		return controlapi.MessageTimeline{}, err
 	}
-	if execution.Message.JobID != job.ID {
+	if execution.Message.SessionID != session.ID {
 		return controlapi.MessageTimeline{}, controlapi.ErrMessageNotFound
 	}
 	reader, ok := a.reader.(interface {
@@ -56,7 +56,7 @@ func (a controlAPIJobs) ReadMessageTimeline(ctx context.Context, jobID, messageI
 	if !ok {
 		return controlapi.MessageTimeline{}, controlapi.ErrTimelineUnavailable
 	}
-	timeline, err := reader.ReadMessageTimeline(ctx, job.ID, messageID)
+	timeline, err := reader.ReadMessageTimeline(ctx, session.ID, messageID)
 	if err != nil {
 		return controlapi.MessageTimeline{}, controlapi.ErrTimelineUnavailable
 	}
@@ -68,5 +68,5 @@ func (a controlAPIJobs) ReadMessageTimeline(ctx context.Context, jobID, messageI
 		}
 		items = append(items, projected)
 	}
-	return controlapi.MessageTimeline{JobID: job.ID, MessageID: messageID, Harness: timeline.Harness, ThreadID: timeline.ThreadID, TurnID: timeline.TurnID, Status: timeline.Status, Items: items}, nil
+	return controlapi.MessageTimeline{SessionID: session.ID, MessageID: messageID, Harness: timeline.Harness, ThreadID: timeline.ThreadID, TurnID: timeline.TurnID, Status: timeline.Status, Items: items}, nil
 }

@@ -12,11 +12,11 @@ import (
 )
 
 type handleTestFileReader struct {
-	read func(context.Context, Job, Sandbox, string) ([]byte, error)
+	read func(context.Context, Session, Sandbox, string) ([]byte, error)
 }
 
-func (r handleTestFileReader) ReadSandboxFile(ctx context.Context, job Job, sandbox Sandbox, path string) ([]byte, error) {
-	return r.read(ctx, job, sandbox, path)
+func (r handleTestFileReader) ReadSandboxFile(ctx context.Context, session Session, sandbox Sandbox, path string) ([]byte, error) {
+	return r.read(ctx, session, sandbox, path)
 }
 
 type handleTestRuntimeResolver struct{ files SandboxFileReader }
@@ -26,56 +26,56 @@ func (r handleTestRuntimeResolver) ResolveSandbox(_ context.Context, profile San
 }
 
 func TestSandboxHandleReadFileReturnsExactRepeatedBytesAndEnforcesOwnership(t *testing.T) {
-	job := Job{ID: "job-files", SandboxProfile: "profile", AdmissionOpen: true, CleanupState: CleanupPending}
-	owned := Sandbox{ID: "sandbox-files", JobID: job.ID}
-	other := Sandbox{ID: "sandbox-other", JobID: job.ID}
-	reader := handleTestFileReader{read: func(_ context.Context, _ Job, gotSandbox Sandbox, _ string) ([]byte, error) {
+	session := Session{ID: "job-files", SandboxProfile: "profile", AdmissionOpen: true, CleanupState: CleanupPending}
+	owned := Sandbox{ID: "sandbox-files", SessionID: session.ID}
+	other := Sandbox{ID: "sandbox-other", SessionID: session.ID}
+	reader := handleTestFileReader{read: func(_ context.Context, _ Session, gotSandbox Sandbox, _ string) ([]byte, error) {
 		return []byte(gotSandbox.ID), nil
 	}}
-	store := handleTestStore{job: job, sandboxes: map[string]Sandbox{owned.ID: owned, other.ID: other}}
+	store := handleTestStore{session: session, sandboxes: map[string]Sandbox{owned.ID: owned, other.ID: other}}
 	application := Application{Store: store, SandboxRuntimes: handleTestRuntimeResolver{files: reader}}
-	handle := application.jobHandle(job.ID).sandboxHandle(owned.ID)
+	handle := application.sessionHandle(session.ID).sandboxHandle(owned.ID)
 	got, err := handle.ReadFile(context.Background(), "result.txt")
 	if err != nil || string(got) != owned.ID {
 		t.Fatalf("owned Sandbox read=%q err=%v", got, err)
 	}
-	got, err = application.jobHandle(job.ID).sandboxHandle(other.ID).ReadFile(context.Background(), "result.txt")
+	got, err = application.sessionHandle(session.ID).sandboxHandle(other.ID).ReadFile(context.Background(), "result.txt")
 	if err != nil || string(got) != other.ID {
-		t.Fatalf("same-Job other-Sandbox read=%q err=%v", got, err)
+		t.Fatalf("same-Session other-Sandbox read=%q err=%v", got, err)
 	}
 	closed := store
-	closed.job.AdmissionOpen = false
+	closed.session.AdmissionOpen = false
 	closedApplication := Application{Store: closed, SandboxRuntimes: handleTestRuntimeResolver{files: reader}}
-	got, err = closedApplication.jobHandle(job.ID).sandboxHandle(owned.ID).ReadFile(context.Background(), "result.txt")
+	got, err = closedApplication.sessionHandle(session.ID).sandboxHandle(owned.ID).ReadFile(context.Background(), "result.txt")
 	if err != nil || string(got) != owned.ID {
 		t.Fatalf("closed-admission read=%q err=%v", got, err)
 	}
-	foreign := handleTestStore{job: job, sandbox: Sandbox{ID: owned.ID, JobID: "job-foreign"}}
+	foreign := handleTestStore{session: session, sandbox: Sandbox{ID: owned.ID, SessionID: "job-foreign"}}
 	foreignApplication := Application{Store: foreign, SandboxRuntimes: handleTestRuntimeResolver{files: reader}}
-	if _, err := foreignApplication.jobHandle(job.ID).sandboxHandle(owned.ID).ReadFile(context.Background(), "result.txt"); err == nil || !strings.Contains(err.Error(), "does not belong") {
+	if _, err := foreignApplication.sessionHandle(session.ID).sandboxHandle(owned.ID).ReadFile(context.Background(), "result.txt"); err == nil || !strings.Contains(err.Error(), "does not belong") {
 		t.Fatalf("foreign Sandbox read error=%v", err)
 	}
 	cleaning := store
-	cleaning.job.AdmissionOpen, cleaning.job.CleanupState = false, CleanupRequested
+	cleaning.session.AdmissionOpen, cleaning.session.CleanupState = false, CleanupRequested
 	cleaningApplication := Application{Store: cleaning, SandboxRuntimes: handleTestRuntimeResolver{files: reader}}
-	if _, err := cleaningApplication.jobHandle(job.ID).sandboxHandle(owned.ID).ReadFile(context.Background(), "result.txt"); !errors.Is(err, ErrSandboxFileCleanupFenced) {
+	if _, err := cleaningApplication.sessionHandle(session.ID).sandboxHandle(owned.ID).ReadFile(context.Background(), "result.txt"); !errors.Is(err, ErrSandboxFileCleanupFenced) {
 		t.Fatalf("cleanup read error=%v", err)
 	}
 }
 
 func TestSandboxHandleReadFileRejectsOversizeCustomRuntimeResult(t *testing.T) {
-	job := Job{ID: "job-files", SandboxProfile: "profile", AdmissionOpen: true, CleanupState: CleanupPending}
-	owned := Sandbox{ID: "sandbox-files", JobID: job.ID}
+	session := Session{ID: "job-files", SandboxProfile: "profile", AdmissionOpen: true, CleanupState: CleanupPending}
+	owned := Sandbox{ID: "sandbox-files", SessionID: session.ID}
 	contents := make([]byte, sandbox.MaxFileReadBytes)
 	var runtimeErr error
-	reader := handleTestFileReader{read: func(context.Context, Job, Sandbox, string) ([]byte, error) {
+	reader := handleTestFileReader{read: func(context.Context, Session, Sandbox, string) ([]byte, error) {
 		return contents, runtimeErr
 	}}
 	application := Application{
-		Store:           handleTestStore{job: job, sandbox: owned},
+		Store:           handleTestStore{session: session, sandbox: owned},
 		SandboxRuntimes: handleTestRuntimeResolver{files: reader},
 	}
-	handle := application.jobHandle(job.ID).sandboxHandle(owned.ID)
+	handle := application.sessionHandle(session.ID).sandboxHandle(owned.ID)
 	got, err := handle.ReadFile(context.Background(), "result.txt")
 	if err != nil || len(got) != sandbox.MaxFileReadBytes {
 		t.Fatalf("exact-limit custom runtime bytes=%d err=%v", len(got), err)
@@ -94,25 +94,25 @@ func TestSandboxHandleReadFileRejectsOversizeCustomRuntimeResult(t *testing.T) {
 }
 
 func TestSandboxHandleReadFileHoldsCleanupFence(t *testing.T) {
-	job := Job{ID: "job-fence", SandboxProfile: "profile", AdmissionOpen: true, CleanupState: CleanupPending}
-	owned := Sandbox{ID: "sandbox-fence", JobID: job.ID}
+	session := Session{ID: "job-fence", SandboxProfile: "profile", AdmissionOpen: true, CleanupState: CleanupPending}
+	owned := Sandbox{ID: "sandbox-fence", SessionID: session.ID}
 	fence := &sync.Mutex{}
 	arrived := make(chan struct{}, 2)
 	cleanupEntered := make(chan struct{})
-	store := handleTestStore{job: job, sandbox: owned, cleanupEntered: cleanupEntered, withFence: func(run func() error) error {
+	store := handleTestStore{session: session, sandbox: owned, cleanupEntered: cleanupEntered, withFence: func(run func() error) error {
 		arrived <- struct{}{}
 		fence.Lock()
 		defer fence.Unlock()
 		return run()
 	}}
 	started, release := make(chan struct{}), make(chan struct{})
-	reader := handleTestFileReader{read: func(context.Context, Job, Sandbox, string) ([]byte, error) {
+	reader := handleTestFileReader{read: func(context.Context, Session, Sandbox, string) ([]byte, error) {
 		close(started)
 		<-release
 		return []byte("retained by caller"), nil
 	}}
 	application := Application{Store: store, SandboxRuntimes: handleTestRuntimeResolver{files: reader}}
-	handle := application.jobHandle(job.ID).sandboxHandle(owned.ID)
+	handle := application.sessionHandle(session.ID).sandboxHandle(owned.ID)
 	readDone := make(chan error, 1)
 	go func() {
 		_, err := handle.ReadFile(context.Background(), "result.txt")
@@ -122,7 +122,7 @@ func TestSandboxHandleReadFileHoldsCleanupFence(t *testing.T) {
 	<-arrived
 	cleanupDone := make(chan error, 1)
 	go func() {
-		cleanupDone <- store.WithJobFence(context.Background(), job.ID, func() error { return store.RequestCleanup(context.Background(), job.ID) })
+		cleanupDone <- store.WithSessionFence(context.Background(), session.ID, func() error { return store.RequestCleanup(context.Background(), session.ID) })
 	}()
 	<-arrived
 	select {
@@ -145,20 +145,20 @@ func TestAgentMessageDefaultsFollowAndBindsExactSandbox(t *testing.T) {
 	admit := handleTestAdmissions{admit: func(_ context.Context, input MessageAdmission) (MessageAdmissionResult, error) {
 		got = input
 		return MessageAdmissionResult{Message: Message{
-			ID: MessageID(input.JobID, input.FromKind, input.FromID), JobID: input.JobID, FromKind: input.FromKind, FromID: strings.TrimSpace(input.FromID),
+			ID: MessageID(input.SessionID, input.FromKind, input.FromID), SessionID: input.SessionID, FromKind: input.FromKind, FromID: strings.TrimSpace(input.FromID),
 			Sequence: 2, Input: input.Input, Intent: input.Intent, AdmittedAt: admittedAt,
 		}, SandboxID: input.SandboxID, Created: true}, nil
 	}}
 	application := Application{Store: handleTestStore{}, AgentMessages: admit}
-	agent := application.jobHandle("job-1").sandboxHandle("sandbox-named").Agent()
+	agent := application.sessionHandle("job-1").sandboxHandle("sandbox-named").Agent()
 	receipt, err := agent.Message(context.Background(), " send-1 ", MessageInput{Text: "continue"})
 	if err == nil || !strings.Contains(err.Error(), "was accepted") {
 		t.Fatalf("wake failure=%v, want accepted-input diagnostic", err)
 	}
-	if got.JobID != "job-1" || got.SandboxID != "sandbox-named" || got.FromKind != MessageFromHuman || got.FromID != "send-1" || got.Input != "continue" || got.Intent != MessageFollow {
+	if got.SessionID != "job-1" || got.SandboxID != "sandbox-named" || got.FromKind != MessageFromHuman || got.FromID != "send-1" || got.Input != "continue" || got.Intent != MessageFollow {
 		t.Fatalf("admission=%#v", got)
 	}
-	if receipt.MessageID != MessageID("job-1", MessageFromHuman, "send-1") || receipt.JobID != "job-1" || receipt.SandboxID != "sandbox-named" || receipt.Sequence != 2 || receipt.Intent != MessageFollow || !receipt.Created || !receipt.AdmittedAt.Equal(admittedAt) {
+	if receipt.MessageID != MessageID("job-1", MessageFromHuman, "send-1") || receipt.SessionID != "job-1" || receipt.SandboxID != "sandbox-named" || receipt.Sequence != 2 || receipt.Intent != MessageFollow || !receipt.Created || !receipt.AdmittedAt.Equal(admittedAt) {
 		t.Fatalf("receipt=%#v", receipt)
 	}
 }
@@ -167,10 +167,10 @@ func TestAgentMessageRequiresExplicitSteerOption(t *testing.T) {
 	var got MessageAdmission
 	admit := handleTestAdmissions{admit: func(_ context.Context, input MessageAdmission) (MessageAdmissionResult, error) {
 		got = input
-		return MessageAdmissionResult{Message: Message{ID: MessageID(input.JobID, input.FromKind, input.FromID), JobID: input.JobID, FromKind: input.FromKind, FromID: input.FromID, Sequence: 3, Input: input.Input, Intent: input.Intent, RefreshSkills: input.RefreshSkills, TargetTurnID: "turn-active"}, SandboxID: input.SandboxID, Created: true}, nil
+		return MessageAdmissionResult{Message: Message{ID: MessageID(input.SessionID, input.FromKind, input.FromID), SessionID: input.SessionID, FromKind: input.FromKind, FromID: input.FromID, Sequence: 3, Input: input.Input, Intent: input.Intent, RefreshSkills: input.RefreshSkills, TargetTurnID: "turn-active"}, SandboxID: input.SandboxID, Created: true}, nil
 	}}
 	application := Application{Store: handleTestStore{}, AgentMessages: admit}
-	agent := application.jobHandle("job-1").sandboxHandle("sandbox-a").Agent()
+	agent := application.sessionHandle("job-1").sandboxHandle("sandbox-a").Agent()
 	receipt, err := agent.Message(context.Background(), "send-steer", MessageInput{Text: "adjust"}, Steer(), RefreshSkills())
 	if err == nil || got.Intent != MessageSteer || !got.RefreshSkills || receipt.Intent != MessageSteer || receipt.TargetTurnID != "turn-active" {
 		t.Fatalf("admission=%#v receipt=%#v err=%v", got, receipt, err)
@@ -189,13 +189,13 @@ func TestAgentMessageAcceptsAttachmentOnlyInputAndCopiesItsOrderedManifest(t *te
 	admit := handleTestAdmissions{admit: func(_ context.Context, input MessageAdmission) (MessageAdmissionResult, error) {
 		got = input
 		return MessageAdmissionResult{Message: Message{
-			ID: MessageID(input.JobID, input.FromKind, input.FromID), JobID: input.JobID,
+			ID: MessageID(input.SessionID, input.FromKind, input.FromID), SessionID: input.SessionID,
 			FromKind: input.FromKind, FromID: input.FromID, Sequence: 1, Input: input.Input,
 			Attachments: append([]MessageAttachment(nil), input.Attachments...), Intent: input.Intent,
 		}, SandboxID: input.SandboxID, Created: true}, nil
 	}}
 	application := Application{Store: handleTestStore{}, AgentMessages: admit}
-	receipt, err := application.jobHandle("job-attachments").sandboxHandle("sandbox-attachments").Agent().Message(
+	receipt, err := application.sessionHandle("job-attachments").sandboxHandle("sandbox-attachments").Agent().Message(
 		context.Background(), "send-attachments", MessageInput{Attachments: attachments},
 	)
 	if err == nil || !strings.Contains(err.Error(), "was accepted") || receipt.MessageID == "" {
@@ -210,7 +210,7 @@ func TestAgentMessageAcceptsAttachmentOnlyInputAndCopiesItsOrderedManifest(t *te
 		Kind: MessageAttachmentFile, Filename: "../escape.txt", MediaType: "text/plain",
 		Digest: strings.Repeat("c", 64), ByteSize: 1,
 	}}}
-	if _, err := application.jobHandle("job-attachments").sandboxHandle("sandbox-attachments").Agent().Message(context.Background(), "invalid", invalid); err == nil {
+	if _, err := application.sessionHandle("job-attachments").sandboxHandle("sandbox-attachments").Agent().Message(context.Background(), "invalid", invalid); err == nil {
 		t.Fatal("Agent Message accepted an attachment filename containing a directory")
 	}
 }
@@ -218,14 +218,14 @@ func TestAgentMessageAcceptsAttachmentOnlyInputAndCopiesItsOrderedManifest(t *te
 func TestAgentMessageReplayAfterCleanupReturnsItsReceiptWithoutAWake(t *testing.T) {
 	admit := handleTestAdmissions{admit: func(_ context.Context, input MessageAdmission) (MessageAdmissionResult, error) {
 		return MessageAdmissionResult{Message: Message{
-			ID: MessageID(input.JobID, input.FromKind, input.FromID), JobID: input.JobID,
+			ID: MessageID(input.SessionID, input.FromKind, input.FromID), SessionID: input.SessionID,
 			FromKind: input.FromKind, FromID: input.FromID, Sequence: 4, Input: input.Input, Intent: input.Intent,
 		}, SandboxID: input.SandboxID, Created: false}, nil
 	}}
 	application := Application{
-		Store: handleTestStore{job: Job{ID: "job-cleaned", CleanupState: CleanupComplete}}, AgentMessages: admit,
+		Store: handleTestStore{session: Session{ID: "job-cleaned", CleanupState: CleanupComplete}}, AgentMessages: admit,
 	}
-	receipt, err := application.jobHandle("job-cleaned").sandboxHandle("sandbox-cleaned").Agent().Message(
+	receipt, err := application.sessionHandle("job-cleaned").sandboxHandle("sandbox-cleaned").Agent().Message(
 		context.Background(), "send-replay", MessageInput{Text: "same input"},
 	)
 	if err != nil || receipt.Created || receipt.MessageID != MessageID("job-cleaned", MessageFromHuman, "send-replay") {
@@ -244,14 +244,14 @@ func TestAgentMessageRejectsForeignReceiptBeforeWake(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			admissions := handleTestAdmissions{admit: func(_ context.Context, input MessageAdmission) (MessageAdmissionResult, error) {
 				result := MessageAdmissionResult{Message: Message{
-					ID: MessageID(input.JobID, input.FromKind, input.FromID), JobID: input.JobID, FromKind: input.FromKind,
+					ID: MessageID(input.SessionID, input.FromKind, input.FromID), SessionID: input.SessionID, FromKind: input.FromKind,
 					FromID: input.FromID, Sequence: 2, Input: input.Input, Intent: input.Intent,
 				}, SandboxID: input.SandboxID, Created: true}
 				test.corrupt(&result)
 				return result, nil
 			}}
 			application := Application{Store: handleTestStore{}, AgentMessages: admissions}
-			receipt, err := application.jobHandle("job-1").sandboxHandle("sandbox-named").Agent().Message(context.Background(), "send-1", MessageInput{Text: "exact"})
+			receipt, err := application.sessionHandle("job-1").sandboxHandle("sandbox-named").Agent().Message(context.Background(), "send-1", MessageInput{Text: "exact"})
 			if err == nil || receipt.MessageID != "" || !strings.Contains(err.Error(), "foreign receipt") {
 				t.Fatalf("receipt=%#v err=%v", receipt, err)
 			}
@@ -268,15 +268,15 @@ func (a handleTestAdmissions) AdmitAgentMessage(ctx context.Context, input Messa
 }
 
 type handleTestStore struct {
-	job            Job
+	session        Session
 	sandbox        Sandbox
 	sandboxes      map[string]Sandbox
 	withFence      func(func() error) error
 	cleanupEntered chan struct{}
 }
 
-func (s handleTestStore) Job(context.Context, string) (Job, error) {
-	return s.job, nil
+func (s handleTestStore) Session(context.Context, string) (Session, error) {
+	return s.session, nil
 }
 func (s handleTestStore) Sandbox(_ context.Context, id string) (Sandbox, error) {
 	if s.sandboxes != nil {
@@ -287,16 +287,16 @@ func (s handleTestStore) Sandbox(_ context.Context, id string) (Sandbox, error) 
 func (handleTestStore) EnsureSandbox(context.Context, string, string) (Sandbox, error) {
 	return Sandbox{}, nil
 }
-func (handleTestStore) JobTasks(context.Context, string) ([]JobTask, error) { return nil, nil }
-func (handleTestStore) CleanupRequests(context.Context) ([]string, error)   { return nil, nil }
+func (handleTestStore) SessionTasks(context.Context, string) ([]SessionTask, error) { return nil, nil }
+func (handleTestStore) CleanupRequests(context.Context) ([]string, error)           { return nil, nil }
 
-func (s handleTestStore) WithJobFence(_ context.Context, _ string, run func() error) error {
+func (s handleTestStore) WithSessionFence(_ context.Context, _ string, run func() error) error {
 	if s.withFence != nil {
 		return s.withFence(run)
 	}
 	return run()
 }
-func (handleTestStore) AttachJobTask(context.Context, string, string, string, string) error {
+func (handleTestStore) AttachSessionTask(context.Context, string, string, string, string) error {
 	return nil
 }
 func (s handleTestStore) RequestCleanup(context.Context, string) error {
@@ -319,7 +319,7 @@ func (handleTestStore) SetCleanupAttention(context.Context, string, string) erro
 func (handleTestStore) CompleteCleanup(context.Context, string, string) error     { return nil }
 
 func (handleTestStore) ScheduleCleanup(context.Context, string, string, string) error { return nil }
-func (handleTestStore) ScheduleJobTask(context.Context, string, string, string, string) error {
+func (handleTestStore) ScheduleSessionTask(context.Context, string, string, string, string) error {
 	return nil
 }
 

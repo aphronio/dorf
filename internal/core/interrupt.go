@@ -18,16 +18,16 @@ type messageInterruptStore interface {
 
 // RequestMessageInterrupt commits the original Turn-starting run's monotonic
 // Stop flag before emitting its idempotent execution wake.
-func (a Application) RequestMessageInterrupt(ctx context.Context, jobID, messageID string) (MessageInterruptTarget, error) {
+func (a Application) RequestMessageInterrupt(ctx context.Context, sessionID, messageID string) (MessageInterruptTarget, error) {
 	interrupts, ok := a.Store.(messageInterruptStore)
 	if !ok {
 		return MessageInterruptTarget{}, fmt.Errorf("Message interruption is not configured")
 	}
-	target, err := interrupts.RequestMessageInterrupt(ctx, jobID, messageID)
+	target, err := interrupts.RequestMessageInterrupt(ctx, sessionID, messageID)
 	if err != nil || !target.InterruptRequested {
 		return target, err
 	}
-	if _, err := a.signalJobExecutionWake(ctx, target.JobID, "stop:"+target.AgentRunID); err != nil {
+	if _, err := a.signalSessionExecutionWake(ctx, target.SessionID, "stop:"+target.AgentRunID); err != nil {
 		return target, fmt.Errorf("Stop was accepted for AgentRun %s, but its execution wake hint failed; retry the same request: %w", target.AgentRunID, err)
 	}
 	return target, nil

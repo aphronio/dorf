@@ -242,7 +242,7 @@ func (g Gateway) RequireModel(ctx context.Context, baseURL, apiKey, model string
 }
 
 // DefaultConnection returns the one deployment-default AI connection. The
-// selected name is copied into each admitted Job; the connection's credential
+// selected name is copied into each admitted Session; the connection's credential
 // remains in protected Gateway state.
 func (g Gateway) DefaultConnection() (string, error) {
 	records, err := g.connections()
@@ -269,7 +269,7 @@ func (g Gateway) DefaultConnection() (string, error) {
 }
 
 // DefaultModel returns the model selected by one authenticated AI connection.
-// New Jobs copy this value into durable admission; existing Jobs never consult
+// New Sessions copy this value into durable admission; existing Sessions never consult
 // it again during replay.
 func (g Gateway) DefaultModel(connectionName string) (string, error) {
 	record, err := g.requireConnection(strings.TrimSpace(connectionName))
@@ -317,7 +317,7 @@ func (g Gateway) ConfiguredConnection(name string) (bool, error) {
 }
 
 // SetDefaultConnection selects one existing authenticated connection for new
-// Jobs without moving its credential into Dorf's durable Job state.
+// Sessions without moving its credential into Dorf's durable Session state.
 func (g Gateway) SetDefaultConnection(name string) error {
 	name = strings.TrimSpace(name)
 	if _, err := g.requireConnection(name); err != nil {

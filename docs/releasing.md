@@ -73,7 +73,7 @@ The hosted workflow accepts only a reused, already published Incus image pin. Wh
 advances, run `scripts/release.sh --publish` locally with a working Incus endpoint. The authority
 builds the pinned guest recipe, exports its image, validates the archive and version metadata,
 and removes its temporary build VM and image alias. Publication does not require a Dorf
-deployment, AI connection, GitHub App installation, coding Job, or browser navigation proof.
+deployment, AI connection, GitHub App installation, coding Session, or browser navigation proof.
 GitHub and GHCR publication credentials are still required.
 
 Browser packages and Chromium live in the shared Nix workstation recipe. Image metadata records

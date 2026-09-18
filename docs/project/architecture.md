@@ -11,7 +11,7 @@ Product direction and vocabulary live in the [North Star](north-star.md).
 ```mermaid
 flowchart LR
     Remote["Remote client"] --> Ingress["HTTPS ingress · guided or custom"]
-    Ingress --> API["Control API · fixed Job projections"]
+    Ingress --> API["Control API · fixed Session projections"]
     Host["Deployment-host Client"] -->|fixed loopback| API
     API -->|direct| Core["In-process Core application boundary"]
     Core --> Custody["Durable execution custody"]
@@ -29,7 +29,7 @@ boundary. [Getting started](../getting-started.md) owns installation and operati
 [`deploy/compose.yaml`](../../deploy/compose.yaml) owns the exact service and network inventory.
 
 Absurd owns when durable work is eligible, claimed, checkpointed, retried, sleeping, waiting, or
-cancelled. It does not own Dorf's product vocabulary or become the only place where a Job's truth can
+cancelled. It does not own Dorf's product vocabulary or become the only place where a Session's truth can
 be understood.
 
 ## Authority model
@@ -40,10 +40,10 @@ of fact.
 
 | Fact | Authority |
 | --- | --- |
-| Job identity, accepted execution contract, native Thread binding, durable lifecycle, and cleanup request/execution | Dorf-owned PostgreSQL facts |
+| Session identity, accepted execution contract, native Thread binding, durable lifecycle, and cleanup request/execution | Dorf-owned PostgreSQL facts |
 | Task claims, checkpoints, retry schedule, sleeps, waits, and cancellation | Absurd schema in the same PostgreSQL deployment |
 | Agent transcript, tool items, Thread, Turn, and native history | The selected Harness |
-| Mutable files, running processes, and local tool output | A Job-owned Sandbox |
+| Mutable files, running processes, and local tool output | A Session-owned Sandbox |
 | External objects and their mutable state | Their external authority, such as GitHub or another service |
 | Accepted Message attachment manifest and bytes | Ordered PostgreSQL Message data and the content-addressed blob store |
 | Native execution and lifecycle receipts | Dorf records exact bindings and observed facts; the native or provider authority proves acceptance |
@@ -51,36 +51,36 @@ of fact.
 The same mutable fact must not be mirrored into multiple authorities. Read models may project facts
 for inspection, but they are disposable and rebuildable. Agent prose and application reports are client inputs; they do not prove platform execution or business success.
 
-Resource ownership follows lifetime. A Job is the aggregate owner of every Sandbox allocated for
+Resource ownership follows lifetime. A Session is the aggregate owner of every Sandbox allocated for
 it. A Sandbox owns or deterministically identifies its
 scoped provider route and injected authority. AgentRuns use a Sandbox but never own it; they remain
-internal durable recovery facts rather than caller-coordinated resources. Cleanup begins at the Job
+internal durable recovery facts rather than caller-coordinated resources. Cleanup begins at the Session
 and reconciles resources against their external authorities before declaring them removed, but only
 after a workflow, composed module, or client has requested resource release. Core never infers that
 request from success, failure, inactivity, or a need for human input.
 
 A logical Sandbox has one active resource binding. Each provider VM has a separate retained
 resource record containing its ownership token and, after attestation, its opaque provider locator.
-Creation records that locator under the Job fence before settling the create Action. Retrying the
+Creation records that locator under the Session fence before settling the create Action. Retrying the
 observation may confirm the same locator; it cannot redirect the existing resource record. Migration
 preserves original ownership tokens and leaves previously unrecorded provider locators unknown.
 Provider replacement will switch the active binding under a delivery hold while preserving resource
 history; the upgrade coordination remains [active implementation](../implementation/runtime-package-upgrades.md).
 
-Direct Jobs support a retained delivery hold per Sandbox. The hold serializes with Message admission
-and the Job effect fence. New automatic input becomes a FIFO follow; existing active turns and
+Direct Sessions support a retained delivery hold per Sandbox. The hold serializes with Message admission
+and the Session effect fence. New automatic input becomes a FIFO follow; existing active turns and
 pre-hold steers can settle. Pending follows, idle pause, and external workspace access respect the
 hold. Its exact operation ID owns release, which commits with an execution wake; replay cannot
 reopen an old hold or release a newer one. Completed cleanup releases any remaining hold after
 resource cleanup has been established. A hold is a delivery barrier, not proof of native quiescence
 or permission to mutate a VM. The upgrade coordinator must supply those additional proofs.
 
-Idle power management reconciles the admitted Job policy through an optional provider capability.
-It runs under the Job effect fence and checks durable deliveries before pausing any owned Sandbox.
+Idle power management reconciles the admitted Session policy through an optional provider capability.
+It runs under the Session effect fence and checks durable deliveries before pausing any owned Sandbox.
 Message admission may race with a provider pause; native delivery waits for the same fence and
 resumes the Sandbox before execution. Retries derive eligibility again rather than replaying a
 stale pause request. The provider owns power state and native snapshot storage. Dorf retains the
-admitted policy and one Job activity timestamp. Managed Sandbox access clears that timestamp
+admitted policy and one Session activity timestamp. Managed Sandbox access clears that timestamp
 before the external operation and records the database clock on completion, including failures,
 before releasing the fence. Request cancellation does not release the fence while the callback
 is still finishing. If a process dies before recording completion, the next eligible idle check
@@ -95,7 +95,7 @@ semantics are described in the [Remote Control API](../control-api.md).
 
 One admission creates one durable execution owner with its configuration and a stable
 idempotency identity. Admission records the
-Job, admitted configuration, Sandbox reservation, Absurd task, and task attachment in one
+Session, admitted configuration, Sandbox reservation, Absurd task, and task attachment in one
 PostgreSQL transaction. Ordinary task handoffs also commit scheduling and attachment together.
 The direct runtime supplies task identity. Absurd's public SQL functions provide this transaction boundary. Message text, ordered
 attachment manifests, and AgentRuns are admitted separately through the same Message operation
@@ -130,18 +130,18 @@ before that fresh Turn. Reload failure prevents submission; accepted-turn recove
 do not reload. [Message semantics](../control-api.md#resources) own the client contract.
 
 A requested cleanup closes admission, cancels the previous task, and schedules and attaches cleanup
-in one transaction under the Job's external-effect fence. A task requesting its own cleanup may
+in one transaction under the Session's external-effect fence. A task requesting its own cleanup may
 complete, but loses execution authority when the cleanup attachment commits. A failed scheduling
 transaction rolls back admission closure and cancellation along with the new task. Replay and
 recovery still reconcile incomplete admission and cleanup records from older writers, including
 during a rolling upgrade.
 
-A Job records an append-only ordered chain of Absurd task attachments. The latest attachment is its
-current execution task; task names are observations, not hard-coded Job phases. Cleanup may replace the current task without changing retry semantics.
+A Session records an append-only ordered chain of Absurd task attachments. The latest attachment is its
+current execution task; task names are observations, not hard-coded Session phases. Cleanup may replace the current task without changing retry semantics.
 
 Direct execution has one readable coordinator over its natural facts. It asks what work is currently
 missing, performs one bounded operation, records the resulting fact, reloads, and continues, stops
-for attention or completion, or returns no current operation. An open Job with no eligible operation
+for attention or completion, or returns no current operation. An open Session with no eligible operation
 keeps its current attached task in an Absurd wait; idleness is not a workflow operation or persisted
 status. Execution and human inspection derive from the same authoritative facts. Dorf does not
 persist a second program counter merely to describe what those facts already imply.
@@ -151,7 +151,7 @@ steps, events, retries, waits, claims, heartbeats, and cancellation. Dorf does n
 mechanics in product tables or query Absurd's private schema as workflow authority.
 
 The in-process application contract follows the ownership hierarchy. Admitting complete Core intent
-returns the Job handle. `EnsureSandbox` returns that Job's Sandbox handle. A Sandbox exposes an Agent
+returns the Session handle. `EnsureSandbox` returns that Session's Sandbox handle. A Sandbox exposes an Agent
 convenience handle for bounded agent work. Behind that handle Core selects the Harness and durably
 creates and reconciles the Message and AgentRun facts; consumers do not coordinate Harness, Message,
 or AgentRun lifecycle themselves. Provider and Harness interfaces remain internal adapter seams
@@ -159,15 +159,16 @@ rather than alternate application contracts.
 
 ### Messages and AgentRuns
 
-A direct Job owns one primary native conversation binding: the Harness name and Thread ID. The binding
-is absent until native acceptance is proven. Recording the first accepted Turn commits the Job
+A Session owns a native Thread ID. Its immutable admitted profile selects the Harness;
+the Session does not store a second Harness selection. The Thread binding is absent until native
+acceptance is proven. Recording the first accepted Turn commits the Session
 binding and AgentRun receipt together; subsequent acceptance must match that binding. Pending
-Follows acquire their Thread from the Job when selected. An uncertain initial submission keeps
-its recovery identity and blocks later input even while the Job binding is absent. AgentRuns
+Follows acquire their Thread from the Session when selected. An uncertain initial submission keeps
+its recovery identity and blocks later input even while the Session binding is absent. AgentRuns
 retain their exact native attribution for delivery recovery and interruption. This binds the
 Thread receiving client input; it does not limit native subagent threads managed by the Harness.
 
-Accepted client input receives immutable Job-local identity and order. A caller-retained per-send
+Accepted client input receives immutable Session-local identity and order. A caller-retained per-send
 idempotency key binds its complete admitted delivery request: the exact Sandbox, text, ordered
 attachment manifest, follow or steer intent and target, authorized Role, capability and input
 Revision when used, and the authoritative retained Thread. The same key and request return the same
@@ -178,19 +179,19 @@ reuses the authoritative retained Thread and creates a distinct Turn. Steer is a
 mode whose exact active Turn target is captured atomically at admission. It may overtake queued
 follows, never falls back to a new Turn, and fails honestly if reconciliation observes that its
 target became terminal. Wake events make work eligible; they do not replace durable delivery facts.
-A later Message wakes the Job's existing execution task rather than attaching a task for that
+A later Message wakes the Session's existing execution task rather than attaching a task for that
 Message. Stop requests and exact native completion observations also signal that task. Each
-reconciliation pass reads a Job-local wake revision before inspecting execution facts, drains
+reconciliation pass reads a Session-local wake revision before inspecting execution facts, drains
 immediately eligible work through the existing priority selector, then waits for the next revision.
 PostgreSQL records each distinct wake cause, advances the revision, and emits its immutable Absurd
 event in one transaction. Wake recording uses a dedicated row lock rather than the external-effect
 fence. A bounded reload covers a missing hint, and an executor restart reclaims the same task
 attachment. Each Core reconciliation advances at most one Message, so consumer policy runs between
-eligible deliveries. Wake metadata remains with the retained Job and carries no execution authority.
+eligible deliveries. Wake metadata remains with the retained Session and carries no execution authority.
 
 Each accepted attachment has immutable bytes in the content-addressed blob store and an ordered
 Message manifest with its kind, filename, media type, digest, and byte size. The delivery adapter
-independently verifies the blob before it creates a deterministic working file in the Job-owned
+independently verifies the blob before it creates a deterministic working file in the Session-owned
 Sandbox. Every image also has a working file path, and an image-capable Harness receives its bytes
 through the native image input. Cleanup deletes the working copies. The retained Message and blobs
 still support exact receipt replay after cleanup, but replay does not start another AgentRun.
@@ -201,11 +202,11 @@ submission, observation, and terminal facts needed to reconcile uncertain delive
 transcript and workspace details remain behind their adapters. Retrying uncertain delivery
 reconciles the same AgentRun; it does not silently create another judgment attempt.
 
-An Agent handle is bound to one exact Job-owned Sandbox. Submission, history reconciliation, wait,
-and steer through that handle cannot fall back to another Sandbox in the Job.
+An Agent handle is bound to one exact Session-owned Sandbox. Submission, history reconciliation, wait,
+and steer through that handle cannot fall back to another Sandbox in the Session.
 
 Passive timeline reads use an optional Sandbox runtime capability. The provider reader reads
-the Job's Thread binding and attests its default Sandbox under the cleanup fence.
+the Session's Thread binding and attests its default Sandbox under the cleanup fence.
 It passes those bound coordinates to the Harness adapter and returns original conversation items.
 The Harness owns ordering and history storage. Dorf adds no transcript table, execution, or
 observation subscription. The [Remote Control API](../control-api.md) owns public read semantics.
@@ -222,7 +223,7 @@ An existing-thread follow or Steer may hold one authenticated native protocol ac
 history, durable baseline, and submission sequence. This is an operation resource scope, not a new
 execution state or a cross-claim session cache. Failed mutations reconcile over fresh authenticated
 history. Accepted observation can retain the protocol until settlement; it does not retain the
-submission scope or the Job effect fence.
+submission scope or the Session effect fence.
 
 Once a Turn is durably bound as active, Core's read-only Harness observation remains separate from
 Message delivery. Internal delivery reconciliation alternates observation with an interruptible
@@ -240,7 +241,7 @@ invariant semantics.
 
 An interrupt is a monotonic request on the original Turn-starting AgentRun. A client may address a
 steer Message, but the request binds its original Turn rather than the latest run. Acceptance and
-native execution share the Job effect fence with cleanup. The existing execution task services Stop
+native execution share the Session effect fence with cleanup. The existing execution task services Stop
 before pending messages, observes the exact native Turn, and records its actual outcome. A lost
 acknowledgement causes observation of that same Turn, never interruption of a successor. The Codex
 adapter relies on native exact-Turn validation for the interrupt request, then reads the exact
@@ -249,7 +250,7 @@ fresh authenticated history without replaying the mutation in the operation.
 
 Consumers and workflows choose a typed execution envelope, including Role, capability, and any input
 Revision, but do not authorize message intent, reorder accepted input, or choose Thread semantics.
-Follow and steer retain the invariant behavior above. Clients compose independent responsibilities through separate Jobs.
+Follow and steer retain the invariant behavior above. Clients compose independent responsibilities through separate Sessions.
 
 ### Deterministic operations
 
@@ -270,8 +271,8 @@ durable Message custody before execution. They do not authorize generic output d
 retention.
 
 `SandboxHandle.ReadFile` returns the exact bytes of one caller-named regular file from that exact
-Job-owned Sandbox. Paths may be absolute, workspace-relative, or relative to the Sandbox user's
-home through `~/`. Core checks Job and Sandbox ownership, executes the read under the Job cleanup
+Session-owned Sandbox. Paths may be absolute, workspace-relative, or relative to the Sandbox user's
+home through `~/`. Core checks Session and Sandbox ownership, executes the read under the Session cleanup
 fence, and rejects traversal and symlinks. It does not add listing, discovery, stat, glob, archive, batch, or directory-download
 APIs; a workflow that needs discovery may compose the existing Sandbox command operation before
 requesting exact files. Core does not interpret, discover, or retain agent-authored files. A caller
@@ -280,7 +281,7 @@ Sandbox deletion makes those files unavailable. Reads enforce `sandbox.MaxFileRe
 reading the opened file, including files that grow during the operation. Oversized reads return
 `ErrFileTooLarge` without partial bytes. Each HTTP handler admits at most
 `sandbox.MaxConcurrentFileReads` transfers, acquiring capacity before file access and retaining it
-through response delivery. The Job fence ends after capture, before a slow client receives the
+through response delivery. The Session fence ends after capture, before a slow client receives the
 bytes. HTTP clients independently bound response materialization and verify exact length and digest.
 Direct Go callers own the lifetime of returned bytes. Durable typed results remain owned by the
 workflow that understands them.
@@ -312,7 +313,7 @@ more work is needed, and when to request cleanup. CLI clients, including the dep
 use the authenticated control projection.
 
 The external projection is not a network exposure of Core. The
-[Remote Control API](../control-api.md) owns its supported Job kinds, operations, authentication,
+[Remote Control API](../control-api.md) owns its supported Session kinds, operations, authentication,
 transport behavior, and managed service boundary. Its published OpenAPI document owns exact request,
 response, and Problem shapes. The [Provider Gateway](provider-gateway.md) owns model-route authority,
 and [`deploy/compose.yaml`](../../deploy/compose.yaml) owns exact process supervision.
@@ -334,42 +335,42 @@ fixed lifecycle operations and does not offer an arbitrary workflow Action callb
 - **Poison work:** bounded attempts, time, cost, and attention stop infinite agent or provider spend.
 - **Operator recovery:** the [Remote Control API](../control-api.md) owns current recovery operations,
   and [Support](../support.md) owns their diagnosis.
-- **Code changes:** prefer short-lived Jobs, additive compatible task results where practical, and
-  versioned workflow code. Let active Jobs drain on their pinned version rather than translating
+- **Code changes:** prefer short-lived Sessions, additive compatible task results where practical, and
+  versioned workflow code. Let active Sessions drain on their pinned version rather than translating
   opaque execution history.
 
 ## Deployment shapes
 
 Dorf separates its owner-controlled control plane from Profile-selected Sandbox providers. A
-provider may be local, remote, or managed without becoming the authority for Jobs or workflow
+provider may be local, remote, or managed without becoming the authority for Sessions or workflow
 policy. The [North Star](north-star.md) owns that product direction, and [Support](../support.md) owns
 the combinations currently proved.
 
-Deployment configuration owns host locations and credentials. Durable Jobs retain stable logical
+Deployment configuration owns host locations and credentials. Durable Sessions retain stable logical
 connection and provider identities, not controller filesystem paths or copied secrets.
 
 PostgreSQL owns immutable Sandbox profile revisions: provider, exact artifact, Harness, and provider
 settings. A profile name holds a candidate revision, an optional active revision, and default
 selection. `profile update` stages a candidate without changing the active revision or default.
 Successful functional verification and confirmed proof-Sandbox cleanup atomically promote that
-candidate. A failed candidate leaves the active revision eligible for new Jobs. An unsettled
+candidate. A failed candidate leaves the active revision eligible for new Sessions. An unsettled
 verification Sandbox must still be cleaned up before staging another candidate.
 
 Admission locks the profile name, reads its current successful verification, and pins the exact
-revision in the same transaction as the Job. Promotion affects only future admissions. Execution,
-recovery, inspection, capabilities, and cleanup resolve the Job's retained revision; they never
+revision in the same transaction as the Session. Promotion affects only future admissions. Execution,
+recovery, inspection, capabilities, and cleanup resolve the Session's retained revision; they never
 follow the name's current pointer. Admission replay retains the original binding. Revision
-records remain available after Job cleanup, and a failure of an old artifact invalidates only its
+records remain available after Session cleanup, and a failure of an old artifact invalidates only its
 own verification. Credentials remain host configuration.
 
 Verification receipts belong to exact revisions. A current successful receipt gates default
-selection and new admission; it is not a runtime lease for already-admitted Jobs. Explicitly
+selection and new admission; it is not a runtime lease for already-admitted Sessions. Explicitly
 re-verifying the active revision fences new admission until its new probe and cleanup settle,
-while Jobs continue against their pinned definition. To roll back future admissions, stage the
+while Sessions continue against their pinned definition. To roll back future admissions, stage the
 old exact settings and verify them again. This does not upgrade packages or restart processes in
 existing VMs.
 
-The profile-revision migration pins existing Jobs to the definition retained at migration time.
+The profile-revision migration pins existing Sessions to the definition retained at migration time.
 Definitions overwritten before this migration cannot be reconstructed from a profile name alone.
 
 Provider adapters own their endpoint identity, topology, transport, and credentials. A Profile
@@ -390,7 +391,7 @@ their interpretation, lifecycle APIs, command transports,
 topology, and connection capabilities remain adapter-private. Consumer code selects a verified
 profile rather than branching on provider or Harness identity.
 
-Within one bounded native operation under the existing Job fence, an adapter may resolve exact
+Within one bounded native operation under the existing Session fence, an adapter may resolve exact
 Sandbox ownership and provider connection capabilities once for adjacent access. That access ends
 with the callback, honors cancellation, and cannot be reused for another owner or durable attempt.
 Lifecycle attestation remains fresh. This does not remove native-history recovery
@@ -406,7 +407,7 @@ and proved end to end. Current support claims belong in operator documentation, 
 
 Go is the current core language. A language-specific executor is justified only when a concrete provider SDK or
 workflow need makes that boundary materially smaller. It consumes a dedicated queue through a small
-versioned contract and may not leak vendor types into core Job authority.
+versioned contract and may not leak vendor types into core Session authority.
 
 ## Dependency budget
 
@@ -455,16 +456,16 @@ preserving an implementation choice.
 - Use Absurd's public APIs for production behavior. Raw tables may support version-pinned tests or
   operator diagnostics but are not workflow authority.
 
-If Dorf outgrows Absurd, completed Jobs remain historical domain records, active short-lived Jobs can
-drain, and new Jobs can begin on the replacement. Raw checkpoint history is not a portability
+If Dorf outgrows Absurd, completed Sessions remain historical domain records, active short-lived Sessions can
+drain, and new Sessions can begin on the replacement. Raw checkpoint history is not a portability
 format.
 
 ### Persistent package recovery
 
-A direct Job's existing durable task also reconciles admitted package upgrades. PostgreSQL retains
+A direct Session's existing durable task also reconciles admitted package upgrades. PostgreSQL retains
 immutable package intent and observed effects; no second persisted phase counter or competing
-upgrade task owns the Job. The delivery hold allows earlier native work to settle while new input
-remains in FIFO. Every upgrade effect runs under the Job fence and current Absurd claim, with
+upgrade task owns the Session. The delivery hold allows earlier native work to settle while new input
+remains in FIFO. Every upgrade effect runs under the Session fence and current Absurd claim, with
 heartbeats across provider calls.
 
 Recovery reserves exact destination ownership before creating a replacement. Native verification

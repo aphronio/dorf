@@ -51,11 +51,11 @@ func (r profileRuntimeResolver) checkpointService(ctx context.Context, boundary 
 }
 
 func (c checkpointCapture) Capture(ctx context.Context, b persistence.CaptureBoundary) (persistence.Reference, error) {
-	job, err := c.store.Job(ctx, b.JobID)
+	session, err := c.store.Session(ctx, b.SessionID)
 	if err != nil {
 		return persistence.Reference{}, err
 	}
-	ctx, cancel, err := checkpointCaptureContext(ctx, job.KeepRunning, b, time.Now())
+	ctx, cancel, err := checkpointCaptureContext(ctx, session.KeepRunning, b, time.Now())
 	if err != nil {
 		return persistence.Reference{}, err
 	}
@@ -66,13 +66,13 @@ func (c checkpointCapture) Capture(ctx context.Context, b persistence.CaptureBou
 	if err != nil {
 		return persistence.Reference{}, err
 	}
-	if owned.JobID != b.JobID || owned.ResourceID != b.ResourceID {
+	if owned.SessionID != b.SessionID || owned.ResourceID != b.ResourceID {
 		return persistence.Reference{}, persistence.ErrCheckpointSuperseded
 	}
 	owner := checkpointOwner(owned)
 	if scoped, ok := c.sandbox.(provider.ScopedAccess); ok {
 		// Keep the capability alive for bounded remote cancellation even when
-		// incoming work cancels capture. This scope holds no Job effect lock.
+		// incoming work cancels capture. This scope holds no Session effect lock.
 		accessCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(c.config.BackupTimeoutSeconds)*time.Second+15*time.Second)
 		defer stop()
 		var reference persistence.Reference
@@ -140,7 +140,7 @@ func (c checkpointCapture) restic() persistence.Driver {
 }
 
 func checkpointRuns(ctx context.Context, store postgres.Store, b persistence.CaptureBoundary) ([]core.AgentRun, error) {
-	deliveries, err := store.Deliveries(ctx, b.JobID)
+	deliveries, err := store.Deliveries(ctx, b.SessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +158,7 @@ func (c checkpointCapture) record(b persistence.CaptureBoundary, r persistence.R
 		return
 	}
 	attributes := map[string]any{
-		"dorf.job_id": b.JobID, "dorf.sandbox_id": b.SandboxID, "dorf.resource_id": b.ResourceID,
+		"dorf.session_id": b.SessionID, "dorf.sandbox_id": b.SandboxID, "dorf.resource_id": b.ResourceID,
 		"duration_ms": r.Duration.Milliseconds(), "dorf.data_added_known": r.DataAddedKnown,
 		"dorf.files_new": r.FilesNew, "dorf.files_changed": r.FilesChanged,
 		"dorf.cancelled": r.Cancelled, "dorf.remote_stopped": r.RemoteStopped, "dorf.remote_stop_ms": r.RemoteStopDuration.Milliseconds(),
@@ -180,11 +180,11 @@ func (c checkpointCapture) recordNativeFailure(b persistence.CaptureBoundary, ph
 		class = rejected.Class
 	}
 	c.emit(telemetry.Event{Name: "dorf.checkpoint.native-rejected", At: time.Now(), Attributes: map[string]any{
-		"dorf.job_id": b.JobID, "dorf.sandbox_id": b.SandboxID, "dorf.resource_id": b.ResourceID,
+		"dorf.session_id": b.SessionID, "dorf.sandbox_id": b.SandboxID, "dorf.resource_id": b.ResourceID,
 		"dorf.capture_phase": phase, "dorf.capture_failure": class,
 	}})
 }
 
 func checkpointOwner(owned core.Sandbox) provider.Ownership {
-	return provider.Ownership{JobID: owned.JobID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce}
+	return provider.Ownership{SessionID: owned.SessionID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce}
 }

@@ -33,7 +33,7 @@ const bindSandboxResource = `-- name: BindSandboxResource :execrows
 update dorf.sandbox_resources r
 set provider_id=$1::text,observed_at=coalesce(r.observed_at,clock_timestamp())
 from dorf.sandboxes s
-where s.id=r.sandbox_id and s.id=$2 and s.job_id=$3
+where s.id=r.sandbox_id and s.id=$2 and s.session_id=$3
   and s.active_resource_id=r.id and r.id=$4
   and r.ownership_nonce=$5 and r.deleted_at is null
   and (r.provider_id is null or r.provider_id=$1::text)
@@ -42,7 +42,7 @@ where s.id=r.sandbox_id and s.id=$2 and s.job_id=$3
 type BindSandboxResourceParams struct {
 	ProviderID     string
 	SandboxID      string
-	JobID          string
+	SessionID      string
 	ResourceID     string
 	OwnershipNonce string
 }
@@ -51,7 +51,7 @@ func (q *Queries) BindSandboxResource(ctx context.Context, arg BindSandboxResour
 	result, err := q.db.ExecContext(ctx, bindSandboxResource,
 		arg.ProviderID,
 		arg.SandboxID,
-		arg.JobID,
+		arg.SessionID,
 		arg.ResourceID,
 		arg.OwnershipNonce,
 	)
@@ -61,50 +61,15 @@ func (q *Queries) BindSandboxResource(ctx context.Context, arg BindSandboxResour
 	return result.RowsAffected()
 }
 
-const getJobSandboxByNameForUpdate = `-- name: GetJobSandboxByNameForUpdate :one
-select s.id,s.job_id,s.name,r.ownership_nonce,s.active_resource_id,coalesce(r.provider_id,'') as provider_id
-from dorf.sandboxes s join dorf.sandbox_resources r on r.id=s.active_resource_id
-where s.job_id=$1 and s.name=$2
-for update
-`
-
-type GetJobSandboxByNameForUpdateParams struct {
-	JobID string
-	Name  string
-}
-
-type GetJobSandboxByNameForUpdateRow struct {
-	ID               string
-	JobID            string
-	Name             string
-	OwnershipNonce   string
-	ActiveResourceID string
-	ProviderID       string
-}
-
-func (q *Queries) GetJobSandboxByNameForUpdate(ctx context.Context, arg GetJobSandboxByNameForUpdateParams) (GetJobSandboxByNameForUpdateRow, error) {
-	row := q.db.QueryRowContext(ctx, getJobSandboxByNameForUpdate, arg.JobID, arg.Name)
-	var i GetJobSandboxByNameForUpdateRow
-	err := row.Scan(
-		&i.ID,
-		&i.JobID,
-		&i.Name,
-		&i.OwnershipNonce,
-		&i.ActiveResourceID,
-		&i.ProviderID,
-	)
-	return i, err
-}
-
 const getSandbox = `-- name: GetSandbox :one
-select s.id,s.job_id,s.name,r.ownership_nonce,s.active_resource_id,coalesce(r.provider_id,'') as provider_id
+select s.id,s.session_id,s.name,r.ownership_nonce,s.active_resource_id,coalesce(r.provider_id,'') as provider_id
 from dorf.sandboxes s join dorf.sandbox_resources r on r.id=s.active_resource_id
 where s.id=$1
 `
 
 type GetSandboxRow struct {
 	ID               string
-	JobID            string
+	SessionID        string
 	Name             string
 	OwnershipNonce   string
 	ActiveResourceID string
@@ -116,7 +81,7 @@ func (q *Queries) GetSandbox(ctx context.Context, id string) (GetSandboxRow, err
 	var i GetSandboxRow
 	err := row.Scan(
 		&i.ID,
-		&i.JobID,
+		&i.SessionID,
 		&i.Name,
 		&i.OwnershipNonce,
 		&i.ActiveResourceID,
@@ -126,7 +91,7 @@ func (q *Queries) GetSandbox(ctx context.Context, id string) (GetSandboxRow, err
 }
 
 const getSandboxForUpdate = `-- name: GetSandboxForUpdate :one
-select s.id,s.job_id,s.name,r.ownership_nonce,s.active_resource_id,coalesce(r.provider_id,'') as provider_id
+select s.id,s.session_id,s.name,r.ownership_nonce,s.active_resource_id,coalesce(r.provider_id,'') as provider_id
 from dorf.sandboxes s join dorf.sandbox_resources r on r.id=s.active_resource_id
 where s.id=$1
 for update
@@ -134,7 +99,7 @@ for update
 
 type GetSandboxForUpdateRow struct {
 	ID               string
-	JobID            string
+	SessionID        string
 	Name             string
 	OwnershipNonce   string
 	ActiveResourceID string
@@ -146,7 +111,7 @@ func (q *Queries) GetSandboxForUpdate(ctx context.Context, id string) (GetSandbo
 	var i GetSandboxForUpdateRow
 	err := row.Scan(
 		&i.ID,
-		&i.JobID,
+		&i.SessionID,
 		&i.Name,
 		&i.OwnershipNonce,
 		&i.ActiveResourceID,
@@ -156,20 +121,20 @@ func (q *Queries) GetSandboxForUpdate(ctx context.Context, id string) (GetSandbo
 }
 
 const getSandboxResource = `-- name: GetSandboxResource :one
-select s.id,s.job_id,s.name,r.id as resource_id,r.ownership_nonce,coalesce(r.provider_id,'') as provider_id
+select s.id,s.session_id,s.name,r.id as resource_id,r.ownership_nonce,coalesce(r.provider_id,'') as provider_id
 from dorf.sandboxes s join dorf.sandbox_resources r on r.sandbox_id=s.id
-where s.job_id=$1 and s.id=$2 and r.id=$3
+where s.session_id=$1 and s.id=$2 and r.id=$3
 `
 
 type GetSandboxResourceParams struct {
-	JobID      string
+	SessionID  string
 	SandboxID  string
 	ResourceID string
 }
 
 type GetSandboxResourceRow struct {
 	ID             string
-	JobID          string
+	SessionID      string
 	Name           string
 	ResourceID     string
 	OwnershipNonce string
@@ -177,11 +142,11 @@ type GetSandboxResourceRow struct {
 }
 
 func (q *Queries) GetSandboxResource(ctx context.Context, arg GetSandboxResourceParams) (GetSandboxResourceRow, error) {
-	row := q.db.QueryRowContext(ctx, getSandboxResource, arg.JobID, arg.SandboxID, arg.ResourceID)
+	row := q.db.QueryRowContext(ctx, getSandboxResource, arg.SessionID, arg.SandboxID, arg.ResourceID)
 	var i GetSandboxResourceRow
 	err := row.Scan(
 		&i.ID,
-		&i.JobID,
+		&i.SessionID,
 		&i.Name,
 		&i.ResourceID,
 		&i.OwnershipNonce,
@@ -190,57 +155,46 @@ func (q *Queries) GetSandboxResource(ctx context.Context, arg GetSandboxResource
 	return i, err
 }
 
-const listJobSandboxes = `-- name: ListJobSandboxes :many
-select s.id,s.job_id,s.name,r.ownership_nonce,s.active_resource_id,coalesce(r.provider_id,'') as provider_id
+const getSessionSandboxByNameForUpdate = `-- name: GetSessionSandboxByNameForUpdate :one
+select s.id,s.session_id,s.name,r.ownership_nonce,s.active_resource_id,coalesce(r.provider_id,'') as provider_id
 from dorf.sandboxes s join dorf.sandbox_resources r on r.id=s.active_resource_id
-where s.job_id=$1
-order by s.id
+where s.session_id=$1 and s.name=$2
+for update
 `
 
-type ListJobSandboxesRow struct {
+type GetSessionSandboxByNameForUpdateParams struct {
+	SessionID string
+	Name      string
+}
+
+type GetSessionSandboxByNameForUpdateRow struct {
 	ID               string
-	JobID            string
+	SessionID        string
 	Name             string
 	OwnershipNonce   string
 	ActiveResourceID string
 	ProviderID       string
 }
 
-func (q *Queries) ListJobSandboxes(ctx context.Context, jobID string) ([]ListJobSandboxesRow, error) {
-	rows, err := q.db.QueryContext(ctx, listJobSandboxes, jobID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListJobSandboxesRow
-	for rows.Next() {
-		var i ListJobSandboxesRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.JobID,
-			&i.Name,
-			&i.OwnershipNonce,
-			&i.ActiveResourceID,
-			&i.ProviderID,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+func (q *Queries) GetSessionSandboxByNameForUpdate(ctx context.Context, arg GetSessionSandboxByNameForUpdateParams) (GetSessionSandboxByNameForUpdateRow, error) {
+	row := q.db.QueryRowContext(ctx, getSessionSandboxByNameForUpdate, arg.SessionID, arg.Name)
+	var i GetSessionSandboxByNameForUpdateRow
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Name,
+		&i.OwnershipNonce,
+		&i.ActiveResourceID,
+		&i.ProviderID,
+	)
+	return i, err
 }
 
 const listSandboxResources = `-- name: ListSandboxResources :many
 select r.id,r.sandbox_id,r.ownership_nonce,coalesce(r.provider_id,'') as provider_id,
        r.reserved_at,r.observed_at,r.deleted_at
 from dorf.sandbox_resources r join dorf.sandboxes s on s.id=r.sandbox_id
-where s.job_id=$1
+where s.session_id=$1
 order by r.reserved_at,r.id
 `
 
@@ -254,8 +208,8 @@ type ListSandboxResourcesRow struct {
 	DeletedAt      sql.NullTime
 }
 
-func (q *Queries) ListSandboxResources(ctx context.Context, jobID string) ([]ListSandboxResourcesRow, error) {
-	rows, err := q.db.QueryContext(ctx, listSandboxResources, jobID)
+func (q *Queries) ListSandboxResources(ctx context.Context, sessionID string) ([]ListSandboxResourcesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSandboxResources, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -271,6 +225,52 @@ func (q *Queries) ListSandboxResources(ctx context.Context, jobID string) ([]Lis
 			&i.ReservedAt,
 			&i.ObservedAt,
 			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSessionSandboxes = `-- name: ListSessionSandboxes :many
+select s.id,s.session_id,s.name,r.ownership_nonce,s.active_resource_id,coalesce(r.provider_id,'') as provider_id
+from dorf.sandboxes s join dorf.sandbox_resources r on r.id=s.active_resource_id
+where s.session_id=$1
+order by s.id
+`
+
+type ListSessionSandboxesRow struct {
+	ID               string
+	SessionID        string
+	Name             string
+	OwnershipNonce   string
+	ActiveResourceID string
+	ProviderID       string
+}
+
+func (q *Queries) ListSessionSandboxes(ctx context.Context, sessionID string) ([]ListSessionSandboxesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionSandboxes, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSessionSandboxesRow
+	for rows.Next() {
+		var i ListSessionSandboxesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.Name,
+			&i.OwnershipNonce,
+			&i.ActiveResourceID,
+			&i.ProviderID,
 		); err != nil {
 			return nil, err
 		}

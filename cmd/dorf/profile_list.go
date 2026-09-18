@@ -48,7 +48,7 @@ func remoteProfileList(ctx context.Context, args []string, stdout, stderr io.Wri
 	}
 	list, err := client.ListProfiles(ctx)
 	if err != nil {
-		return jobControlError(cfg.DeploymentURL, err)
+		return sessionControlError(cfg.DeploymentURL, err)
 	}
 	if *output == "json" {
 		return writeJSON(stdout, list)

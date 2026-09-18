@@ -464,7 +464,7 @@ type protocol struct {
 
 func (p *protocol) configureObservations(ctx context.Context, observations *Observations, owner provider.Ownership) {
 	p.observations, p.owner = observations, owner
-	if run, ok := telemetry.Execution(ctx); ok && run.JobID == owner.JobID && run.SandboxID == owner.SandboxID {
+	if run, ok := telemetry.Execution(ctx); ok && run.SessionID == owner.SessionID && run.SandboxID == owner.SandboxID {
 		p.execution = run
 	}
 }

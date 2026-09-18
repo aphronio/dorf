@@ -90,8 +90,8 @@ func TestRetainMessageAttachmentsChecksProfileBeforePublishingVerifiedBlobs(t *t
 	contents := encodeTestPNG(t, 2, 2)
 	unsupported := &fixedMessageImageCapability{}
 	root := t.TempDir()
-	jobs := controlAPIJobs{blobs: blob.Store{Root: root}, messageImages: unsupported}
-	if _, err := jobs.retainMessageAttachments(context.Background(), core.SandboxProfileRef{Name: "pi"}, []controlapi.SendMessageAttachment{{Filename: "image.png", Contents: contents}}); !errors.Is(err, controlapi.ErrMessageImageUnsupported) {
+	sessions := controlAPISessions{blobs: blob.Store{Root: root}, messageImages: unsupported}
+	if _, err := sessions.retainMessageAttachments(context.Background(), core.SandboxProfileRef{Name: "pi"}, []controlapi.SendMessageAttachment{{Filename: "image.png", Contents: contents}}); !errors.Is(err, controlapi.ErrMessageImageUnsupported) {
 		t.Fatalf("unsupported image error=%v", err)
 	}
 	if unsupported.calls != 1 {
@@ -103,8 +103,8 @@ func TestRetainMessageAttachmentsChecksProfileBeforePublishingVerifiedBlobs(t *t
 	}
 
 	supported := &fixedMessageImageCapability{supported: true}
-	jobs.messageImages = supported
-	attachments, err := jobs.retainMessageAttachments(context.Background(), core.SandboxProfileRef{Name: "codex"}, []controlapi.SendMessageAttachment{
+	sessions.messageImages = supported
+	attachments, err := sessions.retainMessageAttachments(context.Background(), core.SandboxProfileRef{Name: "codex"}, []controlapi.SendMessageAttachment{
 		{Filename: "image.png", Contents: contents},
 		{Filename: "notes.txt", Contents: []byte("notes")},
 	})
@@ -115,7 +115,7 @@ func TestRetainMessageAttachmentsChecksProfileBeforePublishingVerifiedBlobs(t *t
 		t.Fatalf("supported capability calls=%d", supported.calls)
 	}
 	for index, attachment := range attachments {
-		if err := jobs.blobs.Verify(attachment.Digest, attachment.ByteSize); err != nil {
+		if err := sessions.blobs.Verify(attachment.Digest, attachment.ByteSize); err != nil {
 			t.Fatalf("attachment %d did not retain verified bytes: %v", index, err)
 		}
 	}

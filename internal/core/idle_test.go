@@ -9,17 +9,17 @@ import (
 
 type idleStore struct {
 	ExecutionStore
-	job         Job
+	session     Session
 	deliveries  []Delivery
 	fenced      bool
 	beforeFence func()
 }
 
-func (s *idleStore) Job(context.Context, string) (Job, error) {
+func (s *idleStore) Session(context.Context, string) (Session, error) {
 	if !s.fenced {
-		panic("unfenced Job read")
+		panic("unfenced Session read")
 	}
-	return s.job, nil
+	return s.session, nil
 }
 func (s *idleStore) SandboxIdleFor(context.Context, string, time.Duration) (bool, error) {
 	for _, delivery := range s.deliveries {
@@ -32,9 +32,9 @@ func (s *idleStore) SandboxIdleFor(context.Context, string, time.Duration) (bool
 	return true, nil
 }
 func (s *idleStore) Sandboxes(context.Context, string) ([]Sandbox, error) {
-	return []Sandbox{{ID: "sandbox", JobID: s.job.ID}}, nil
+	return []Sandbox{{ID: "sandbox", SessionID: s.session.ID}}, nil
 }
-func (s *idleStore) WithJobFence(_ context.Context, _ string, run func() error) error {
+func (s *idleStore) WithSessionFence(_ context.Context, _ string, run func() error) error {
 	if s.beforeFence != nil {
 		s.beforeFence()
 	}
@@ -50,7 +50,7 @@ type idleExternals struct {
 	err   error
 }
 
-func (e *idleExternals) SandboxPause(context.Context, Job, Sandbox) error {
+func (e *idleExternals) SandboxPause(context.Context, Session, Sandbox) error {
 	if !e.store.fenced {
 		panic("unfenced pause")
 	}
@@ -60,10 +60,10 @@ func (e *idleExternals) SandboxPause(context.Context, Job, Sandbox) error {
 func TestIdlePauseHonorsDurableWorkAndPolicy(t *testing.T) {
 	for _, state := range []AgentRunState{AgentRunCompleted, AgentRunFailed, AgentRunInterrupted, AgentRunActive, AgentRunSubmitting, AgentRunUncertain, "pending"} {
 		t.Run(string(state), func(t *testing.T) {
-			store := &idleStore{job: Job{ID: "job", AdmissionOpen: true, CleanupState: CleanupPending}, deliveries: []Delivery{{AgentRun: AgentRun{State: state}}}}
+			store := &idleStore{session: Session{ID: "session", AdmissionOpen: true, CleanupState: CleanupPending}, deliveries: []Delivery{{AgentRun: AgentRun{State: state}}}}
 			external := &idleExternals{store: store}
 			service := NewExecutionService(store, external, nil, nil)
-			if err := service.ReconcileIdleSandboxes(context.Background(), "job"); err != nil {
+			if err := service.ReconcileIdleSandboxes(context.Background(), "session"); err != nil {
 				t.Fatal(err)
 			}
 			terminal := state == AgentRunCompleted || state == AgentRunFailed || state == AgentRunInterrupted
@@ -72,23 +72,23 @@ func TestIdlePauseHonorsDurableWorkAndPolicy(t *testing.T) {
 			}
 		})
 	}
-	for _, job := range []Job{{ID: "job", KeepRunning: true, AdmissionOpen: true, CleanupState: CleanupPending}, {ID: "job", AdmissionOpen: false, CleanupState: CleanupPending}, {ID: "job", AdmissionOpen: true, CleanupState: CleanupScheduled}} {
-		store := &idleStore{job: job}
+	for _, session := range []Session{{ID: "session", KeepRunning: true, AdmissionOpen: true, CleanupState: CleanupPending}, {ID: "session", AdmissionOpen: false, CleanupState: CleanupPending}, {ID: "session", AdmissionOpen: true, CleanupState: CleanupScheduled}} {
+		store := &idleStore{session: session}
 		external := &idleExternals{store: store}
-		if err := NewExecutionService(store, external, nil, nil).ReconcileIdleSandboxes(context.Background(), "job"); err != nil || external.calls != 0 {
+		if err := NewExecutionService(store, external, nil, nil).ReconcileIdleSandboxes(context.Background(), "session"); err != nil || external.calls != 0 {
 			t.Fatalf("unexpected pause: %d %v", external.calls, err)
 		}
 	}
 }
 func TestIdleRetryRechecksNewWork(t *testing.T) {
-	store := &idleStore{job: Job{ID: "job", AdmissionOpen: true, CleanupState: CleanupPending}}
+	store := &idleStore{session: Session{ID: "session", AdmissionOpen: true, CleanupState: CleanupPending}}
 	external := &idleExternals{store: store, err: errors.New("snapshot busy")}
 	service := NewExecutionService(store, external, nil, nil)
-	if err := service.ReconcileIdleSandboxes(context.Background(), "job"); err == nil {
+	if err := service.ReconcileIdleSandboxes(context.Background(), "session"); err == nil {
 		t.Fatal("missing pause error")
 	}
 	store.beforeFence = func() { store.deliveries = []Delivery{{AgentRun: AgentRun{State: AgentRunActive}}} }
-	if err := service.ReconcileIdleSandboxes(context.Background(), "job"); err != nil {
+	if err := service.ReconcileIdleSandboxes(context.Background(), "session"); err != nil {
 		t.Fatal(err)
 	}
 	if external.calls != 1 {

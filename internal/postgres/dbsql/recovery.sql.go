@@ -16,13 +16,13 @@ update dorf.sandbox_delivery_holds hold
 set released_at=coalesce(hold.released_at,clock_timestamp())
 from dorf.sandbox_recoveries recovery
 join dorf.sandboxes sandbox on sandbox.id=recovery.sandbox_id
-join dorf.jobs job on job.id=sandbox.job_id
+join dorf.sessions session on session.id=sandbox.session_id
 join dorf.sandbox_resources destination on destination.id=recovery.destination_resource_id
 where recovery.id=$1 and hold.id=recovery.id
   and hold.reason='checkpoint_recovery' and hold.sandbox_id=sandbox.id
   and recovery.finished_at is null and sandbox.active_resource_id=recovery.source_resource_id
   and destination.deleted_at is not null
-  and not job.admission_open and job.cleanup_state='scheduled'
+  and not session.admission_open and session.cleanup_state='scheduled'
 `
 
 func (q *Queries) AbandonCheckpointRecovery(ctx context.Context, id string) (int64, error) {
@@ -38,7 +38,7 @@ select
     recovery.id, recovery.sandbox_id, recovery.checkpoint_repository, recovery.checkpoint_snapshot_id, recovery.source_resource_id, recovery.destination_resource_id, recovery.requested_at, recovery.verified_at, recovery.finished_at,
     source.deleted_at as source_deleted_at,
     destination.deleted_at as destination_deleted_at,
-    sandbox.job_id,
+    sandbox.session_id,
     coalesce(source.provider_id,'') as source_provider_id,
     coalesce(destination.provider_id,'') as destination_provider_id,
     checkpoint.resource_id as checkpoint_resource_id,
@@ -76,7 +76,7 @@ type GetCheckpointRecoveryRow struct {
 	FinishedAt            sql.NullTime
 	SourceDeletedAt       sql.NullTime
 	DestinationDeletedAt  sql.NullTime
-	JobID                 string
+	SessionID             string
 	SourceProviderID      string
 	DestinationProviderID string
 	CheckpointResourceID  string
@@ -108,7 +108,7 @@ func (q *Queries) GetCheckpointRecovery(ctx context.Context, id string) (GetChec
 		&i.FinishedAt,
 		&i.SourceDeletedAt,
 		&i.DestinationDeletedAt,
-		&i.JobID,
+		&i.SessionID,
 		&i.SourceProviderID,
 		&i.DestinationProviderID,
 		&i.CheckpointResourceID,
@@ -173,12 +173,12 @@ func (q *Queries) InsertCheckpointRecoveryHold(ctx context.Context, arg InsertCh
 	return err
 }
 
-const listJobCheckpointRecoveries = `-- name: ListJobCheckpointRecoveries :many
+const listSessionCheckpointRecoveries = `-- name: ListSessionCheckpointRecoveries :many
 select
     recovery.id, recovery.sandbox_id, recovery.checkpoint_repository, recovery.checkpoint_snapshot_id, recovery.source_resource_id, recovery.destination_resource_id, recovery.requested_at, recovery.verified_at, recovery.finished_at,
     source.deleted_at as source_deleted_at,
     destination.deleted_at as destination_deleted_at,
-    sandbox.job_id,
+    sandbox.session_id,
     coalesce(source.provider_id,'') as source_provider_id,
     coalesce(destination.provider_id,'') as destination_provider_id,
     checkpoint.resource_id as checkpoint_resource_id,
@@ -201,11 +201,11 @@ join dorf.sandbox_checkpoints checkpoint
   on checkpoint.repository=recovery.checkpoint_repository
  and checkpoint.snapshot_id=recovery.checkpoint_snapshot_id
 left join dorf.sandbox_upgrades package on package.id=checkpoint.effective_upgrade_id
-where sandbox.job_id=$1
+where sandbox.session_id=$1
 order by recovery.requested_at,recovery.id
 `
 
-type ListJobCheckpointRecoveriesRow struct {
+type ListSessionCheckpointRecoveriesRow struct {
 	ID                    string
 	SandboxID             string
 	CheckpointRepository  string
@@ -217,7 +217,7 @@ type ListJobCheckpointRecoveriesRow struct {
 	FinishedAt            sql.NullTime
 	SourceDeletedAt       sql.NullTime
 	DestinationDeletedAt  sql.NullTime
-	JobID                 string
+	SessionID             string
 	SourceProviderID      string
 	DestinationProviderID string
 	CheckpointResourceID  string
@@ -234,15 +234,15 @@ type ListJobCheckpointRecoveriesRow struct {
 	PackageVersion        string
 }
 
-func (q *Queries) ListJobCheckpointRecoveries(ctx context.Context, jobID string) ([]ListJobCheckpointRecoveriesRow, error) {
-	rows, err := q.db.QueryContext(ctx, listJobCheckpointRecoveries, jobID)
+func (q *Queries) ListSessionCheckpointRecoveries(ctx context.Context, sessionID string) ([]ListSessionCheckpointRecoveriesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionCheckpointRecoveries, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListJobCheckpointRecoveriesRow
+	var items []ListSessionCheckpointRecoveriesRow
 	for rows.Next() {
-		var i ListJobCheckpointRecoveriesRow
+		var i ListSessionCheckpointRecoveriesRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.SandboxID,
@@ -255,7 +255,7 @@ func (q *Queries) ListJobCheckpointRecoveries(ctx context.Context, jobID string)
 			&i.FinishedAt,
 			&i.SourceDeletedAt,
 			&i.DestinationDeletedAt,
-			&i.JobID,
+			&i.SessionID,
 			&i.SourceProviderID,
 			&i.DestinationProviderID,
 			&i.CheckpointResourceID,
@@ -314,7 +314,7 @@ const recoveryNativeStateSafe = `-- name: RecoveryNativeStateSafe :one
 select not exists (
     select 1
     from dorf.agent_runs run
-    join dorf.job_messages message on message.id=run.message_id
+    join dorf.session_messages message on message.id=run.message_id
     where run.sandbox_id=$1
       and message.sequence>$2
       and (

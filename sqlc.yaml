@@ -23,19 +23,19 @@ sql:
           - oid
           - pr
         overrides:
-          - column: "dorf.jobs.cleanup_state"
+          - column: "dorf.sessions.cleanup_state"
             go_type:
               import: "github.com/aphronio/dorf/internal/core"
               type: "CleanupState"
-          - column: "dorf.jobs.workflow_name"
+          - column: "dorf.sessions.workflow_name"
             go_type:
               import: "github.com/aphronio/dorf/internal/core"
               type: "WorkflowName"
-          - column: "dorf.job_messages.from_kind"
+          - column: "dorf.session_messages.from_kind"
             go_type:
               import: "github.com/aphronio/dorf/internal/core"
               type: "MessageFromKind"
-          - column: "dorf.job_messages.delivery_intent"
+          - column: "dorf.session_messages.delivery_intent"
             go_type:
               import: "github.com/aphronio/dorf/internal/core"
               type: "MessageDeliveryIntent"
@@ -51,7 +51,3 @@ sql:
             go_type:
               import: "github.com/aphronio/dorf/internal/core"
               type: "AgentRunState"
-          - column: "dorf.job_outcomes.outcome"
-            go_type:
-              import: "github.com/aphronio/dorf/internal/coding"
-              type: "OutcomeKind"

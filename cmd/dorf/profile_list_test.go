@@ -87,7 +87,7 @@ func TestUnknownProfileErrorGuidesRemoteAndHostClients(t *testing.T) {
 	}
 	cause := &controlclient.ProblemError{Problem: problem}
 	for _, deployment := range []string{"https://dorf.example.test", "http://127.0.0.1:8745"} {
-		err := jobControlError(deployment, cause)
+		err := sessionControlError(deployment, cause)
 		if !errors.Is(err, cause) || !strings.Contains(err.Error(), "dorf profile list") {
 			t.Fatalf("profile error for %s=%v", deployment, err)
 		}

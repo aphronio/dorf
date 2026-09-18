@@ -21,12 +21,12 @@ func (s Service) WriteFile(ctx context.Context, sandboxID, name string, contents
 	if len(contents) > provider.MaxFileWriteBytes {
 		return ErrInvalidRequest
 	}
-	return s.withSandbox(ctx, sandboxID, func(runtime core.SandboxRuntime, job core.Job, owned core.Sandbox) error {
+	return s.withSandbox(ctx, sandboxID, func(runtime core.SandboxRuntime, session core.Session, owned core.Sandbox) error {
 		writer, ok := runtime.Files.(core.SandboxFileWriter)
 		if !ok {
 			return ErrUnavailable
 		}
-		return writer.WriteSandboxFile(ctx, job, owned, name, contents, ifAbsent)
+		return writer.WriteSandboxFile(ctx, session, owned, name, contents, ifAbsent)
 	})
 }
 

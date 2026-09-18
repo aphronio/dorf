@@ -11,10 +11,10 @@ import (
 	"github.com/aphronio/dorf/internal/postgres/dbsql"
 )
 
-// spawnJobTaskTx uses Absurd's public SQL API because its Go client owns a
+// spawnSessionTaskTx uses Absurd's public SQL API because its Go client owns a
 // separate connection. Task eligibility and Dorf attachment commit together.
-func spawnJobTaskTx(ctx context.Context, tx *sql.Tx, queue, jobID, previousTaskID, name, key string) (string, error) {
-	params, err := json.Marshal(core.JobTaskParams{JobID: jobID, PreviousTaskID: previousTaskID})
+func spawnSessionTaskTx(ctx context.Context, tx *sql.Tx, queue, sessionID, previousTaskID, name, key string) (string, error) {
+	params, err := json.Marshal(core.SessionTaskParams{SessionID: sessionID, PreviousTaskID: previousTaskID})
 	if err != nil {
 		return "", err
 	}
@@ -32,41 +32,41 @@ func spawnJobTaskTx(ctx context.Context, tx *sql.Tx, queue, jobID, previousTaskI
 	var taskID string
 	err = tx.QueryRowContext(ctx, `select task_id::text from absurd.spawn_task($1,$2,$3::jsonb,$4::jsonb)`, queue, name, string(params), string(options)).Scan(&taskID)
 	if err != nil {
-		return "", fmt.Errorf("schedule Job task in Absurd: %w", err)
+		return "", fmt.Errorf("schedule Session task in Absurd: %w", err)
 	}
 	return taskID, nil
 }
 
-func scheduleJobTaskTx(ctx context.Context, tx *sql.Tx, queue, jobID, name, key string, admission bool) error {
+func scheduleSessionTaskTx(ctx context.Context, tx *sql.Tx, queue, sessionID, name, key string, admission bool) error {
 	queries := dbsql.New(tx)
-	current, err := queries.GetCurrentJobTaskForUpdate(ctx, jobID)
+	current, err := queries.GetCurrentSessionTaskForUpdate(ctx, sessionID)
 	if err != nil {
 		return err
 	}
-	// Admission replay must preserve an existing handoff or closed Job.
+	// Admission replay must preserve an existing handoff or closed Session.
 	if admission && (current.TaskID != "" || !current.AdmissionOpen) {
 		return nil
 	}
 	if !current.AdmissionOpen || current.CleanupState != core.CleanupPending {
-		return fmt.Errorf("Job %s cannot schedule ordinary work after cleanup begins", jobID)
+		return fmt.Errorf("Session %s cannot schedule ordinary work after cleanup begins", sessionID)
 	}
-	taskID, err := spawnJobTaskTx(ctx, tx, queue, jobID, current.TaskID, name, key)
+	taskID, err := spawnSessionTaskTx(ctx, tx, queue, sessionID, current.TaskID, name, key)
 	if err != nil {
 		return err
 	}
-	return attachJobTaskTx(ctx, queries, jobID, current.TaskID, taskID, name, false)
+	return attachSessionTaskTx(ctx, queries, sessionID, current.TaskID, taskID, name, false)
 }
 
-func (s Store) ScheduleJobTask(ctx context.Context, queue, jobID, name, key string) error {
+func (s Store) ScheduleSessionTask(ctx context.Context, queue, sessionID, name, key string) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if err := acquireJobFenceTx(ctx, tx, jobID); err != nil {
+	if err := acquireSessionFenceTx(ctx, tx, sessionID); err != nil {
 		return err
 	}
-	if err := scheduleJobTaskTx(ctx, tx, queue, jobID, name, key, false); err != nil {
+	if err := scheduleSessionTaskTx(ctx, tx, queue, sessionID, name, key, false); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -74,24 +74,24 @@ func (s Store) ScheduleJobTask(ctx context.Context, queue, jobID, name, key stri
 
 // ScheduleCleanup closes admission, cancels the previous task, and attaches
 // cleanup under the same transaction and external-effect fence.
-func (s Store) ScheduleCleanup(ctx context.Context, queue, jobID, callerTaskID string) error {
+func (s Store) ScheduleCleanup(ctx context.Context, queue, sessionID, callerTaskID string) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if err := acquireJobFenceTx(ctx, tx, jobID); err != nil {
+	if err := acquireSessionFenceTx(ctx, tx, sessionID); err != nil {
 		return err
 	}
 	queries := dbsql.New(tx)
-	current, err := queries.GetCurrentJobTaskForUpdate(ctx, jobID)
+	current, err := queries.GetCurrentSessionTaskForUpdate(ctx, sessionID)
 	if err != nil {
 		return err
 	}
 	if current.CleanupState == core.CleanupScheduled || current.CleanupState == core.CleanupComplete {
 		return nil
 	}
-	if err := expectOneRows(queries.RequestCleanup(ctx, jobID)); err != nil {
+	if err := expectOneRows(queries.RequestCleanup(ctx, sessionID)); err != nil {
 		return err
 	}
 	if current.TaskID != "" && current.TaskID != callerTaskID {
@@ -99,11 +99,11 @@ func (s Store) ScheduleCleanup(ctx context.Context, queue, jobID, callerTaskID s
 			return fmt.Errorf("cancel attached Absurd task: %w", err)
 		}
 	}
-	taskID, err := spawnJobTaskTx(ctx, tx, queue, jobID, current.TaskID, core.CleanupTaskName, "cleanup:v3:"+jobID)
+	taskID, err := spawnSessionTaskTx(ctx, tx, queue, sessionID, current.TaskID, core.CleanupTaskName, "cleanup:v3:"+sessionID)
 	if err != nil {
 		return err
 	}
-	if err := attachJobTaskTx(ctx, queries, jobID, current.TaskID, taskID, core.CleanupTaskName, true); err != nil {
+	if err := attachSessionTaskTx(ctx, queries, sessionID, current.TaskID, taskID, core.CleanupTaskName, true); err != nil {
 		return err
 	}
 	return tx.Commit()

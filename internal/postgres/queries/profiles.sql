@@ -153,7 +153,7 @@ update dorf.sandbox_profile_verifications
 set last_error=sqlc.arg(last_error)
 where profile_name=sqlc.arg(profile_name)
   and contract_version=sqlc.arg(contract_version)
-  and definition_hash=(select sandbox_profile_revision from dorf.jobs where id=sqlc.arg(job_id))
+  and definition_hash=(select sandbox_profile_revision from dorf.sessions where id=sqlc.arg(session_id))
   and probe_completed_at is not null and cleaned_at is not null;
 
 -- name: GetActiveSandboxProfile :one

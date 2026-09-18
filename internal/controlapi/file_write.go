@@ -23,7 +23,7 @@ func (h *handler) writeFile(w http.ResponseWriter, r *http.Request, name string)
 		h.fail(w, problem("body_too_large"))
 		return
 	}
-	if err := h.jobs.WriteSandboxFile(r.Context(), r.PathValue("sandbox"), name, contents, len(conditions) == 1); err != nil {
+	if err := h.sessions.WriteSandboxFile(r.Context(), r.PathValue("sandbox"), name, contents, len(conditions) == 1); err != nil {
 		h.serviceError(w, r, err)
 		return
 	}

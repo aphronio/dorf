@@ -16,7 +16,7 @@ func TestMessageAttachmentManifestPersistsAndReplaysInExactOrderAfterCleanup(t *
 	_, store, _ := testDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	job, _, err := admitDirectFixture(t, store, ctx, core.JobAdmission{
+	session, _, err := admitDirectFixture(t, store, ctx, core.SessionAdmission{
 		AdmissionKey:   fmt.Sprintf("attachment-manifest-%d", time.Now().UnixNano()),
 		SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "low",
 	})
@@ -28,7 +28,7 @@ func TestMessageAttachmentManifestPersistsAndReplaysInExactOrderAfterCleanup(t *
 		{Kind: core.MessageAttachmentImage, Filename: "diagram.webp", MediaType: "image/webp", Digest: strings.Repeat("b", 64), ByteSize: 29},
 	}
 	input := core.MessageAdmission{
-		JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman,
+		SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), FromKind: core.MessageFromHuman,
 		FromID: "attachment-only", Attachments: attachments, Intent: core.MessageFollow, RefreshSkills: true,
 	}
 	first, err := store.AdmitDirectMessage(ctx, input)
@@ -39,7 +39,7 @@ func TestMessageAttachmentManifestPersistsAndReplaysInExactOrderAfterCleanup(t *
 	if err != nil || !reflect.DeepEqual(execution.Message.Attachments, attachments) {
 		t.Fatalf("reloaded execution=%#v err=%v", execution, err)
 	}
-	deliveries, err := store.Deliveries(ctx, job.ID)
+	deliveries, err := store.Deliveries(ctx, session.ID)
 	if err != nil || len(deliveries) != 2 || !reflect.DeepEqual(deliveries[1].Message.Attachments, attachments) {
 		t.Fatalf("deliveries=%#v err=%v", deliveries, err)
 	}
@@ -68,15 +68,15 @@ func TestMessageAttachmentManifestPersistsAndReplaysInExactOrderAfterCleanup(t *
 			t.Fatal(err)
 		}
 	}
-	if err := store.RequestCleanup(ctx, job.ID); err != nil {
+	if err := store.RequestCleanup(ctx, session.ID); err != nil {
 		t.Fatal(err)
 	}
-	cleanupTaskID := "attachment-cleanup-" + job.ID
-	if err := store.AttachCleanupTask(ctx, job.ID, job.CurrentTaskID, cleanupTaskID, core.CleanupTaskName); err != nil {
+	cleanupTaskID := "attachment-cleanup-" + session.ID
+	if err := store.AttachCleanupTask(ctx, session.ID, session.CurrentTaskID, cleanupTaskID, core.CleanupTaskName); err != nil {
 		t.Fatal(err)
 	}
 	for _, kind := range []core.ActionKind{core.ActionRouteRevoke, core.ActionSandboxDelete} {
-		action, err := store.GetOrCreateSandboxAction(ctx, core.MainSandboxName(job.ID), kind)
+		action, err := store.GetOrCreateSandboxAction(ctx, core.MainSandboxName(session.ID), kind)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -84,10 +84,10 @@ func TestMessageAttachmentManifestPersistsAndReplaysInExactOrderAfterCleanup(t *
 			t.Fatal(err)
 		}
 	}
-	if err := store.CompleteCleanup(ctx, job.ID, cleanupTaskID); err != nil {
+	if err := store.CompleteCleanup(ctx, session.ID, cleanupTaskID); err != nil {
 		t.Fatal(err)
 	}
-	cleaned, err := store.Job(ctx, job.ID)
+	cleaned, err := store.Session(ctx, session.ID)
 	if err != nil || cleaned.CleanupState != core.CleanupComplete {
 		t.Fatalf("attachment cleanup=%#v err=%v", cleaned, err)
 	}

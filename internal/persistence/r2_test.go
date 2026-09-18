@@ -16,7 +16,7 @@ import (
 func TestR2CredentialsStayWithinOneStableLogicalRepository(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
 	repository := r2Fixture(now)
-	first := provider.Ownership{JobID: "job", SandboxID: "sandbox", OwnershipNonce: "first"}
+	first := provider.Ownership{SessionID: "session", SandboxID: "sandbox", OwnershipNonce: "first"}
 	replacement := first
 	replacement.OwnershipNonce = "replacement"
 	initial, err := repository.credentials(t.Context(), first, RepositoryReadWrite)
@@ -48,7 +48,7 @@ func TestR2CredentialsStayWithinOneStableLogicalRepository(t *testing.T) {
 func TestR2TemporaryCredentialMatchesOfficialLocalSigningShape(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
 	repository := r2Fixture(now)
-	credentials, err := repository.credentials(t.Context(), provider.Ownership{JobID: "job", SandboxID: "sandbox", OwnershipNonce: "owned"}, RepositoryReadWrite)
+	credentials, err := repository.credentials(t.Context(), provider.Ownership{SessionID: "session", SandboxID: "sandbox", OwnershipNonce: "owned"}, RepositoryReadWrite)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestR2TemporaryCredentialMatchesOfficialLocalSigningShape(t *testing.T) {
 func TestR2ConfigurationErrorsDoNotExposeSecrets(t *testing.T) {
 	secret := "do-not-print-this-parent-secret"
 	repository := R2Repository{Endpoint: "https://user:pass@example.invalid", ParentSecretAccessKey: secret, PasswordKey: []byte(strings.Repeat("p", 32))}
-	_, err := repository.credentials(t.Context(), provider.Ownership{JobID: "job", SandboxID: "sandbox", OwnershipNonce: "owned"}, RepositoryReadWrite)
+	_, err := repository.credentials(t.Context(), provider.Ownership{SessionID: "session", SandboxID: "sandbox", OwnershipNonce: "owned"}, RepositoryReadWrite)
 	if err == nil || strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "user:pass") {
 		t.Fatalf("unsafe configuration error: %v", err)
 	}

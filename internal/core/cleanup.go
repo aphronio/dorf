@@ -18,33 +18,33 @@ type cleanupTarget struct {
 
 // RegisterCleanup installs the Core-owned resource cleanup task.
 func (a Application) RegisterCleanup() {
-	a.Tasks.MustRegister(absurd.Task(CleanupTaskName, func(ctx context.Context, params JobTaskParams) (TaskResultV1, error) {
-		if err := a.VerifyAttachedTask(ctx, params.JobID, CleanupTaskName, params.PreviousTaskID); err != nil {
+	a.Tasks.MustRegister(absurd.Task(CleanupTaskName, func(ctx context.Context, params SessionTaskParams) (TaskResultV1, error) {
+		if err := a.VerifyAttachedTask(ctx, params.SessionID, CleanupTaskName, params.PreviousTaskID); err != nil {
 			return TaskResultV1{}, err
 		}
-		job, err := a.Store.Job(ctx, params.JobID)
+		session, err := a.Store.Session(ctx, params.SessionID)
 		if err != nil {
 			return TaskResultV1{}, err
 		}
 		if a.CleanupRuntimes == nil {
 			return TaskResultV1{}, fmt.Errorf("Sandbox runtime resolution is not configured")
 		}
-		runtime, err := a.CleanupRuntimes.ResolveCleanup(ctx, job.ProfileRef())
+		runtime, err := a.CleanupRuntimes.ResolveCleanup(ctx, session.ProfileRef())
 		if err != nil {
-			return TaskResultV1{}, fmt.Errorf("resolve Sandbox profile %q: %w", job.SandboxProfile, err)
+			return TaskResultV1{}, fmt.Errorf("resolve Sandbox profile %q: %w", session.SandboxProfile, err)
 		}
-		if runtime.SandboxProfile != job.ProfileRef() {
-			detail := fmt.Sprintf("Job requires Sandbox profile %q, but this worker resolved %q", job.SandboxProfile, runtime.SandboxProfile)
-			if attentionErr := a.Store.SetCleanupAttention(ctx, job.ID, detail); attentionErr != nil {
+		if runtime.SandboxProfile != session.ProfileRef() {
+			detail := fmt.Sprintf("Session requires Sandbox profile %q, but this worker resolved %q", session.SandboxProfile, runtime.SandboxProfile)
+			if attentionErr := a.Store.SetCleanupAttention(ctx, session.ID, detail); attentionErr != nil {
 				return TaskResultV1{}, fmt.Errorf("%s; record profile mismatch attention: %w", detail, attentionErr)
 			}
 			return TaskResultV1{}, fmt.Errorf("%s", detail)
 		}
 		return absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (TaskResultV1, error) {
-			if err := a.runCleanup(workCtx, runtime.Execution, params.JobID); err != nil {
+			if err := a.runCleanup(workCtx, runtime.Execution, params.SessionID); err != nil {
 				return TaskResultV1{}, err
 			}
-			return TaskResultV1{JobID: params.JobID, Outcome: "cleanup-complete"}, nil
+			return TaskResultV1{SessionID: params.SessionID, Outcome: "cleanup-complete"}, nil
 		})
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
 }
@@ -73,12 +73,12 @@ func CurrentCleanupAction(sandboxes []Sandbox, actions []Action) (ActionKind, st
 	return "", "", false
 }
 
-func (a Application) runCleanup(ctx context.Context, service CleanupExecution, jobID string) error {
-	var job Job
+func (a Application) runCleanup(ctx context.Context, service CleanupExecution, sessionID string) error {
+	var session Session
 	var sandboxes []Sandbox
 	for {
 		var err error
-		job, sandboxes, err = service.PrepareCleanup(ctx, jobID)
+		session, sandboxes, err = service.PrepareCleanup(ctx, sessionID)
 		if err == nil {
 			break
 		}
@@ -96,27 +96,27 @@ func (a Application) runCleanup(ctx context.Context, service CleanupExecution, j
 		case <-timer.C:
 		}
 	}
-	if job.CleanupState == CleanupComplete {
+	if session.CleanupState == CleanupComplete {
 		return nil
 	}
-	if job.CleanupAttention != "" {
-		if err := a.Store.SetCleanupAttention(ctx, jobID, ""); err != nil {
+	if session.CleanupAttention != "" {
+		if err := a.Store.SetCleanupAttention(ctx, sessionID, ""); err != nil {
 			return err
 		}
 	}
 
 	for _, target := range cleanupTargets(sandboxes) {
 		detail := fmt.Sprintf("reconciling %s for Sandbox %s", target.Kind, target.Sandbox.ID)
-		err := service.ExecuteSandboxAction(ctx, job.ID, target.Sandbox.ID, target.Kind)
+		err := service.ExecuteSandboxAction(ctx, session.ID, target.Sandbox.ID, target.Kind)
 		if err != nil {
-			_ = a.Store.SetCleanupAttention(ctx, jobID, detail+": "+err.Error())
+			_ = a.Store.SetCleanupAttention(ctx, sessionID, detail+": "+err.Error())
 			return fmt.Errorf("reconcile %s for Sandbox %s: %w", target.Kind, target.Sandbox.ID, err)
 		}
 	}
 
-	detail := "verifying no owned resource or non-cleanup Job claim remains unsettled"
-	if err := service.CompleteCleanup(ctx, jobID); err != nil {
-		_ = a.Store.SetCleanupAttention(ctx, jobID, detail+": "+err.Error())
+	detail := "verifying no owned resource or non-cleanup Session claim remains unsettled"
+	if err := service.CompleteCleanup(ctx, sessionID); err != nil {
+		_ = a.Store.SetCleanupAttention(ctx, sessionID, detail+": "+err.Error())
 		return err
 	}
 	return nil

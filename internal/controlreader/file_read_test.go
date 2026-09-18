@@ -56,7 +56,7 @@ func TestReadFileClientEnforcesFileBoundAndExactLength(t *testing.T) {
 }
 
 func TestReadFileServiceMapsAndDefendsTheProviderBound(t *testing.T) {
-	job, owned := boundedReaderAuthority()
+	session, owned := boundedReaderAuthority()
 	for _, test := range []struct {
 		name     string
 		files    core.SandboxFileReader
@@ -66,7 +66,7 @@ func TestReadFileServiceMapsAndDefendsTheProviderBound(t *testing.T) {
 		{name: "custom oversized runtime", files: &boundedFiles{contents: bytes.Repeat([]byte{'x'}, provider.MaxFileReadBytes+1)}, wantSent: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			service := Service{Store: &boundedStore{job: job, sandbox: owned}, Runtimes: boundedRuntimes{profile: job.SandboxProfile, files: test.files}}
+			service := Service{Store: &boundedStore{session: session, sandbox: owned}, Runtimes: boundedRuntimes{profile: session.SandboxProfile, files: test.files}}
 			contents, err := service.ReadFile(context.Background(), owned.ID, "result.bin")
 			if len(contents) != 0 || errors.Is(err, ErrFileTooLarge) != test.wantSent {
 				t.Fatalf("ReadFile() bytes=%d err=%v", len(contents), err)
@@ -76,11 +76,11 @@ func TestReadFileServiceMapsAndDefendsTheProviderBound(t *testing.T) {
 }
 
 func TestPrivateFileTooLargeRoundTripsThroughHandlerAndClient(t *testing.T) {
-	job, owned := boundedReaderAuthority()
+	session, owned := boundedReaderAuthority()
 	token := strings.Repeat("c", 64)
 	handler, err := NewHandler(token, Service{
-		Store:    &boundedStore{job: job, sandbox: owned},
-		Runtimes: boundedRuntimes{profile: job.SandboxProfile, files: &boundedFiles{err: provider.ErrFileTooLarge}},
+		Store:    &boundedStore{session: session, sandbox: owned},
+		Runtimes: boundedRuntimes{profile: session.SandboxProfile, files: &boundedFiles{err: provider.ErrFileTooLarge}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -96,10 +96,10 @@ func TestPrivateFileTooLargeRoundTripsThroughHandlerAndClient(t *testing.T) {
 }
 
 func TestPrivateFileReadTransferBudgetKeepsFenceFreeDuringSlowWrite(t *testing.T) {
-	job, owned := boundedReaderAuthority()
+	session, owned := boundedReaderAuthority()
 	files := &boundedFiles{contents: []byte("exact"), entered: make(chan struct{}, 16)}
-	store := &boundedStore{job: job, sandbox: owned}
-	handler, err := NewHandler(strings.Repeat("b", 64), Service{Store: store, Runtimes: boundedRuntimes{profile: job.SandboxProfile, files: files}})
+	store := &boundedStore{session: session, sandbox: owned}
+	handler, err := NewHandler(strings.Repeat("b", 64), Service{Store: store, Runtimes: boundedRuntimes{profile: session.SandboxProfile, files: files}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,9 +134,9 @@ func TestPrivateFileReadTransferBudgetKeepsFenceFreeDuringSlowWrite(t *testing.T
 
 	fenceEntered := make(chan struct{})
 	go func() {
-		_ = store.WithJobFence(context.Background(), job.ID, func() error { close(fenceEntered); return nil })
+		_ = store.WithSessionFence(context.Background(), session.ID, func() error { close(fenceEntered); return nil })
 	}()
-	waitSignal(t, fenceEntered, "same-Job fence while response writer was blocked")
+	waitSignal(t, fenceEntered, "same-Session fence while response writer was blocked")
 
 	health := httptest.NewRecorder()
 	healthDone := make(chan struct{})
@@ -185,16 +185,16 @@ func (f fileRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, err
 }
 
 type boundedStore struct {
-	job     core.Job
+	session core.Session
 	sandbox core.Sandbox
 	fence   sync.Mutex
 }
 
-func (s *boundedStore) Job(_ context.Context, id string) (core.Job, error) {
-	if id != s.job.ID {
-		return core.Job{}, postgres.ErrNotFound
+func (s *boundedStore) Session(_ context.Context, id string) (core.Session, error) {
+	if id != s.session.ID {
+		return core.Session{}, postgres.ErrNotFound
 	}
-	return s.job, nil
+	return s.session, nil
 }
 func (s *boundedStore) Sandbox(_ context.Context, id string) (core.Sandbox, error) {
 	if id != s.sandbox.ID {
@@ -205,7 +205,7 @@ func (s *boundedStore) Sandbox(_ context.Context, id string) (core.Sandbox, erro
 func (*boundedStore) AgentMessageExecution(context.Context, string) (core.AgentMessageExecution, error) {
 	return core.AgentMessageExecution{}, postgres.ErrNotFound
 }
-func (s *boundedStore) WithJobFence(_ context.Context, _ string, run func() error) error {
+func (s *boundedStore) WithSessionFence(_ context.Context, _ string, run func() error) error {
 	s.fence.Lock()
 	defer s.fence.Unlock()
 	return run()
@@ -232,7 +232,7 @@ type boundedFiles struct {
 	calls    atomic.Int32
 }
 
-func (f *boundedFiles) ReadSandboxFile(context.Context, core.Job, core.Sandbox, string) ([]byte, error) {
+func (f *boundedFiles) ReadSandboxFile(context.Context, core.Session, core.Sandbox, string) ([]byte, error) {
 	f.calls.Add(1)
 	if f.entered != nil {
 		f.entered <- struct{}{}
@@ -263,9 +263,9 @@ type releaseSignal struct {
 func newReleaseSignal() *releaseSignal { return &releaseSignal{ch: make(chan struct{})} }
 func (s *releaseSignal) close()        { s.once.Do(func() { close(s.ch) }) }
 
-func boundedReaderAuthority() (core.Job, core.Sandbox) {
-	job := core.Job{ID: "job-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
-	return job, core.Sandbox{ID: "sandbox-1", JobID: job.ID, OwnershipNonce: strings.Repeat("a", 64)}
+func boundedReaderAuthority() (core.Session, core.Sandbox) {
+	session := core.Session{ID: "job-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
+	return session, core.Sandbox{ID: "sandbox-1", SessionID: session.ID, OwnershipNonce: strings.Repeat("a", 64)}
 }
 
 func waitSignal(t *testing.T, signal <-chan struct{}, what string) {

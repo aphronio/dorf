@@ -29,7 +29,7 @@ owned by the deployment operator with mode `0600`, then recreate the worker. Thi
 survives setup and application updates; do not edit the generated Compose `.env`. Standalone workers
 read their process environment. The official OpenTelemetry exporter owns batching and bounded retries.
 
-Each selected native notification carries the exact Dorf Job, Message, and AgentRun IDs plus
+Each selected native notification carries the exact Dorf Session, Message, and AgentRun IDs plus
 the native Thread and Turn IDs. The Turn comes from the submission acknowledgement or the existing
 durable binding. This covers Follow turns, including an initial direct Message. Steers do not
 take ownership of another Message's model usage. API response types are unchanged.
@@ -117,7 +117,7 @@ failure belongs to DNS, TLS, ingress, or the control API on host port `8745`. An
 response means the saved Client credential is invalid, expired, or revoked. Rerun `dorf setup` for
 the setup-owned host Client, or issue a new Enrollment for a remote Client. Use
 `dorf auth status --output json` for automation.
-`invalid_cursor` means a Job-list cursor was not passed back unchanged; begin a fresh traversal
+`invalid_cursor` means a Session-list cursor was not passed back unchanged; begin a fresh traversal
 rather than altering it.
 
 On the deployment host, start service diagnosis with the direct Compose status and log operations in
@@ -137,7 +137,7 @@ the operator-facing boundary, while Getting started alone owns lifecycle command
 own its own supervision and configuration custody. A remote client must not perform any of these
 host actions.
 
-If admission succeeds but a Job does not progress while the managed project is ready, continue with
+If admission succeeds but a Session does not progress while the managed project is ready, continue with
 the Profile, Sandbox, Harness, Provider Gateway, and integration checks below rather than
 attributing the failure to ingress.
 
@@ -166,7 +166,7 @@ Ownership guide:
 Never attach Enrollment codes, Client configuration, Provider Gateway state, credentials,
 environment dumps, Harness transcript contents, complete inspection output, watch snapshots, or
 Message output to a report. Those surfaces may contain the caller's full goal or agent output.
-Report only the needed Job ID and reviewed state, attention, and cleanup facts; redact caller input
+Report only the needed Session ID and reviewed state, attention, and cleanup facts; redact caller input
 first.
 
 ## E2B idle pause
@@ -180,7 +180,7 @@ can cold-boot a Sandbox if a memory snapshot cannot complete. Existing Sandboxes
 creation-time timeout policy.
 
 A transient idle-pause error leaves the Turn result intact and emits a worker warning containing
-the Job identity. The durable runtime attempts idle reconciliation again on its next wake. Check
+the Session identity. The durable runtime attempts idle reconciliation again on its next wake. Check
 provider availability and account limits when warnings persist; do not equate a settled Turn with
 confirmed provider pause. A missing retained Sandbox is an ownership/recovery error, not permission
 to start a replacement conversation silently.

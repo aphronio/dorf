@@ -13,18 +13,18 @@ import (
 )
 
 func TestSandboxPreparationInstallsInstructionsBeforeItCanSucceed(t *testing.T) {
-	job := core.Job{ID: "job-instructions", AgentsMD: "Keep replies brief.\n"}
-	owned := core.Sandbox{ID: "sandbox-instructions", JobID: job.ID, OwnershipNonce: "owned"}
+	session := core.Session{ID: "job-instructions", AgentsMD: "Keep replies brief.\n"}
+	owned := core.Sandbox{ID: "sandbox-instructions", SessionID: session.ID, OwnershipNonce: "owned"}
 	sandbox := &instructionsSandbox{writeErr: errors.New("temporary file transport failure")}
 	externals := Externals{Sandbox: sandbox}
-	if _, err := externals.SandboxCreate(context.Background(), job, owned); !errors.Is(err, sandbox.writeErr) {
+	if _, err := externals.SandboxCreate(context.Background(), session, owned); !errors.Is(err, sandbox.writeErr) {
 		t.Fatalf("preparation completed without instructions: %v", err)
 	}
 	sandbox.writeErr = nil
-	if _, err := externals.SandboxCreate(context.Background(), job, owned); err != nil {
+	if _, err := externals.SandboxCreate(context.Background(), session, owned); err != nil {
 		t.Fatal(err)
 	}
-	if sandbox.path != "/workspace/job/AGENTS.md" || sandbox.contents != job.AgentsMD || sandbox.owner != ownershipMetadata(owned) {
+	if sandbox.path != "/workspace/job/AGENTS.md" || sandbox.contents != session.AgentsMD || sandbox.owner != ownershipMetadata(owned) {
 		t.Fatalf("instructions were not installed in the exact owned workspace: %#v", sandbox)
 	}
 }
@@ -59,7 +59,7 @@ func TestHarnessObservationNeverFallsBackFromExactSandbox(t *testing.T) {
 		requested = append(requested, sandboxID)
 		return provider.Ownership{}, fmt.Errorf("stop after ownership resolution")
 	}}
-	job := core.Job{ID: "job-exact-sandbox"}
+	session := core.Session{ID: "job-exact-sandbox"}
 	for _, test := range []struct {
 		sandboxID string
 		threadID  string
@@ -67,8 +67,8 @@ func TestHarnessObservationNeverFallsBackFromExactSandbox(t *testing.T) {
 		{sandboxID: "sandbox-initial"},
 		{sandboxID: "sandbox-history", threadID: "thread-1"},
 	} {
-		run := core.AgentRun{ID: "run-1", JobID: job.ID, SandboxID: test.sandboxID, ThreadID: test.threadID}
-		execution := core.AgentMessageExecution{Job: job, AgentRun: run, Sandbox: core.Sandbox{ID: test.sandboxID, JobID: job.ID}}
+		run := core.AgentRun{ID: "run-1", SessionID: session.ID, SandboxID: test.sandboxID, ThreadID: test.threadID}
+		execution := core.AgentMessageExecution{Session: session, AgentRun: run, Sandbox: core.Sandbox{ID: test.sandboxID, SessionID: session.ID}}
 		operation, err := NewAgentRunOperation(externals, execution)
 		if err != nil {
 			t.Fatal(err)

@@ -13,7 +13,7 @@ import (
 
 const getCheckpointBoundary = `-- name: GetCheckpointBoundary :one
 select
-    j.id as job_id,
+    j.id as session_id,
     s.id as sandbox_id,
     s.active_resource_id as resource_id,
     j.sandbox_profile as profile_name,
@@ -29,13 +29,13 @@ select
     coalesce((
         select max(m.sequence)
         from dorf.agent_runs ar
-        join dorf.job_messages m on m.id=ar.message_id
+        join dorf.session_messages m on m.id=ar.message_id
         where ar.sandbox_id=s.id
     ),0)::bigint as message_sequence,
     coalesce((
         select max(m.sequence)
         from dorf.agent_runs ar
-        join dorf.job_messages m on m.id=ar.message_id
+        join dorf.session_messages m on m.id=ar.message_id
         where ar.sandbox_id=s.id and ar.state='completed'
           and ar.turn_id is not null and ar.turn_outcome='completed'
     ),0)::bigint as completed_turn_sequence,
@@ -60,7 +60,7 @@ select
         )
     )::boolean as eligible
 from dorf.sandboxes s
-join dorf.jobs j on j.id=s.job_id
+join dorf.sessions j on j.id=s.session_id
 join dorf.sandbox_resources r on r.sandbox_id=s.id and r.id=s.active_resource_id
 where s.id=$2
 `
@@ -71,7 +71,7 @@ type GetCheckpointBoundaryParams struct {
 }
 
 type GetCheckpointBoundaryRow struct {
-	JobID                 string
+	SessionID             string
 	SandboxID             string
 	ResourceID            string
 	ProfileName           string
@@ -88,7 +88,7 @@ func (q *Queries) GetCheckpointBoundary(ctx context.Context, arg GetCheckpointBo
 	row := q.db.QueryRowContext(ctx, getCheckpointBoundary, arg.Cleanup, arg.SandboxID)
 	var i GetCheckpointBoundaryRow
 	err := row.Scan(
-		&i.JobID,
+		&i.SessionID,
 		&i.SandboxID,
 		&i.ResourceID,
 		&i.ProfileName,
@@ -104,7 +104,7 @@ func (q *Queries) GetCheckpointBoundary(ctx context.Context, arg GetCheckpointBo
 }
 
 const getLastSandboxCheckpoint = `-- name: GetLastSandboxCheckpoint :one
-select c.repository, c.snapshot_id, c.sandbox_id, c.resource_id, c.profile_name, c.profile_revision, c.effective_upgrade_id, c.last_activity_at, c.message_sequence, c.completed_turn_sequence, c.delivery_hold_count, c.cleanup, c.published_at, c.publication_sequence,s.job_id
+select c.repository, c.snapshot_id, c.sandbox_id, c.resource_id, c.profile_name, c.profile_revision, c.effective_upgrade_id, c.last_activity_at, c.message_sequence, c.completed_turn_sequence, c.delivery_hold_count, c.cleanup, c.published_at, c.publication_sequence,s.session_id
 from dorf.sandbox_checkpoints c
 join dorf.sandboxes s on s.id=c.sandbox_id
 where c.sandbox_id=$1
@@ -127,7 +127,7 @@ type GetLastSandboxCheckpointRow struct {
 	Cleanup               bool
 	PublishedAt           time.Time
 	PublicationSequence   sql.NullInt64
-	JobID                 string
+	SessionID             string
 }
 
 func (q *Queries) GetLastSandboxCheckpoint(ctx context.Context, sandboxID string) (GetLastSandboxCheckpointRow, error) {
@@ -148,13 +148,13 @@ func (q *Queries) GetLastSandboxCheckpoint(ctx context.Context, sandboxID string
 		&i.Cleanup,
 		&i.PublishedAt,
 		&i.PublicationSequence,
-		&i.JobID,
+		&i.SessionID,
 	)
 	return i, err
 }
 
 const getSandboxCheckpointByReference = `-- name: GetSandboxCheckpointByReference :one
-select c.repository, c.snapshot_id, c.sandbox_id, c.resource_id, c.profile_name, c.profile_revision, c.effective_upgrade_id, c.last_activity_at, c.message_sequence, c.completed_turn_sequence, c.delivery_hold_count, c.cleanup, c.published_at, c.publication_sequence,s.job_id
+select c.repository, c.snapshot_id, c.sandbox_id, c.resource_id, c.profile_name, c.profile_revision, c.effective_upgrade_id, c.last_activity_at, c.message_sequence, c.completed_turn_sequence, c.delivery_hold_count, c.cleanup, c.published_at, c.publication_sequence,s.session_id
 from dorf.sandbox_checkpoints c
 join dorf.sandboxes s on s.id=c.sandbox_id
 where c.repository=$1 and c.snapshot_id=$2
@@ -180,7 +180,7 @@ type GetSandboxCheckpointByReferenceRow struct {
 	Cleanup               bool
 	PublishedAt           time.Time
 	PublicationSequence   sql.NullInt64
-	JobID                 string
+	SessionID             string
 }
 
 func (q *Queries) GetSandboxCheckpointByReference(ctx context.Context, arg GetSandboxCheckpointByReferenceParams) (GetSandboxCheckpointByReferenceRow, error) {
@@ -201,7 +201,7 @@ func (q *Queries) GetSandboxCheckpointByReference(ctx context.Context, arg GetSa
 		&i.Cleanup,
 		&i.PublishedAt,
 		&i.PublicationSequence,
-		&i.JobID,
+		&i.SessionID,
 	)
 	return i, err
 }
@@ -260,7 +260,7 @@ func (q *Queries) InsertSandboxCheckpoint(ctx context.Context, arg InsertSandbox
 const listIdleCheckpointSandboxIDs = `-- name: ListIdleCheckpointSandboxIDs :many
 select s.id
 from dorf.sandboxes s
-join dorf.jobs j on j.id=s.job_id
+join dorf.sessions j on j.id=s.session_id
 join dorf.sandbox_resources r on r.sandbox_id=s.id and r.id=s.active_resource_id
 where j.workflow_name='' and j.workflow_revision=''
   and j.admission_open and j.cleanup_state='pending'
@@ -296,13 +296,13 @@ where j.workflow_name='' and j.workflow_revision=''
           and c.message_sequence=coalesce((
               select max(m.sequence)
               from dorf.agent_runs ar
-              join dorf.job_messages m on m.id=ar.message_id
+              join dorf.session_messages m on m.id=ar.message_id
               where ar.sandbox_id=s.id
           ),0)
           and c.completed_turn_sequence=coalesce((
               select max(m.sequence)
               from dorf.agent_runs ar
-              join dorf.job_messages m on m.id=ar.message_id
+              join dorf.session_messages m on m.id=ar.message_id
               where ar.sandbox_id=s.id and ar.state='completed'
                 and ar.turn_id is not null and ar.turn_outcome='completed'
           ),0)
@@ -343,7 +343,7 @@ func (q *Queries) ListIdleCheckpointSandboxIDs(ctx context.Context, seconds floa
 }
 
 const listSandboxCheckpoints = `-- name: ListSandboxCheckpoints :many
-select c.repository, c.snapshot_id, c.sandbox_id, c.resource_id, c.profile_name, c.profile_revision, c.effective_upgrade_id, c.last_activity_at, c.message_sequence, c.completed_turn_sequence, c.delivery_hold_count, c.cleanup, c.published_at, c.publication_sequence,s.job_id
+select c.repository, c.snapshot_id, c.sandbox_id, c.resource_id, c.profile_name, c.profile_revision, c.effective_upgrade_id, c.last_activity_at, c.message_sequence, c.completed_turn_sequence, c.delivery_hold_count, c.cleanup, c.published_at, c.publication_sequence,s.session_id
 from dorf.sandbox_checkpoints c
 join dorf.sandboxes s on s.id=c.sandbox_id
 where c.sandbox_id=$1
@@ -365,7 +365,7 @@ type ListSandboxCheckpointsRow struct {
 	Cleanup               bool
 	PublishedAt           time.Time
 	PublicationSequence   sql.NullInt64
-	JobID                 string
+	SessionID             string
 }
 
 func (q *Queries) ListSandboxCheckpoints(ctx context.Context, sandboxID string) ([]ListSandboxCheckpointsRow, error) {
@@ -392,7 +392,7 @@ func (q *Queries) ListSandboxCheckpoints(ctx context.Context, sandboxID string) 
 			&i.Cleanup,
 			&i.PublishedAt,
 			&i.PublicationSequence,
-			&i.JobID,
+			&i.SessionID,
 		); err != nil {
 			return nil, err
 		}

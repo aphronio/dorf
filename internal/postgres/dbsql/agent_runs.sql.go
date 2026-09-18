@@ -71,42 +71,46 @@ func (q *Queries) BindHarnessTurn(ctx context.Context, arg BindHarnessTurnParams
 	return result.RowsAffected()
 }
 
-const bindJobThread = `-- name: BindJobThread :execrows
-update dorf.jobs j
-set thread_harness=$1,thread_id=$2
-from dorf.agent_runs ar
-where ar.id=$3 and j.id=ar.job_id
-  and j.workflow_name='' and j.workflow_revision=''
-  and (j.thread_id is null or (j.thread_harness=$1 and j.thread_id=$2))
+const bindPendingFollowToSessionThread = `-- name: BindPendingFollowToSessionThread :execrows
+update dorf.agent_runs ar
+set harness=p.harness,thread_id=j.thread_id
+from dorf.sessions j
+join dorf.sandbox_profile_revisions p on p.name=j.sandbox_profile and p.definition_hash=j.sandbox_profile_revision,
+     dorf.session_messages m
+where ar.message_id=$1 and m.id=ar.message_id
+  and j.id=ar.session_id and m.delivery_intent='follow'
+  and ar.state='pending' and ar.baseline_turn_id is null and ar.thread_id is null
+  and j.thread_id is not null
+  and (ar.harness is null or ar.harness=p.harness)
 `
 
-type BindJobThreadParams struct {
-	Harness  sql.NullString
-	ThreadID sql.NullString
-	RunID    string
-}
-
-func (q *Queries) BindJobThread(ctx context.Context, arg BindJobThreadParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, bindJobThread, arg.Harness, arg.ThreadID, arg.RunID)
+func (q *Queries) BindPendingFollowToSessionThread(ctx context.Context, messageID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindPendingFollowToSessionThread, messageID)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected()
 }
 
-const bindPendingFollowToJobThread = `-- name: BindPendingFollowToJobThread :execrows
-update dorf.agent_runs ar
-set harness=j.thread_harness,thread_id=j.thread_id
-from dorf.jobs j, dorf.job_messages m
-where ar.message_id=$1 and m.id=ar.message_id
-  and j.id=ar.job_id and m.delivery_intent='follow'
-  and ar.state='pending' and ar.baseline_turn_id is null and ar.thread_id is null
-  and j.thread_id is not null
-  and (ar.harness is null or ar.harness=j.thread_harness)
+const bindSessionThread = `-- name: BindSessionThread :execrows
+update dorf.sessions j
+set thread_id=$1
+from dorf.agent_runs ar,dorf.sandbox_profile_revisions p
+where ar.id=$2 and j.id=ar.session_id
+  and p.name=j.sandbox_profile and p.definition_hash=j.sandbox_profile_revision
+  and p.harness=$3
+  and j.workflow_name='' and j.workflow_revision=''
+  and (j.thread_id is null or j.thread_id=$1)
 `
 
-func (q *Queries) BindPendingFollowToJobThread(ctx context.Context, messageID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, bindPendingFollowToJobThread, messageID)
+type BindSessionThreadParams struct {
+	ThreadID sql.NullString
+	RunID    string
+	Harness  string
+}
+
+func (q *Queries) BindSessionThread(ctx context.Context, arg BindSessionThreadParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindSessionThread, arg.ThreadID, arg.RunID, arg.Harness)
 	if err != nil {
 		return 0, err
 	}
@@ -160,7 +164,7 @@ func (q *Queries) FailAgentRun(ctx context.Context, arg FailAgentRunParams) (int
 }
 
 const getAgentRunByMessage = `-- name: GetAgentRunByMessage :one
-select id,job_id,message_id,state,
+select id,session_id,message_id,state,
        coalesce(harness,'') as harness,coalesce(thread_id,'') as thread_id,
        (baseline_turn_id is not null)::boolean as baseline_recorded,
        coalesce(baseline_turn_id,'') as baseline_turn_id,
@@ -174,7 +178,7 @@ where message_id=$1::text
 
 type GetAgentRunByMessageRow struct {
 	ID                 string
-	JobID              string
+	SessionID          string
 	MessageID          string
 	State              core.AgentRunState
 	Harness            string
@@ -199,7 +203,7 @@ func (q *Queries) GetAgentRunByMessage(ctx context.Context, messageID string) (G
 	var i GetAgentRunByMessageRow
 	err := row.Scan(
 		&i.ID,
-		&i.JobID,
+		&i.SessionID,
 		&i.MessageID,
 		&i.State,
 		&i.Harness,
@@ -222,7 +226,7 @@ func (q *Queries) GetAgentRunByMessage(ctx context.Context, messageID string) (G
 }
 
 const getAgentRunForBinding = `-- name: GetAgentRunForBinding :one
-select job_id,sandbox_id,role,state,coalesce(harness,'') as harness,
+select session_id,sandbox_id,role,state,coalesce(harness,'') as harness,
        coalesce(thread_id,'') as thread_id,coalesce(turn_id,'') as turn_id,
        coalesce(turn_outcome,'') as turn_outcome
 from dorf.agent_runs
@@ -231,7 +235,7 @@ for update
 `
 
 type GetAgentRunForBindingRow struct {
-	JobID       string
+	SessionID   string
 	SandboxID   string
 	Role        string
 	State       core.AgentRunState
@@ -245,7 +249,7 @@ func (q *Queries) GetAgentRunForBinding(ctx context.Context, runID string) (GetA
 	row := q.db.QueryRowContext(ctx, getAgentRunForBinding, runID)
 	var i GetAgentRunForBindingRow
 	err := row.Scan(
-		&i.JobID,
+		&i.SessionID,
 		&i.SandboxID,
 		&i.Role,
 		&i.State,
@@ -278,36 +282,36 @@ func (q *Queries) GetAgentRunPreparation(ctx context.Context, runID string) (Get
 }
 
 const getMessageInterruptTarget = `-- name: GetMessageInterruptTarget :one
-select source.id,source.job_id,source.state,source.interrupt_requested
+select source.id,source.session_id,source.state,source.interrupt_requested
 from dorf.agent_runs requested
-join dorf.agent_runs source on source.job_id=requested.job_id
+join dorf.agent_runs source on source.session_id=requested.session_id
     and source.sandbox_id=requested.sandbox_id and source.harness=requested.harness
     and source.thread_id=requested.thread_id
     and source.turn_id=coalesce(requested.turn_id, (
-        select steer_target_turn_id from dorf.job_messages where id=requested.message_id
+        select steer_target_turn_id from dorf.session_messages where id=requested.message_id
     ))
-join dorf.job_messages origin on origin.id=source.message_id and origin.delivery_intent='follow'
-where requested.job_id=$1 and requested.message_id=$2
+join dorf.session_messages origin on origin.id=source.message_id and origin.delivery_intent='follow'
+where requested.session_id=$1 and requested.message_id=$2
 `
 
 type GetMessageInterruptTargetParams struct {
-	JobID     string
+	SessionID string
 	MessageID string
 }
 
 type GetMessageInterruptTargetRow struct {
 	ID                 string
-	JobID              string
+	SessionID          string
 	State              core.AgentRunState
 	InterruptRequested bool
 }
 
 func (q *Queries) GetMessageInterruptTarget(ctx context.Context, arg GetMessageInterruptTargetParams) (GetMessageInterruptTargetRow, error) {
-	row := q.db.QueryRowContext(ctx, getMessageInterruptTarget, arg.JobID, arg.MessageID)
+	row := q.db.QueryRowContext(ctx, getMessageInterruptTarget, arg.SessionID, arg.MessageID)
 	var i GetMessageInterruptTargetRow
 	err := row.Scan(
 		&i.ID,
-		&i.JobID,
+		&i.SessionID,
 		&i.State,
 		&i.InterruptRequested,
 	)
@@ -316,11 +320,11 @@ func (q *Queries) GetMessageInterruptTarget(ctx context.Context, arg GetMessageI
 
 const insertAdmittedAgentRun = `-- name: InsertAdmittedAgentRun :execrows
 insert into dorf.agent_runs(
-    id,job_id,message_id,harness,thread_id,role,state,input_revision,capability,sandbox_id
+    id,session_id,message_id,harness,thread_id,role,state,input_revision,capability,sandbox_id
 )
 select $1,j.id,$2,$3,$4,
        $5,'pending',$6,$7,$8
-from dorf.jobs j
+from dorf.sessions j
 where j.id=$9
 on conflict do nothing
 `
@@ -334,7 +338,7 @@ type InsertAdmittedAgentRunParams struct {
 	InputRevision sql.NullString
 	Capability    sql.NullString
 	SandboxID     string
-	JobID         string
+	SessionID     string
 }
 
 func (q *Queries) InsertAdmittedAgentRun(ctx context.Context, arg InsertAdmittedAgentRunParams) (int64, error) {
@@ -347,7 +351,7 @@ func (q *Queries) InsertAdmittedAgentRun(ctx context.Context, arg InsertAdmitted
 		arg.InputRevision,
 		arg.Capability,
 		arg.SandboxID,
-		arg.JobID,
+		arg.SessionID,
 	)
 	if err != nil {
 		return 0, err
@@ -379,9 +383,9 @@ func (q *Queries) InterruptAgentRun(ctx context.Context, arg InterruptAgentRunPa
 
 const listUnsettledAgentMessages = `-- name: ListUnsettledAgentMessages :many
 select m.id as message_id,ar.sandbox_id
-from dorf.job_messages m
+from dorf.session_messages m
 join dorf.agent_runs ar on ar.message_id=m.id
-where m.job_id=$1
+where m.session_id=$1
   and (ar.state in ('submitting','active','uncertain')
        or (ar.baseline_turn_id is not null and ar.state not in ('completed','failed','interrupted')))
 order by m.sequence,ar.id
@@ -392,8 +396,8 @@ type ListUnsettledAgentMessagesRow struct {
 	SandboxID string
 }
 
-func (q *Queries) ListUnsettledAgentMessages(ctx context.Context, jobID string) ([]ListUnsettledAgentMessagesRow, error) {
-	rows, err := q.db.QueryContext(ctx, listUnsettledAgentMessages, jobID)
+func (q *Queries) ListUnsettledAgentMessages(ctx context.Context, sessionID string) ([]ListUnsettledAgentMessagesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUnsettledAgentMessages, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -460,9 +464,9 @@ func (q *Queries) PrepareAgentRun(ctx context.Context, arg PrepareAgentRunParams
 const propagateTurnOutcomeToSteers = `-- name: PropagateTurnOutcomeToSteers :exec
 update dorf.agent_runs accepted
 set turn_outcome=$1
-from dorf.job_messages message,dorf.agent_runs source
+from dorf.session_messages message,dorf.agent_runs source
 where source.id=$2 and accepted.id<>source.id
-  and accepted.job_id=source.job_id and accepted.harness=source.harness and accepted.thread_id=source.thread_id
+  and accepted.session_id=source.session_id and accepted.harness=source.harness and accepted.thread_id=source.thread_id
   and accepted.message_id=message.id and message.delivery_intent='steer'
   and message.steer_target_turn_id=$3
   and accepted.turn_id=$3
@@ -496,7 +500,7 @@ func (q *Queries) RequestAgentRunInterrupt(ctx context.Context, runID string) (i
 const requeueAutoMessageAsFollow = `-- name: RequeueAutoMessageAsFollow :execrows
 with eligible as (
     select m.id
-    from dorf.job_messages m
+    from dorf.session_messages m
     join dorf.agent_runs ar on ar.message_id=m.id
     where ar.id=$2
       and m.requested_intent='auto' and m.delivery_intent='steer'
@@ -506,7 +510,7 @@ with eligible as (
       and (ar.baseline_turn_id is null or ar.baseline_turn_id=m.steer_target_turn_id)
     for update of m,ar
 ), requeued_message as (
-    update dorf.job_messages m
+    update dorf.session_messages m
     set delivery_intent='follow',steer_target_turn_id=null
     from eligible e
     where m.id=e.id

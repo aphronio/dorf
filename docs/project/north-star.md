@@ -22,14 +22,14 @@ supported recovery, and requested cleanup. Harnesses own native execution and co
 Dorf exposes observations and durable receipts without treating agent prose as proof of success.
 
 Apply this test before adding a concept: if it interprets business success, acceptance, rejection,
-human judgment, cross-Job composition, or release timing, place it in the client. Keep only the
+human judgment, cross-Session composition, or release timing, place it in the client. Keep only the
 execution custody or lifecycle mechanism that remains after that policy is removed.
 
 ## Vocabulary
 
 | Term | Meaning |
 | --- | --- |
-| **Job** | The current durable execution handle with admitted configuration, one primary native Thread binding, Messages, owned resources, and lifecycle |
+| **Session** | The current durable execution handle with admitted configuration, one native Thread binding, Messages, owned resources, and lifecycle |
 | **Sandbox** | An isolated mutable workstation with exact resource ownership |
 | **Message** | Durable text and optional ordered attachments with delivery intent and an immutable request identity |
 | **AgentRun** | The current internal delivery and native execution recovery record for one Message |
@@ -37,9 +37,9 @@ execution custody or lifecycle mechanism that remains after that policy is remov
 | **Thread / Turn** | The Harness's continuing conversation and individual execution identities |
 | **Action** | A fixed compute or model-route lifecycle effect with stable identity and reconciliation |
 
-A direct Job binds the primary Thread receiving client input; native subagent threads remain
+A direct Session binds the primary Thread receiving client input; native subagent threads remain
 Harness-owned. AgentRuns retain exact delivery and Turn attribution.
-Session naming and separate Turn ownership remain [proposals](../implementation/session-product-proposals.md).
+Separate Turn ownership remains a [proposal](../implementation/session-product-proposals.md).
 
 ## Message semantics
 
@@ -51,10 +51,10 @@ input and intent; Dorf reconciles delivery and preserves these rules.
 
 ## Workflow examples
 
-An external coding client creates a direct Job, prepares its checkout, and sends instructions.
+An external coding client creates a direct Session, prepares its checkout, and sends instructions.
 It retrieves files before cleanup and owns revision selection, isolated reviews, publication,
 credentials, and the meaning of merge or close events. Several independently controlled agents
-use separate Jobs composed by that client. Native Harness subagents remain native behavior.
+use separate Sessions composed by that client. Native Harness subagents remain native behavior.
 
 An investigation client similarly supplies its source and instructions, chooses report paths,
 retrieves needed files, and decides whether to continue. Neither application needs Dorf to assign

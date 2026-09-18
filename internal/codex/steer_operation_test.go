@@ -95,21 +95,21 @@ func newSteerOperationFixture(t *testing.T, dropAcknowledgement, terminal bool) 
 	return f
 }
 
-func (f *steerOperationFixture) externals() (terminalapp.Externals, core.Job, core.Delivery) {
+func (f *steerOperationFixture) externals() (terminalapp.Externals, core.Session, core.Delivery) {
 	externals := terminalapp.Externals{
 		Agent: f.agent, Sandbox: f.sandbox,
 		Ownership: func(context.Context, string) (provider.Ownership, error) { return f.owner, nil },
 	}
-	job := core.Job{ID: f.owner.JobID}
+	session := core.Session{ID: f.owner.SessionID}
 	delivery := core.Delivery{
-		AgentRun: core.AgentRun{ID: "run", State: core.AgentRunPending, Harness: Harness, ThreadID: "thread", MessageID: "message", JobID: job.ID, SandboxID: f.owner.SandboxID},
+		AgentRun: core.AgentRun{ID: "run", State: core.AgentRunPending, Harness: Harness, ThreadID: "thread", MessageID: "message", SessionID: session.ID, SandboxID: f.owner.SandboxID},
 		Message:  core.Message{ID: "message", Intent: core.MessageSteer, TargetTurnID: "target", Input: "correction"},
 	}
-	return externals, job, delivery
+	return externals, session, delivery
 }
 
-func submitSteer(ctx context.Context, externals core.SteerExternals, job core.Job, delivery core.Delivery) error {
-	history, err := externals.SteerHistory(ctx, job, delivery.AgentRun.SandboxID, delivery.AgentRun.ThreadID)
+func submitSteer(ctx context.Context, externals core.SteerExternals, session core.Session, delivery core.Delivery) error {
+	history, err := externals.SteerHistory(ctx, session, delivery.AgentRun.SandboxID, delivery.AgentRun.ThreadID)
 	if err != nil {
 		return err
 	}
@@ -121,7 +121,7 @@ func submitSteer(ctx context.Context, externals core.SteerExternals, job core.Jo
 	default:
 		return fmt.Errorf("unexpected steer reconciliation: %s", reconciliation.Classification)
 	}
-	accepted, err := externals.AgentSteer(ctx, job, delivery)
+	accepted, err := externals.AgentSteer(ctx, session, delivery)
 	if err != nil {
 		return err
 	}
@@ -135,14 +135,14 @@ func TestNativeSteerOperationProductionCompositionCounts(t *testing.T) {
 	for _, scoped := range []bool{false, true} {
 		t.Run(map[bool]string{false: "per-call", true: "operation"}[scoped], func(t *testing.T) {
 			f := newSteerOperationFixture(t, false, false)
-			externals, job, delivery := f.externals()
+			externals, session, delivery := f.externals()
 			var err error
 			if scoped {
-				err = externals.WithSteerScope(context.Background(), job, delivery, func(ctx context.Context, bound core.SteerExternals) error {
-					return submitSteer(ctx, bound, job, delivery)
+				err = externals.WithSteerScope(context.Background(), session, delivery, func(ctx context.Context, bound core.SteerExternals) error {
+					return submitSteer(ctx, bound, session, delivery)
 				})
 			} else {
-				err = submitSteer(context.Background(), externals, job, delivery)
+				err = submitSteer(context.Background(), externals, session, delivery)
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -161,9 +161,9 @@ func TestNativeSteerOperationProductionCompositionCounts(t *testing.T) {
 
 func TestNativeSteerOperationTerminalTargetDoesNotMutate(t *testing.T) {
 	f := newSteerOperationFixture(t, false, true)
-	externals, job, delivery := f.externals()
-	if err := externals.WithSteerScope(context.Background(), job, delivery, func(ctx context.Context, bound core.SteerExternals) error {
-		return submitSteer(ctx, bound, job, delivery)
+	externals, session, delivery := f.externals()
+	if err := externals.WithSteerScope(context.Background(), session, delivery, func(ctx context.Context, bound core.SteerExternals) error {
+		return submitSteer(ctx, bound, session, delivery)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -177,9 +177,9 @@ func TestNativeSteerOperationEndsTransportWithoutCreatingObservation(t *testing.
 	observations := NewObservations(context.Background(), nil)
 	t.Cleanup(observations.Close)
 	f.agent.Observations = observations
-	externals, job, delivery := f.externals()
-	if err := externals.WithSteerScope(context.Background(), job, delivery, func(ctx context.Context, bound core.SteerExternals) error {
-		return submitSteer(ctx, bound, job, delivery)
+	externals, session, delivery := f.externals()
+	if err := externals.WithSteerScope(context.Background(), session, delivery, func(ctx context.Context, bound core.SteerExternals) error {
+		return submitSteer(ctx, bound, session, delivery)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -198,22 +198,22 @@ func TestNativeSteerOperationEndsTransportWithoutCreatingObservation(t *testing.
 
 func TestNativeSteerOperationLostAcknowledgementUsesFreshHistoryWithoutReplay(t *testing.T) {
 	f := newSteerOperationFixture(t, true, false)
-	externals, job, delivery := f.externals()
-	err := externals.WithSteerScope(context.Background(), job, delivery, func(ctx context.Context, bound core.SteerExternals) error {
-		if _, err := bound.SteerHistory(ctx, job, delivery.AgentRun.SandboxID, delivery.AgentRun.ThreadID); err != nil {
+	externals, session, delivery := f.externals()
+	err := externals.WithSteerScope(context.Background(), session, delivery, func(ctx context.Context, bound core.SteerExternals) error {
+		if _, err := bound.SteerHistory(ctx, session, delivery.AgentRun.SandboxID, delivery.AgentRun.ThreadID); err != nil {
 			return err
 		}
-		if _, err := bound.AgentSteer(ctx, job, delivery); err == nil {
+		if _, err := bound.AgentSteer(ctx, session, delivery); err == nil {
 			t.Fatal("expected lost acknowledgement")
 		}
-		history, err := bound.SteerHistory(ctx, job, delivery.AgentRun.SandboxID, delivery.AgentRun.ThreadID)
+		history, err := bound.SteerHistory(ctx, session, delivery.AgentRun.SandboxID, delivery.AgentRun.ThreadID)
 		if err != nil {
 			return err
 		}
 		if got := core.ReconcileSteer(delivery.AgentRun.ID, delivery.Message.TargetTurnID, history.Turns); got.Classification != "completed" {
 			t.Fatalf("fresh history reconciliation=%#v", got)
 		}
-		if _, err := bound.AgentSteer(ctx, job, delivery); err == nil {
+		if _, err := bound.AgentSteer(ctx, session, delivery); err == nil {
 			t.Fatal("invalid operation replayed mutation")
 		}
 		return nil
@@ -234,7 +234,7 @@ func TestNativeSteerOperationRejectsCancellationForeignBindingAndEscapedScope(t 
 	err := f.agent.WithOperation(ctx, f.owner, "thread", func(ctx context.Context, bound terminalapp.Harness) error {
 		escaped = bound
 		foreign := f.owner
-		foreign.JobID = "other"
+		foreign.SessionID = "other"
 		if _, err := bound.SteerTurn(ctx, foreign, "thread", "target", "run", core.HarnessInput{Text: "foreign"}); err == nil {
 			t.Fatal("foreign owner accepted")
 		}

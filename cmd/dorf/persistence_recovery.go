@@ -43,8 +43,8 @@ func (r profileRuntimeResolver) checkpointRecovery(ctx context.Context, ref core
 	return persistence.RecoveryService{Store: r.store, Driver: driver, Queue: r.client.QueueName(), Claim: absurdruntime.RequireClaim}, nil
 }
 
-func (d checkpointRecovery) Restore(ctx context.Context, job core.Job, destination core.Sandbox, checkpoint persistence.Checkpoint) (string, error) {
-	if checkpoint.Repository != d.capture.config.ID || checkpoint.JobID != job.ID || checkpoint.SandboxID != destination.ID {
+func (d checkpointRecovery) Restore(ctx context.Context, session core.Session, destination core.Sandbox, checkpoint persistence.Checkpoint) (string, error) {
+	if checkpoint.Repository != d.capture.config.ID || checkpoint.SessionID != session.ID || checkpoint.SandboxID != destination.ID {
 		return "", fmt.Errorf("recovery checkpoint differs from configured repository or owner")
 	}
 	owner := checkpointOwner(destination)
@@ -68,8 +68,8 @@ func (d checkpointRecovery) Restore(ctx context.Context, job core.Job, destinati
 	return status.ProviderID, nil
 }
 
-func (d checkpointRecovery) VerifyAndRenew(ctx context.Context, job core.Job, destination core.Sandbox, checkpoint persistence.Checkpoint, pkg persistence.EffectivePackage, runs []core.AgentRun) error {
-	if checkpoint.Repository != d.capture.config.ID || checkpoint.JobID != job.ID {
+func (d checkpointRecovery) VerifyAndRenew(ctx context.Context, session core.Session, destination core.Sandbox, checkpoint persistence.Checkpoint, pkg persistence.EffectivePackage, runs []core.AgentRun) error {
+	if checkpoint.Repository != d.capture.config.ID || checkpoint.SessionID != session.ID {
 		return fmt.Errorf("checkpoint recovery custody differs")
 	}
 	owner := checkpointOwner(destination)
@@ -84,7 +84,7 @@ func (d checkpointRecovery) VerifyAndRenew(ctx context.Context, job core.Job, de
 	if err := d.externals.Gateway.RevokeExact(ctx, "sandbox:"+destination.ID, route.ID); err != nil {
 		return err
 	}
-	if err := d.externals.RouteCreate(ctx, job, destination, route); err != nil {
+	if err := d.externals.RouteCreate(ctx, session, destination, route); err != nil {
 		return err
 	}
 	return d.capture.agent.VerifyRetainedThreads(ctx, owner, runs)
@@ -117,21 +117,21 @@ func (d checkpointRecovery) DeleteResource(ctx context.Context, owned core.Sandb
 	return d.capture.sandbox.DeleteOwned(ctx, checkpointOwner(owned))
 }
 
-func (e checkpointExecution) ReconcileJobAgent(ctx context.Context, jobID string) (core.AgentReconciliationProgress, error) {
-	job, err := e.resolver.store.Job(ctx, jobID)
+func (e checkpointExecution) ReconcileSessionAgent(ctx context.Context, sessionID string) (core.AgentReconciliationProgress, error) {
+	session, err := e.resolver.store.Session(ctx, sessionID)
 	if err != nil {
 		return core.AgentReconciliationIdle, err
 	}
-	recovery, err := e.resolver.checkpointRecovery(ctx, job.ProfileRef())
+	recovery, err := e.resolver.checkpointRecovery(ctx, session.ProfileRef())
 	if err != nil {
 		return core.AgentReconciliationIdle, err
 	}
-	progressed, err := absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (bool, error) { return recovery.Reconcile(workCtx, jobID) })
+	progressed, err := absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (bool, error) { return recovery.Reconcile(workCtx, sessionID) })
 	if err != nil {
 		return core.AgentReconciliationIdle, err
 	}
 	if progressed {
 		return core.AgentReconciliationReady, nil
 	}
-	return e.Execution.ReconcileJobAgent(ctx, jobID)
+	return e.Execution.ReconcileSessionAgent(ctx, sessionID)
 }

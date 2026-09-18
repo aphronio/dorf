@@ -14,7 +14,7 @@ func liveOwnership(t *testing.T, purpose string) Ownership {
 	}
 	nonce := hex.EncodeToString(nonceBytes)
 	return Ownership{
-		JobID:          "e2b-" + purpose + "-proof-" + nonce[:12],
+		SessionID:      "e2b-" + purpose + "-proof-" + nonce[:12],
 		SandboxID:      "dorf-e2b-" + purpose + "-" + nonce[:12],
 		OwnershipNonce: nonce,
 	}

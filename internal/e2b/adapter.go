@@ -28,7 +28,7 @@ type Adapter struct {
 }
 
 func e2bOwnership(owner provider.Ownership) Ownership {
-	return Ownership{JobID: owner.JobID, SandboxID: owner.SandboxID, OwnershipNonce: owner.OwnershipNonce}
+	return Ownership{SessionID: owner.SessionID, SandboxID: owner.SandboxID, OwnershipNonce: owner.OwnershipNonce}
 }
 
 func (a Adapter) Workspace() string { return a.Config.Workspace }

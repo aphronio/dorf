@@ -53,13 +53,13 @@ func TestProfilePromotionSerializesAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	type result struct {
-		job core.Job
-		err error
+		session core.Session
+		err     error
 	}
 	done := make(chan result, 1)
 	go func() {
-		job, _, err := store.AdmitDirect(ctx, core.JobAdmission{AdmissionKey: name, SandboxProfile: name, ProviderConnection: "primary", Model: "model-test", ReasoningEffort: "high"}, client.QueueName())
-		done <- result{job, err}
+		session, _, err := store.AdmitDirect(ctx, core.SessionAdmission{AdmissionKey: name, SandboxProfile: name, ProviderConnection: "primary", Model: "model-test", ReasoningEffort: "high"}, client.QueueName())
+		done <- result{session, err}
 	}()
 	select {
 	case got := <-done:
@@ -70,8 +70,8 @@ func TestProfilePromotionSerializesAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := <-done
-	if got.err != nil || got.job.SandboxProfileRevision != next.DefinitionHash {
-		t.Fatalf("admission after promotion=%+v err=%v", got.job, got.err)
+	if got.err != nil || got.session.SandboxProfileRevision != next.DefinitionHash {
+		t.Fatalf("admission after promotion=%+v err=%v", got.session, got.err)
 	}
 }
 

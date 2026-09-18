@@ -11,11 +11,11 @@ import (
 )
 
 // AgentRunOperation binds ordinary Harness translation to one authoritative
-// Job and Sandbox. Core decides whether the durable run requires initial
+// Session and Sandbox. Core decides whether the durable run requires initial
 // submission, follow submission, recovery, or observation.
 type AgentRunOperation struct {
 	externals             Externals
-	job                   core.Job
+	session               core.Session
 	sandbox               core.Sandbox
 	messageIntent         core.MessageDeliveryIntent
 	observation           bool
@@ -26,11 +26,11 @@ type AgentRunOperation struct {
 }
 
 func NewAgentRunOperation(externals Externals, execution core.AgentMessageExecution) (AgentRunOperation, error) {
-	if execution.Job.ID == "" || execution.Sandbox.ID == "" || execution.Sandbox.JobID != execution.Job.ID ||
-		execution.AgentRun.JobID != execution.Job.ID || execution.AgentRun.SandboxID != execution.Sandbox.ID || execution.AgentRun.MessageID != execution.Message.ID {
-		return AgentRunOperation{}, fmt.Errorf("ordinary Agent operation requires the exact Message and Job-owned Sandbox")
+	if execution.Session.ID == "" || execution.Sandbox.ID == "" || execution.Sandbox.SessionID != execution.Session.ID ||
+		execution.AgentRun.SessionID != execution.Session.ID || execution.AgentRun.SandboxID != execution.Sandbox.ID || execution.AgentRun.MessageID != execution.Message.ID {
+		return AgentRunOperation{}, fmt.Errorf("ordinary Agent operation requires the exact Message and Session-owned Sandbox")
 	}
-	return AgentRunOperation{externals: externals, job: execution.Job, sandbox: execution.Sandbox, messageIntent: execution.Message.Intent, refreshSkills: execution.RefreshSkills,
+	return AgentRunOperation{externals: externals, session: execution.Session, sandbox: execution.Sandbox, messageIntent: execution.Message.Intent, refreshSkills: execution.RefreshSkills,
 		observation: execution.Message.Observation, developerInstructions: execution.Message.DeveloperInstructions, messageID: execution.Message.ID, attachments: slices.Clone(execution.Message.Attachments)}, nil
 }
 
@@ -61,9 +61,9 @@ func (o AgentRunOperation) Submit(ctx context.Context, run core.AgentRun, input 
 	prepared.Observation = o.observation
 	prepared.DeveloperInstructions = o.developerInstructions
 	if run.ThreadID == "" {
-		return o.externals.Agent.StartInitialTurn(ctx, owner, o.externals.Sandbox.Workspace(), run.ID, prepared, o.job.Model, o.job.ReasoningEffort, o.refreshSkills)
+		return o.externals.Agent.StartInitialTurn(ctx, owner, o.externals.Sandbox.Workspace(), run.ID, prepared, o.session.Model, o.session.ReasoningEffort, o.refreshSkills)
 	}
-	return o.externals.Agent.StartTurn(ctx, owner, o.externals.Sandbox.Workspace(), run.ThreadID, run.ID, prepared, o.job.Model, o.job.ReasoningEffort, o.refreshSkills)
+	return o.externals.Agent.StartTurn(ctx, owner, o.externals.Sandbox.Workspace(), run.ThreadID, run.ID, prepared, o.session.Model, o.session.ReasoningEffort, o.refreshSkills)
 }
 
 func (o AgentRunOperation) Recover(ctx context.Context, run core.AgentRun) (core.HarnessBinding, error) {
@@ -98,8 +98,8 @@ func (o AgentRunOperation) observationContext(ctx context.Context, run core.Agen
 }
 
 func (o AgentRunOperation) owner(ctx context.Context, run core.AgentRun) (provider.Ownership, error) {
-	if run.JobID != o.job.ID || run.SandboxID != o.sandbox.ID || run.MessageID != o.messageID {
-		return provider.Ownership{}, fmt.Errorf("AgentRun %s changed its exact Message, Job or Sandbox binding", run.ID)
+	if run.SessionID != o.session.ID || run.SandboxID != o.sandbox.ID || run.MessageID != o.messageID {
+		return provider.Ownership{}, fmt.Errorf("AgentRun %s changed its exact Message, Session or Sandbox binding", run.ID)
 	}
 	return o.externals.owner(ctx, o.sandbox.ID)
 }

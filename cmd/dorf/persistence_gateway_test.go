@@ -43,13 +43,13 @@ func newLivePersistenceGatewayRecovery(t *testing.T, recovery checkpointRecovery
 	return &livePersistenceGatewayRecovery{checkpointRecovery: recovery, fixture: fixture, gateway: controlled}
 }
 
-func (d *livePersistenceGatewayRecovery) VerifyAndRenew(ctx context.Context, job core.Job, destination core.Sandbox, checkpoint persistence.Checkpoint, pkg persistence.EffectivePackage, runs []core.AgentRun) error {
+func (d *livePersistenceGatewayRecovery) VerifyAndRenew(ctx context.Context, session core.Session, destination core.Sandbox, checkpoint persistence.Checkpoint, pkg persistence.EffectivePackage, runs []core.AgentRun) error {
 	d.verifyAttempts++
 	owner := livePersistenceOwner(destination)
 	if err := d.assertReplacementState(ctx, owner); err != nil {
 		return err
 	}
-	if err := d.checkpointRecovery.VerifyAndRenew(ctx, job, destination, checkpoint, pkg, runs); err != nil {
+	if err := d.checkpointRecovery.VerifyAndRenew(ctx, session, destination, checkpoint, pkg, runs); err != nil {
 		return err
 	}
 	digest, err := routeKeyDigest(ctx, d.capture.sandbox, owner)

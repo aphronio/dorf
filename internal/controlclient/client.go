@@ -166,27 +166,24 @@ func (c *Client) Me(ctx context.Context) (controlapi.Identity, error) {
 	return response, err
 }
 
-// AdmitJob admits or replays one direct Job using the caller-generated key.
-func (c *Client) AdmitJob(ctx context.Context, key string, request controlapi.AdmitJobRequest) (controlapi.DirectJob, error) {
+// CreateSession admits or replays one direct Session using the caller-generated key.
+func (c *Client) CreateSession(ctx context.Context, key string, request controlapi.CreateSessionRequest) (controlapi.Session, error) {
 	if strings.TrimSpace(key) == "" {
-		return controlapi.DirectJob{}, fmt.Errorf("Idempotency-Key is empty")
+		return controlapi.Session{}, fmt.Errorf("Idempotency-Key is empty")
 	}
-	var response controlapi.DirectJob
-	err := c.do(ctx, http.MethodPost, []string{"v1", "jobs"}, request, true, key, &response)
-	if err == nil && response.Kind != controlapi.JobKindDirect {
-		return controlapi.DirectJob{}, fmt.Errorf("Dorf API Job response has unexpected kind")
-	}
+	var response controlapi.Session
+	err := c.do(ctx, http.MethodPost, []string{"v1", "sessions"}, request, true, key, &response)
 	return response, err
 }
 
-// Job retrieves one canonical Job snapshot.
-func (c *Client) Job(ctx context.Context, id string) (controlapi.JobView, error) {
+// Session retrieves one canonical Session snapshot.
+func (c *Client) Session(ctx context.Context, id string) (controlapi.Session, error) {
 	if id == "" {
-		return nil, fmt.Errorf("Job ID is empty")
+		return controlapi.Session{}, fmt.Errorf("Session ID is empty")
 	}
-	var response jobResponse
-	err := c.do(ctx, http.MethodGet, []string{"v1", "jobs", id}, nil, true, "", &response)
-	return response.JobView, err
+	var response controlapi.Session
+	err := c.do(ctx, http.MethodGet, []string{"v1", "sessions", id}, nil, true, "", &response)
+	return response, err
 }
 
 func (c *Client) ListProfiles(ctx context.Context) (controlapi.ProfileList, error) {
@@ -195,15 +192,15 @@ func (c *Client) ListProfiles(ctx context.Context) (controlapi.ProfileList, erro
 	return list, err
 }
 
-// ListJobs retrieves one bounded page of immutable Job references. A zero
+// ListSessions retrieves one bounded page of immutable Session references. A zero
 // limit asks the server to apply its default.
-func (c *Client) ListJobs(ctx context.Context, limit int, cursor string) (controlapi.JobList, error) {
+func (c *Client) ListSessions(ctx context.Context, limit int, cursor string) (controlapi.SessionList, error) {
 	if limit < 0 || limit > 100 {
-		return controlapi.JobList{}, fmt.Errorf("Job list limit must be between 1 and 100, or zero for the server default")
+		return controlapi.SessionList{}, fmt.Errorf("Session list limit must be between 1 and 100, or zero for the server default")
 	}
-	request, err := c.request(ctx, http.MethodGet, []string{"v1", "jobs"}, nil, true, "")
+	request, err := c.request(ctx, http.MethodGet, []string{"v1", "sessions"}, nil, true, "")
 	if err != nil {
-		return controlapi.JobList{}, err
+		return controlapi.SessionList{}, err
 	}
 	query := request.URL.Query()
 	if limit != 0 {
@@ -215,29 +212,29 @@ func (c *Client) ListJobs(ctx context.Context, limit int, cursor string) (contro
 	request.URL.RawQuery = query.Encode()
 	response, err := send(c.http, request)
 	if err != nil {
-		return controlapi.JobList{}, asServiceError(err)
+		return controlapi.SessionList{}, asServiceError(err)
 	}
-	var list controlapi.JobList
+	var list controlapi.SessionList
 	if err := decodeJSONResponse(response, &list); err != nil {
-		return controlapi.JobList{}, asServiceError(err)
+		return controlapi.SessionList{}, asServiceError(err)
 	}
 	return list, nil
 }
 
-// WatchJob delivers complete canonical snapshots and reconnects an interrupted
+// WatchSession delivers complete canonical snapshots and reconnects an interrupted
 // stream using the last successfully delivered event ID. The caller's context
 // is the only lifetime limit on the stream.
-func (c *Client) WatchJob(ctx context.Context, id string, deliver func(controlapi.JobView) error) error {
+func (c *Client) WatchSession(ctx context.Context, id string, deliver func(controlapi.Session) error) error {
 	if id == "" {
-		return fmt.Errorf("Job ID is empty")
+		return fmt.Errorf("Session ID is empty")
 	}
 	if deliver == nil {
-		return fmt.Errorf("Job snapshot receiver is nil")
+		return fmt.Errorf("Session snapshot receiver is nil")
 	}
 	lastEventID := ""
 	retryAfter := time.Second
 	for {
-		reconnect, err := c.watchJobOnce(ctx, id, &lastEventID, &retryAfter, deliver)
+		reconnect, err := c.watchSessionOnce(ctx, id, &lastEventID, &retryAfter, deliver)
 		if err != nil && !reconnect {
 			return err
 		}
@@ -253,23 +250,23 @@ func (c *Client) WatchJob(ctx context.Context, id string, deliver func(controlap
 }
 
 // SendMessage admits or replays one durable follow or steer Message.
-func (c *Client) SendMessage(ctx context.Context, jobID, key string, input controlapi.SendMessageRequest) (controlapi.Message, error) {
-	if jobID == "" {
-		return controlapi.Message{}, fmt.Errorf("Job ID is empty")
+func (c *Client) SendMessage(ctx context.Context, sessionID, key string, input controlapi.SendMessageRequest) (controlapi.Message, error) {
+	if sessionID == "" {
+		return controlapi.Message{}, fmt.Errorf("Session ID is empty")
 	}
 	if strings.TrimSpace(key) == "" {
 		return controlapi.Message{}, fmt.Errorf("Idempotency-Key is empty")
 	}
 	var response controlapi.Message
 	if len(input.Attachments) == 0 {
-		err := c.do(ctx, http.MethodPost, []string{"v1", "jobs", jobID, "messages"}, input, true, key, &response)
+		err := c.do(ctx, http.MethodPost, []string{"v1", "sessions", sessionID, "messages"}, input, true, key, &response)
 		return response, err
 	}
 	body, contentType, err := encodeMessageMultipart(input)
 	if err != nil {
 		return controlapi.Message{}, err
 	}
-	err = c.doBody(ctx, http.MethodPost, []string{"v1", "jobs", jobID, "messages"}, body, contentType, true, key, &response)
+	err = c.doBody(ctx, http.MethodPost, []string{"v1", "sessions", sessionID, "messages"}, body, contentType, true, key, &response)
 	return response, err
 }
 
@@ -327,38 +324,38 @@ func writeMessageAttachment(writer *multipart.Writer, attachment controlapi.Send
 }
 
 // Message retrieves one durable Message receipt and its current delivery state.
-func (c *Client) Message(ctx context.Context, jobID, messageID string) (controlapi.Message, error) {
-	if jobID == "" {
-		return controlapi.Message{}, fmt.Errorf("Job ID is empty")
+func (c *Client) Message(ctx context.Context, sessionID, messageID string) (controlapi.Message, error) {
+	if sessionID == "" {
+		return controlapi.Message{}, fmt.Errorf("Session ID is empty")
 	}
 	if messageID == "" {
 		return controlapi.Message{}, fmt.Errorf("Message ID is empty")
 	}
 	var response controlapi.Message
-	err := c.do(ctx, http.MethodGet, []string{"v1", "jobs", jobID, "messages", messageID}, nil, true, "", &response)
+	err := c.do(ctx, http.MethodGet, []string{"v1", "sessions", sessionID, "messages", messageID}, nil, true, "", &response)
 	return response, err
 }
 
-func (c *Client) InterruptMessage(ctx context.Context, jobID, messageID string) (controlapi.Message, error) {
-	if jobID == "" || messageID == "" {
-		return controlapi.Message{}, fmt.Errorf("interrupt requires exact Job and Message identities")
+func (c *Client) InterruptMessage(ctx context.Context, sessionID, messageID string) (controlapi.Message, error) {
+	if sessionID == "" || messageID == "" {
+		return controlapi.Message{}, fmt.Errorf("interrupt requires exact Session and Message identities")
 	}
 	var response controlapi.Message
-	err := c.do(ctx, http.MethodPut, []string{"v1", "jobs", jobID, "messages", messageID, "interrupt"}, nil, true, "", &response)
+	err := c.do(ctx, http.MethodPut, []string{"v1", "sessions", sessionID, "messages", messageID, "interrupt"}, nil, true, "", &response)
 	return response, err
 }
 
 // Retry admits or replays one explicit retry request using caller-retained
 // request identity.
-func (c *Client) Retry(ctx context.Context, jobID, key string) (controlapi.Retry, error) {
-	if jobID == "" {
-		return controlapi.Retry{}, fmt.Errorf("Job ID is empty")
+func (c *Client) Retry(ctx context.Context, sessionID, key string) (controlapi.Retry, error) {
+	if sessionID == "" {
+		return controlapi.Retry{}, fmt.Errorf("Session ID is empty")
 	}
 	if strings.TrimSpace(key) == "" {
 		return controlapi.Retry{}, fmt.Errorf("Idempotency-Key is empty")
 	}
 	var response controlapi.Retry
-	err := c.do(ctx, http.MethodPost, []string{"v1", "jobs", jobID, "retries"}, nil, true, key, &response)
+	err := c.do(ctx, http.MethodPost, []string{"v1", "sessions", sessionID, "retries"}, nil, true, key, &response)
 	return response, err
 }
 
@@ -422,24 +419,14 @@ func readSandboxFileResponse(response *http.Response) ([]byte, error) {
 	return contents, nil
 }
 
-// Cleanup idempotently requests exact cleanup of one Job.
-func (c *Client) Cleanup(ctx context.Context, id string) (controlapi.JobView, error) {
+// Cleanup idempotently requests exact cleanup of one Session.
+func (c *Client) Cleanup(ctx context.Context, id string) (controlapi.Session, error) {
 	if id == "" {
-		return nil, fmt.Errorf("Job ID is empty")
+		return controlapi.Session{}, fmt.Errorf("Session ID is empty")
 	}
-	var response jobResponse
-	err := c.do(ctx, http.MethodPut, []string{"v1", "jobs", id, "cleanup"}, nil, true, "", &response)
-	return response.JobView, err
-}
-
-type jobResponse struct {
-	controlapi.JobView
-}
-
-func (r *jobResponse) UnmarshalJSON(contents []byte) error {
-	job, err := decodeJob(contents)
-	r.JobView = job
-	return err
+	var response controlapi.Session
+	err := c.do(ctx, http.MethodPut, []string{"v1", "sessions", id, "cleanup"}, nil, true, "", &response)
+	return response, err
 }
 
 func (c *Client) do(ctx context.Context, method string, path []string, input any, authenticated bool, key string, output any) error {
@@ -566,8 +553,8 @@ func (c *Client) endpoint(parts []string) string {
 	return endpoint.String()
 }
 
-func (c *Client) watchJobOnce(ctx context.Context, id string, lastEventID *string, retryAfter *time.Duration, deliver func(controlapi.JobView) error) (bool, error) {
-	request, err := c.request(ctx, http.MethodGet, []string{"v1", "jobs", id, "watch"}, nil, true, "")
+func (c *Client) watchSessionOnce(ctx context.Context, id string, lastEventID *string, retryAfter *time.Duration, deliver func(controlapi.Session) error) (bool, error) {
+	request, err := c.request(ctx, http.MethodGet, []string{"v1", "sessions", id, "watch"}, nil, true, "")
 	if err != nil {
 		return false, err
 	}
@@ -606,11 +593,11 @@ func (c *Client) watchJobOnce(ctx context.Context, id string, lastEventID *strin
 		line := scanner.Text()
 		if line == "" {
 			if len(data) != 0 && (eventType == "" || eventType == "snapshot") {
-				job, err := decodeJob([]byte(strings.Join(data, "\n")))
+				session, err := decodeSession([]byte(strings.Join(data, "\n")))
 				if err != nil {
 					return false, asServiceError(fmt.Errorf("decode Dorf API watch snapshot"))
 				}
-				if err := deliver(job); err != nil {
+				if err := deliver(session); err != nil {
 					return false, err
 				}
 			}
@@ -661,23 +648,12 @@ func (c *Client) watchJobOnce(ctx context.Context, id string, lastEventID *strin
 	return true, nil
 }
 
-func decodeJob(contents []byte) (controlapi.JobView, error) {
-	var discriminator struct {
-		Kind string `json:"kind"`
+func decodeSession(contents []byte) (controlapi.Session, error) {
+	var session controlapi.Session
+	if err := json.Unmarshal(contents, &session); err != nil {
+		return controlapi.Session{}, fmt.Errorf("decode Dorf API Session response")
 	}
-	if err := json.Unmarshal(contents, &discriminator); err != nil {
-		return nil, fmt.Errorf("decode Dorf API Job response")
-	}
-	switch discriminator.Kind {
-	case controlapi.JobKindDirect:
-		var job controlapi.DirectJob
-		if err := json.Unmarshal(contents, &job); err != nil {
-			return nil, fmt.Errorf("decode Dorf API Job response")
-		}
-		return job, nil
-	default:
-		return nil, fmt.Errorf("Dorf API Job response has unsupported kind")
-	}
+	return session, nil
 }
 
 func verifyContentDigest(values []string, contents []byte) error {

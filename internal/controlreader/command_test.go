@@ -15,23 +15,23 @@ import (
 type readerCommandExecutor struct {
 	calls   int
 	command provider.Command
-	job     core.Job
+	session core.Session
 	sandbox core.Sandbox
 	stdout  string
 }
 
-func (e *readerCommandExecutor) ExecSandbox(_ context.Context, job core.Job, owned core.Sandbox, command provider.Command) (provider.CommandResult, error) {
+func (e *readerCommandExecutor) ExecSandbox(_ context.Context, session core.Session, owned core.Sandbox, command provider.Command) (provider.CommandResult, error) {
 	e.calls++
-	e.command, e.job, e.sandbox = command, job, owned
+	e.command, e.session, e.sandbox = command, session, owned
 	return provider.CommandResult{ExitCode: 7, Stdout: e.stdout, Stderr: "warning\n"}, nil
 }
 
-func TestCommandsUseAuthenticatedJobCustodyAndCleanupFence(t *testing.T) {
-	job := core.Job{ID: "job-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
-	owned := core.Sandbox{ID: "sandbox-1", JobID: job.ID, OwnershipNonce: strings.Repeat("a", 64)}
-	store := &readerTestStore{job: job, sandbox: owned}
+func TestCommandsUseAuthenticatedSessionCustodyAndCleanupFence(t *testing.T) {
+	session := core.Session{ID: "job-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
+	owned := core.Sandbox{ID: "sandbox-1", SessionID: session.ID, OwnershipNonce: strings.Repeat("a", 64)}
+	store := &readerTestStore{session: session, sandbox: owned}
 	executor := &readerCommandExecutor{stdout: "installed\n"}
-	handler, err := NewHandler(strings.Repeat("b", 64), Service{Store: store, Runtimes: readerTestRuntimes{profile: job.SandboxProfile, commands: executor}})
+	handler, err := NewHandler(strings.Repeat("b", 64), Service{Store: store, Runtimes: readerTestRuntimes{profile: session.SandboxProfile, commands: executor}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestCommandsUseAuthenticatedJobCustodyAndCleanupFence(t *testing.T) {
 	if err != nil || result.ExitCode != 7 || result.Stdout != "installed\n" || result.Stderr != "warning\n" {
 		t.Fatalf("command result=%+v err=%v", result, err)
 	}
-	if executor.calls != 1 || !reflect.DeepEqual(executor.command, command) || executor.job != job || executor.sandbox != owned || store.fences != 1 {
+	if executor.calls != 1 || !reflect.DeepEqual(executor.command, command) || executor.session != session || executor.sandbox != owned || store.fences != 1 {
 		t.Fatal("command lost exact argv, stdin, or custody")
 	}
 	for _, invalid := range []provider.Command{{}, {Argv: []string{"sleep", "1"}, TimeoutSeconds: 121}, {Argv: []string{"bad\x00argument"}}} {
@@ -71,7 +71,7 @@ func TestCommandsUseAuthenticatedJobCustodyAndCleanupFence(t *testing.T) {
 		t.Fatalf("upgrade-held command reached provider: %v", err)
 	}
 	store.deliveryHeld = false
-	store.job.CleanupState = core.CleanupRequested
+	store.session.CleanupState = core.CleanupRequested
 	if _, err := client.Exec(context.Background(), owned.ID, command); !errors.Is(err, ErrUnavailable) || executor.calls != 2 {
 		t.Fatalf("cleanup-fenced command reached provider: %v", err)
 	}

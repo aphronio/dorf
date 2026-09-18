@@ -189,12 +189,12 @@ func coreApplication(store postgres.Store, client *absurd.Client) core.Applicati
 type composedMessageAdmissions struct{ store postgres.Store }
 
 func (a composedMessageAdmissions) AdmitAgentMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
-	job, err := a.store.Job(ctx, input.JobID)
+	session, err := a.store.Session(ctx, input.SessionID)
 	if err != nil {
 		return core.MessageAdmissionResult{}, err
 	}
 	if input.Observation || input.RefreshSkills || input.DeveloperInstructions != nil {
-		profile, err := a.store.SandboxProfileRevision(ctx, job.ProfileRef())
+		profile, err := a.store.SandboxProfileRevision(ctx, session.ProfileRef())
 		if err != nil {
 			return core.MessageAdmissionResult{}, err
 		}
@@ -207,10 +207,10 @@ func (a composedMessageAdmissions) AdmitAgentMessage(ctx context.Context, input 
 	}
 	var admitted core.MessageAdmissionResult
 	switch {
-	case job.Workflow == "" && job.WorkflowRevision == "":
+	case session.Workflow == "" && session.WorkflowRevision == "":
 		admitted, err = a.store.AdmitDirectMessage(ctx, input)
 	default:
-		return core.MessageAdmissionResult{}, fmt.Errorf("Job contract %s revision %s does not accept Messages in this deployment", job.Workflow, job.WorkflowRevision)
+		return core.MessageAdmissionResult{}, fmt.Errorf("Session contract %s revision %s does not accept Messages in this deployment", session.Workflow, session.WorkflowRevision)
 	}
 	if err != nil {
 		return admitted, err
@@ -667,7 +667,7 @@ func newProviderGatewayStatusView(profile core.SandboxProfile, connection string
 	switch {
 	case !view.ProfileVerified:
 		detail, next := sandboxProfileNotReady(profile)
-		view.Impact = "new Jobs cannot use this Sandbox profile; " + detail
+		view.Impact = "new Sessions cannot use this Sandbox profile; " + detail
 		view.Next = next
 	case view.Authority.Status != "ready":
 		view.Impact = "new AgentRuns cannot obtain authenticated inference routes"
@@ -936,7 +936,7 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 		return err
 	}
 	var hostIdentity controlapi.Identity
-	err = presenter.Run(ctx, "Preparing Job control", func(ctx context.Context) error {
+	err = presenter.Run(ctx, "Preparing Session control", func(ctx context.Context) error {
 		var err error
 		hostIdentity, err = ensureHostControlClient(ctx, store, paths.StateDir)
 		return err
@@ -944,7 +944,7 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	if err != nil {
 		return err
 	}
-	presenter.Ready("Job control", "Authenticated deployment-host Client "+hostIdentity.Client.ID)
+	presenter.Ready("Session control", "Authenticated deployment-host Client "+hostIdentity.Client.ID)
 	fmt.Fprintln(stdout)
 
 	resolvedOptions, err := resolveSetupSandboxOptions(ctx, store, cfg, options, presenter)
@@ -996,9 +996,9 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	}
 	presenter.Section("Ready")
 	if len(providers) == 0 {
-		presenter.Ready("Dorf", "Control plane ready. Configure a Sandbox profile before admitting Jobs")
+		presenter.Ready("Dorf", "Control plane ready. Configure a Sandbox profile before admitting Sessions")
 	} else {
-		presenter.Ready("Dorf", "Control plane and durable Job worker ready")
+		presenter.Ready("Dorf", "Control plane and durable Session worker ready")
 	}
 	if prepared != nil && prepared.ControlURL != "" {
 		presenter.Ready("Connect", "dorf connect "+prepared.ControlURL)
@@ -1392,6 +1392,6 @@ func boundedTaskError(raw json.RawMessage) string {
 }
 
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <version|update|setup|connect|auth|client|serve|migrate|doctor|provider|profile|upgrade|checkpoint|run|job|worker|sandbox> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|update|setup|connect|auth|client|serve|migrate|doctor|provider|profile|upgrade|checkpoint|run|session|worker|sandbox> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

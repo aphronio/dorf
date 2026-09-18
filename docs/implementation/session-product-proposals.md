@@ -1,6 +1,6 @@
 # Session product: proposed slices
 
-Status: iterative tracker. Slices 1–3 and 5 have agreed implementation scopes; other slices remain
+Status: iterative tracker. Slices 1–3, 5, and 5a have agreed implementation scopes; other slices remain
 proposals requiring their own discussion and agreement.
 
 This tracker explores a smaller product centered on one durable Session, with application goals,
@@ -37,6 +37,7 @@ decision record. This proposal tracker is not a substitute for either.
 | 3. Remove coding application | Verified | Retire coding, review, and publication policy while keeping direct execution. | Discuss the smallest concrete removal; add client primitives only for a proven need. Settle further Session vocabulary and ownership changes in their implementing slices. |
 | 4. Dependable setup and activation | Proposed | Hold native delivery until an exact configuration revision is ready; validate provider and harness options in their selected adapters. | Define lifetime-pinned versus changeable settings, profile/package compatibility, field ownership, quiescent updates, and uncertain setup-command outcomes. |
 | 5. Job owns its Thread | Verified | Store the authoritative native conversation binding directly on the execution owner. | Prove uncertain initial acceptance and queued Follow recovery; define legacy binding conversion and conflict handling. Decide when public and internal Job naming changes. |
+| 5a. Session naming | Verified | Rename the existing execution context and its client contract; retain one primary Thread and derive Harness from the pinned profile. | Agreed scope is recorded below. |
 | 6. Separate delivery from Turn execution | Proposed | Several accepted Message receipts reference one Turn outcome; interruption targets that exact Turn. | Prove accepted, rejected, and uncertain Steers, Auto successor adoption, and preserved native submission attribution. |
 | 7. Finish application removal | Dropped | Application evidence and application-only tables are removed with coding. | Remaining generic Job/AgentRun fields belong to their future ownership slices. |
 
@@ -44,7 +45,8 @@ decision record. This proposal tracker is not a substitute for either.
 Completed: separate review contracts -> remove investigation -> remove coding
 Completed next: Job Thread ownership (slice 5, before setup/activation)
 
-Remaining candidates: setup/activation, Session naming, delivery/Turn facts
+Completed: Session naming (slice 5a)
+Remaining candidates: setup/activation, delivery/Turn facts
 
 Each arrow is a proposed dependency, not approval to start the next slice.
 ```
@@ -130,6 +132,27 @@ Each arrow is a proposed dependency, not approval to start the next slice.
 - Net physical Go change: 42 fewer handwritten implementation lines, 45 fewer generated lines,
   and 99 additional test lines. No deployment was changed.
 
+### Slice 5a: Session naming
+
+- Agreed scope: rename Job to Session across Go, SQL storage, public API, CLI, and existing clients.
+  Use `ThreadID` for the current input target. Derive Harness from the immutable admitted
+  profile; remove the redundant stored binding field. Profile naming is deferred.
+- Preserve opaque IDs, request keys, accepted input, native Thread/Turn attribution, resource
+  ownership, queued work, and execution behavior. No public aliases or parallel compatibility path.
+- Session-level input targets its bound Thread. Additional explicitly addressed Threads can be
+  considered later; this slice adds no collection, table, or multi-Harness dispatch.
+- Client simplification: one concrete Session response across creation, observation, and cleanup.
+  Remove the kind discriminator, common/view wrappers, and kind-based decoding. Configuration,
+  delivery/Turn separation, and controller replacement remain separate.
+- Decision: [D146](../project/decisions/D146-name-the-execution-context-session.md).
+- Verification: `mise run check` and `mise run docs:check` passed. Final OpenAPI/client checks and
+  PostgreSQL baseline migration checks passed after the schema-reference and profile-validation
+  refinements. The migration preserves the bound Thread and rejects a profile/Harness mismatch.
+  Existing client flows, generated contracts, types, and migration checks passed.
+- Net physical Go change: 87 fewer handwritten implementation lines, 29 fewer test lines, and
+  8 additional generated lines. Published migrations remain unchanged; the new migration renames storage.
+  Only disposable test databases were migrated. No deployment was changed.
+
 ### Slice 6: delivery and execution facts
 
 - Agreed scope: pending discussion.
@@ -144,12 +167,12 @@ Each arrow is a proposed dependency, not approval to start the next slice.
 Apply [Build a small thing that composes](../project/principles.md#build-a-small-thing-that-composes):
 inspect real callers before changing the contract, describe the client simplification, and keep
 application policy outside Dorf. Consumer-specific source evidence belongs outside this public
-repository. These candidates have not been approved for implementation.
+repository. Except for naming in slice 5a, these candidates have not been approved for implementation.
 
 | Candidate | Client simplification | Scope to settle |
 | --- | --- | --- |
 | Align existing consumers with application retirement | A client can regenerate its models and use the supported direct contract without retired workflow types or dispatch paths. | Audit actual callers before deployment. Retire unused application flows or implement their policy in the client through existing primitives. No workflow restoration in Core. |
-| Job → Session vocabulary | One consistent name for the durable context across creation, continued input, inspection, and release. | Agree on a coordinated API/client change, retained ID and request-key behavior, and concrete deployment order. A rename alone does not simplify execution or justify another resource. |
+| Job → Session vocabulary (agreed in slice 5a) | One consistent name for the durable context across creation, continued input, inspection, and release. | Agree on a coordinated API/client change, retained ID and request-key behavior, and concrete deployment order. A rename alone does not simplify execution or justify another resource. |
 | Workspace access through the Session handle | Clients need not repeatedly retrieve a collection and select the default Sandbox before reading files or executing commands. | First compare a small client helper with a public API change. Preserve readiness, delivery holds, exact ownership, bounded files, and unknown command outcomes. Resource generations remain internal custody. |
 | Separate Message delivery from Turn observation | Clients can distinguish input acceptance from the shared execution outcome without reconstructing it across steering Messages. | Keep this in slice 6; demonstrate an actual reduction in client reconciliation while retaining reply ordering, cursor gaps, completion watermarks, and exact interruption. |
 
@@ -159,7 +182,7 @@ identifies the primary native conversation receiving input; native subagent thre
 Harness-owned. A Session ID need not equal any native Thread or session ID. Saved Agent resources,
 a second transcript store, and additional configuration lifecycle states need their own use case.
 
-Review order: consumer contract alignment first, then discuss naming or workspace access against
+Consumer contract alignment and naming are complete. Discuss workspace access next only against
 a concrete client diff. Setup/activation remains proposed; the existing create → prepare → send
 sequence must be evaluated before adding another barrier or configuration revision model.
 

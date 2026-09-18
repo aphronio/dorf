@@ -88,18 +88,18 @@ func TestSandboxUpgradeRecoveryKeepsCustodyAndQueuedInput(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, store, client := testDatabase(t)
 			ctx := context.Background()
-			job, _, err := admitDirectFixture(t, store, ctx, core.JobAdmission{AdmissionKey: fmt.Sprintf("upgrade-%s-%d", tc.name, time.Now().UnixNano()), SandboxProfile: "incus", ProviderConnection: "primary", Model: "model-test", ReasoningEffort: "low"})
+			session, _, err := admitDirectFixture(t, store, ctx, core.SessionAdmission{AdmissionKey: fmt.Sprintf("upgrade-%s-%d", tc.name, time.Now().UnixNano()), SandboxProfile: "incus", ProviderConnection: "primary", Model: "model-test", ReasoningEffort: "low"})
 			if err != nil {
 				t.Fatal(err)
 			}
-			owned, err := store.Sandbox(ctx, core.MainSandboxName(job.ID))
+			owned, err := store.Sandbox(ctx, core.MainSandboxName(session.ID))
 			if err != nil {
 				t.Fatal(err)
 			}
 			if err := store.BindSandboxResource(ctx, owned, "provider-original"); err != nil {
 				t.Fatal(err)
 			}
-			current, err := nextDelivery(ctx, store, job.ID)
+			current, err := nextDelivery(ctx, store, session.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -109,9 +109,9 @@ func TestSandboxUpgradeRecoveryKeepsCustodyAndQueuedInput(t *testing.T) {
 			if err := store.BindAgentRun(ctx, current.AgentRun.ID, "codex", "retained-thread", "retained-turn", "completed"); err != nil {
 				t.Fatal(err)
 			}
-			request := upgrade.Request{ID: "upgrade-" + strings.ReplaceAll(job.ID, "_", "-"), JobID: job.ID, SandboxID: owned.ID, PackagePath: "/nix/store/" + strings.Repeat("a", 32) + "-codex-0.155.0", Version: "0.155.0"}
+			request := upgrade.Request{ID: "upgrade-" + strings.ReplaceAll(session.ID, "_", "-"), SessionID: session.ID, SandboxID: owned.ID, PackagePath: "/nix/store/" + strings.Repeat("a", 32) + "-codex-0.155.0", Version: "0.155.0"}
 			// Keep provider checkpoint keys within the shared 63-character limit.
-			request.ID = "upgrade-" + job.ID[len(job.ID)-24:]
+			request.ID = "upgrade-" + session.ID[len(session.ID)-24:]
 			receipt, err := store.RequestSandboxUpgrade(ctx, client.QueueName(), request)
 			if err != nil {
 				t.Fatal(err)
@@ -125,13 +125,13 @@ func TestSandboxUpgradeRecoveryKeepsCustodyAndQueuedInput(t *testing.T) {
 			if _, err := store.RequestSandboxUpgrade(ctx, client.QueueName(), changed); err == nil {
 				t.Fatal("changed request accepted")
 			}
-			if err := store.ReleaseSandboxDelivery(ctx, client.QueueName(), job.ID, owned.ID, request.ID); err == nil {
+			if err := store.ReleaseSandboxDelivery(ctx, client.QueueName(), session.ID, owned.ID, request.ID); err == nil {
 				t.Fatal("generic release bypassed verification")
 			}
 			if err := store.FinishSandboxUpgrade(ctx, client.QueueName(), receipt); err == nil {
 				t.Fatal("unverified release accepted")
 			}
-			queued, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: owned.ID, FromKind: core.MessageFromHuman, FromID: "held-input", Input: "continue after upgrade", Intent: core.MessageAuto})
+			queued, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{SessionID: session.ID, SandboxID: owned.ID, FromKind: core.MessageFromHuman, FromID: "held-input", Input: "continue after upgrade", Intent: core.MessageAuto})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -140,7 +140,7 @@ func TestSandboxUpgradeRecoveryKeepsCustodyAndQueuedInput(t *testing.T) {
 			service := upgrade.Service{Store: store, Driver: driver, Queue: client.QueueName(), Claim: func(context.Context) error { return nil }, Emit: func(event telemetry.Event) { events = append(events, event) }}
 			lostResponse := false
 			for range 20 {
-				records, err := store.JobUpgrades(ctx, job.ID)
+				records, err := store.SessionUpgrades(ctx, session.ID)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -148,7 +148,7 @@ func TestSandboxUpgradeRecoveryKeepsCustodyAndQueuedInput(t *testing.T) {
 				if !receipt.VerifiedAt.IsZero() && ((!tc.replace && !receipt.CheckpointDeletedAt.IsZero()) || (tc.replace && driver.deleted[owned.ResourceID])) {
 					break
 				}
-				_, err = service.Reconcile(ctx, job.ID)
+				_, err = service.Reconcile(ctx, session.ID)
 				if err != nil {
 					if !tc.replace || lostResponse {
 						t.Fatal(err)
@@ -157,7 +157,7 @@ func TestSandboxUpgradeRecoveryKeepsCustodyAndQueuedInput(t *testing.T) {
 				}
 				// A new executor sees only retained facts, never an in-memory step index.
 				service.Store = postgres.Store{DB: store.DB}
-				selected, err := store.AgentMessage(ctx, job.ID)
+				selected, err := store.AgentMessage(ctx, session.ID)
 				if err != nil || selected != nil {
 					t.Fatalf("hold leaked delivery: %v", err)
 				}
@@ -166,7 +166,7 @@ func TestSandboxUpgradeRecoveryKeepsCustodyAndQueuedInput(t *testing.T) {
 				t.Fatal("verification did not converge")
 			}
 			service.Queue = "missing_queue"
-			if _, err := service.Reconcile(ctx, job.ID); err == nil {
+			if _, err := service.Reconcile(ctx, session.ID); err == nil {
 				t.Fatal("release succeeded without wake")
 			}
 			held, _ := store.SandboxDeliveryHeld(ctx, owned.ID)
@@ -175,14 +175,14 @@ func TestSandboxUpgradeRecoveryKeepsCustodyAndQueuedInput(t *testing.T) {
 				t.Fatal("failed wake partially switched custody")
 			}
 			service.Queue = client.QueueName()
-			if _, err := service.Reconcile(ctx, job.ID); err != nil {
+			if _, err := service.Reconcile(ctx, session.ID); err != nil {
 				t.Fatal(err)
 			}
 			after, err := store.Sandbox(ctx, owned.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
-			history, _ := store.JobUpgrades(ctx, job.ID)
+			history, _ := store.SessionUpgrades(ctx, session.ID)
 			want := "upgraded"
 			if tc.rollback {
 				want = "rolled_back"
@@ -199,7 +199,7 @@ func TestSandboxUpgradeRecoveryKeepsCustodyAndQueuedInput(t *testing.T) {
 			if tc.replace && driver.checkpointDeleted {
 				t.Fatal("deleted replacement's backing checkpoint")
 			}
-			next, err := store.AgentMessage(ctx, job.ID)
+			next, err := store.AgentMessage(ctx, session.ID)
 			if err != nil || next == nil || next.MessageID != queued.Message.ID {
 				t.Fatalf("queued input was not resumed: %v", err)
 			}

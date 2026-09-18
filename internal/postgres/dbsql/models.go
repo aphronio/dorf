@@ -13,28 +13,12 @@ import (
 
 type DorfAction struct {
 	ID        string
-	JobID     string
+	SessionID string
 	Kind      core.ActionKind
 	State     core.ActionState
 	ScopeKey  string
 	CreatedAt time.Time
 	SettledAt sql.NullTime
-}
-
-type DorfJobRetryRequest struct {
-	RequestKey string
-	JobID      string
-	TaskID     string
-	RunID      string
-	Attempt    int32
-}
-
-type DorfJobTask struct {
-	JobID      string
-	Sequence   int64
-	TaskID     string
-	TaskName   string
-	AttachedAt time.Time
 }
 
 type DorfSandboxDeliveryHold struct {
@@ -43,4 +27,20 @@ type DorfSandboxDeliveryHold struct {
 	Reason      string
 	RequestedAt time.Time
 	ReleasedAt  sql.NullTime
+}
+
+type DorfSessionRetryRequest struct {
+	RequestKey string
+	SessionID  string
+	TaskID     string
+	RunID      string
+	Attempt    int32
+}
+
+type DorfSessionTask struct {
+	SessionID  string
+	Sequence   int64
+	TaskID     string
+	TaskName   string
+	AttachedAt time.Time
 }

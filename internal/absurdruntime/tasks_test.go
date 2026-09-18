@@ -3,9 +3,9 @@ package absurdruntime
 import "testing"
 
 func TestTaskSpawnOptionsUseBoundedExponentialRetry(t *testing.T) {
-	options := TaskSpawnOptions("jobs", "job-key")
+	options := TaskSpawnOptions("sessions", "job-key")
 
-	if options.QueueName != "jobs" || options.IdempotencyKey != "job-key" || options.MaxAttempts != 5 {
+	if options.QueueName != "sessions" || options.IdempotencyKey != "job-key" || options.MaxAttempts != 5 {
 		t.Fatalf("spawn identity = %#v", options)
 	}
 	if options.RetryStrategy == nil {

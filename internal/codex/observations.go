@@ -36,7 +36,7 @@ func NewObservations(ctx context.Context, emit func(telemetry.Event), terminalWa
 }
 
 type instructionScope struct {
-	jobID, sandboxID, threadID string
+	sessionID, sandboxID, threadID string
 }
 
 type observationKey struct {
@@ -45,7 +45,7 @@ type observationKey struct {
 }
 
 func (p *protocol) instructionScope(threadID string) instructionScope {
-	return instructionScope{jobID: p.owner.JobID, sandboxID: p.owner.SandboxID, threadID: threadID}
+	return instructionScope{sessionID: p.owner.SessionID, sandboxID: p.owner.SandboxID, threadID: threadID}
 }
 
 func (o *Observations) Close() {
@@ -267,7 +267,7 @@ func (p *protocol) emitObservation(name string, at time.Time, fields map[string]
 		return
 	}
 	attributes := map[string]any{
-		"dorf.job_id": p.observed.run.JobID, "dorf.message_id": p.observed.run.MessageID,
+		"dorf.session_id": p.observed.run.SessionID, "dorf.message_id": p.observed.run.MessageID,
 		"dorf.agent_run_id": p.observed.run.ID, "native.thread_id": p.observed.threadID,
 		"native.turn_id": p.observed.turnID,
 	}
@@ -340,7 +340,7 @@ func (p *protocol) signalTerminalWake() {
 	}
 	p.observed.wakeStarted = true
 	target := core.NativeTerminalWakeTarget{
-		JobID: p.observed.run.JobID, SandboxID: p.observed.run.SandboxID,
+		SessionID: p.observed.run.SessionID, SandboxID: p.observed.run.SandboxID,
 		AgentRunID: p.observed.run.ID, ThreadID: p.observed.threadID, TurnID: p.observed.turnID,
 	}
 	o := p.observations
@@ -360,7 +360,7 @@ func (p *protocol) signalTerminalWake() {
 			o.emit(telemetry.Event{
 				Name: "codex.native-terminal-wake.failed", At: time.Now(), Failed: true,
 				Attributes: map[string]any{
-					"dorf.job_id": target.JobID, "dorf.agent_run_id": target.AgentRunID,
+					"dorf.session_id": target.SessionID, "dorf.agent_run_id": target.AgentRunID,
 					"native.thread_id": target.ThreadID, "native.turn_id": target.TurnID,
 				},
 			})

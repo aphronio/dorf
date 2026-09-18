@@ -23,7 +23,7 @@ var (
 // different checkpoint kind or storage path. Eligible is derived from current
 // facts and must still be true when publication rechecks the boundary.
 type CaptureBoundary struct {
-	JobID                 string    `json:"job_id"`
+	SessionID             string    `json:"job_id"`
 	SandboxID             string    `json:"sandbox_id"`
 	ResourceID            string    `json:"resource_id"`
 	ProfileName           string    `json:"profile_name"`

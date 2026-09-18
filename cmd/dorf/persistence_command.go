@@ -17,22 +17,22 @@ import (
 // exact snapshot; storage order or an object-store alias never chooses it.
 func checkpointCommand(ctx context.Context, store postgres.Store, tasks *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
 	if len(args) < 2 {
-		return fmt.Errorf("checkpoint requires show JOB or recover JOB --id ID --repository ID --snapshot FULL_ID")
+		return fmt.Errorf("checkpoint requires show SESSION or recover SESSION --id ID --repository ID --snapshot FULL_ID")
 	}
-	job, err := store.Job(ctx, args[1])
+	session, err := store.Session(ctx, args[1])
 	if err != nil {
 		return err
 	}
 	switch args[0] {
 	case "show":
 		if len(args) != 2 {
-			return fmt.Errorf("checkpoint show requires exactly one Job")
+			return fmt.Errorf("checkpoint show requires exactly one Session")
 		}
-		checkpoints, err := store.ListCheckpoints(ctx, core.MainSandboxName(job.ID))
+		checkpoints, err := store.ListCheckpoints(ctx, core.MainSandboxName(session.ID))
 		if err != nil {
 			return err
 		}
-		recoveries, err := store.JobRecoveries(ctx, job.ID)
+		recoveries, err := store.SessionRecoveries(ctx, session.ID)
 		if err != nil {
 			return err
 		}
@@ -41,29 +41,29 @@ func checkpointCommand(ctx context.Context, store postgres.Store, tasks *absurd.
 			Recoveries  []persistence.RecoveryReceipt `json:"recoveries"`
 		}{checkpoints, recoveries})
 	case "recover":
-		return recoverCheckpointCommand(ctx, store, tasks, cfg, job, args[2:], stdout, stderr)
+		return recoverCheckpointCommand(ctx, store, tasks, cfg, session, args[2:], stdout, stderr)
 	default:
 		return fmt.Errorf("unknown checkpoint operation")
 	}
 }
 
-func wakeFailedCheckpointJob(ctx context.Context, store postgres.Store, tasks *absurd.Client, job core.Job, requestID string) error {
-	if job.CurrentTaskID == "" {
+func wakeFailedCheckpointSession(ctx context.Context, store postgres.Store, tasks *absurd.Client, session core.Session, requestID string) error {
+	if session.CurrentTaskID == "" {
 		return fmt.Errorf("checkpoint recovery has no attached execution task")
 	}
-	result, err := tasks.FetchTaskResult(ctx, tasks.QueueName(), job.CurrentTaskID)
+	result, err := tasks.FetchTaskResult(ctx, tasks.QueueName(), session.CurrentTaskID)
 	if err != nil {
 		return err
 	}
 	if result != nil && result.State == absurd.TaskFailed {
-		_, err := coreApplication(store, tasks).RetryFailedJob(ctx, job.ID, "checkpoint-recovery:"+requestID)
+		_, err := coreApplication(store, tasks).RetryFailedSession(ctx, session.ID, "checkpoint-recovery:"+requestID)
 		return err
 	}
 	return nil
 }
 
-func recoverCheckpointCommand(ctx context.Context, store postgres.Store, tasks *absurd.Client, cfg config.Config, job core.Job, args []string, stdout, stderr io.Writer) error {
-	request := persistence.RecoveryRequest{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID)}
+func recoverCheckpointCommand(ctx context.Context, store postgres.Store, tasks *absurd.Client, cfg config.Config, session core.Session, args []string, stdout, stderr io.Writer) error {
+	request := persistence.RecoveryRequest{SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID)}
 	flags := flag.NewFlagSet("checkpoint recover", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.StringVar(&request.ID, "id", "", "stable recovery request ID")
@@ -82,18 +82,18 @@ func recoverCheckpointCommand(ctx context.Context, store postgres.Store, tasks *
 	if err != nil {
 		return err
 	}
-	if checkpointCfg == nil || !checkpointCfg.enabled(job.ProfileRef()) || checkpointCfg.ID != request.Repository {
+	if checkpointCfg == nil || !checkpointCfg.enabled(session.ProfileRef()) || checkpointCfg.ID != request.Repository {
 		return fmt.Errorf("checkpoint recovery custody is not configured")
 	}
 	resolver := profileRuntimeResolver{cfg: cfg, store: store, client: tasks}
-	if _, err := resolver.checkpointRecovery(ctx, job.ProfileRef()); err != nil {
+	if _, err := resolver.checkpointRecovery(ctx, session.ProfileRef()); err != nil {
 		return err
 	}
 	receipt, err := store.RequestCheckpointRecovery(ctx, tasks.QueueName(), request)
 	if err != nil {
 		return err
 	}
-	if err := wakeFailedCheckpointJob(ctx, store, tasks, job, request.ID); err != nil {
+	if err := wakeFailedCheckpointSession(ctx, store, tasks, session, request.ID); err != nil {
 		return err
 	}
 	return writeJSON(stdout, receipt)

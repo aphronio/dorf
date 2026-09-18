@@ -83,10 +83,10 @@ func ValidMessageInput(input MessageInput) bool {
 		(strings.TrimSpace(input.Text) != "" || len(input.Attachments) != 0) && ValidMessageAttachments(input.Attachments)
 }
 
-// JobAdmission is the complete Core input shared by workflow and direct-client
+// SessionAdmission is the complete Core input shared by workflow and direct-client
 // admission. Workflow packages extend it with their own typed input; a direct
 // client leaves both workflow identity fields empty.
-type JobAdmission struct {
+type SessionAdmission struct {
 	KeepRunning        bool
 	CreatedByClientID  string
 	ClientReference    string
@@ -105,7 +105,7 @@ type MessageAdmission struct {
 	Observation           bool
 	DeveloperInstructions *string
 	RefreshSkills         bool
-	JobID                 string
+	SessionID             string
 	SandboxID             string
 	FromKind              MessageFromKind
 	FromID                string

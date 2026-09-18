@@ -1,10 +1,11 @@
 # D145: Direct Job owns its Thread
 
-- **Applicability:** current
+- **Applicability:** partial
 - **Areas:** harnesses, persistence
 - **Read when:** Changing conversation continuity, native acceptance recovery, or Thread migration.
 - **Decision history:** Moves authoritative direct conversation binding from prior AgentRuns to
-  their Job, superseding that part of D055, 2026-09-18.
+  their Job, superseding that part of D055, 2026-09-18. D146 names that owner Session and derives
+  Harness from the admitted profile.
 - **Decision:** Store the primary Harness/Thread pair on the direct Job. Bind it atomically with proven
   native Turn acceptance. Select later Follows and read the conversation timeline through that
   binding. AgentRuns retain their native attribution and submission recovery facts. Native

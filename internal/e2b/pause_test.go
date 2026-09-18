@@ -12,7 +12,7 @@ import (
 
 func TestMemoryPauseReconcilesLostAcknowledgementAndReconnect(t *testing.T) {
 	api := newFakeAPI(t)
-	owner := Ownership{JobID: "pause-job", SandboxID: "pause-sandbox", OwnershipNonce: strings.Repeat("a", 64)}
+	owner := Ownership{SessionID: "pause-session", SandboxID: "pause-sandbox", OwnershipNonce: strings.Repeat("a", 64)}
 	state := "running"
 	pauses := 0
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -61,7 +61,7 @@ func TestMemoryPauseReconcilesLostAcknowledgementAndReconnect(t *testing.T) {
 }
 
 func TestPauseRefusalPreservesRetryableProviderError(t *testing.T) {
-	owner := Ownership{JobID: "job", SandboxID: "sandbox", OwnershipNonce: strings.Repeat("a", 64)}
+	owner := Ownership{SessionID: "session", SandboxID: "sandbox", OwnershipNonce: strings.Repeat("a", 64)}
 	client := Client{APIURL: "https://e2b.test", APIKey: "test-key", HTTPClient: &http.Client{Transport: handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			json.NewEncoder(w).Encode(detailSandbox{SandboxID: "provider", State: "running", Metadata: owner.metadata()})
@@ -76,7 +76,7 @@ func TestPauseRefusalPreservesRetryableProviderError(t *testing.T) {
 }
 
 func TestPauseAcceptsConcurrentProviderAutoPause(t *testing.T) {
-	owner := Ownership{JobID: "job", SandboxID: "sandbox", OwnershipNonce: strings.Repeat("a", 64)}
+	owner := Ownership{SessionID: "session", SandboxID: "sandbox", OwnershipNonce: strings.Repeat("a", 64)}
 	client := Client{APIURL: "https://e2b.test", APIKey: "test-key", HTTPClient: &http.Client{Transport: handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			json.NewEncoder(w).Encode(detailSandbox{SandboxID: "provider", State: "running", Metadata: owner.metadata()})

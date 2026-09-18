@@ -12,17 +12,17 @@ import (
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
-func TestJobExecutionWakeSerializesDeduplicatesAndRollsBackEmitFailure(t *testing.T) {
+func TestSessionExecutionWakeSerializesDeduplicatesAndRollsBackEmitFailure(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
-	job, _, err := admitDirectFixture(t, store, ctx, core.JobAdmission{
+	session, _, err := admitDirectFixture(t, store, ctx, core.SessionAdmission{
 		AdmissionKey: fmt.Sprintf("wake-revision-%d", time.Now().UnixNano()), SandboxProfile: "incus",
 		ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "low",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if revision, err := store.JobExecutionWakeRevision(ctx, job.ID); err != nil || revision != 0 {
+	if revision, err := store.SessionExecutionWakeRevision(ctx, session.ID); err != nil || revision != 0 {
 		t.Fatalf("initial wake revision=%d err=%v", revision, err)
 	}
 
@@ -34,7 +34,7 @@ func TestJobExecutionWakeSerializesDeduplicatesAndRollsBackEmitFailure(t *testin
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			revision, err := store.SignalJobExecutionWake(ctx, client.QueueName(), job.ID, fmt.Sprintf("message:concurrent-%02d", index))
+			revision, err := store.SignalSessionExecutionWake(ctx, client.QueueName(), session.ID, fmt.Sprintf("message:concurrent-%02d", index))
 			if err != nil {
 				errors <- err
 				return
@@ -58,40 +58,40 @@ func TestJobExecutionWakeSerializesDeduplicatesAndRollsBackEmitFailure(t *testin
 			t.Fatalf("serialized revisions=%v", got)
 		}
 	}
-	replayed, err := store.SignalJobExecutionWake(ctx, client.QueueName(), job.ID, "message:concurrent-00")
+	replayed, err := store.SignalSessionExecutionWake(ctx, client.QueueName(), session.ID, "message:concurrent-00")
 	if err != nil || replayed < 1 || replayed > signals {
 		t.Fatalf("duplicate wake revision=%d err=%v", replayed, err)
 	}
-	if revision, err := store.JobExecutionWakeRevision(ctx, job.ID); err != nil || revision != signals {
+	if revision, err := store.SessionExecutionWakeRevision(ctx, session.ID); err != nil || revision != signals {
 		t.Fatalf("deduplicated wake revision=%d err=%v", revision, err)
 	}
 	var causes int
-	if err := store.DB.QueryRowContext(ctx, `select count(*) from dorf.job_execution_wake_causes where job_id=$1`, job.ID).Scan(&causes); err != nil || causes != signals {
+	if err := store.DB.QueryRowContext(ctx, `select count(*) from dorf.session_execution_wake_causes where session_id=$1`, session.ID).Scan(&causes); err != nil || causes != signals {
 		t.Fatalf("wake causes=%d err=%v", causes, err)
 	}
 
-	rollbackJob, _, err := admitDirectFixture(t, store, ctx, core.JobAdmission{
+	rollbackSession, _, err := admitDirectFixture(t, store, ctx, core.SessionAdmission{
 		AdmissionKey: fmt.Sprintf("wake-rollback-%d", time.Now().UnixNano()), SandboxProfile: "incus",
 		ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "low",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SignalJobExecutionWake(ctx, "missing_wake_queue", rollbackJob.ID, "message:rollback"); err == nil {
+	if _, err := store.SignalSessionExecutionWake(ctx, "missing_wake_queue", rollbackSession.ID, "message:rollback"); err == nil {
 		t.Fatal("wake signal unexpectedly succeeded without an Absurd queue")
 	}
-	if revision, err := store.JobExecutionWakeRevision(ctx, rollbackJob.ID); err != nil || revision != 0 {
+	if revision, err := store.SessionExecutionWakeRevision(ctx, rollbackSession.ID); err != nil || revision != 0 {
 		t.Fatalf("failed emit committed revision=%d err=%v", revision, err)
 	}
-	if err := store.DB.QueryRowContext(ctx, `select count(*) from dorf.job_execution_wake_causes where job_id=$1`, rollbackJob.ID).Scan(&causes); err != nil || causes != 0 {
+	if err := store.DB.QueryRowContext(ctx, `select count(*) from dorf.session_execution_wake_causes where session_id=$1`, rollbackSession.ID).Scan(&causes); err != nil || causes != 0 {
 		t.Fatalf("failed emit committed causes=%d err=%v", causes, err)
 	}
 }
 
-func TestJobExecutionWakeIsDurableBeforeWaitAndTimeoutReloads(t *testing.T) {
+func TestSessionExecutionWakeIsDurableBeforeWaitAndTimeoutReloads(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
-	job, _, err := admitDirectFixture(t, store, ctx, core.JobAdmission{
+	session, _, err := admitDirectFixture(t, store, ctx, core.SessionAdmission{
 		AdmissionKey: fmt.Sprintf("wake-await-%d", time.Now().UnixNano()), SandboxProfile: "incus",
 		ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "low",
 	})
@@ -109,16 +109,16 @@ func TestJobExecutionWakeIsDurableBeforeWaitAndTimeoutReloads(t *testing.T) {
 		{name: "timeout", revision: 2, timeout: 25 * time.Millisecond},
 	} {
 		taskName := "dorf-job-execution-wake-proof-" + test.name
-		client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
-			err := application.AwaitJobExecutionWake(taskCtx, job.ID, test.revision, "test/wake/"+test.name, test.timeout)
-			return core.TaskResultV1{JobID: job.ID, Outcome: test.name}, err
+		client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.SessionTaskParams) (core.TaskResultV1, error) {
+			err := application.AwaitSessionExecutionWake(taskCtx, session.ID, test.revision, "test/wake/"+test.name, test.timeout)
+			return core.TaskResultV1{SessionID: session.ID, Outcome: test.name}, err
 		}))
-		spawned, err := client.Spawn(ctx, taskName, core.JobTaskParams{JobID: job.ID})
+		spawned, err := client.Spawn(ctx, taskName, core.SessionTaskParams{SessionID: session.ID})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if test.signal {
-			if revision, err := store.SignalJobExecutionWake(ctx, client.QueueName(), job.ID, "message:before-wait"); err != nil || revision != test.revision {
+			if revision, err := store.SignalSessionExecutionWake(ctx, client.QueueName(), session.ID, "message:before-wait"); err != nil || revision != test.revision {
 				t.Fatalf("signal revision=%d err=%v", revision, err)
 			}
 		}
@@ -145,19 +145,19 @@ func TestJobExecutionWakeIsDurableBeforeWaitAndTimeoutReloads(t *testing.T) {
 func TestNativeTerminalWakeAcceptsFastBindRaceAndRejectsForeignOrClosedTargets(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
-	job, _, err := admitDirectFixture(t, store, ctx, core.JobAdmission{
+	session, _, err := admitDirectFixture(t, store, ctx, core.SessionAdmission{
 		AdmissionKey: fmt.Sprintf("native-wake-%d", time.Now().UnixNano()), SandboxProfile: "incus",
 		ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "low",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	delivery, err := nextDelivery(ctx, store, job.ID)
+	delivery, err := nextDelivery(ctx, store, session.ID)
 	if err != nil || delivery == nil {
 		t.Fatalf("delivery=%+v err=%v", delivery, err)
 	}
 	target := core.NativeTerminalWakeTarget{
-		JobID: job.ID, SandboxID: delivery.AgentRun.SandboxID, AgentRunID: delivery.AgentRun.ID,
+		SessionID: session.ID, SandboxID: delivery.AgentRun.SandboxID, AgentRunID: delivery.AgentRun.ID,
 		ThreadID: "fast-thread", TurnID: "fast-turn",
 	}
 	if signaled, err := store.SignalNativeTerminalWake(ctx, client.QueueName(), target); err != nil || !signaled {
@@ -172,7 +172,7 @@ func TestNativeTerminalWakeAcceptsFastBindRaceAndRejectsForeignOrClosedTargets(t
 	if signaled, err := store.SignalNativeTerminalWake(ctx, client.QueueName(), target); err != nil || !signaled {
 		t.Fatalf("terminal replay signal=%t err=%v", signaled, err)
 	}
-	if revision, err := store.JobExecutionWakeRevision(ctx, job.ID); err != nil || revision != 1 {
+	if revision, err := store.SessionExecutionWakeRevision(ctx, session.ID); err != nil || revision != 1 {
 		t.Fatalf("terminal replay revision=%d err=%v", revision, err)
 	}
 	foreign := target
@@ -180,25 +180,25 @@ func TestNativeTerminalWakeAcceptsFastBindRaceAndRejectsForeignOrClosedTargets(t
 	if _, err := store.SignalNativeTerminalWake(ctx, client.QueueName(), foreign); err == nil {
 		t.Fatal("foreign terminal binding was accepted")
 	}
-	if err := store.RequestCleanup(ctx, job.ID); err != nil {
+	if err := store.RequestCleanup(ctx, session.ID); err != nil {
 		t.Fatal(err)
 	}
 	if signaled, err := store.SignalNativeTerminalWake(ctx, client.QueueName(), target); err != nil || signaled {
-		t.Fatalf("closed Job terminal signal=%t err=%v", signaled, err)
+		t.Fatalf("closed Session terminal signal=%t err=%v", signaled, err)
 	}
 }
 
 func TestStopWakeReturnsAndReemitsOriginalTurnTarget(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
-	job, _, err := admitDirectFixture(t, store, ctx, core.JobAdmission{
+	session, _, err := admitDirectFixture(t, store, ctx, core.SessionAdmission{
 		AdmissionKey: fmt.Sprintf("stop-wake-%d", time.Now().UnixNano()), SandboxProfile: "incus",
 		ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "low",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	delivery, err := nextDelivery(ctx, store, job.ID)
+	delivery, err := nextDelivery(ctx, store, session.ID)
 	if err != nil || delivery == nil {
 		t.Fatalf("delivery=%+v err=%v", delivery, err)
 	}
@@ -209,15 +209,15 @@ func TestStopWakeReturnsAndReemitsOriginalTurnTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	application := core.Application{Store: store, Tasks: client}
-	first, err := application.RequestMessageInterrupt(ctx, job.ID, delivery.Message.ID)
-	if err != nil || first.AgentRunID != delivery.AgentRun.ID || first.JobID != job.ID || !first.InterruptRequested {
+	first, err := application.RequestMessageInterrupt(ctx, session.ID, delivery.Message.ID)
+	if err != nil || first.AgentRunID != delivery.AgentRun.ID || first.SessionID != session.ID || !first.InterruptRequested {
 		t.Fatalf("first Stop target=%+v err=%v", first, err)
 	}
-	replayed, err := application.RequestMessageInterrupt(ctx, job.ID, delivery.Message.ID)
+	replayed, err := application.RequestMessageInterrupt(ctx, session.ID, delivery.Message.ID)
 	if err != nil || replayed != first {
 		t.Fatalf("replayed Stop target=%+v err=%v", replayed, err)
 	}
-	if revision, err := store.JobExecutionWakeRevision(ctx, job.ID); err != nil || revision != 1 {
+	if revision, err := store.SessionExecutionWakeRevision(ctx, session.ID); err != nil || revision != 1 {
 		t.Fatalf("Stop replay revision=%d err=%v", revision, err)
 	}
 }

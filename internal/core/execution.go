@@ -16,10 +16,10 @@ const (
 )
 
 // AgentReconciliation is the runtime-only Core contract for advancing at most
-// one generically selected Message for a Job. It is deliberately not embedded in
+// one generically selected Message for a Session. It is deliberately not embedded in
 // the workflow execution surface.
 type AgentReconciliation interface {
-	ReconcileJobAgent(context.Context, string) (AgentReconciliationProgress, error)
+	ReconcileSessionAgent(context.Context, string) (AgentReconciliationProgress, error)
 }
 
 // AgentObservation exposes only the settled Message result needed by typed
@@ -42,9 +42,9 @@ type Execution interface {
 }
 
 // CleanupExecution is the smallest Core capability needed after a client or
-// workflow requests Job cleanup.
+// workflow requests Session cleanup.
 type CleanupExecution interface {
 	SandboxExecution
-	PrepareCleanup(context.Context, string) (Job, []Sandbox, error)
+	PrepareCleanup(context.Context, string) (Session, []Sandbox, error)
 	CompleteCleanup(context.Context, string) error
 }

@@ -12,25 +12,25 @@ import (
 )
 
 func observationFixture() (Service, *timelineTestStore, *timelineTestRuntime, codex.ReplyBinding) {
-	job := core.Job{ID: "job", SandboxProfile: "profile", CleanupState: core.CleanupPending, AdmissionOpen: true}
-	owned := core.Sandbox{ID: "sandbox", Name: core.DefaultSandbox, JobID: job.ID, OwnershipNonce: strings.Repeat("a", 64)}
-	run := core.AgentRun{ID: "run", JobID: job.ID, MessageID: "message", SandboxID: owned.ID, Harness: "codex", ThreadID: "bound", TurnID: "selected", State: core.AgentRunActive}
-	message := core.Message{ID: "message", JobID: job.ID, Intent: core.MessageFollow}
-	store := &timelineTestStore{readerTestStore: &readerTestStore{job: job, sandbox: owned, execution: core.AgentMessageExecution{Job: job, Message: message, AgentRun: run, Sandbox: owned}}, deliveries: []core.Delivery{{Message: message, AgentRun: run}}}
+	session := core.Session{ID: "session", SandboxProfile: "profile", CleanupState: core.CleanupPending, AdmissionOpen: true}
+	owned := core.Sandbox{ID: "sandbox", Name: core.DefaultSandbox, SessionID: session.ID, OwnershipNonce: strings.Repeat("a", 64)}
+	run := core.AgentRun{ID: "run", SessionID: session.ID, MessageID: "message", SandboxID: owned.ID, Harness: "codex", ThreadID: "bound", TurnID: "selected", State: core.AgentRunActive}
+	message := core.Message{ID: "message", SessionID: session.ID, Intent: core.MessageFollow}
+	store := &timelineTestStore{readerTestStore: &readerTestStore{session: session, sandbox: owned, execution: core.AgentMessageExecution{Session: session, Message: message, AgentRun: run, Sandbox: owned}}, deliveries: []core.Delivery{{Message: message, AgentRun: run}}}
 	runtime := &timelineTestRuntime{store: store, result: core.HarnessTimeline{Harness: "codex", ThreadID: "bound", TurnID: "selected", Status: "inProgress", Items: []json.RawMessage{json.RawMessage(`{"id":"input","type":"userMessage"}`)}, CompletedItems: []core.HarnessConversationItem{{Index: 0, NativeItemID: "input", Kind: "input", ClientID: "run"}, {Index: 1, NativeItemID: "reply", Kind: "reply", Text: "answer"}}}}
 	service := Service{Store: store, Runtimes: runtime, Replies: codex.NewReplyFeed()}
-	binding := codex.ReplyBinding{JobID: job.ID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce, Harness: "codex", ThreadID: "bound", TurnID: "selected"}
+	binding := codex.ReplyBinding{SessionID: session.ID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce, Harness: "codex", ThreadID: "bound", TurnID: "selected"}
 	return service, store, runtime, binding
 }
 
 func TestObservationDefersMissingCacheAndRequiresOutcomeAndFinalPrefix(t *testing.T) {
 	service, store, runtime, binding := observationFixture()
-	input := observationRequest{JobID: "job", MessageID: "message"}
+	input := observationRequest{SessionID: "session", MessageID: "message"}
 	value, _, err := service.messageObservation(context.Background(), input, false)
 	if err != nil || value.State != "resync_deferred" || runtime.calls != 0 || store.activityStarts != 0 {
 		t.Fatalf("stream hydrated idle cache: %+v %v", value, err)
 	}
-	value, err = service.ReadMessageObservation(context.Background(), "job", "message", "")
+	value, err = service.ReadMessageObservation(context.Background(), "session", "message", "")
 	if err != nil || runtime.calls != 1 || len(value.Items) != 2 || value.Items[0].MessageID != "message" || value.Items[0].ClientID != "" {
 		t.Fatalf("explicit hydration: %+v %v", value, err)
 	}
@@ -53,11 +53,11 @@ func TestObservationDefersMissingCacheAndRequiresOutcomeAndFinalPrefix(t *testin
 
 func TestObservationCursorRejectsBindingDriftAndRewrittenPrefixAfterRestart(t *testing.T) {
 	service, store, _, binding := observationFixture()
-	value, err := service.ReadMessageObservation(context.Background(), "job", "message", "")
+	value, err := service.ReadMessageObservation(context.Background(), "session", "message", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := observationRequest{JobID: "job", MessageID: "message", Cursor: *value.Cursor}
+	input := observationRequest{SessionID: "session", MessageID: "message", Cursor: *value.Cursor}
 	store.execution.AgentRun.TurnID = "other"
 	if _, _, err := service.messageObservation(context.Background(), input, false); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("binding drift error=%v", err)
@@ -80,7 +80,7 @@ func TestObservationFailureBeforeNativeBindingIsCompleteWithoutHistory(t *testin
 	store.execution.AgentRun.ThreadID = ""
 	store.execution.AgentRun.TurnID = ""
 	store.execution.AgentRun.State = core.AgentRunFailed
-	value, err := service.ReadMessageObservation(context.Background(), "job", "message", "")
+	value, err := service.ReadMessageObservation(context.Background(), "session", "message", "")
 	if err != nil || value.State != "complete" || value.Binding != nil || value.Cursor != nil || value.CompletionWatermark == nil || *value.CompletionWatermark != 0 || runtime.calls != 0 {
 		t.Fatalf("unbound failure: %+v %v", value, err)
 	}
@@ -90,13 +90,13 @@ func TestObservationNativeCompletionCannotOverrideActiveDurableState(t *testing.
 	service, store, runtime, binding := observationFixture()
 	service.Replies.Seed(binding, runtime.result.CompletedItems, true)
 	store.execution.AgentRun.TurnOutcome = "completed"
-	value, _, err := service.messageObservation(context.Background(), observationRequest{JobID: "job", MessageID: "message"}, false)
+	value, _, err := service.messageObservation(context.Background(), observationRequest{SessionID: "session", MessageID: "message"}, false)
 	if err != nil || value.Outcome != nil || value.CompletionWatermark != nil || value.State != "observing" {
 		t.Fatalf("native completion overrode active custody: %+v %v", value, err)
 	}
 }
 
-func TestObservationHardJobAttentionOverridesDeliveryUncertainty(t *testing.T) {
+func TestObservationHardSessionAttentionOverridesDeliveryUncertainty(t *testing.T) {
 	service, store, _, _ := observationFixture()
 	store.execution.AgentRun.State = core.AgentRunUncertain
 	store.execution.AgentRun.Attention = "submission acknowledgement was lost"
@@ -104,39 +104,39 @@ func TestObservationHardJobAttentionOverridesDeliveryUncertainty(t *testing.T) {
 	tests := []struct {
 		name       string
 		configure  func()
-		callback   func(context.Context, core.Job) (string, error)
+		callback   func(context.Context, core.Session) (string, error)
 		wantCode   string
 		wantCalled bool
 	}{
 		{
-			name: "closed job",
+			name: "closed session",
 			configure: func() {
-				store.execution.Job.AdmissionOpen = false
+				store.execution.Session.AdmissionOpen = false
 			},
-			callback:   func(context.Context, core.Job) (string, error) { return "task_failed", nil },
-			wantCode:   "job_closed",
+			callback:   func(context.Context, core.Session) (string, error) { return "task_failed", nil },
+			wantCode:   "session_closed",
 			wantCalled: false,
 		},
 		{
 			name: "workflow attention",
 			configure: func() {
-				store.execution.Job.WorkflowAttention = "workflow failed"
+				store.execution.Session.WorkflowAttention = "workflow failed"
 			},
-			callback:   func(context.Context, core.Job) (string, error) { return "task_failed", nil },
-			wantCode:   "job_attention",
+			callback:   func(context.Context, core.Session) (string, error) { return "task_failed", nil },
+			wantCode:   "session_attention",
 			wantCalled: false,
 		},
 		{
 			name:       "failed workflow task",
 			configure:  func() {},
-			callback:   func(context.Context, core.Job) (string, error) { return "task_failed", nil },
+			callback:   func(context.Context, core.Session) (string, error) { return "task_failed", nil },
 			wantCode:   "task_failed",
 			wantCalled: true,
 		},
 		{
 			name:       "delivery uncertainty",
 			configure:  func() {},
-			callback:   func(context.Context, core.Job) (string, error) { return "", nil },
+			callback:   func(context.Context, core.Session) (string, error) { return "", nil },
 			wantCode:   "agent_delivery_attention",
 			wantCalled: true,
 		},
@@ -144,13 +144,13 @@ func TestObservationHardJobAttentionOverridesDeliveryUncertainty(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			job := store.execution.Job
-			defer func() { store.execution.Job = job }()
+			session := store.execution.Session
+			defer func() { store.execution.Session = session }()
 			test.configure()
 			called := false
-			service.ObservationAttention = func(ctx context.Context, job core.Job) (string, error) {
+			service.ObservationAttention = func(ctx context.Context, session core.Session) (string, error) {
 				called = true
-				return test.callback(ctx, job)
+				return test.callback(ctx, session)
 			}
 			result := MessageObservation{}
 			if err := service.projectObservationAttention(context.Background(), &result, store.execution); err != nil {

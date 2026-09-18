@@ -11,21 +11,21 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
-	"github.com/aphronio/dorf/internal/direct"
-	"github.com/earendil-works/absurd/sdks/go/absurd"
 	"github.com/aphronio/dorf/internal/core"
+	"github.com/aphronio/dorf/internal/direct"
 	"github.com/aphronio/dorf/internal/postgres"
+	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
 func TestDeliveryHoldPreservesAdmissionDrainAndRestart(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
-	job, _, err := admitDirectFixture(t, store, ctx, core.JobAdmission{AdmissionKey: fmt.Sprintf("hold-%d", time.Now().UnixNano()), SandboxProfile: "incus", ProviderConnection: "primary", Model: "model-test", ReasoningEffort: "low"})
+	session, _, err := admitDirectFixture(t, store, ctx, core.SessionAdmission{AdmissionKey: fmt.Sprintf("hold-%d", time.Now().UnixNano()), SandboxProfile: "incus", ProviderConnection: "primary", Model: "model-test", ReasoningEffort: "low"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	sandboxID := core.MainSandboxName(job.ID)
-	current, err := nextDelivery(ctx, store, job.ID)
+	sandboxID := core.MainSandboxName(session.ID)
+	current, err := nextDelivery(ctx, store, session.ID)
 	if err != nil || current == nil {
 		t.Fatalf("initial delivery: %v", err)
 	}
@@ -36,17 +36,17 @@ func TestDeliveryHoldPreservesAdmissionDrainAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	admit := func(key string, intent core.MessageDeliveryIntent) (core.MessageAdmissionResult, error) {
-		return store.AdmitDirectMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: sandboxID, FromKind: core.MessageFromHuman, FromID: key, Input: key, Intent: intent})
+		return store.AdmitDirectMessage(ctx, core.MessageAdmission{SessionID: session.ID, SandboxID: sandboxID, FromKind: core.MessageFromHuman, FromID: key, Input: key, Intent: intent})
 	}
 	steer, err := admit("pre-hold-steer", core.MessageSteer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hold, err := store.HoldSandboxDelivery(ctx, client.QueueName(), job.ID, sandboxID, job.ID+":upgrade")
+	hold, err := store.HoldSandboxDelivery(ctx, client.QueueName(), session.ID, sandboxID, session.ID+":upgrade")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.HoldSandboxDelivery(ctx, client.QueueName(), job.ID, sandboxID, job.ID+":competing"); err == nil {
+	if _, err := store.HoldSandboxDelivery(ctx, client.QueueName(), session.ID, sandboxID, session.ID+":competing"); err == nil {
 		t.Fatal("competing hold accepted")
 	}
 	if _, err := admit("explicit-steer", core.MessageSteer); !errors.Is(err, core.ErrMessageSteerUnavailable) {
@@ -64,7 +64,7 @@ func TestDeliveryHoldPreservesAdmissionDrainAndRestart(t *testing.T) {
 		}
 		queued = append(queued, input.Message)
 	}
-	selected, err := store.AgentMessage(ctx, job.ID)
+	selected, err := store.AgentMessage(ctx, session.ID)
 	if err != nil || selected == nil || selected.MessageID != steer.Message.ID {
 		t.Fatalf("pre-hold steer did not drain: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestDeliveryHoldPreservesAdmissionDrainAndRestart(t *testing.T) {
 	if err := store.BindSteer(ctx, core.AgentRunID(steer.Message.ID), "held-turn", "running"); err != nil {
 		t.Fatal(err)
 	}
-	selected, err = store.AgentMessage(ctx, job.ID)
+	selected, err = store.AgentMessage(ctx, session.ID)
 	if err != nil || selected == nil || selected.MessageID != current.Message.ID {
 		t.Fatalf("active observation blocked: %v", err)
 	}
@@ -92,31 +92,31 @@ func TestDeliveryHoldPreservesAdmissionDrainAndRestart(t *testing.T) {
 	if err != nil || !held {
 		t.Fatalf("restart lost hold: %v", err)
 	}
-	if ready, err := restarted.HasImmediatelyEligibleAgentMessage(ctx, job.ID); err != nil || ready {
+	if ready, err := restarted.HasImmediatelyEligibleAgentMessage(ctx, session.ID); err != nil || ready {
 		t.Fatalf("held FIFO became runnable: %v", err)
 	}
-	if selected, err := restarted.AgentMessage(ctx, job.ID); err != nil || selected != nil {
+	if selected, err := restarted.AgentMessage(ctx, session.ID); err != nil || selected != nil {
 		t.Fatalf("held FIFO dispatched: %v", err)
 	}
-	if err := restarted.ReleaseSandboxDelivery(ctx, "missing_queue", job.ID, sandboxID, hold.ID); err == nil {
+	if err := restarted.ReleaseSandboxDelivery(ctx, "missing_queue", session.ID, sandboxID, hold.ID); err == nil {
 		t.Fatal("release succeeded without durable wake")
 	}
 	if held, err := restarted.SandboxDeliveryHeld(ctx, sandboxID); err != nil || !held {
 		t.Fatal("failed wake committed release")
 	}
-	before, err := restarted.JobExecutionWakeRevision(ctx, job.ID)
+	before, err := restarted.SessionExecutionWakeRevision(ctx, session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := restarted.ReleaseSandboxDelivery(ctx, client.QueueName(), job.ID, sandboxID, hold.ID); err != nil {
+	if err := restarted.ReleaseSandboxDelivery(ctx, client.QueueName(), session.ID, sandboxID, hold.ID); err != nil {
 		t.Fatal(err)
 	}
-	after, err := restarted.JobExecutionWakeRevision(ctx, job.ID)
+	after, err := restarted.SessionExecutionWakeRevision(ctx, session.ID)
 	if err != nil || after != before+1 {
 		t.Fatalf("release did not wake delivery: %v", err)
 	}
 	for _, input := range queued {
-		selected, err := restarted.AgentMessage(ctx, job.ID)
+		selected, err := restarted.AgentMessage(ctx, session.ID)
 		if err != nil || selected == nil || selected.MessageID != input.ID {
 			t.Fatalf("FIFO changed after release: %v", err)
 		}
@@ -128,27 +128,27 @@ func TestDeliveryHoldPreservesAdmissionDrainAndRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	second, err := restarted.HoldSandboxDelivery(ctx, client.QueueName(), job.ID, sandboxID, job.ID+":second")
+	second, err := restarted.HoldSandboxDelivery(ctx, client.QueueName(), session.ID, sandboxID, session.ID+":second")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := restarted.ReleaseSandboxDelivery(ctx, client.QueueName(), job.ID, sandboxID, hold.ID); err != nil {
+	if err := restarted.ReleaseSandboxDelivery(ctx, client.QueueName(), session.ID, sandboxID, hold.ID); err != nil {
 		t.Fatal(err)
 	}
 	if held, err := restarted.SandboxDeliveryHeld(ctx, sandboxID); err != nil || !held {
 		t.Fatal("stale release cleared newer hold")
 	}
-	old, err := restarted.HoldSandboxDelivery(ctx, client.QueueName(), job.ID, sandboxID, hold.ID)
+	old, err := restarted.HoldSandboxDelivery(ctx, client.QueueName(), session.ID, sandboxID, hold.ID)
 	if err != nil || old.ReleasedAt.IsZero() {
 		t.Fatal("old request replay reopened hold")
 	}
-	if _, err := db.ExecContext(ctx, "update dorf.jobs set sandbox_last_active_at=clock_timestamp()-interval '2 minutes' where id=$1", job.ID); err != nil {
+	if _, err := db.ExecContext(ctx, "update dorf.sessions set sandbox_last_active_at=clock_timestamp()-interval '2 minutes' where id=$1", session.ID); err != nil {
 		t.Fatal(err)
 	}
-	if idle, err := restarted.SandboxIdleFor(ctx, job.ID, time.Minute); err != nil || idle {
+	if idle, err := restarted.SandboxIdleFor(ctx, session.ID, time.Minute); err != nil || idle {
 		t.Fatal("idle pause ignored delivery hold")
 	}
-	if err := restarted.ReleaseSandboxDelivery(ctx, client.QueueName(), job.ID, sandboxID, second.ID); err != nil {
+	if err := restarted.ReleaseSandboxDelivery(ctx, client.QueueName(), session.ID, sandboxID, second.ID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -169,17 +169,17 @@ func TestDeliveryHoldThroughDurableWorkerRestartAndCleanup(t *testing.T) {
 		return app
 	}
 	configure(client)
-	job, _, err := store.AdmitDirect(ctx, core.JobAdmission{AdmissionKey: fmt.Sprintf("held-worker-%d", time.Now().UnixNano()), SandboxProfile: "incus", ProviderConnection: "primary", Model: "model-test", ReasoningEffort: "low"}, client.QueueName())
+	session, _, err := store.AdmitDirect(ctx, core.SessionAdmission{AdmissionKey: fmt.Sprintf("held-worker-%d", time.Now().UnixNano()), SandboxProfile: "incus", ProviderConnection: "primary", Model: "model-test", ReasoningEffort: "low"}, client.QueueName())
 	if err != nil {
 		t.Fatal(err)
 	}
-	sandboxID := core.MainSandboxName(job.ID)
-	hold, err := store.HoldSandboxDelivery(ctx, client.QueueName(), job.ID, sandboxID, job.ID+":upgrade")
+	sandboxID := core.MainSandboxName(session.ID)
+	hold, err := store.HoldSandboxDelivery(ctx, client.QueueName(), session.ID, sandboxID, session.ID+":upgrade")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := range 2 {
-		_, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: sandboxID, FromKind: core.MessageFromHuman, FromID: fmt.Sprintf("queued-%d", i), Input: "synthetic queued input", Intent: core.MessageAuto})
+		_, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{SessionID: session.ID, SandboxID: sandboxID, FromKind: core.MessageFromHuman, FromID: fmt.Sprintf("queued-%d", i), Input: "synthetic queued input", Intent: core.MessageAuto})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -213,7 +213,7 @@ func TestDeliveryHoldThroughDurableWorkerRestartAndCleanup(t *testing.T) {
 	}
 	stop := start(client)
 	wait(func() bool {
-		state, err := client.FetchTaskResult(ctx, client.QueueName(), job.CurrentTaskID)
+		state, err := client.FetchTaskResult(ctx, client.QueueName(), session.CurrentTaskID)
 		return err == nil && state != nil && state.State == absurd.TaskSleeping
 	})
 	stop()
@@ -229,11 +229,11 @@ func TestDeliveryHoldThroughDurableWorkerRestartAndCleanup(t *testing.T) {
 	}
 	configure(restarted)
 	start(restarted)
-	if err := store.ReleaseSandboxDelivery(ctx, restarted.QueueName(), job.ID, sandboxID, hold.ID); err != nil {
+	if err := store.ReleaseSandboxDelivery(ctx, restarted.QueueName(), session.ID, sandboxID, hold.ID); err != nil {
 		t.Fatal(err)
 	}
 	wait(func() bool {
-		deliveries, err := store.Deliveries(ctx, job.ID)
+		deliveries, err := store.Deliveries(ctx, session.ID)
 		return err == nil && len(deliveries) == 2 && deliveries[0].AgentRun.State == core.AgentRunCompleted && deliveries[1].AgentRun.State == core.AgentRunCompleted
 	})
 	harness.mu.Lock()
@@ -242,13 +242,13 @@ func TestDeliveryHoldThroughDurableWorkerRestartAndCleanup(t *testing.T) {
 	if submitted != 2 {
 		t.Fatalf("native submissions=%d; want exactly two", submitted)
 	}
-	if _, err := store.HoldSandboxDelivery(ctx, restarted.QueueName(), job.ID, sandboxID, job.ID+":cleanup-hold"); err != nil {
+	if _, err := store.HoldSandboxDelivery(ctx, restarted.QueueName(), session.ID, sandboxID, session.ID+":cleanup-hold"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ScheduleCleanup(ctx, restarted.QueueName(), job.ID, ""); err != nil {
+	if err := store.ScheduleCleanup(ctx, restarted.QueueName(), session.ID, ""); err != nil {
 		t.Fatal(err)
 	}
-	cleaning, err := store.Job(ctx, job.ID)
+	cleaning, err := store.Session(ctx, session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

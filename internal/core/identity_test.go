@@ -5,23 +5,23 @@ import (
 )
 
 func TestStableIdentitiesDoNotContainGoalOrSecrets(t *testing.T) {
-	jobA := JobID("client-request-40")
-	jobB := JobID("client-request-40")
-	if jobA != jobB || jobA == "" {
-		t.Fatalf("job identity is not stable: %q != %q", jobA, jobB)
+	sessionA := SessionID("client-request-40")
+	sessionB := SessionID("client-request-40")
+	if sessionA != sessionB || sessionA == "" {
+		t.Fatalf("session identity is not stable: %q != %q", sessionA, sessionB)
 	}
-	if ActionID(jobA, ActionSandboxCreate) != ActionID(jobA, ActionSandboxCreate) {
+	if ActionID(sessionA, ActionSandboxCreate) != ActionID(sessionA, ActionSandboxCreate) {
 		t.Fatal("Sandbox Action identity is not stable")
 	}
-	if ActionID(jobA, ActionSandboxCreate) == ActionID(jobA, ActionRouteCreate) {
+	if ActionID(sessionA, ActionSandboxCreate) == ActionID(sessionA, ActionRouteCreate) {
 		t.Fatal("different effects share an Action identity")
 	}
-	messageA := MessageID(jobA, MessageFromHuman, "caller-a")
-	messageB := MessageID(jobA, MessageFromHuman, "caller-b")
+	messageA := MessageID(sessionA, MessageFromHuman, "caller-a")
+	messageB := MessageID(sessionA, MessageFromHuman, "caller-b")
 	if messageA == messageB || AgentRunID(messageA) == AgentRunID(messageB) {
 		t.Fatal("distinct logical inputs share delivery identities")
 	}
-	if messageA == MessageID(jobA, MessageFromWorkflow, "caller-a") {
+	if messageA == MessageID(sessionA, MessageFromWorkflow, "caller-a") {
 		t.Fatal("different senders share a Message identity")
 	}
 	if AgentRunID(messageA) != AgentRunID(messageA) {

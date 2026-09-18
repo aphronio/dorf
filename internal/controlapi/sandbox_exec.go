@@ -26,7 +26,7 @@ func (h *handler) sandboxExecRoute(w http.ResponseWriter, r *http.Request, _ con
 		h.fail(w, problem("sandbox_exec_unavailable"))
 		return
 	}
-	result, err := h.jobs.ExecSandbox(r.Context(), r.PathValue("sandbox"), command)
+	result, err := h.sessions.ExecSandbox(r.Context(), r.PathValue("sandbox"), command)
 	if err != nil {
 		h.serviceError(w, r, err)
 		return

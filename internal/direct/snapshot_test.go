@@ -7,14 +7,14 @@ import (
 )
 
 func TestSnapshotProjectsDirectExecutionIndependently(t *testing.T) {
-	jobID := "job-direct"
-	main := core.Sandbox{ID: core.MainSandboxName(jobID), JobID: jobID, Name: core.DefaultSandbox}
+	sessionID := "job-direct"
+	main := core.Sandbox{ID: core.MainSandboxName(sessionID), SessionID: sessionID, Name: core.DefaultSandbox}
 	succeeded := func(kind core.ActionKind) core.Action {
-		return core.Action{JobID: jobID, Kind: kind, Scope: main.ID, State: core.ActionSucceeded}
+		return core.Action{SessionID: sessionID, Kind: kind, Scope: main.ID, State: core.ActionSucceeded}
 	}
 	completed := core.Delivery{AgentRun: core.AgentRun{State: core.AgentRunCompleted, TurnOutcome: "completed"}}
 	ready := Snapshot{
-		Job:         core.Job{ID: jobID, AdmissionOpen: true, CleanupState: core.CleanupPending},
+		Session:     core.Session{ID: sessionID, AdmissionOpen: true, CleanupState: core.CleanupPending},
 		MainSandbox: main,
 		Actions:     []core.Action{succeeded(core.ActionSandboxCreate), succeeded(core.ActionRouteCreate)},
 		Deliveries:  []core.Delivery{completed},
@@ -26,7 +26,7 @@ func TestSnapshotProjectsDirectExecutionIndependently(t *testing.T) {
 		state  ExecutionState
 		detail string
 	}{
-		{name: "Job attention", change: func(s *Snapshot) { s.Job.WorkflowAttention = "job needs intervention"; s.Actions = nil }, state: ExecutionAttention, detail: "job needs intervention"},
+		{name: "Session attention", change: func(s *Snapshot) { s.Session.WorkflowAttention = "session needs intervention"; s.Actions = nil }, state: ExecutionAttention, detail: "session needs intervention"},
 		{name: "provisioning Sandbox", change: func(s *Snapshot) { s.Actions = nil }, state: ExecutionProvisioningSandbox},
 		{name: "connecting route", change: func(s *Snapshot) { s.Actions = s.Actions[:1] }, state: ExecutionConnectingRoute},
 		{name: "working Agent", change: func(s *Snapshot) { s.Deliveries[0].AgentRun = core.AgentRun{State: core.AgentRunActive} }, state: ExecutionWorking},
@@ -35,9 +35,9 @@ func TestSnapshotProjectsDirectExecutionIndependently(t *testing.T) {
 		{
 			name: "closed and cleaned remains execution idle",
 			change: func(s *Snapshot) {
-				s.Job.AdmissionOpen = false
-				s.Job.CleanupState = core.CleanupComplete
-				s.Job.CleanupAttention = "cleanup detail is independent"
+				s.Session.AdmissionOpen = false
+				s.Session.CleanupState = core.CleanupComplete
+				s.Session.CleanupAttention = "cleanup detail is independent"
 			},
 			state: ExecutionIdle,
 		},

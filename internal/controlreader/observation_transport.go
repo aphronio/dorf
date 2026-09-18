@@ -19,7 +19,7 @@ func observationStreamEndpoint(service Service) http.HandlerFunc {
 		}
 		started := false
 		controller := http.NewResponseController(w)
-		err := service.StreamMessageObservation(r.Context(), input.JobID, input.MessageID, input.Cursor, func(value MessageObservation) error {
+		err := service.StreamMessageObservation(r.Context(), input.SessionID, input.MessageID, input.Cursor, func(value MessageObservation) error {
 			raw, err := json.Marshal(value)
 			if err != nil {
 				return err
@@ -49,8 +49,8 @@ func observationStreamEndpoint(service Service) http.HandlerFunc {
 	}
 }
 
-func (c Client) ReadMessageObservation(ctx context.Context, jobID, messageID, cursor string) (MessageObservation, error) {
-	response, err := c.request(ctx, CoherentObservationPath, observationRequest{JobID: jobID, MessageID: messageID, Cursor: cursor})
+func (c Client) ReadMessageObservation(ctx context.Context, sessionID, messageID, cursor string) (MessageObservation, error) {
+	response, err := c.request(ctx, CoherentObservationPath, observationRequest{SessionID: sessionID, MessageID: messageID, Cursor: cursor})
 	if err != nil {
 		return MessageObservation{}, err
 	}
@@ -63,11 +63,11 @@ func (c Client) ReadMessageObservation(ctx context.Context, jobID, messageID, cu
 	return value, err
 }
 
-func (c Client) StreamMessageObservation(ctx context.Context, jobID, messageID, cursor string, emit func(MessageObservation) error) error {
+func (c Client) StreamMessageObservation(ctx context.Context, sessionID, messageID, cursor string, emit func(MessageObservation) error) error {
 	client := *c.http
 	client.Timeout = ObservationStreamTimeout + 5*time.Second
 	c.http = &client
-	response, err := c.request(ctx, ObservationStreamPath, observationRequest{JobID: jobID, MessageID: messageID, Cursor: cursor})
+	response, err := c.request(ctx, ObservationStreamPath, observationRequest{SessionID: sessionID, MessageID: messageID, Cursor: cursor})
 	if err != nil {
 		return err
 	}

@@ -22,7 +22,7 @@ func TestMessageCLIDefaultAndExactStop(t *testing.T) {
 		}
 		requests <- r.Method + " " + r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
-		message := controlapi.Message{JobID: "job", ID: "message", Intent: "steer", Delivery: controlapi.State{State: "running"}}
+		message := controlapi.Message{SessionID: "session", ID: "message", Intent: "steer", Delivery: controlapi.State{State: "running"}}
 		switch r.Method {
 		case http.MethodPost:
 			var input controlapi.SendMessageRequest
@@ -51,11 +51,11 @@ func TestMessageCLIDefaultAndExactStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output, diagnostic bytes.Buffer
-	if err := run(context.Background(), []string{"job", "message", "--key", "send-key", "--input-file", input, "--output", "json", "job"}, &output, &diagnostic); err != nil {
+	if err := run(context.Background(), []string{"session", "message", "--key", "send-key", "--input-file", input, "--output", "json", "session"}, &output, &diagnostic); err != nil {
 		t.Fatal(err)
 	}
 	output.Reset()
-	if err := run(context.Background(), []string{"job", "message", "interrupt", "--output", "json", "job", "message"}, &output, &diagnostic); err != nil {
+	if err := run(context.Background(), []string{"session", "message", "interrupt", "--output", "json", "session", "message"}, &output, &diagnostic); err != nil {
 		t.Fatal(err)
 	}
 	var receipt remoteMessageReceipt
@@ -65,7 +65,7 @@ func TestMessageCLIDefaultAndExactStop(t *testing.T) {
 	if len(requests) != 2 {
 		t.Fatalf("request count=%d", len(requests))
 	}
-	if first, second := <-requests, <-requests; first != "POST /v1/jobs/job/messages" || second != "PUT /v1/jobs/job/messages/message/interrupt" {
+	if first, second := <-requests, <-requests; first != "POST /v1/sessions/session/messages" || second != "PUT /v1/sessions/session/messages/message/interrupt" {
 		t.Fatalf("requests=%s, %s", first, second)
 	}
 }

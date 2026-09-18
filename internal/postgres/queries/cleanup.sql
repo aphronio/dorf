@@ -1,42 +1,42 @@
--- name: GetCleanupJobForUpdate :one
+-- name: GetCleanupSessionForUpdate :one
 select admission_open,cleanup_state,
-       coalesce((select task_id from dorf.job_tasks where job_id=dorf.jobs.id order by sequence desc limit 1),'') as current_task_id,
+       coalesce((select task_id from dorf.session_tasks where session_id=dorf.sessions.id order by sequence desc limit 1),'') as current_task_id,
        coalesce(cleanup_attention,'') as cleanup_attention
-from dorf.jobs
-where id=sqlc.arg(job_id)
+from dorf.sessions
+where id=sqlc.arg(session_id)
 for update;
 
 -- name: RequestCleanup :execrows
-update dorf.jobs
+update dorf.sessions
 set admission_open=false,
     cleanup_state=case when cleanup_state='pending' then 'requested' else cleanup_state end
-where id=sqlc.arg(job_id) and cleanup_state in ('pending','requested');
+where id=sqlc.arg(session_id) and cleanup_state in ('pending','requested');
 
 -- name: ListCleanupRequests :many
-select id from dorf.jobs where not admission_open and cleanup_state='requested' order by id;
+select id from dorf.sessions where not admission_open and cleanup_state='requested' order by id;
 
 -- name: CountUnsettledSandboxCleanupActions :one
 select count(*)
 from dorf.sandboxes s
-where s.job_id=sqlc.arg(job_id)
+where s.session_id=sqlc.arg(session_id)
   and (
-    not exists(select 1 from dorf.actions a where a.job_id=s.job_id and a.kind='provider-route-revoke' and a.scope_key=s.id and a.state='succeeded')
-    or not exists(select 1 from dorf.actions a where a.job_id=s.job_id and a.kind='sandbox-delete' and a.scope_key=s.id and a.state='succeeded')
+    not exists(select 1 from dorf.actions a where a.session_id=s.session_id and a.kind='provider-route-revoke' and a.scope_key=s.id and a.state='succeeded')
+    or not exists(select 1 from dorf.actions a where a.session_id=s.session_id and a.kind='sandbox-delete' and a.scope_key=s.id and a.state='succeeded')
     or exists(select 1 from dorf.sandbox_resources r where r.sandbox_id=s.id and r.deleted_at is null)
     or exists(select 1 from dorf.sandbox_upgrades u where u.sandbox_id=s.id and u.checkpoint_reference is not null and u.checkpoint_deleted_at is null)
   );
 
 -- name: CompleteCleanup :one
 with completed as (
-    update dorf.jobs j0
+    update dorf.sessions j0
     set cleanup_state='complete',cleanup_attention=null,
         workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null,
         cleaned_at=coalesce(cleaned_at,clock_timestamp())
-    where j0.id=sqlc.arg(job_id) and j0.cleanup_state='scheduled'
+    where j0.id=sqlc.arg(session_id) and j0.cleanup_state='scheduled'
     returning j0.id
 ), released as (
     update dorf.sandbox_delivery_holds h set released_at=clock_timestamp()
-    from dorf.sandboxes s join completed j on j.id=s.job_id
+    from dorf.sandboxes s join completed j on j.id=s.session_id
     where h.sandbox_id=s.id and h.released_at is null
 )
 select count(*) from completed;

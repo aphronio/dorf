@@ -1,6 +1,6 @@
 <picture>
   <source media="(prefers-reduced-motion: reduce)" srcset="assets/cover.png">
-  <img alt="Agents continuing Jobs inside isolated Sandboxes in the Dorf village" src="assets/cover.gif">
+  <img alt="Agents continuing Sessions inside isolated Sandboxes in the Dorf village" src="assets/cover.gif">
 </picture>
 
 <p align="center"><strong>Your agents. Your infrastructure. One API.</strong></p>
@@ -26,9 +26,9 @@ Deployment-host CLI      Remote clients
 ```
 
 Dorf is a stateful, self-hosted control plane, not an agent framework or an embeddable runtime SDK.
-An enrolled CLI admits a direct Job and operates its interaction
+An enrolled CLI admits a direct Session and operates its interaction
 loop—Messages, observation, eligible recovery, exact Sandbox files,
-cleanup, and bounded Job listing—through one configured Dorf deployment. The deployment-host CLI
+cleanup, and bounded Session listing—through one configured Dorf deployment. The deployment-host CLI
 uses fixed authenticated loopback HTTP; remote clients use operator-owned HTTPS ingress. Each
 deployment publishes its OpenAPI and typed Problem catalog. Static release manifests define
 separately supervised API and worker services; one resumable `dorf setup` flow prepares their

@@ -12,13 +12,13 @@ import (
 )
 
 type Store interface {
-	WithJobFence(context.Context, string, func() error) error
-	Job(context.Context, string) (core.Job, error)
+	WithSessionFence(context.Context, string, func() error) error
+	Session(context.Context, string) (core.Session, error)
 	Sandbox(context.Context, string) (core.Sandbox, error)
 	SandboxResources(context.Context, string) ([]core.SandboxResource, error)
-	JobDeliveryHolds(context.Context, string) ([]core.SandboxDeliveryHold, error)
+	SessionDeliveryHolds(context.Context, string) ([]core.SandboxDeliveryHold, error)
 	Deliveries(context.Context, string) ([]core.Delivery, error)
-	JobUpgrades(context.Context, string) ([]Receipt, error)
+	SessionUpgrades(context.Context, string) ([]Receipt, error)
 	UpgradeQuiescent(context.Context, string) (bool, error)
 	SandboxResource(context.Context, string, string, string) (core.Sandbox, error)
 	RecordUpgradePreparation(context.Context, string, string) error
@@ -45,23 +45,23 @@ type Service struct {
 	Emit     func(telemetry.Event)
 }
 
-// Reconcile runs one effect under the same Job fence as native delivery and
+// Reconcile runs one effect under the same Session fence as native delivery and
 // cleanup. Pending follows are excluded from quiescence; pre-hold work drains
 // through the ordinary executor. The existing direct task owns retries.
-func (s Service) Reconcile(ctx context.Context, jobID string) (bool, error) {
+func (s Service) Reconcile(ctx context.Context, sessionID string) (bool, error) {
 	var progress bool
-	err := s.Store.WithJobFence(ctx, jobID, func() error {
-		job, err := s.Store.Job(ctx, jobID)
+	err := s.Store.WithSessionFence(ctx, sessionID, func() error {
+		session, err := s.Store.Session(ctx, sessionID)
 		if err != nil {
 			return err
 		}
-		if task, ok := absurd.TaskFromContext(ctx); ok && task.TaskID() != job.CurrentTaskID {
-			return fmt.Errorf("upgrade executor no longer owns the Job task")
+		if task, ok := absurd.TaskFromContext(ctx); ok && task.TaskID() != session.CurrentTaskID {
+			return fmt.Errorf("upgrade executor no longer owns the Session task")
 		}
-		if !job.AdmissionOpen || job.CleanupState != core.CleanupPending {
+		if !session.AdmissionOpen || session.CleanupState != core.CleanupPending {
 			return nil
 		}
-		receipts, err := s.Store.JobUpgrades(ctx, jobID)
+		receipts, err := s.Store.SessionUpgrades(ctx, sessionID)
 		if err != nil {
 			return err
 		}
@@ -93,10 +93,10 @@ func (s Service) authorize(ctx context.Context, r Receipt) error {
 	if err != nil {
 		return err
 	}
-	if owned.JobID != r.JobID || owned.ResourceID != r.SourceResourceID {
+	if owned.SessionID != r.SessionID || owned.ResourceID != r.SourceResourceID {
 		return fmt.Errorf("upgrade source binding was superseded")
 	}
-	holds, err := s.Store.JobDeliveryHolds(ctx, r.JobID)
+	holds, err := s.Store.SessionDeliveryHolds(ctx, r.SessionID)
 	if err != nil {
 		return err
 	}
@@ -109,7 +109,7 @@ func (s Service) authorize(ctx context.Context, r Receipt) error {
 }
 
 func (s Service) step(ctx context.Context, r Receipt) error {
-	source, err := s.Store.SandboxResource(ctx, r.JobID, r.SandboxID, r.SourceResourceID)
+	source, err := s.Store.SandboxResource(ctx, r.SessionID, r.SandboxID, r.SourceResourceID)
 	if err != nil {
 		return err
 	}
@@ -165,7 +165,7 @@ func (s Service) restore(ctx context.Context, r Receipt, source core.Sandbox) er
 			return s.record(ctx, func() error { return s.Store.ReserveUpgradeDestination(ctx, r, s.Driver.ReplacesResource()) })
 		})
 	}
-	destination, err := s.Store.SandboxResource(ctx, r.JobID, r.SandboxID, r.DestinationResourceID)
+	destination, err := s.Store.SandboxResource(ctx, r.SessionID, r.SandboxID, r.DestinationResourceID)
 	if err != nil {
 		return err
 	}
@@ -182,7 +182,7 @@ func (s Service) verify(ctx context.Context, r Receipt, source core.Sandbox) err
 	destination, version := source, r.Version
 	if !r.RollbackAt.IsZero() {
 		var err error
-		destination, err = s.Store.SandboxResource(ctx, r.JobID, r.SandboxID, r.DestinationResourceID)
+		destination, err = s.Store.SandboxResource(ctx, r.SessionID, r.SandboxID, r.DestinationResourceID)
 		if err != nil {
 			return err
 		}
@@ -207,7 +207,7 @@ func (s Service) verify(ctx context.Context, r Receipt, source core.Sandbox) err
 func (s Service) finish(ctx context.Context, r Receipt, source core.Sandbox) error {
 	replacement := r.DestinationResourceID != "" && r.DestinationResourceID != r.SourceResourceID
 	if replacement {
-		deleted, err := s.resourceDeleted(ctx, r.JobID, r.SourceResourceID)
+		deleted, err := s.resourceDeleted(ctx, r.SessionID, r.SourceResourceID)
 		if err != nil {
 			return err
 		}
@@ -223,7 +223,7 @@ func (s Service) finish(ctx context.Context, r Receipt, source core.Sandbox) err
 }
 
 func (s Service) boundRuns(ctx context.Context, r Receipt) ([]core.AgentRun, error) {
-	deliveries, err := s.Store.Deliveries(ctx, r.JobID)
+	deliveries, err := s.Store.Deliveries(ctx, r.SessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -236,8 +236,8 @@ func (s Service) boundRuns(ctx context.Context, r Receipt) ([]core.AgentRun, err
 	return runs, nil
 }
 
-func (s Service) resourceDeleted(ctx context.Context, jobID, resourceID string) (bool, error) {
-	resources, err := s.Store.SandboxResources(ctx, jobID)
+func (s Service) resourceDeleted(ctx context.Context, sessionID, resourceID string) (bool, error) {
+	resources, err := s.Store.SandboxResources(ctx, sessionID)
 	if err != nil {
 		return false, err
 	}
@@ -293,12 +293,12 @@ func (s Service) perform(ctx context.Context, r Receipt, step string, fn func() 
 		// Do not put native output, route credentials, or unbounded provider errors
 		// into diagnostics. The operation and exact custody provide correlation.
 		detail := "workspace upgrade " + step + " failed"
-		if saveErr := s.Store.SetWorkflowAttention(ctx, r.JobID, source, detail); saveErr != nil {
+		if saveErr := s.Store.SetWorkflowAttention(ctx, r.SessionID, source, detail); saveErr != nil {
 			return saveErr
 		}
 		return fmt.Errorf("%s; delivery remains held", detail)
 	}
-	return s.Store.ClearWorkflowAttention(ctx, r.JobID, source)
+	return s.Store.ClearWorkflowAttention(ctx, r.SessionID, source)
 }
 func (s Service) event(r Receipt, name string, failed bool, duration time.Duration) {
 	if s.Emit == nil {
@@ -312,7 +312,7 @@ func (s Service) event(r Receipt, name string, failed bool, duration time.Durati
 		}
 	}
 	s.Emit(telemetry.Event{Name: "dorf.upgrade." + name, At: time.Now(), Failed: failed, Attributes: map[string]any{
-		"dorf.upgrade_id": r.ID, "dorf.provider": s.Provider, "dorf.requested_at": r.RequestedAt.Format(time.RFC3339Nano), "dorf.job_id": r.JobID, "dorf.sandbox_id": r.SandboxID,
+		"dorf.upgrade_id": r.ID, "dorf.provider": s.Provider, "dorf.requested_at": r.RequestedAt.Format(time.RFC3339Nano), "dorf.session_id": r.SessionID, "dorf.sandbox_id": r.SandboxID,
 		"dorf.source_resource_id": r.SourceResourceID, "dorf.source_provider_id": r.SourceProviderID, "dorf.destination_provider_id": r.DestinationProviderID, "dorf.destination_resource_id": r.DestinationResourceID,
 		"dorf.checkpoint_reference": r.Checkpoint.Reference, "dorf.upgrade_outcome": outcome, "dorf.failure_code": r.FailureCode, "dorf.package_version": r.Version,
 		"dorf.previous_package_version": r.PreviousVersion, "duration_ms": duration.Milliseconds(),

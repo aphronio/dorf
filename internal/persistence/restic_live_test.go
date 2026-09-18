@@ -74,7 +74,7 @@ func TestLiveResticDriverAgainstScopedR2(t *testing.T) {
 		t.Fatal("live proof requires exact restic 0.19.1")
 	}
 	receipt := liveReceipt{ResticVersion: strings.Fields(string(versionOutput))[1]}
-	owner := provider.Ownership{JobID: testAttempt(t, "live-job"), SandboxID: testAttempt(t, "live-sandbox"), OwnershipNonce: testAttempt(t, "live-owner")}
+	owner := provider.Ownership{SessionID: testAttempt(t, "live-session"), SandboxID: testAttempt(t, "live-sandbox"), OwnershipNonce: testAttempt(t, "live-owner")}
 	root := t.TempDir()
 	driver := liveDriver(repository, config.ResticPath, filepath.Join(root, "source-control"))
 	temporary, err := repository.credentials(t.Context(), owner, RepositoryReadWrite)
@@ -167,7 +167,7 @@ func TestLiveResticDriverAgainstScopedR2(t *testing.T) {
 	overwritten := curlStatus(t, temporary, "PUT", canaryURL, []byte("changed"))
 	deleted := curlStatus(t, temporary, "DELETE", canaryURL, nil)
 	receipt.OwnObjectsWritable = created == 200 && overwritten == 200 && deleted == 204
-	otherOwner := provider.Ownership{JobID: testAttempt(t, "other-job"), SandboxID: testAttempt(t, "other-sandbox"), OwnershipNonce: "synthetic"}
+	otherOwner := provider.Ownership{SessionID: testAttempt(t, "other-session"), SandboxID: testAttempt(t, "other-sandbox"), OwnershipNonce: "synthetic"}
 	otherPrefix, err := repository.repositoryPrefix(otherOwner)
 	if err != nil {
 		t.Fatal(err)

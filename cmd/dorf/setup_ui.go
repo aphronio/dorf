@@ -194,7 +194,7 @@ func (p setupPresenter) ProfileDefaultGroup(profile, current string, selected *b
 	return huh.NewGroup(
 		huh.NewConfirm().Affirmative("Use " + profile).Negative("Keep " + current).Value(selected),
 	).Title("Make " + profile + " the default Sandbox profile?").
-		Description("Jobs can still select either verified profile explicitly.")
+		Description("Sessions can still select either verified profile explicitly.")
 }
 
 func (p setupPresenter) ConnectionGroup(selected *setupConnectionMode) *huh.Group {

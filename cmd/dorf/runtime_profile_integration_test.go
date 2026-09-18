@@ -114,7 +114,7 @@ func TestGuidedSetupStagesE2BProfileAndPreservesActiveDefault(t *testing.T) {
 	}
 }
 
-func TestAdmittedJobRuntimeIgnoresLaterVerificationReceiptState(t *testing.T) {
+func TestAdmittedSessionRuntimeIgnoresLaterVerificationReceiptState(t *testing.T) {
 	dsn := os.Getenv("DORF_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("DORF_TEST_DATABASE_URL is not configured")
@@ -152,7 +152,7 @@ func TestAdmittedJobRuntimeIgnoresLaterVerificationReceiptState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := core.JobAdmission{
+	input := core.SessionAdmission{
 		AdmissionKey:   "runtime-reverify-" + name,
 		SandboxProfile: name, ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
 	}
@@ -165,9 +165,9 @@ func TestAdmittedJobRuntimeIgnoresLaterVerificationReceiptState(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = tasks.DropQueue(context.Background(), queue); _ = tasks.Close() })
-	job, created, err := store.AdmitDirect(ctx, input, queue)
+	session, created, err := store.AdmitDirect(ctx, input, queue)
 	if err != nil || !created {
-		t.Fatalf("admit Job=%#v created=%v err=%v", job, created, err)
+		t.Fatalf("admit Session=%#v created=%v err=%v", session, created, err)
 	}
 	_, refreshing, err := store.BeginSandboxProfileVerification(ctx, name)
 	if err != nil {
@@ -179,8 +179,8 @@ func TestAdmittedJobRuntimeIgnoresLaterVerificationReceiptState(t *testing.T) {
 	}
 	assertRuntime := func(state string) {
 		t.Helper()
-		sandbox, err := resolver.ResolveSandbox(ctx, job.ProfileRef())
-		if err != nil || sandbox.SandboxProfile != job.ProfileRef() || sandbox.Execution == nil {
+		sandbox, err := resolver.ResolveSandbox(ctx, session.ProfileRef())
+		if err != nil || sandbox.SandboxProfile != session.ProfileRef() || sandbox.Execution == nil {
 			t.Fatalf("%s Sandbox runtime=%#v err=%v", state, sandbox, err)
 		}
 	}
@@ -211,28 +211,28 @@ func TestAdmittedJobRuntimeIgnoresLaterVerificationReceiptState(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Reload after promotion, as recovery does, rather than retaining an in-memory definition.
-	job, err = store.Job(ctx, job.ID)
+	session, err = store.Session(ctx, session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertRuntime("promoted replacement")
-	cleanup, err := resolver.ResolveCleanup(ctx, job.ProfileRef())
-	if err != nil || cleanup.SandboxProfile != job.ProfileRef() {
+	cleanup, err := resolver.ResolveCleanup(ctx, session.ProfileRef())
+	if err != nil || cleanup.SandboxProfile != session.ProfileRef() {
 		t.Fatalf("cleanup=%#v err=%v", cleanup, err)
 	}
-	direct, err := resolver.ResolveDirect(ctx, job.ProfileRef())
-	if err != nil || direct.SandboxProfile != job.ProfileRef() {
+	direct, err := resolver.ResolveDirect(ctx, session.ProfileRef())
+	if err != nil || direct.SandboxProfile != session.ProfileRef() {
 		t.Fatalf("direct=%#v err=%v", direct, err)
 	}
 	input.AdmissionKey += "-new"
-	newJob, created, err := store.AdmitDirect(ctx, input, queue)
-	if err != nil || !created || newJob.SandboxProfileRevision != next.DefinitionHash || newJob.ProfileRef() == job.ProfileRef() {
-		t.Fatalf("new admission=%#v created=%v err=%v", newJob, created, err)
+	newSession, created, err := store.AdmitDirect(ctx, input, queue)
+	if err != nil || !created || newSession.SandboxProfileRevision != next.DefinitionHash || newSession.ProfileRef() == session.ProfileRef() {
+		t.Fatalf("new admission=%#v created=%v err=%v", newSession, created, err)
 	}
 	for _, check := range []struct {
 		ref    core.SandboxProfileRef
 		images bool
-	}{{job.ProfileRef(), true}, {newJob.ProfileRef(), false}} {
+	}{{session.ProfileRef(), true}, {newSession.ProfileRef(), false}} {
 		images, err := resolver.SupportsMessageImages(ctx, check.ref)
 		if err != nil || images != check.images {
 			t.Fatalf("images for %v=%v err=%v", check.ref, images, err)

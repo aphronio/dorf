@@ -25,8 +25,8 @@ type workerControlReader struct {
 
 func controlReaderService(store postgres.Store, tasks *absurd.Client, cfg config.Config) controlreader.Service {
 	return controlreader.Service{
-		ObservationAttention: func(ctx context.Context, job core.Job) (string, error) {
-			task, err := fetchTaskResult(ctx, tasks, job.CurrentTaskID)
+		ObservationAttention: func(ctx context.Context, session core.Session) (string, error) {
+			task, err := fetchTaskResult(ctx, tasks, session.CurrentTaskID)
 			if err != nil {
 				return "", err
 			}

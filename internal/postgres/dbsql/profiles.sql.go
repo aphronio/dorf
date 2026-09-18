@@ -604,7 +604,7 @@ update dorf.sandbox_profile_verifications
 set last_error=$1
 where profile_name=$2
   and contract_version=$3
-  and definition_hash=(select sandbox_profile_revision from dorf.jobs where id=$4)
+  and definition_hash=(select sandbox_profile_revision from dorf.sessions where id=$4)
   and probe_completed_at is not null and cleaned_at is not null
 `
 
@@ -612,7 +612,7 @@ type MarkSandboxProfileUnavailableParams struct {
 	LastError       sql.NullString
 	ProfileName     string
 	ContractVersion string
-	JobID           string
+	SessionID       string
 }
 
 func (q *Queries) MarkSandboxProfileUnavailable(ctx context.Context, arg MarkSandboxProfileUnavailableParams) (int64, error) {
@@ -620,7 +620,7 @@ func (q *Queries) MarkSandboxProfileUnavailable(ctx context.Context, arg MarkSan
 		arg.LastError,
 		arg.ProfileName,
 		arg.ContractVersion,
-		arg.JobID,
+		arg.SessionID,
 	)
 	if err != nil {
 		return 0, err

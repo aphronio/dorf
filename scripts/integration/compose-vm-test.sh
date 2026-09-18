@@ -72,7 +72,7 @@ test_guest_uses_one_command_setup_lifecycle() {
 		fail "guest proof bypasses setup-generated Compose file selection"
 	fi
 	assert_contains "$GUEST" 'capture "$EVIDENCE_DIR/setup.log" "$DORF_BIN" setup "${setup_args[@]}"'
-	assert_contains "$GUEST" 'Dorf ready: Control plane and durable Job worker ready'
+	assert_contains "$GUEST" 'Dorf ready: Control plane and durable Session worker ready'
 	assert_contains "$GUEST" '.NetworkSettings.Ports["8745/tcp"]'
 	assert_contains "$GUEST" '.NetworkSettings.Ports["5432/tcp"]'
 	if grep -Fq -- 'compose up' "$GUEST"; then

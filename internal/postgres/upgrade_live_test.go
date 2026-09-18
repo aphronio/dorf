@@ -59,16 +59,16 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 		defer eventLock.Unlock()
 		_ = json.NewEncoder(events).Encode(event)
 	}
-	job, _, err := store.AdmitDirect(ctx, core.JobAdmission{AdmissionKey: id, SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-6-astra", ReasoningEffort: "low", KeepRunning: true}, client.QueueName())
+	session, _, err := store.AdmitDirect(ctx, core.SessionAdmission{AdmissionKey: id, SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-6-astra", ReasoningEffort: "low", KeepRunning: true}, client.QueueName())
 	if err != nil {
 		t.Fatal(err)
 	}
-	owned, err := store.Sandbox(ctx, core.MainSandboxName(job.ID))
+	owned, err := store.Sandbox(ctx, core.MainSandboxName(session.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner := provider.Ownership{JobID: job.ID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce}
-	t.Logf("proof=%s job=%s sandbox=%s provider=%s", id, job.ID, owned.ID, selected)
+	owner := provider.Ownership{SessionID: session.ID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce}
+	t.Logf("proof=%s session=%s sandbox=%s provider=%s", id, session.ID, owned.ID, selected)
 	// A failed proof keeps custody in PostgreSQL for investigation and cleanup.
 	t.Logf("retained evidence: %s", root)
 	if err := sandbox.ReconcileOwnedCreate(ctx, owner); err != nil {
@@ -110,7 +110,7 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 		}
 		result, err := sandbox.Exec(ctx, owner, nil, "browser-python", "/tmp/dorf-workstation-proof.py")
 		if err != nil || result.ExitCode != 0 {
-			emit(telemetry.Event{Name: "dorf.upgrade.workstation.failed", At: time.Now(), Failed: true, Attributes: map[string]any{"dorf.upgrade_id": id, "dorf.job_id": job.ID, "dorf.provider": selected}})
+			emit(telemetry.Event{Name: "dorf.upgrade.workstation.failed", At: time.Now(), Failed: true, Attributes: map[string]any{"dorf.upgrade_id": id, "dorf.session_id": session.ID, "dorf.provider": selected}})
 			t.Fatalf("workstation proof failed (exit=%d): %v\n%s\n%s", result.ExitCode, err, result.Stdout, result.Stderr)
 		}
 		output := strings.TrimSpace(result.Stdout)
@@ -125,7 +125,7 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(root, "workstation.json"), data, 0600); err != nil {
 			t.Fatal(err)
 		}
-		emit(telemetry.Event{Name: "dorf.upgrade.workstation.verified", At: time.Now(), Attributes: map[string]any{"dorf.upgrade_id": id, "dorf.job_id": job.ID, "dorf.provider": selected, "dorf.workstation_path": proof.Workstation}})
+		emit(telemetry.Event{Name: "dorf.upgrade.workstation.verified", At: time.Now(), Attributes: map[string]any{"dorf.upgrade_id": id, "dorf.session_id": session.ID, "dorf.provider": selected, "dorf.workstation_path": proof.Workstation}})
 		t.Logf("workstation proof: %s", output)
 	} else {
 		run("bash /opt/dorf-upgrade-proof/guest.sh bootstrap")
@@ -138,7 +138,7 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 	agent := codex.Agent{Sandbox: sandbox, Port: 8755, Timeout: 2 * time.Minute}
 	external := liveUpgradeExternals{Externals: terminal.Externals{Sandbox: sandbox, Agent: agent, Ownership: func(ctx context.Context, id string) (provider.Ownership, error) {
 		current, err := store.Sandbox(ctx, id)
-		return provider.Ownership{JobID: current.JobID, SandboxID: current.ID, OwnershipNonce: current.OwnershipNonce}, err
+		return provider.Ownership{SessionID: current.SessionID, SandboxID: current.ID, OwnershipNonce: current.OwnershipNonce}, err
 	}}}
 	driver := liveUpgradeDriver{LiveGateway: os.Getenv("DORF_UPGRADE_GATEWAY_HOST") != "", NativeDriver: upgrade.NativeDriver{Sandbox: sandbox, Checkpointer: checkpoints, Agent: agent, Replace: selected == "e2b"}}
 	configure := func(tasks *absurd.Client) {
@@ -162,7 +162,7 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 		return finish
 	}
 	admit := func(key, text string) core.Message {
-		result, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: owned.ID, FromKind: core.MessageFromHuman, FromID: key, Input: text, Intent: core.MessageAuto})
+		result, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{SessionID: session.ID, SandboxID: owned.ID, FromKind: core.MessageFromHuman, FromID: key, Input: text, Intent: core.MessageAuto})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -184,7 +184,7 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 		if index == 1 {
 			path = oldTarget
 		}
-		request := upgrade.Request{ID: fmt.Sprintf("%s-%d", id, index), JobID: job.ID, SandboxID: owned.ID, PackagePath: path, Version: version}
+		request := upgrade.Request{ID: fmt.Sprintf("%s-%d", id, index), SessionID: session.ID, SandboxID: owned.ID, PackagePath: path, Version: version}
 		if _, err := store.RequestSandboxUpgrade(ctx, client.QueueName(), request); err != nil {
 			t.Fatal(err)
 		}
@@ -196,7 +196,7 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 		stop = start(restarted)
 		waitMessage(queued)
 		stop()
-		receipts, err := store.JobUpgrades(ctx, job.ID)
+		receipts, err := store.SessionUpgrades(ctx, session.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -216,7 +216,7 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 			t.Fatal("E2B did not switch provider binding")
 		}
 		if !driver.LiveGateway {
-			data, err := sandbox.ReadFile(ctx, provider.Ownership{JobID: job.ID, SandboxID: current.ID, OwnershipNonce: current.OwnershipNonce}, "/workspace/upgrade-worker-proof/requests.jsonl")
+			data, err := sandbox.ReadFile(ctx, provider.Ownership{SessionID: session.ID, SandboxID: current.ID, OwnershipNonce: current.OwnershipNonce}, "/workspace/upgrade-worker-proof/requests.jsonl")
 			if err != nil || !strings.Contains(string(data), "DORF_UPGRADE_WORKER_CONTEXT_732") {
 				t.Fatal("resumed model request lost original context")
 			}
@@ -228,7 +228,7 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		history, err := agent.ReadTurns(ctx, provider.Ownership{JobID: job.ID, SandboxID: current.ID, OwnershipNonce: current.OwnershipNonce}, execution.AgentRun.ThreadID)
+		history, err := agent.ReadTurns(ctx, provider.Ownership{SessionID: session.ID, SandboxID: current.ID, OwnershipNonce: current.OwnershipNonce}, execution.AgentRun.ThreadID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -245,11 +245,11 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 		t.Logf("verified upgrade=%s outcome=%s provider_before=%s provider_after=%s", request.ID, receipt.Outcome(), receipt.SourceProviderID, current.ProviderID)
 	}
 	stop = start(client)
-	if err := store.ScheduleCleanup(ctx, client.QueueName(), job.ID, ""); err != nil {
+	if err := store.ScheduleCleanup(ctx, client.QueueName(), session.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	liveUpgradeWait(t, ctx, func() bool {
-		current, err := store.Job(ctx, job.ID)
+		current, err := store.Session(ctx, session.ID)
 		return err == nil && current.CleanupState == core.CleanupComplete
 	})
 	stop()
@@ -261,7 +261,7 @@ func liveUpgradeWait(t *testing.T, ctx context.Context, ready func() bool) {
 	deadline := time.Now().Add(5 * time.Minute)
 	for !ready() {
 		if time.Now().After(deadline) {
-			t.Fatal("retained worker did not converge; inspect saved Job and upgrade receipts")
+			t.Fatal("retained worker did not converge; inspect saved Session and upgrade receipts")
 		}
 		select {
 		case <-ctx.Done():
@@ -321,15 +321,15 @@ func liveUpgradeSandbox(t *testing.T, selected string) provider.Sandbox {
 
 type liveUpgradeExternals struct{ terminal.Externals }
 
-func (e liveUpgradeExternals) RouteCreate(ctx context.Context, job core.Job, s core.Sandbox, route core.Route) error {
+func (e liveUpgradeExternals) RouteCreate(ctx context.Context, session core.Session, s core.Sandbox, route core.Route) error {
 	if os.Getenv("DORF_UPGRADE_GATEWAY_HOST") != "" {
-		key, err := liveUpgradeGateway(ctx, "create", s, route, job.Model)
+		key, err := liveUpgradeGateway(ctx, "create", s, route, session.Model)
 		if err != nil {
 			return err
 		}
-		return e.Agent.InstallRoute(ctx, provider.Ownership{JobID: s.JobID, SandboxID: s.ID, OwnershipNonce: s.OwnershipNonce}, os.Getenv("DORF_UPGRADE_GATEWAY_URL"), key, job.Model)
+		return e.Agent.InstallRoute(ctx, provider.Ownership{SessionID: s.SessionID, SandboxID: s.ID, OwnershipNonce: s.OwnershipNonce}, os.Getenv("DORF_UPGRADE_GATEWAY_URL"), key, session.Model)
 	}
-	owner := provider.Ownership{JobID: s.JobID, SandboxID: s.ID, OwnershipNonce: s.OwnershipNonce}
+	owner := provider.Ownership{SessionID: s.SessionID, SandboxID: s.ID, OwnershipNonce: s.OwnershipNonce}
 	if err := e.Sandbox.PutFile(ctx, owner, "/root/.codex/config.toml", []byte("model_provider = \"proof\"\n[model_providers.proof]\nname = \"proof\"\nbase_url = \"http://127.0.0.1:18997/v1\"\nwire_api = \"responses\"\n")); err != nil {
 		return err
 	}
@@ -338,13 +338,13 @@ func (e liveUpgradeExternals) RouteCreate(ctx context.Context, job core.Job, s c
 	}
 	return liveUpgradeFixture(ctx, e.Sandbox, owner)
 }
-func (e liveUpgradeExternals) RouteRevoke(ctx context.Context, _ core.Job, s core.Sandbox, route core.Route) error {
+func (e liveUpgradeExternals) RouteRevoke(ctx context.Context, _ core.Session, s core.Sandbox, route core.Route) error {
 	if os.Getenv("DORF_UPGRADE_GATEWAY_HOST") != "" {
 		if _, err := liveUpgradeGateway(ctx, "revoke", s, route, ""); err != nil {
 			return err
 		}
 	}
-	return e.Agent.RemoveRoute(ctx, provider.Ownership{JobID: s.JobID, SandboxID: s.ID, OwnershipNonce: s.OwnershipNonce})
+	return e.Agent.RemoveRoute(ctx, provider.Ownership{SessionID: s.SessionID, SandboxID: s.ID, OwnershipNonce: s.OwnershipNonce})
 }
 
 type liveUpgradeAgent struct{ terminal.Externals }
@@ -363,14 +363,14 @@ type liveUpgradeDriver struct {
 
 func (d liveUpgradeDriver) Verify(ctx context.Context, s core.Sandbox, version string, runs []core.AgentRun) error {
 	if !d.LiveGateway {
-		if err := liveUpgradeFixture(ctx, d.Sandbox, provider.Ownership{JobID: s.JobID, SandboxID: s.ID, OwnershipNonce: s.OwnershipNonce}); err != nil {
+		if err := liveUpgradeFixture(ctx, d.Sandbox, provider.Ownership{SessionID: s.SessionID, SandboxID: s.ID, OwnershipNonce: s.OwnershipNonce}); err != nil {
 			return err
 		}
 	}
 	if err := d.NativeDriver.Verify(ctx, s, version, runs); err != nil {
 		return err
 	}
-	owner := provider.Ownership{JobID: s.JobID, SandboxID: s.ID, OwnershipNonce: s.OwnershipNonce}
+	owner := provider.Ownership{SessionID: s.SessionID, SandboxID: s.ID, OwnershipNonce: s.OwnershipNonce}
 	if version == "0.147.0" {
 		if err := d.Sandbox.PutFile(ctx, owner, "/root/.codex/upgrade-incompatible-state", []byte("injected migrated state")); err != nil {
 			return err

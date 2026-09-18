@@ -11,8 +11,8 @@ import (
 func TestObservationAdmissionRetainsKindAndSupportsAuto(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
-	job, _ := prepareTransportIntegrationJob(t, store, "observation")
-	input := core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromWorkflow, FromID: "event-1", Input: "Task updated", Intent: core.MessageFollow, Observation: true}
+	session, _ := prepareTransportIntegrationSession(t, store, "observation")
+	input := core.MessageAdmission{SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), FromKind: core.MessageFromWorkflow, FromID: "event-1", Input: "Task updated", Intent: core.MessageFollow, Observation: true}
 	accepted, err := store.AdmitDirectMessage(ctx, input)
 	if err != nil || !accepted.Created {
 		t.Fatalf("admit: %+v %v", accepted, err)

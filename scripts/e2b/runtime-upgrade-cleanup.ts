@@ -10,7 +10,7 @@ if (!/^upgrade-proof-[0-9a-f]{12}$/.test(id ?? '')) throw new Error('an exact pr
 const root = resolve(import.meta.dir, '../..');
 const evidence = resolve(root, '.dorf/runtime-upgrade', id);
 const custody = JSON.parse(await readFile(resolve(evidence, 'custody.json'), 'utf8'));
-if (custody.key !== id || custody.owner.job_id !== id || custody.owner.sandbox_id !== id || custody.project !== 'dorf-runtime-upgrade-proof') {
+if (custody.key !== id || custody.owner.session_id !== id || custody.owner.sandbox_id !== id || custody.project !== 'dorf-runtime-upgrade-proof') {
   throw new Error('foreign proof custody');
 }
 async function command(binary: string, args: string[], input = '') {

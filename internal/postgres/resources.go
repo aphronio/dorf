@@ -12,19 +12,19 @@ import (
 )
 
 // BindSandboxResource records an attested locator without allowing a later
-// observation to redirect the same resource identity. Callers hold the Job fence
+// observation to redirect the same resource identity. Callers hold the Session fence
 // across provider attestation and this write.
 func (s Store) BindSandboxResource(ctx context.Context, owned core.Sandbox, providerID string) error {
-	if owned.JobID == "" || owned.ID == "" || owned.ResourceID == "" || strings.TrimSpace(providerID) == "" || providerID != strings.TrimSpace(providerID) {
+	if owned.SessionID == "" || owned.ID == "" || owned.ResourceID == "" || strings.TrimSpace(providerID) == "" || providerID != strings.TrimSpace(providerID) {
 		return fmt.Errorf("resource binding requires exact ownership and provider identity")
 	}
 	return expectOneRows(dbsql.New(s.DB).BindSandboxResource(ctx, dbsql.BindSandboxResourceParams{
-		JobID: owned.JobID, SandboxID: owned.ID, ResourceID: owned.ResourceID, OwnershipNonce: owned.OwnershipNonce, ProviderID: providerID,
+		SessionID: owned.SessionID, SandboxID: owned.ID, ResourceID: owned.ResourceID, OwnershipNonce: owned.OwnershipNonce, ProviderID: providerID,
 	}))
 }
 
-func (s Store) SandboxResources(ctx context.Context, jobID string) ([]core.SandboxResource, error) {
-	rows, err := dbsql.New(s.DB).ListSandboxResources(ctx, jobID)
+func (s Store) SandboxResources(ctx context.Context, sessionID string) ([]core.SandboxResource, error) {
+	rows, err := dbsql.New(s.DB).ListSandboxResources(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -38,9 +38,9 @@ func (s Store) SandboxResources(ctx context.Context, jobID string) ([]core.Sandb
 	return resources, nil
 }
 
-func (s Store) SandboxResource(ctx context.Context, jobID, sandboxID, resourceID string) (core.Sandbox, error) {
+func (s Store) SandboxResource(ctx context.Context, sessionID, sandboxID, resourceID string) (core.Sandbox, error) {
 	row, err := dbsql.New(s.DB).GetSandboxResource(ctx, dbsql.GetSandboxResourceParams{
-		JobID: jobID, SandboxID: sandboxID, ResourceID: resourceID,
+		SessionID: sessionID, SandboxID: sandboxID, ResourceID: resourceID,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return core.Sandbox{}, ErrNotFound
@@ -48,7 +48,7 @@ func (s Store) SandboxResource(ctx context.Context, jobID, sandboxID, resourceID
 	if err != nil {
 		return core.Sandbox{}, err
 	}
-	return core.Sandbox{ID: row.ID, JobID: row.JobID, Name: row.Name,
+	return core.Sandbox{ID: row.ID, SessionID: row.SessionID, Name: row.Name,
 		ResourceID: row.ResourceID, OwnershipNonce: row.OwnershipNonce, ProviderID: row.ProviderID}, nil
 }
 

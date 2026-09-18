@@ -11,26 +11,26 @@ type Execution struct {
 	Upgrades Service
 }
 
-func (e Execution) ReconcileJobAgent(ctx context.Context, jobID string) (core.AgentReconciliationProgress, error) {
-	progress, err := absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (bool, error) { return e.Upgrades.Reconcile(workCtx, jobID) })
+func (e Execution) ReconcileSessionAgent(ctx context.Context, sessionID string) (core.AgentReconciliationProgress, error) {
+	progress, err := absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (bool, error) { return e.Upgrades.Reconcile(workCtx, sessionID) })
 	if err != nil {
 		return core.AgentReconciliationIdle, err
 	}
 	if progress {
 		return core.AgentReconciliationReady, nil
 	}
-	return e.ExecutionService.ReconcileJobAgent(ctx, jobID)
+	return e.ExecutionService.ReconcileSessionAgent(ctx, sessionID)
 }
-func (e Execution) PrepareCleanup(ctx context.Context, jobID string) (core.Job, []core.Sandbox, error) {
-	job, sandboxes, err := e.ExecutionService.PrepareCleanup(ctx, jobID)
-	if err != nil || job.CleanupState == core.CleanupComplete {
-		return job, sandboxes, err
+func (e Execution) PrepareCleanup(ctx context.Context, sessionID string) (core.Session, []core.Sandbox, error) {
+	session, sandboxes, err := e.ExecutionService.PrepareCleanup(ctx, sessionID)
+	if err != nil || session.CleanupState == core.CleanupComplete {
+		return session, sandboxes, err
 	}
-	return job, sandboxes, e.Upgrades.PrepareCleanup(ctx, jobID)
+	return session, sandboxes, e.Upgrades.PrepareCleanup(ctx, sessionID)
 }
-func (e Execution) CompleteCleanup(ctx context.Context, jobID string) error {
-	if err := e.Upgrades.CompleteCleanup(ctx, jobID); err != nil {
+func (e Execution) CompleteCleanup(ctx context.Context, sessionID string) error {
+	if err := e.Upgrades.CompleteCleanup(ctx, sessionID); err != nil {
 		return err
 	}
-	return e.ExecutionService.CompleteCleanup(ctx, jobID)
+	return e.ExecutionService.CompleteCleanup(ctx, sessionID)
 }

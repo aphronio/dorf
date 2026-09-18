@@ -36,7 +36,7 @@ type Service struct {
 }
 
 // Capture runs on backup capacity, or after cleanup has closed admission. It
-// holds no Job fence while reading native files, hashing, uploading or stopping
+// holds no Session fence while reading native files, hashing, uploading or stopping
 // a cancelled process. Publication independently rechecks the durable boundary.
 func (s Service) Capture(ctx context.Context, sandboxID string, cleanup bool) (Checkpoint, error) {
 	boundary, err := s.Store.Boundary(ctx, sandboxID, cleanup)
@@ -126,7 +126,7 @@ func (s Service) event(boundary CaptureBoundary, outcome string, elapsed time.Du
 		return
 	}
 	s.Emit(telemetry.Event{Name: "dorf.checkpoint." + outcome, At: time.Now(), Failed: outcome == "failed", Attributes: map[string]any{
-		"dorf.job_id": boundary.JobID, "dorf.sandbox_id": boundary.SandboxID,
+		"dorf.session_id": boundary.SessionID, "dorf.sandbox_id": boundary.SandboxID,
 		"dorf.resource_id": boundary.ResourceID, "dorf.checkpoint_outcome": outcome,
 		"dorf.completed_turn_sequence": boundary.CompletedTurnSequence,
 		"duration_ms":                  elapsed.Milliseconds(),

@@ -14,7 +14,7 @@ import (
 // Ownership is Dorf's durable identity for one provider Sandbox. A provider's
 // opaque resource locator is deliberately adapter-private.
 type Ownership struct {
-	JobID          string `json:"job_id"`
+	SessionID      string `json:"job_id"`
 	SandboxID      string `json:"sandbox_id"`
 	OwnershipNonce string `json:"ownership_nonce"`
 }

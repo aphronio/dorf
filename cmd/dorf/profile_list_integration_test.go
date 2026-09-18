@@ -96,13 +96,13 @@ func TestControlAPIProfileDiscoveryAndSelection(t *testing.T) {
 		t.Fatal("completed verification did not become visible")
 	}
 	key := fmt.Sprintf("profile-discovery-job-%d", time.Now().UnixNano())
-	response := controlTestRequest(t, handler, http.MethodPost, "/v1/jobs", credential, key, controlapi.AdmitJobRequest{
+	response := controlTestRequest(t, handler, http.MethodPost, "/v1/sessions", credential, key, controlapi.CreateSessionRequest{
 		Profile: profiles[cloudName].Name, AIConnection: "primary", Model: "model-test",
 	})
-	var job controlapi.DirectJob
-	controlTestJSON(t, response, http.StatusCreated, &job)
-	if job.Profile != cloudName {
-		t.Fatalf("admitted profile=%q, want discovered %q", job.Profile, cloudName)
+	var session controlapi.Session
+	controlTestJSON(t, response, http.StatusCreated, &session)
+	if session.Profile != cloudName {
+		t.Fatalf("admitted profile=%q, want discovered %q", session.Profile, cloudName)
 	}
 	// Refreshing proof invalidates new admission eligibility without erasing the profile.
 	if _, _, err := store.BeginSandboxProfileVerification(ctx, cloudName); err != nil {
@@ -130,7 +130,7 @@ func TestControlAPIUnknownProfilesHaveASpecificProblem(t *testing.T) {
 		path  string
 		input any
 	}{
-		{"/v1/jobs", controlapi.AdmitJobRequest{Profile: missing}},
+		{"/v1/sessions", controlapi.CreateSessionRequest{Profile: missing}},
 	} {
 		t.Run(test.path, func(t *testing.T) {
 			response := controlTestRequest(t, handler, http.MethodPost, test.path, credential,

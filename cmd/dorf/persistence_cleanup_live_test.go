@@ -27,9 +27,9 @@ import (
 )
 
 // TestLivePersistenceCleanup is an explicitly budgeted destructive proof. It
-// creates at most two sequential E2B Sandboxes: the Job's source and a private
+// creates at most two sequential E2B Sandboxes: the Session's source and a private
 // inspection resource. The second resource restores one exact checkpoint but
-// is never attached to or used to reopen the cleaned Job.
+// is never attached to or used to reopen the cleaned Session.
 func TestLivePersistenceCleanup(t *testing.T) {
 	if os.Getenv("DORF_LIVE_PERSISTENCE_E2B") != "1" {
 		t.Skip("set DORF_LIVE_PERSISTENCE_E2B=1 with a private budget reservation")
@@ -66,15 +66,15 @@ func TestLivePersistenceCleanup(t *testing.T) {
 	proof := &livePersistenceProof{t: t, ctx: ctx, store: store, tasks: tasks, sandbox: sandbox, agent: agent, fixture: fixture}
 	proof.installRuntime(profile.Ref())
 
-	job, _, err := store.AdmitDirect(ctx, core.JobAdmission{
+	session, _, err := store.AdmitDirect(ctx, core.SessionAdmission{
 		AdmissionKey: "checkpoint-cleanup-proof-" + receipt.RunID, SandboxProfile: profile.Name,
 		ProviderConnection: "synthetic-local", Model: "synthetic-model", ReasoningEffort: "low", KeepRunning: true,
 	}, tasks.QueueName())
 	if err != nil {
 		t.Fatal(err)
 	}
-	proof.job = job
-	proof.sandboxID = core.MainSandboxName(job.ID)
+	proof.session = session
+	proof.sandboxID = core.MainSandboxName(session.ID)
 	proof.registerCleanup()
 	proof.registerEventExport()
 
@@ -114,7 +114,7 @@ func TestLivePersistenceCleanup(t *testing.T) {
 	badConfig := baseConfig.withProfile(profile.Ref())
 	badConfig.ResticPath = persistence.DefaultResticPath + "-unavailable"
 	rewriteLiveCleanupConfig(t, privateConfig, badConfig)
-	if err := store.ScheduleCleanup(ctx, tasks.QueueName(), job.ID, ""); err != nil {
+	if err := store.ScheduleCleanup(ctx, tasks.QueueName(), session.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	failedStarted := time.Now()
@@ -122,7 +122,7 @@ func TestLivePersistenceCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	failedDuration := time.Since(failedStarted)
-	assertLiveCleanupRetained(t, ctx, store, sandbox, job.ID, proof.sandboxID)
+	assertLiveCleanupRetained(t, ctx, store, sandbox, session.ID, proof.sandboxID)
 	if publishedBeforeRoute.Load() || publishedBeforeDelete.Load() {
 		t.Fatal("cleanup reached a destructive action after the unavailable backup")
 	}
@@ -141,9 +141,9 @@ func TestLivePersistenceCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	cleanupDuration := time.Since(cleanupStarted)
-	cleaned, err := store.Job(ctx, job.ID)
+	cleaned, err := store.Session(ctx, session.ID)
 	if err != nil || cleaned.AdmissionOpen || cleaned.CleanupState != core.CleanupComplete || cleaned.CleanedAt.IsZero() {
-		t.Fatalf("cleanup Job = %#v: %v", cleaned, err)
+		t.Fatalf("cleanup Session = %#v: %v", cleaned, err)
 	}
 	if !publishedBeforeRoute.Load() || !publishedBeforeDelete.Load() {
 		t.Fatal("cleanup did not prove checkpoint publication before route revocation and resource deletion")
@@ -158,7 +158,7 @@ func TestLivePersistenceCleanup(t *testing.T) {
 
 	inspectionDigest := sha256.Sum256([]byte("cleanup-inspection-v1\x00" + receipt.RunID))
 	inspectionOwner := provider.Ownership{
-		JobID: job.ID, SandboxID: proof.sandboxID, OwnershipNonce: hex.EncodeToString(inspectionDigest[:]),
+		SessionID: session.ID, SandboxID: proof.sandboxID, OwnershipNonce: hex.EncodeToString(inspectionDigest[:]),
 	}
 	removeInspection := liveInspectionCleanup(t, sandbox, inspectionOwner)
 	if err := sandbox.ReconcileOwnedCreate(ctx, inspectionOwner); err != nil {
@@ -176,9 +176,9 @@ func TestLivePersistenceCleanup(t *testing.T) {
 	assertLiveCleanupRestore(t, ctx, sandbox, inspectionOwner)
 	removeInspection()
 
-	afterInspection, err := store.Job(ctx, job.ID)
+	afterInspection, err := store.Session(ctx, session.ID)
 	if err != nil || afterInspection != cleaned {
-		t.Fatalf("private inspection reopened or mutated cleaned Job: before=%#v after=%#v err=%v", cleaned, afterInspection, err)
+		t.Fatalf("private inspection reopened or mutated cleaned Session: before=%#v after=%#v err=%v", cleaned, afterInspection, err)
 	}
 	t.Logf("live cleanup persistence proof passed: unavailable=%s cleanup_retry=%s restore=%s logical_added_bytes=%d",
 		failedDuration, cleanupDuration, restoreDuration, proof.completedLogicalDataAdded())
@@ -204,28 +204,28 @@ type liveCleanupExternals struct {
 	publishedBeforeDelete *atomic.Bool
 }
 
-func (e liveCleanupExternals) RouteRevoke(ctx context.Context, job core.Job, sandbox core.Sandbox, route core.Route) error {
-	if err := e.requirePublished(ctx, job, sandbox); err != nil {
+func (e liveCleanupExternals) RouteRevoke(ctx context.Context, session core.Session, sandbox core.Sandbox, route core.Route) error {
+	if err := e.requirePublished(ctx, session, sandbox); err != nil {
 		return err
 	}
 	e.publishedBeforeRoute.Store(true)
 	return e.Agent.RemoveRoute(ctx, livePersistenceOwner(sandbox))
 }
 
-func (e liveCleanupExternals) SandboxDelete(ctx context.Context, job core.Job, sandbox core.Sandbox) error {
-	if err := e.requirePublished(ctx, job, sandbox); err != nil {
+func (e liveCleanupExternals) SandboxDelete(ctx context.Context, session core.Session, sandbox core.Sandbox) error {
+	if err := e.requirePublished(ctx, session, sandbox); err != nil {
 		return err
 	}
 	e.publishedBeforeDelete.Store(true)
-	return e.Externals.SandboxDelete(ctx, job, sandbox)
+	return e.Externals.SandboxDelete(ctx, session, sandbox)
 }
 
-func (e liveCleanupExternals) requirePublished(ctx context.Context, job core.Job, sandbox core.Sandbox) error {
+func (e liveCleanupExternals) requirePublished(ctx context.Context, session core.Session, sandbox core.Sandbox) error {
 	checkpoint, err := e.store.LastCheckpoint(ctx, e.sandboxID)
 	if err != nil {
 		return fmt.Errorf("cleanup action preceded checkpoint publication: %w", err)
 	}
-	if !checkpoint.Cleanup || checkpoint.JobID != job.ID || checkpoint.SandboxID != sandbox.ID || checkpoint.ResourceID != sandbox.ResourceID {
+	if !checkpoint.Cleanup || checkpoint.SessionID != session.ID || checkpoint.SandboxID != sandbox.ID || checkpoint.ResourceID != sandbox.ResourceID {
 		return fmt.Errorf("cleanup action checkpoint differs from its source boundary")
 	}
 	return nil
@@ -246,18 +246,18 @@ func rewriteLiveCleanupConfig(t *testing.T, path string, cfg checkpointConfig) {
 	}
 }
 
-func assertLiveCleanupRetained(t *testing.T, ctx context.Context, store postgres.Store, sandbox provider.Sandbox, jobID, sandboxID string) {
+func assertLiveCleanupRetained(t *testing.T, ctx context.Context, store postgres.Store, sandbox provider.Sandbox, sessionID, sandboxID string) {
 	t.Helper()
-	job, err := store.Job(ctx, jobID)
-	if err != nil || job.AdmissionOpen || job.CleanupState != core.CleanupScheduled || job.CleanupAttention == "" {
-		t.Fatalf("failed cleanup Job = %#v: %v", job, err)
+	session, err := store.Session(ctx, sessionID)
+	if err != nil || session.AdmissionOpen || session.CleanupState != core.CleanupScheduled || session.CleanupAttention == "" {
+		t.Fatalf("failed cleanup Session = %#v: %v", session, err)
 	}
 	owned := sourceSandbox(t, ctx, store, sandboxID)
 	present, err := sandbox.OwnedPresent(ctx, livePersistenceOwner(owned))
 	if err != nil || !present {
 		t.Fatalf("failed cleanup source retained=%t: %v", present, err)
 	}
-	resources, err := store.SandboxResources(ctx, jobID)
+	resources, err := store.SandboxResources(ctx, sessionID)
 	if err != nil || len(resources) != 1 || !resources[0].DeletedAt.IsZero() {
 		t.Fatalf("failed cleanup resources = %#v: %v", resources, err)
 	}

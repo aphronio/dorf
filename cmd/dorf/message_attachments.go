@@ -30,7 +30,7 @@ type classifiedMessageAttachment struct {
 	mediaType string
 }
 
-func (a controlAPIJobs) retainMessageAttachments(ctx context.Context, profile core.SandboxProfileRef, raw []controlapi.SendMessageAttachment) ([]core.MessageAttachment, error) {
+func (a controlAPISessions) retainMessageAttachments(ctx context.Context, profile core.SandboxProfileRef, raw []controlapi.SendMessageAttachment) ([]core.MessageAttachment, error) {
 	classified, hasImage, err := classifyMessageAttachments(raw)
 	if err != nil {
 		return nil, err

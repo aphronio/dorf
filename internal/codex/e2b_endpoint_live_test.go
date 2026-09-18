@@ -116,7 +116,7 @@ func e2bEndpointOwnership(t *testing.T) provider.Ownership {
 	}
 	nonce := hex.EncodeToString(raw)
 	return provider.Ownership{
-		JobID:          "e2b-codex-endpoint-proof-" + nonce[:12],
+		SessionID:      "e2b-codex-endpoint-proof-" + nonce[:12],
 		SandboxID:      "dorf-e2b-codex-endpoint-" + nonce[:12],
 		OwnershipNonce: nonce,
 	}

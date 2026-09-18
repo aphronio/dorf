@@ -35,7 +35,7 @@ const (
 type handler struct {
 	discovery Discovery
 	auth      Auth
-	jobs      Jobs
+	sessions  Sessions
 	profiles  Profiles
 	mux       *http.ServeMux
 	redeem    redemptionLimiter
@@ -45,26 +45,26 @@ type handler struct {
 
 type authenticatedRoute func(http.ResponseWriter, *http.Request, controlauth.Client)
 
-func newHandlerContext(discovery Discovery, auth Auth, jobs Jobs, profiles Profiles, shutdown context.Context) http.Handler {
-	h := &handler{discovery: discovery, auth: auth, jobs: jobs, profiles: profiles, mux: http.NewServeMux(),
+func newHandlerContext(discovery Discovery, auth Auth, sessions Sessions, profiles Profiles, shutdown context.Context) http.Handler {
+	h := &handler{discovery: discovery, auth: auth, sessions: sessions, profiles: profiles, mux: http.NewServeMux(),
 		fileReads: make(chan struct{}, provider.MaxConcurrentFileReads), shutdown: shutdown}
 	h.mux.HandleFunc("/v1", h.discoveryRoute)
 	h.mux.HandleFunc(OpenAPIPath, h.openAPIRoute)
 	h.mux.HandleFunc("/v1/auth/enrollments/redeem", h.redeemRoute)
 	h.mux.HandleFunc("/v1/me", h.authenticate(h.meRoute))
 	h.mux.HandleFunc("/v1/profiles", h.authenticate(h.profilesRoute))
-	h.mux.HandleFunc("/v1/jobs", h.authenticate(h.jobsRoute))
-	h.mux.HandleFunc("/v1/jobs/{job}/timeline", h.authenticate(h.timelineRoute))
-	h.mux.HandleFunc("/v1/jobs/{job}/watch", h.authenticate(h.watchRoute))
-	h.mux.HandleFunc("/v1/jobs/{job}/messages", h.authenticate(h.sendMessageRoute))
-	h.mux.HandleFunc("/v1/jobs/{job}/messages/{message}/observation", h.authenticate(h.messageObservationRoute))
-	h.mux.HandleFunc("/v1/jobs/{job}/messages/{message}/observation/stream", h.authenticate(h.messageObservationRoute))
-	h.mux.HandleFunc("/v1/jobs/{job}/messages/{message}/timeline", h.authenticate(h.messageTimelineRoute))
-	h.mux.HandleFunc("/v1/jobs/{job}/messages/{message}", h.authenticate(h.messageRoute))
-	h.mux.HandleFunc("/v1/jobs/{job}/messages/{message}/interrupt", h.authenticate(h.interruptMessageRoute))
-	h.mux.HandleFunc("/v1/jobs/{job}/retries", h.authenticate(h.retryRoute))
-	h.mux.HandleFunc("/v1/jobs/{job}/cleanup", h.authenticate(h.cleanupRoute))
-	h.mux.HandleFunc("/v1/jobs/{job}", h.authenticate(h.jobRoute))
+	h.mux.HandleFunc("/v1/sessions", h.authenticate(h.sessionsRoute))
+	h.mux.HandleFunc("/v1/sessions/{session}/timeline", h.authenticate(h.timelineRoute))
+	h.mux.HandleFunc("/v1/sessions/{session}/watch", h.authenticate(h.watchRoute))
+	h.mux.HandleFunc("/v1/sessions/{session}/messages", h.authenticate(h.sendMessageRoute))
+	h.mux.HandleFunc("/v1/sessions/{session}/messages/{message}/observation", h.authenticate(h.messageObservationRoute))
+	h.mux.HandleFunc("/v1/sessions/{session}/messages/{message}/observation/stream", h.authenticate(h.messageObservationRoute))
+	h.mux.HandleFunc("/v1/sessions/{session}/messages/{message}/timeline", h.authenticate(h.messageTimelineRoute))
+	h.mux.HandleFunc("/v1/sessions/{session}/messages/{message}", h.authenticate(h.messageRoute))
+	h.mux.HandleFunc("/v1/sessions/{session}/messages/{message}/interrupt", h.authenticate(h.interruptMessageRoute))
+	h.mux.HandleFunc("/v1/sessions/{session}/retries", h.authenticate(h.retryRoute))
+	h.mux.HandleFunc("/v1/sessions/{session}/cleanup", h.authenticate(h.cleanupRoute))
+	h.mux.HandleFunc("/v1/sessions/{session}", h.authenticate(h.sessionRoute))
 	h.mux.HandleFunc("/v1/sandboxes/{sandbox}/status", h.authenticate(h.sandboxStatusRoute))
 	h.mux.HandleFunc("/v1/sandboxes/{sandbox}/exec", h.authenticate(h.sandboxExecRoute))
 	h.mux.HandleFunc("/v1/sandboxes/{sandbox}/files", h.authenticate(h.fileRoute))
@@ -74,13 +74,13 @@ func newHandlerContext(discovery Discovery, auth Auth, jobs Jobs, profiles Profi
 	return h
 }
 
-func NewServer(discovery Discovery, auth Auth, jobs Jobs, profiles Profiles) *http.Server {
+func NewServer(discovery Discovery, auth Auth, sessions Sessions, profiles Profiles) *http.Server {
 	discovery.Links = OpenAPIDiscoveryLinks()
 	if !slices.Contains(discovery.Capabilities, OpenAPICapability) {
 		discovery.Capabilities = append(discovery.Capabilities, OpenAPICapability)
 	}
 	shutdown, cancel := context.WithCancel(context.Background())
-	server := &http.Server{Handler: newHandlerContext(discovery, auth, jobs, profiles, shutdown), ReadHeaderTimeout: 10 * time.Second,
+	server := &http.Server{Handler: newHandlerContext(discovery, auth, sessions, profiles, shutdown), ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: maxHeaderBytes}
 	server.RegisterOnShutdown(cancel)
 	return server
@@ -190,19 +190,19 @@ func (h *handler) meRoute(w http.ResponseWriter, r *http.Request, client control
 	}
 }
 
-func (h *handler) jobsRoute(w http.ResponseWriter, r *http.Request, client controlauth.Client) {
+func (h *handler) sessionsRoute(w http.ResponseWriter, r *http.Request, client controlauth.Client) {
 	switch r.Method {
 	case http.MethodGet:
-		h.jobListRoute(w, r)
+		h.sessionListRoute(w, r)
 	case http.MethodPost:
-		h.admitDirectRoute(w, r, client)
+		h.createSessionRoute(w, r, client)
 	default:
 		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
 		h.fail(w, problem("method_not_allowed"))
 	}
 }
 
-func (h *handler) admitDirectRoute(w http.ResponseWriter, r *http.Request, client controlauth.Client) {
+func (h *handler) createSessionRoute(w http.ResponseWriter, r *http.Request, client controlauth.Client) {
 	if !h.exact(w, r, http.MethodPost, true) {
 		return
 	}
@@ -210,16 +210,16 @@ func (h *handler) admitDirectRoute(w http.ResponseWriter, r *http.Request, clien
 	if !ok {
 		return
 	}
-	var input AdmitJobRequest
+	var input CreateSessionRequest
 	if !h.decode(w, r, &input) {
 		return
 	}
-	job, created, err := h.jobs.AdmitDirect(r.Context(), client.ID, key, input)
+	session, created, err := h.sessions.Create(r.Context(), client.ID, key, input)
 	if err != nil {
 		h.serviceError(w, r, err)
 		return
 	}
-	h.jobResponseStatus(w, r, job, nil, createdStatus(created))
+	h.sessionResponseStatus(w, r, session, nil, createdStatus(created))
 }
 
 func (h *handler) sendMessageRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
@@ -234,7 +234,7 @@ func (h *handler) sendMessageRoute(w http.ResponseWriter, r *http.Request, _ con
 	if !h.decodeMessage(w, r, &input) {
 		return
 	}
-	message, created, err := h.jobs.SendMessage(r.Context(), r.PathValue("job"), key, input)
+	message, created, err := h.sessions.SendMessage(r.Context(), r.PathValue("session"), key, input)
 	if err != nil {
 		h.serviceError(w, r, err)
 		return
@@ -244,7 +244,7 @@ func (h *handler) sendMessageRoute(w http.ResponseWriter, r *http.Request, _ con
 
 func (h *handler) messageRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
 	if h.exact(w, r, http.MethodGet, false) {
-		message, err := h.jobs.GetMessage(r.Context(), r.PathValue("job"), r.PathValue("message"))
+		message, err := h.sessions.GetMessage(r.Context(), r.PathValue("session"), r.PathValue("message"))
 		if err != nil {
 			h.serviceError(w, r, err)
 			return
@@ -257,7 +257,7 @@ func (h *handler) interruptMessageRoute(w http.ResponseWriter, r *http.Request, 
 	if !h.exact(w, r, http.MethodPut, false) {
 		return
 	}
-	message, err := h.jobs.InterruptMessage(r.Context(), r.PathValue("job"), r.PathValue("message"))
+	message, err := h.sessions.InterruptMessage(r.Context(), r.PathValue("session"), r.PathValue("message"))
 	if err != nil {
 		h.serviceError(w, r, err)
 		return
@@ -273,7 +273,7 @@ func (h *handler) retryRoute(w http.ResponseWriter, r *http.Request, _ controlau
 	if !ok {
 		return
 	}
-	retry, created, err := h.jobs.Retry(r.Context(), r.PathValue("job"), key)
+	retry, created, err := h.sessions.Retry(r.Context(), r.PathValue("session"), key)
 	if err != nil {
 		h.serviceError(w, r, err)
 		return
@@ -283,19 +283,19 @@ func (h *handler) retryRoute(w http.ResponseWriter, r *http.Request, _ controlau
 
 func (h *handler) cleanupRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
 	if h.exact(w, r, http.MethodPut, false) {
-		job, err := h.jobs.RequestCleanup(r.Context(), r.PathValue("job"))
-		h.jobResponse(w, r, job, err)
+		session, err := h.sessions.RequestCleanup(r.Context(), r.PathValue("session"))
+		h.sessionResponse(w, r, session, err)
 	}
 }
 
-func (h *handler) jobRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
+func (h *handler) sessionRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
 	if h.exact(w, r, http.MethodGet, false) {
-		job, err := h.jobs.Get(r.Context(), r.PathValue("job"))
-		h.jobResponse(w, r, job, err)
+		session, err := h.sessions.Get(r.Context(), r.PathValue("session"))
+		h.sessionResponse(w, r, session, err)
 	}
 }
 
-func (h *handler) jobListRoute(w http.ResponseWriter, r *http.Request) {
+func (h *handler) sessionListRoute(w http.ResponseWriter, r *http.Request) {
 	if contentTypes := r.Header.Values("Content-Type"); len(contentTypes) != 0 || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
 		h.fail(w, problem("body_not_allowed"))
 		return
@@ -336,27 +336,27 @@ func (h *handler) jobListRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	list, err := h.jobs.List(r.Context(), limit, cursor)
+	list, err := h.sessions.List(r.Context(), limit, cursor)
 	if err != nil {
 		h.serviceError(w, r, err)
 		return
 	}
-	if list.Jobs == nil {
-		list.Jobs = []JobSummary{}
+	if list.Sessions == nil {
+		list.Sessions = []SessionSummary{}
 	}
 	h.reply(w, http.StatusOK, list)
 }
 
-func (h *handler) jobResponse(w http.ResponseWriter, r *http.Request, job JobView, err error) {
-	h.jobResponseStatus(w, r, job, err, http.StatusOK)
+func (h *handler) sessionResponse(w http.ResponseWriter, r *http.Request, session Session, err error) {
+	h.sessionResponseStatus(w, r, session, err, http.StatusOK)
 }
 
-func (h *handler) jobResponseStatus(w http.ResponseWriter, r *http.Request, job JobView, err error, status int) {
+func (h *handler) sessionResponseStatus(w http.ResponseWriter, r *http.Request, session Session, err error, status int) {
 	if err != nil {
 		h.serviceError(w, r, err)
 		return
 	}
-	body, id, err := jobRepresentation(job)
+	body, id, err := sessionRepresentation(session)
 	if err != nil {
 		h.serviceError(w, r, err)
 		return
@@ -435,7 +435,7 @@ func (h *handler) watchRoute(w http.ResponseWriter, r *http.Request, client cont
 	defer cancel()
 
 	controller := http.NewResponseController(w)
-	job, err := h.jobs.Get(ctx, r.PathValue("job"))
+	session, err := h.sessions.Get(ctx, r.PathValue("session"))
 	if err != nil {
 		if ctx.Err() != nil {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) && r.Context().Err() == nil {
@@ -446,7 +446,7 @@ func (h *handler) watchRoute(w http.ResponseWriter, r *http.Request, client cont
 		h.serviceError(w, r, err)
 		return
 	}
-	body, currentID, err := jobRepresentation(job)
+	body, currentID, err := sessionRepresentation(session)
 	if err != nil {
 		h.serviceError(w, r, err)
 		return
@@ -485,7 +485,7 @@ func (h *handler) watchRoute(w http.ResponseWriter, r *http.Request, client cont
 				return
 			}
 		case <-poll.C:
-			job, err := h.jobs.Get(ctx, r.PathValue("job"))
+			session, err := h.sessions.Get(ctx, r.PathValue("session"))
 			if err != nil {
 				if ctx.Err() != nil {
 					return
@@ -493,7 +493,7 @@ func (h *handler) watchRoute(w http.ResponseWriter, r *http.Request, client cont
 				log.Printf("Dorf control API watch stopped: path=%q error_type=%T", r.URL.Path, err)
 				return
 			}
-			body, currentID, err := jobRepresentation(job)
+			body, currentID, err := sessionRepresentation(session)
 			if err != nil {
 				log.Printf("Dorf control API watch stopped: path=%q error_type=%T", r.URL.Path, err)
 				return
@@ -574,7 +574,7 @@ func (h *handler) readFile(w http.ResponseWriter, r *http.Request, name string) 
 	case <-r.Context().Done():
 		return
 	}
-	contents, err := h.jobs.ReadSandboxFile(r.Context(), r.PathValue("sandbox"), name)
+	contents, err := h.sessions.ReadSandboxFile(r.Context(), r.PathValue("sandbox"), name)
 	if err != nil {
 		h.serviceError(w, r, err)
 		return
@@ -591,12 +591,11 @@ func (h *handler) readFile(w http.ResponseWriter, r *http.Request, name string) 
 	_, _ = w.Write(contents)
 }
 
-func jobRepresentation(job JobView) ([]byte, string, error) {
-	common := job.Common()
-	if common.ID == "" || common.Kind != job.jobKind() {
-		return nil, "", fmt.Errorf("control API Job representation has invalid identity or kind")
+func sessionRepresentation(session Session) ([]byte, string, error) {
+	if session.ID == "" {
+		return nil, "", fmt.Errorf("control API Session representation has invalid identity")
 	}
-	body, err := json.Marshal(job)
+	body, err := json.Marshal(session)
 	if err != nil {
 		return nil, "", err
 	}
@@ -679,7 +678,7 @@ var serviceProblems = []struct {
 	{controlauth.ErrEnrollmentUnavailable, "enrollment_unavailable"},
 	{controlauth.ErrClientConflict, "client_conflict"},
 	{ErrInvalidCursor, "invalid_cursor"},
-	{ErrJobNotFound, "job_not_found"},
+	{ErrSessionNotFound, "session_not_found"},
 	{ErrMessageNotFound, "message_not_found"},
 	{ErrTurnNotFound, "turn_not_found"},
 	{ErrTimelineUnavailable, "timeline_unavailable"},

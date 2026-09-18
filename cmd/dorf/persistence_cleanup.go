@@ -15,30 +15,30 @@ type checkpointExecution struct {
 	resolver profileRuntimeResolver
 }
 
-func (e checkpointExecution) PrepareCleanup(ctx context.Context, jobID string) (core.Job, []core.Sandbox, error) {
-	job, sandboxes, err := e.Execution.PrepareCleanup(ctx, jobID)
-	if err != nil || job.CleanupState == core.CleanupComplete {
-		return job, sandboxes, err
+func (e checkpointExecution) PrepareCleanup(ctx context.Context, sessionID string) (core.Session, []core.Sandbox, error) {
+	session, sandboxes, err := e.Execution.PrepareCleanup(ctx, sessionID)
+	if err != nil || session.CleanupState == core.CleanupComplete {
+		return session, sandboxes, err
 	}
-	recovery, err := e.resolver.checkpointRecovery(ctx, job.ProfileRef())
+	recovery, err := e.resolver.checkpointRecovery(ctx, session.ProfileRef())
 	if err != nil {
-		return job, sandboxes, err
+		return session, sandboxes, err
 	}
-	if err := recovery.PrepareCleanup(ctx, jobID); err != nil {
-		return job, sandboxes, err
+	if err := recovery.PrepareCleanup(ctx, sessionID); err != nil {
+		return session, sandboxes, err
 	}
 	for _, owned := range sandboxes {
-		if err := e.captureBeforeCleanup(ctx, job, owned); err != nil {
+		if err := e.captureBeforeCleanup(ctx, session, owned); err != nil {
 			detail := "checkpoint before cleanup failed; source resource remains retained"
-			_ = e.resolver.store.SetCleanupAttention(ctx, jobID, detail)
-			return job, sandboxes, fmt.Errorf("%s", detail)
+			_ = e.resolver.store.SetCleanupAttention(ctx, sessionID, detail)
+			return session, sandboxes, fmt.Errorf("%s", detail)
 		}
 	}
-	return job, sandboxes, nil
+	return session, sandboxes, nil
 }
 
-func (e checkpointExecution) captureBeforeCleanup(ctx context.Context, job core.Job, owned core.Sandbox) error {
-	profile, err := e.resolver.store.SandboxProfileRevision(ctx, job.ProfileRef())
+func (e checkpointExecution) captureBeforeCleanup(ctx context.Context, session core.Session, owned core.Sandbox) error {
+	profile, err := e.resolver.store.SandboxProfileRevision(ctx, session.ProfileRef())
 	if err != nil {
 		return err
 	}
@@ -60,7 +60,7 @@ func (e checkpointExecution) captureBeforeCleanup(ctx context.Context, job core.
 	}
 	if !present {
 		if e.resolver.emit != nil {
-			e.resolver.emit(telemetry.Event{Name: "dorf.checkpoint.source-unavailable", At: time.Now(), Attributes: map[string]any{"dorf.job_id": job.ID, "dorf.sandbox_id": owned.ID, "dorf.resource_id": owned.ResourceID}})
+			e.resolver.emit(telemetry.Event{Name: "dorf.checkpoint.source-unavailable", At: time.Now(), Attributes: map[string]any{"dorf.session_id": session.ID, "dorf.sandbox_id": owned.ID, "dorf.resource_id": owned.ResourceID}})
 		}
 		return nil
 	}

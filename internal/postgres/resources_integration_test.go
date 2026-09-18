@@ -8,14 +8,14 @@ import (
 )
 
 func TestSandboxResourceBindingCannotRedirectOwnership(t *testing.T) {
-	_, store, job := actionIntegrationJob(t, "resource-binding")
+	_, store, session := actionIntegrationSession(t, "resource-binding")
 	ctx := context.Background()
-	owned, err := store.Sandbox(ctx, core.MainSandboxName(job.ID))
+	owned, err := store.Sandbox(ctx, core.MainSandboxName(session.ID))
 	if err != nil || owned.ResourceID == "" || owned.ProviderID != "" {
 		t.Fatalf("initial resource identity=%q provider=%q err=%v", owned.ResourceID, owned.ProviderID, err)
 	}
 	bind := func(candidate core.Sandbox, providerID string) error {
-		return store.WithJobFence(ctx, job.ID, func() error {
+		return store.WithSessionFence(ctx, session.ID, func() error {
 			return store.BindSandboxResource(ctx, candidate, providerID)
 		})
 	}
@@ -38,7 +38,7 @@ func TestSandboxResourceBindingCannotRedirectOwnership(t *testing.T) {
 	if err := bind(foreign, "provider-original"); err == nil {
 		t.Fatal("a different logical Sandbox was accepted")
 	}
-	resources, err := store.SandboxResources(ctx, job.ID)
+	resources, err := store.SandboxResources(ctx, session.ID)
 	if err != nil || len(resources) != 1 || resources[0].ID != owned.ResourceID || resources[0].ProviderID != "provider-original" || resources[0].ObservedAt.IsZero() {
 		t.Fatalf("resource history count=%d err=%v", len(resources), err)
 	}

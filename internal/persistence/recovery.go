@@ -14,14 +14,14 @@ import (
 // delivery hold and makes an operator retry idempotent.
 type RecoveryRequest struct {
 	ID         string `json:"id"`
-	JobID      string `json:"job_id"`
+	SessionID  string `json:"job_id"`
 	SandboxID  string `json:"sandbox_id"`
 	Repository string `json:"repository"`
 	SnapshotID string `json:"snapshot_id"`
 }
 
 func (r RecoveryRequest) Validate() error {
-	for _, value := range []string{r.ID, r.JobID, r.SandboxID, r.Repository} {
+	for _, value := range []string{r.ID, r.SessionID, r.SandboxID, r.Repository} {
 		if value == "" || value != strings.TrimSpace(value) || len(value) > 256 {
 			return fmt.Errorf("recovery requires exact bounded identities")
 		}
@@ -67,17 +67,17 @@ type RecoveryReceipt struct {
 // then installs fresh route authority in the replacement without starting a
 // new Turn. Repeating either method after a lost receipt must be safe.
 type RecoveryDriver interface {
-	Restore(context.Context, core.Job, core.Sandbox, Checkpoint) (string, error)
-	VerifyAndRenew(context.Context, core.Job, core.Sandbox, Checkpoint, EffectivePackage, []core.AgentRun) error
+	Restore(context.Context, core.Session, core.Sandbox, Checkpoint) (string, error)
+	VerifyAndRenew(context.Context, core.Session, core.Sandbox, Checkpoint, EffectivePackage, []core.AgentRun) error
 	DeleteResource(context.Context, core.Sandbox) error
 }
 
 type RecoveryStore interface {
-	WithJobFence(context.Context, string, func() error) error
-	Job(context.Context, string) (core.Job, error)
+	WithSessionFence(context.Context, string, func() error) error
+	Session(context.Context, string) (core.Session, error)
 	Sandbox(context.Context, string) (core.Sandbox, error)
 	Deliveries(context.Context, string) ([]core.Delivery, error)
-	JobRecoveries(context.Context, string) ([]RecoveryReceipt, error)
+	SessionRecoveries(context.Context, string) ([]RecoveryReceipt, error)
 	SandboxResource(context.Context, string, string, string) (core.Sandbox, error)
 	RecoveryNativeStateSafe(context.Context, RecoveryReceipt) (bool, error)
 	RecordRecoveryRestored(context.Context, RecoveryReceipt, string) error
@@ -96,23 +96,23 @@ type RecoveryService struct {
 	Claim  func(context.Context) error
 }
 
-// Reconcile performs at most one repeatable recovery effect under the same Job
+// Reconcile performs at most one repeatable recovery effect under the same Session
 // fence as native delivery. Pending queued input remains durable behind the
 // exact recovery hold.
-func (s RecoveryService) Reconcile(ctx context.Context, jobID string) (bool, error) {
+func (s RecoveryService) Reconcile(ctx context.Context, sessionID string) (bool, error) {
 	var progressed bool
-	err := s.Store.WithJobFence(ctx, jobID, func() error {
-		job, err := s.Store.Job(ctx, jobID)
+	err := s.Store.WithSessionFence(ctx, sessionID, func() error {
+		session, err := s.Store.Session(ctx, sessionID)
 		if err != nil {
 			return err
 		}
-		if task, ok := absurd.TaskFromContext(ctx); ok && task.TaskID() != job.CurrentTaskID {
-			return fmt.Errorf("recovery executor no longer owns the Job task")
+		if task, ok := absurd.TaskFromContext(ctx); ok && task.TaskID() != session.CurrentTaskID {
+			return fmt.Errorf("recovery executor no longer owns the Session task")
 		}
-		if !job.AdmissionOpen || job.CleanupState != core.CleanupPending {
+		if !session.AdmissionOpen || session.CleanupState != core.CleanupPending {
 			return nil
 		}
-		receipts, err := s.Store.JobRecoveries(ctx, jobID)
+		receipts, err := s.Store.SessionRecoveries(ctx, sessionID)
 		if err != nil {
 			return err
 		}
@@ -126,26 +126,26 @@ func (s RecoveryService) Reconcile(ctx context.Context, jobID string) (bool, err
 			if err := s.requireClaim(ctx); err != nil {
 				return err
 			}
-			err = s.step(ctx, job, receipt)
+			err = s.step(ctx, session, receipt)
 			if err != nil {
 				return s.attention(ctx, receipt, err)
 			}
 			progressed = true
-			return s.Store.ClearWorkflowAttention(ctx, jobID, "recovery:"+receipt.ID)
+			return s.Store.ClearWorkflowAttention(ctx, sessionID, "recovery:"+receipt.ID)
 		}
 		return nil
 	})
 	return progressed, err
 }
 
-func (s RecoveryService) step(ctx context.Context, job core.Job, receipt RecoveryReceipt) error {
+func (s RecoveryService) step(ctx context.Context, session core.Session, receipt RecoveryReceipt) error {
 	if receipt.DestinationProviderID == "" || receipt.VerifiedAt.IsZero() {
-		destination, err := s.Store.SandboxResource(ctx, job.ID, receipt.SandboxID, receipt.DestinationResourceID)
+		destination, err := s.Store.SandboxResource(ctx, session.ID, receipt.SandboxID, receipt.DestinationResourceID)
 		if err != nil {
 			return err
 		}
 		if receipt.DestinationProviderID == "" {
-			providerID, err := s.Driver.Restore(ctx, job, destination, receipt.Checkpoint)
+			providerID, err := s.Driver.Restore(ctx, session, destination, receipt.Checkpoint)
 			if err != nil {
 				return err
 			}
@@ -155,13 +155,13 @@ func (s RecoveryService) step(ctx context.Context, job core.Job, receipt Recover
 		if err != nil {
 			return err
 		}
-		if err := s.Driver.VerifyAndRenew(ctx, job, destination, receipt.Checkpoint, receipt.Package, runs); err != nil {
+		if err := s.Driver.VerifyAndRenew(ctx, session, destination, receipt.Checkpoint, receipt.Package, runs); err != nil {
 			return err
 		}
 		return s.record(ctx, func() error { return s.Store.RecordRecoveryVerified(ctx, receipt.ID) })
 	}
 	if receipt.SourceDeletedAt.IsZero() {
-		source, err := s.Store.SandboxResource(ctx, job.ID, receipt.SandboxID, receipt.SourceResourceID)
+		source, err := s.Store.SandboxResource(ctx, session.ID, receipt.SandboxID, receipt.SourceResourceID)
 		if err != nil {
 			return err
 		}
@@ -174,7 +174,7 @@ func (s RecoveryService) step(ctx context.Context, job core.Job, receipt Recover
 }
 
 func (s RecoveryService) coveredRuns(ctx context.Context, receipt RecoveryReceipt) ([]core.AgentRun, error) {
-	deliveries, err := s.Store.Deliveries(ctx, receipt.JobID)
+	deliveries, err := s.Store.Deliveries(ctx, receipt.SessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +217,7 @@ func (s RecoveryService) attention(ctx context.Context, receipt RecoveryReceipt,
 		return err
 	}
 	detail := "checkpoint recovery requires operator attention; delivery remains held"
-	if err := s.Store.SetWorkflowAttention(ctx, receipt.JobID, "recovery:"+receipt.ID, detail); err != nil {
+	if err := s.Store.SetWorkflowAttention(ctx, receipt.SessionID, "recovery:"+receipt.ID, detail); err != nil {
 		return err
 	}
 	return fmt.Errorf("%s: %w", detail, cause)
@@ -226,22 +226,22 @@ func (s RecoveryService) attention(ctx context.Context, receipt RecoveryReceipt,
 // PrepareCleanup removes a replacement reserved by an unfinished recovery.
 // The ordinary cleanup path owns the active resource and releases remaining
 // delivery holds only after every owned resource is gone.
-func (s RecoveryService) PrepareCleanup(ctx context.Context, jobID string) error {
-	return s.Store.WithJobFence(ctx, jobID, func() error {
-		job, err := s.Store.Job(ctx, jobID)
+func (s RecoveryService) PrepareCleanup(ctx context.Context, sessionID string) error {
+	return s.Store.WithSessionFence(ctx, sessionID, func() error {
+		session, err := s.Store.Session(ctx, sessionID)
 		if err != nil {
 			return err
 		}
-		if task, ok := absurd.TaskFromContext(ctx); ok && task.TaskID() != job.CurrentTaskID {
-			return fmt.Errorf("recovery cleanup no longer owns the Job task")
+		if task, ok := absurd.TaskFromContext(ctx); ok && task.TaskID() != session.CurrentTaskID {
+			return fmt.Errorf("recovery cleanup no longer owns the Session task")
 		}
-		if job.AdmissionOpen || job.CleanupState != core.CleanupScheduled {
-			return fmt.Errorf("recovery cleanup requires the scheduled Job cleanup owner")
+		if session.AdmissionOpen || session.CleanupState != core.CleanupScheduled {
+			return fmt.Errorf("recovery cleanup requires the scheduled Session cleanup owner")
 		}
 		if err := s.requireClaim(ctx); err != nil {
 			return err
 		}
-		receipts, err := s.Store.JobRecoveries(ctx, jobID)
+		receipts, err := s.Store.SessionRecoveries(ctx, sessionID)
 		if err != nil {
 			return err
 		}
@@ -249,7 +249,7 @@ func (s RecoveryService) PrepareCleanup(ctx context.Context, jobID string) error
 			if !receipt.FinishedAt.IsZero() {
 				continue
 			}
-			if err := s.prepareReceiptCleanup(ctx, jobID, receipt); err != nil {
+			if err := s.prepareReceiptCleanup(ctx, sessionID, receipt); err != nil {
 				return err
 			}
 		}
@@ -257,7 +257,7 @@ func (s RecoveryService) PrepareCleanup(ctx context.Context, jobID string) error
 	})
 }
 
-func (s RecoveryService) prepareReceiptCleanup(ctx context.Context, jobID string, receipt RecoveryReceipt) error {
+func (s RecoveryService) prepareReceiptCleanup(ctx context.Context, sessionID string, receipt RecoveryReceipt) error {
 	active, err := s.Store.Sandbox(ctx, receipt.SandboxID)
 	if err != nil {
 		return err
@@ -266,7 +266,7 @@ func (s RecoveryService) prepareReceiptCleanup(ctx context.Context, jobID string
 		return fmt.Errorf("cleanup cannot abandon adopted recovery custody")
 	}
 	if receipt.DestinationDeletedAt.IsZero() {
-		destination, err := s.Store.SandboxResource(ctx, jobID, receipt.SandboxID, receipt.DestinationResourceID)
+		destination, err := s.Store.SandboxResource(ctx, sessionID, receipt.SandboxID, receipt.DestinationResourceID)
 		if err != nil {
 			return err
 		}

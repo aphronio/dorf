@@ -8,14 +8,14 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 )
 
-func (a controlAPIJobs) projectCommonJob(ctx context.Context, job core.Job, kind, executionState string, attention *controlapi.Attention, task taskResultView, owned []core.Sandbox) (controlapi.Job, error) {
-	view, err := publicCommonJob(job, kind, executionState, attention, task, owned)
+func (a controlAPISessions) projectSessionResources(ctx context.Context, session core.Session, executionState string, attention *controlapi.Attention, task taskResultView, owned []core.Sandbox) (controlapi.Session, error) {
+	view, err := publicSession(session, executionState, attention, task, owned)
 	if err != nil {
-		return controlapi.Job{}, err
+		return controlapi.Session{}, err
 	}
-	resources, err := a.store.SandboxResources(ctx, job.ID)
+	resources, err := a.store.SandboxResources(ctx, session.ID)
 	if err != nil {
-		return controlapi.Job{}, err
+		return controlapi.Session{}, err
 	}
 	bySandbox := make(map[string][]controlapi.SandboxResource)
 	for _, resource := range resources {
@@ -27,9 +27,9 @@ func (a controlAPIJobs) projectCommonJob(ctx context.Context, job core.Job, kind
 	for i := range view.Sandboxes {
 		view.Sandboxes[i].Resources = bySandbox[view.Sandboxes[i].ID]
 	}
-	holds, err := a.store.JobDeliveryHolds(ctx, job.ID)
+	holds, err := a.store.SessionDeliveryHolds(ctx, session.ID)
 	if err != nil {
-		return controlapi.Job{}, err
+		return controlapi.Session{}, err
 	}
 	for i := range view.Sandboxes {
 		for _, hold := range holds {
@@ -38,8 +38,8 @@ func (a controlAPIJobs) projectCommonJob(ctx context.Context, job core.Job, kind
 			}
 		}
 	}
-	if err := a.projectUpgrades(ctx, job, &view); err != nil {
-		return controlapi.Job{}, err
+	if err := a.projectUpgrades(ctx, session, &view); err != nil {
+		return controlapi.Session{}, err
 	}
 	return view, nil
 }
@@ -51,11 +51,11 @@ func optionalResourceTime(value time.Time) *time.Time {
 	return &value
 }
 
-func (a controlAPIJobs) messageWaitReason(ctx context.Context, delivery core.Delivery) (string, error) {
+func (a controlAPISessions) messageWaitReason(ctx context.Context, delivery core.Delivery) (string, error) {
 	if delivery.AgentRun.State != core.AgentRunPending || delivery.Message.Intent != core.MessageFollow {
 		return "", nil
 	}
-	holds, err := a.store.JobDeliveryHolds(ctx, delivery.Message.JobID)
+	holds, err := a.store.SessionDeliveryHolds(ctx, delivery.Message.SessionID)
 	if err != nil {
 		return "", err
 	}
@@ -67,8 +67,8 @@ func (a controlAPIJobs) messageWaitReason(ctx context.Context, delivery core.Del
 	return "", nil
 }
 
-func (a controlAPIJobs) projectUpgrades(ctx context.Context, job core.Job, view *controlapi.Job) error {
-	receipts, err := a.store.JobUpgrades(ctx, job.ID)
+func (a controlAPISessions) projectUpgrades(ctx context.Context, session core.Session, view *controlapi.Session) error {
+	receipts, err := a.store.SessionUpgrades(ctx, session.ID)
 	if err != nil {
 		return err
 	}
@@ -78,7 +78,7 @@ func (a controlAPIJobs) projectUpgrades(ctx context.Context, job core.Job, view 
 				continue
 			}
 			status := receipt.Status()
-			if receipt.FinishedAt.IsZero() && job.WorkflowAttentionSource == "upgrade:"+receipt.ID && job.WorkflowAttention != "" {
+			if receipt.FinishedAt.IsZero() && session.WorkflowAttentionSource == "upgrade:"+receipt.ID && session.WorkflowAttention != "" {
 				status = "failed"
 			}
 			view.Sandboxes[i].Upgrades = append(view.Sandboxes[i].Upgrades, controlapi.SandboxUpgrade{
