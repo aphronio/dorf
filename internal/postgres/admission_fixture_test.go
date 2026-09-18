@@ -43,3 +43,10 @@ func admitDirectFixture(t *testing.T, store postgres.Store, ctx context.Context,
 func fixtureMessage(sessionID string) core.MessageAdmission {
 	return core.MessageAdmission{SessionID: sessionID, SandboxID: core.MainSandboxName(sessionID), FromKind: core.MessageFromHuman, FromID: "fixture-message", Input: "initial input", Intent: core.MessageFollow}
 }
+
+// requestCleanupFixture stops admission without scheduling so fault tests can
+// inject and claim an exact cleanup task themselves.
+func requestCleanupFixture(ctx context.Context, store postgres.Store, sessionID string) error {
+	_, err := store.DB.ExecContext(ctx, `update dorf.sessions set admission_open=false,cleanup_state='requested' where id=$1 and cleanup_state='pending'`, sessionID)
+	return err
+}

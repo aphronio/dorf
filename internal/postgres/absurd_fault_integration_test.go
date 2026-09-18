@@ -101,7 +101,7 @@ func TestRetryFailedSessionTargetsAttachedCleanupTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RequestCleanup(ctx, session.ID); err != nil {
+	if err := requestCleanupFixture(ctx, store, session.ID); err != nil {
 		t.Fatal(err)
 	}
 	spawned, err := client.Spawn(ctx, taskName, faultActionParams{SessionID: session.ID}, absurd.SpawnOptions{MaxAttempts: 1})

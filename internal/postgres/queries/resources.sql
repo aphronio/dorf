@@ -3,18 +3,6 @@ select s.id,s.session_id,s.name,r.ownership_nonce,s.active_resource_id,coalesce(
 from dorf.sandboxes s join dorf.sandbox_resources r on r.id=s.active_resource_id
 where s.id=sqlc.arg(id);
 
--- name: GetSandboxForUpdate :one
-select s.id,s.session_id,s.name,r.ownership_nonce,s.active_resource_id,coalesce(r.provider_id,'') as provider_id
-from dorf.sandboxes s join dorf.sandbox_resources r on r.id=s.active_resource_id
-where s.id=sqlc.arg(id)
-for update;
-
--- name: GetSessionSandboxByNameForUpdate :one
-select s.id,s.session_id,s.name,r.ownership_nonce,s.active_resource_id,coalesce(r.provider_id,'') as provider_id
-from dorf.sandboxes s join dorf.sandbox_resources r on r.id=s.active_resource_id
-where s.session_id=sqlc.arg(session_id) and s.name=sqlc.arg(name)
-for update;
-
 -- name: ListSessionSandboxes :many
 select s.id,s.session_id,s.name,r.ownership_nonce,s.active_resource_id,coalesce(r.provider_id,'') as provider_id
 from dorf.sandboxes s join dorf.sandbox_resources r on r.id=s.active_resource_id

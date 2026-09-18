@@ -76,7 +76,7 @@ func TestControlStatusUsesPostgresCustodyAndLeavesSessionUnchanged(t *testing.T)
 	if result.State != "paused" || result.Provider != "e2b" || !reflect.DeepEqual(before, after) {
 		t.Fatalf("observation changed Session or lost status: %+v", result)
 	}
-	if err := store.RequestCleanup(ctx, session.ID); err != nil {
+	if err := store.ScheduleCleanup(ctx, tasks.QueueName(), session.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	response := controlTestRequest(t, handler, http.MethodGet, path, credential, "", nil)

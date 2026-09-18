@@ -304,25 +304,6 @@ func (q *Queries) GetSessionForSandboxActionAuthorization(ctx context.Context, s
 	return i, err
 }
 
-const getSessionForSandboxEnsure = `-- name: GetSessionForSandboxEnsure :one
-select admission_open,cleanup_state
-from dorf.sessions
-where id=$1
-for update
-`
-
-type GetSessionForSandboxEnsureRow struct {
-	AdmissionOpen bool
-	CleanupState  core.CleanupState
-}
-
-func (q *Queries) GetSessionForSandboxEnsure(ctx context.Context, sessionID string) (GetSessionForSandboxEnsureRow, error) {
-	row := q.db.QueryRowContext(ctx, getSessionForSandboxEnsure, sessionID)
-	var i GetSessionForSandboxEnsureRow
-	err := row.Scan(&i.AdmissionOpen, &i.CleanupState)
-	return i, err
-}
-
 const getSessionSandboxProfileForUpdate = `-- name: GetSessionSandboxProfileForUpdate :one
 select sandbox_profile
 from dorf.sessions

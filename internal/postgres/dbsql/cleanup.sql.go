@@ -81,33 +81,6 @@ func (q *Queries) GetCleanupSessionForUpdate(ctx context.Context, sessionID stri
 	return i, err
 }
 
-const listCleanupRequests = `-- name: ListCleanupRequests :many
-select id from dorf.sessions where not admission_open and cleanup_state='requested' order by id
-`
-
-func (q *Queries) ListCleanupRequests(ctx context.Context) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listCleanupRequests)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const requestCleanup = `-- name: RequestCleanup :execrows
 update dorf.sessions
 set admission_open=false,

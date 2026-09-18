@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	provider "github.com/aphronio/dorf/internal/sandbox"
-	"time"
 
 	"github.com/aphronio/dorf/internal/sandbox"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -70,13 +69,10 @@ type ApplicationStore interface {
 	SandboxActivityStore
 	Session(context.Context, string) (Session, error)
 	Sandbox(context.Context, string) (Sandbox, error)
-	EnsureSandbox(context.Context, string, string) (Sandbox, error)
 	SessionTasks(context.Context, string) ([]SessionTask, error)
-	CleanupRequests(context.Context) ([]string, error)
 	WithSessionFence(context.Context, string, func() error) error
 	AttachSessionTask(context.Context, string, string, string, string) error
 	ScheduleCleanup(context.Context, string, string, string) error
-	ScheduleSessionTask(context.Context, string, string, string, string) error
 	AttachCleanupTask(context.Context, string, string, string, string) error
 	RecordSandboxProfileUnavailable(context.Context, string, string, string, error) error
 	SetCleanupAttention(context.Context, string, string) error
@@ -115,41 +111,6 @@ func (a Application) requestCleanup(ctx context.Context, sessionID string) (Sess
 		return Session{}, err
 	}
 	return a.Store.Session(ctx, sessionID)
-}
-
-// RecoverCleanupRequests completes retained requests from deployments that
-// recorded cleanup before scheduling and attachment became atomic.
-func (a Application) RecoverCleanupRequests(ctx context.Context) error {
-	sessionIDs, err := a.Store.CleanupRequests(ctx)
-	if err != nil {
-		return err
-	}
-	for _, sessionID := range sessionIDs {
-		if _, err := a.requestCleanup(ctx, sessionID); err != nil {
-			return fmt.Errorf("recover cleanup request for Session %s: %w", sessionID, err)
-		}
-	}
-	return nil
-}
-
-// ReconcileCleanupRequests also covers older writers during a rolling upgrade.
-// New cleanup requests commit their task attachment atomically.
-func (a Application) ReconcileCleanupRequests(ctx context.Context, interval time.Duration) error {
-	if interval <= 0 {
-		return fmt.Errorf("cleanup reconciliation interval must be positive")
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		if err := a.RecoverCleanupRequests(ctx); err != nil {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
 }
 
 func currentTaskID(ctx context.Context) string {

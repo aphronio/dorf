@@ -103,18 +103,25 @@ type workerProcessResult struct {
 	err  error
 }
 
-// runWorkerProcesses gives durable execution, cleanup recovery, and the
+// runWorkerProcesses gives durable execution and the
 // optional private reader one cancellation boundary. The first process to
 // stop cancels the others; the reader is then drained within the container's
 // Compose stop grace period.
-func runWorkerProcesses(ctx context.Context, reader *workerControlReader, runWorker, recoverCleanup func(context.Context) error, reportReady func()) error {
+func runWorkerProcesses(ctx context.Context, reader *workerControlReader, runWorker func(context.Context) error, reportReady func()) error {
 	if reader == nil {
-		return runWorkerWithoutControlReader(ctx, runWorker, recoverCleanup, reportReady)
+		if reportReady != nil {
+			reportReady()
+		}
+		err := runWorker(ctx)
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
+		return err
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	const processCount = 3
+	const processCount = 2
 	results := make(chan workerProcessResult, processCount)
 	start := func(name string, run func() error) {
 		go func() {
@@ -122,7 +129,6 @@ func runWorkerProcesses(ctx context.Context, reader *workerControlReader, runWor
 		}()
 	}
 	start("durable worker", func() error { return runWorker(runCtx) })
-	start("cleanup recovery", func() error { return recoverCleanup(runCtx) })
 	start("control reader", func() error { return reader.serve(runCtx) })
 	if reportReady != nil {
 		reportReady()
@@ -147,38 +153,6 @@ func runWorkerProcesses(ctx context.Context, reader *workerControlReader, runWor
 		}
 	}
 	return shutdownErr
-}
-
-// runWorkerWithoutControlReader retains the manually supervised worker's
-// established lifecycle when the deployment-only reader token is absent.
-func runWorkerWithoutControlReader(ctx context.Context, runWorker, recoverCleanup func(context.Context) error, reportReady func()) error {
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	recoveryDone := make(chan error, 1)
-	go func() {
-		err := recoverCleanup(runCtx)
-		recoveryDone <- err
-		if err != nil && !errors.Is(err, context.Canceled) {
-			cancel()
-		}
-	}()
-	workerDone := make(chan error, 1)
-	go func() {
-		workerDone <- runWorker(runCtx)
-	}()
-	if reportReady != nil {
-		reportReady()
-	}
-	err := <-workerDone
-	cancel()
-	recoveryErr := <-recoveryDone
-	if recoveryErr != nil && !errors.Is(recoveryErr, context.Canceled) {
-		return recoveryErr
-	}
-	if errors.Is(err, context.Canceled) {
-		return nil
-	}
-	return err
 }
 
 func workerProcessError(result workerProcessResult) error {

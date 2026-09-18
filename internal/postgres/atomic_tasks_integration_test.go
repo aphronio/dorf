@@ -227,55 +227,6 @@ func TestAtomicCleanupRollsBackCancellationAndAppendsOneTask(t *testing.T) {
 	}
 }
 
-func TestAtomicOrdinaryTaskHandoffPreservesHistoryAndPredecessor(t *testing.T) {
-	_, store, _ := testDatabase(t)
-	client := newFaultClient(t, store, fmt.Sprintf("dorf_atomic_handoff_%d", time.Now().UnixNano()))
-	application := core.Application{Store: store, Tasks: client}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	session, _, err := store.AdmitDirect(ctx, atomicAdmissionInput(t), client.QueueName())
-	if err != nil {
-		t.Fatal(err)
-	}
-	client.MustRegister(absurd.Task(direct.TaskName, func(ctx context.Context, params core.SessionTaskParams) (core.TaskResultV1, error) {
-		if err := application.VerifyAttachedTask(ctx, session.ID, direct.TaskName, params.PreviousTaskID); err == nil {
-			return core.TaskResultV1{}, fmt.Errorf("predecessor retained execution authority after handoff")
-		}
-		return core.TaskResultV1{SessionID: session.ID, Outcome: "superseded"}, nil
-	}))
-	client.MustRegister(absurd.Task("handoff", func(ctx context.Context, params core.SessionTaskParams) (core.TaskResultV1, error) {
-		if params.PreviousTaskID != session.CurrentTaskID {
-			return core.TaskResultV1{}, fmt.Errorf("handoff predecessor=%q", params.PreviousTaskID)
-		}
-		if err := application.VerifyAttachedTask(ctx, session.ID, "handoff", params.PreviousTaskID); err != nil {
-			return core.TaskResultV1{}, err
-		}
-		return core.TaskResultV1{SessionID: session.ID, Outcome: "handoff"}, nil
-	}))
-	var current core.Session
-	for range 2 {
-		current, err = application.ScheduleSessionTask(ctx, session, "handoff", "handoff:"+session.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	history, err := store.SessionTasks(ctx, session.ID)
-	if err != nil || len(history) != 2 || history[0].TaskID != session.CurrentTaskID || history[1].TaskID != current.CurrentTaskID {
-		t.Fatalf("handoff history=%#v err=%v", history, err)
-	}
-	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "handoff", BatchSize: 2, ClaimTimeout: time.Minute}); err != nil {
-		t.Fatal(err)
-	}
-	task, err := client.FetchTaskResult(ctx, client.QueueName(), current.CurrentTaskID)
-	if err != nil || task == nil || task.State != absurd.TaskCompleted {
-		t.Fatalf("handoff task=%#v err=%v", task, err)
-	}
-	task, err = client.FetchTaskResult(ctx, client.QueueName(), session.CurrentTaskID)
-	if err != nil || task == nil || task.State != absurd.TaskCompleted {
-		t.Fatalf("predecessor task=%#v err=%v", task, err)
-	}
-}
-
 func TestExecutingTaskCanRequestAtomicCleanupWithoutCancellingItself(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	client := newFaultClient(t, store, fmt.Sprintf("dorf_atomic_self_%d", time.Now().UnixNano()))

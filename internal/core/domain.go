@@ -422,13 +422,6 @@ func MainSandboxName(sessionID string) string {
 	return "dorf-" + digest(sessionID, 20)
 }
 
-func NamedSandboxID(sessionID, name string) string {
-	if name == DefaultSandbox {
-		return MainSandboxName(sessionID)
-	}
-	return "dorf-" + digest(sessionID+"\x00sandbox\x00"+name, 20)
-}
-
 func ProviderRouteID(actionID string) string {
 	return "route-" + digest(actionID, 16)
 }

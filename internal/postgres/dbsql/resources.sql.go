@@ -90,36 +90,6 @@ func (q *Queries) GetSandbox(ctx context.Context, id string) (GetSandboxRow, err
 	return i, err
 }
 
-const getSandboxForUpdate = `-- name: GetSandboxForUpdate :one
-select s.id,s.session_id,s.name,r.ownership_nonce,s.active_resource_id,coalesce(r.provider_id,'') as provider_id
-from dorf.sandboxes s join dorf.sandbox_resources r on r.id=s.active_resource_id
-where s.id=$1
-for update
-`
-
-type GetSandboxForUpdateRow struct {
-	ID               string
-	SessionID        string
-	Name             string
-	OwnershipNonce   string
-	ActiveResourceID string
-	ProviderID       string
-}
-
-func (q *Queries) GetSandboxForUpdate(ctx context.Context, id string) (GetSandboxForUpdateRow, error) {
-	row := q.db.QueryRowContext(ctx, getSandboxForUpdate, id)
-	var i GetSandboxForUpdateRow
-	err := row.Scan(
-		&i.ID,
-		&i.SessionID,
-		&i.Name,
-		&i.OwnershipNonce,
-		&i.ActiveResourceID,
-		&i.ProviderID,
-	)
-	return i, err
-}
-
 const getSandboxResource = `-- name: GetSandboxResource :one
 select s.id,s.session_id,s.name,r.id as resource_id,r.ownership_nonce,coalesce(r.provider_id,'') as provider_id
 from dorf.sandboxes s join dorf.sandbox_resources r on r.sandbox_id=s.id
@@ -150,41 +120,6 @@ func (q *Queries) GetSandboxResource(ctx context.Context, arg GetSandboxResource
 		&i.Name,
 		&i.ResourceID,
 		&i.OwnershipNonce,
-		&i.ProviderID,
-	)
-	return i, err
-}
-
-const getSessionSandboxByNameForUpdate = `-- name: GetSessionSandboxByNameForUpdate :one
-select s.id,s.session_id,s.name,r.ownership_nonce,s.active_resource_id,coalesce(r.provider_id,'') as provider_id
-from dorf.sandboxes s join dorf.sandbox_resources r on r.id=s.active_resource_id
-where s.session_id=$1 and s.name=$2
-for update
-`
-
-type GetSessionSandboxByNameForUpdateParams struct {
-	SessionID string
-	Name      string
-}
-
-type GetSessionSandboxByNameForUpdateRow struct {
-	ID               string
-	SessionID        string
-	Name             string
-	OwnershipNonce   string
-	ActiveResourceID string
-	ProviderID       string
-}
-
-func (q *Queries) GetSessionSandboxByNameForUpdate(ctx context.Context, arg GetSessionSandboxByNameForUpdateParams) (GetSessionSandboxByNameForUpdateRow, error) {
-	row := q.db.QueryRowContext(ctx, getSessionSandboxByNameForUpdate, arg.SessionID, arg.Name)
-	var i GetSessionSandboxByNameForUpdateRow
-	err := row.Scan(
-		&i.ID,
-		&i.SessionID,
-		&i.Name,
-		&i.OwnershipNonce,
-		&i.ActiveResourceID,
 		&i.ProviderID,
 	)
 	return i, err

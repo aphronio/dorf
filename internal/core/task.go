@@ -45,18 +45,6 @@ func SessionExecutionWakeEvent(sessionID string, revision int64) string {
 	return fmt.Sprintf("dorf.job-execution:v1:%s:%020d", sessionID, revision)
 }
 
-// ScheduleSessionTask reconciles one consumer-owned task with the Session's durable
-// current attachment. The concrete consumer owns the task name and idempotency key.
-func (a Application) ScheduleSessionTask(ctx context.Context, session Session, taskName, taskKey string) (Session, error) {
-	if a.Tasks == nil {
-		return Session{}, fmt.Errorf("Session task scheduling is not configured")
-	}
-	if err := a.Store.ScheduleSessionTask(ctx, a.Tasks.QueueName(), session.ID, taskName, taskKey); err != nil {
-		return Session{}, err
-	}
-	return a.Store.Session(ctx, session.ID)
-}
-
 // EmitMessageWake emits a disposable wake hint for one durably accepted FIFO
 // Message. Re-emission is safe because the event identity is deterministic.
 func (a Application) EmitMessageWake(ctx context.Context, message Message) error {

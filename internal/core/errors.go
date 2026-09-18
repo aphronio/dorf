@@ -11,5 +11,4 @@ var (
 	ErrMessageReplayConflict       = errors.New("Message request key is bound to different input")
 	ErrRetryReplayConflict         = errors.New("retry request key is bound to a different Session")
 	ErrRetryNotEligible            = errors.New("Session execution is not eligible for retry")
-	ErrSandboxFileCleanupFenced    = errors.New("Sandbox file reads are unavailable after cleanup begins")
 )

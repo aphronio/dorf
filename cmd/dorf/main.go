@@ -1263,9 +1263,6 @@ func worker(ctx context.Context, store postgres.Store, client *absurd.Client, cf
 	if *concurrency < 1 {
 		return fmt.Errorf("worker concurrency must be positive")
 	}
-	if err := coreApplication(store, client).RecoverCleanupRequests(ctx); err != nil {
-		return err
-	}
 	claimTimeout := cfg.TurnTimeout + 5*time.Minute
 	if *once {
 		err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: workerID(), ClaimTimeout: claimTimeout, BatchSize: *concurrency})
@@ -1291,9 +1288,6 @@ func worker(ctx context.Context, store postgres.Store, client *absurd.Client, cf
 			return runWithCheckpoints(runCtx, runtimes, func(foregroundCtx context.Context) error {
 				return client.RunWorker(foregroundCtx, absurd.WorkerOptions{WorkerID: workerID(), ClaimTimeout: claimTimeout, BatchSize: *concurrency, Concurrency: *concurrency})
 			})
-		},
-		func(runCtx context.Context) error {
-			return coreApplication(store, client).ReconcileCleanupRequests(runCtx, time.Second)
 		},
 		func() { fmt.Fprintln(stdout, "Dorf durable worker started") },
 	)

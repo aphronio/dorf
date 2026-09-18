@@ -29,22 +29,6 @@ type providerCheck struct {
 	err error
 }
 
-type scopedCleanupRequestStore struct {
-	postgres.Store
-	sessionID string
-}
-
-func (s scopedCleanupRequestStore) CleanupRequests(ctx context.Context) ([]string, error) {
-	sessionIDs, err := s.Store.CleanupRequests(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if slices.Contains(sessionIDs, s.sessionID) {
-		return []string{s.sessionID}, nil
-	}
-	return nil, nil
-}
-
 func nextDelivery(ctx context.Context, store postgres.Store, sessionID string) (*core.Delivery, error) {
 	work, err := store.AgentMessage(ctx, sessionID)
 	if err != nil || work == nil {
@@ -205,73 +189,6 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 	return db, store, client
 }
 
-func TestActiveWorkerRecoversOrphanedCleanupRequestAndScheduledReplayIsInert(t *testing.T) {
-	_, store, client := testDatabase(t)
-	ctx := context.Background()
-	key := fmt.Sprintf("cleanup-request-recovery-%d", time.Now().UnixNano())
-	session, created, err := admitDirectFixture(t, store, ctx, directSessionInput(key))
-	if err != nil || !created {
-		t.Fatalf("admit Session=%#v created=%t err=%v", session, created, err)
-	}
-	application := core.Application{
-		Store: scopedCleanupRequestStore{Store: store, sessionID: session.ID},
-		Tasks: client,
-	}
-	workerCtx, stopWorker := context.WithCancel(ctx)
-	workerDone := make(chan error, 1)
-	recoveryDone := make(chan error, 1)
-	go func() {
-		workerDone <- client.RunWorker(workerCtx, absurd.WorkerOptions{WorkerID: "cleanup-request-recovery", ClaimTimeout: time.Minute, BatchSize: 1, Concurrency: 1})
-	}()
-	go func() { recoveryDone <- application.ReconcileCleanupRequests(workerCtx, 100*time.Millisecond) }()
-	t.Cleanup(func() {
-		stopWorker()
-		<-workerDone
-		<-recoveryDone
-	})
-
-	// Older releases could commit a cleanup request without its task. Keep
-	// recovering that retained state, including writes during rolling upgrades.
-	if err := store.RequestCleanup(ctx, session.ID); err != nil {
-		t.Fatal(err)
-	}
-	requested, err := store.Session(ctx, session.ID)
-	if err != nil || requested.CleanupState != core.CleanupRequested || requested.CurrentTaskID != "" || requested.AdmissionOpen {
-		t.Fatalf("durable cleanup request=%#v err=%v", requested, err)
-	}
-	var scheduled core.Session
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		scheduled, err = store.Session(ctx, session.ID)
-		if err == nil && scheduled.CurrentTaskID != "" && scheduled.CleanupState != core.CleanupRequested {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if err != nil || scheduled.CurrentTaskID == "" || (scheduled.CleanupState != core.CleanupScheduled && scheduled.CleanupState != core.CleanupComplete) {
-		t.Fatalf("continuously recovered cleanup=%#v err=%v", scheduled, err)
-	}
-	handle, err := application.OpenSession(ctx, session.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := handle.RequestCleanup(ctx); err != nil {
-		t.Fatal(err)
-	}
-	replayed, err := store.Session(ctx, session.ID)
-	if err != nil || replayed.CurrentTaskID != scheduled.CurrentTaskID || (replayed.CleanupState != core.CleanupScheduled && replayed.CleanupState != core.CleanupComplete) {
-		t.Fatalf("scheduled cleanup replay=%#v err=%v", replayed, err)
-	}
-	if _, err := client.AwaitTaskResult(ctx, client.QueueName(), scheduled.CurrentTaskID); err != nil {
-		t.Fatal(err)
-	}
-	cleaned, err := store.Session(ctx, session.ID)
-	if err != nil || cleaned.CleanupState != core.CleanupComplete {
-		execution, _ := client.FetchTaskResult(ctx, client.QueueName(), scheduled.CurrentTaskID)
-		t.Fatalf("recovered cleanup completion=%#v err=%v task=%#v", cleaned, err, execution)
-	}
-}
-
 func TestWorkflowEnsureAndCleanupSerializeBothWinnerOrders(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
@@ -295,14 +212,11 @@ func TestWorkflowEnsureAndCleanupSerializeBothWinnerOrders(t *testing.T) {
 	}()
 	t.Cleanup(func() { stopWorker(); <-workerDone })
 
-	session, created, err := admitDirectFixture(t, store, ctx, directSessionInput(
+	session, created, err := store.AdmitDirect(ctx, directSessionInput(
 		fmt.Sprintf("ensure-wins-%d", time.Now().UnixNano()),
-	))
+	), client.QueueName())
 	if err != nil || !created {
 		t.Fatalf("admit ensure winner created=%t err=%v", created, err)
-	}
-	if _, err := application.ScheduleSessionTask(ctx, session, direct.TaskName, direct.TaskKey(session.ID)); err != nil {
-		t.Fatal(err)
 	}
 	select {
 	case <-externals.entered:
@@ -349,14 +263,11 @@ func TestWorkflowEnsureAndCleanupSerializeBothWinnerOrders(t *testing.T) {
 	loserApplication := core.Application{Store: store, Tasks: loserClient, SandboxRuntimes: loserResolver, CleanupRuntimes: loserResolver}
 	loserApplication.RegisterCleanup()
 	direct.Register(loserApplication, store, loserResolver)
-	loser, created, err := admitDirectFixture(t, store, ctx, directSessionInput(
+	loser, created, err := store.AdmitDirect(ctx, directSessionInput(
 		fmt.Sprintf("cleanup-wins-%d", time.Now().UnixNano()),
-	))
+	), loserClient.QueueName())
 	if err != nil || !created {
 		t.Fatalf("admit cleanup winner created=%t err=%v", created, err)
-	}
-	if _, err := loserApplication.ScheduleSessionTask(ctx, loser, direct.TaskName, direct.TaskKey(loser.ID)); err != nil {
-		t.Fatal(err)
 	}
 	loserHandle, err := loserApplication.OpenSession(ctx, loser.ID)
 	if err != nil {
@@ -549,7 +460,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	if err != nil || repeated.Created || !reflect.DeepEqual(repeated.Message, first.Message) {
 		t.Fatalf("idempotent message=%#v err=%v", repeated, err)
 	}
-	if admitted, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{SessionID: session.ID, SandboxID: core.NamedSandboxID(session.ID, "other"), FromKind: "human", FromID: "client-retry", Input: "same text"}); !errors.Is(err, core.ErrMessageReplayConflict) || admitted.Created {
+	if admitted, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{SessionID: session.ID, SandboxID: "foreign-sandbox", FromKind: "human", FromID: "client-retry", Input: "same text"}); !errors.Is(err, core.ErrMessageReplayConflict) || admitted.Created {
 		t.Fatalf("same send key replayed through another Sandbox: admitted=%#v err=%v", admitted, err)
 	}
 	if _, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), FromKind: "human", FromID: "client-retry", Input: "changed"}); !errors.Is(err, core.ErrMessageReplayConflict) {
@@ -1970,82 +1881,6 @@ func TestSandboxActionAttentionPersistsAcrossRetryAndClearsOnSuccess(t *testing.
 	}
 }
 
-func TestSessionHandleEnsuresStableDefaultAndNamedSandboxes(t *testing.T) {
-	db, store, session := actionIntegrationSession(t, "handle-sandbox-identity")
-	ctx := context.Background()
-	foreign, created, err := admitDirectFixture(t, store, ctx, directSessionInput(
-		fmt.Sprintf("foreign-sandbox-owner-%d", time.Now().UnixNano()),
-	))
-	if err != nil || !created {
-		t.Fatalf("admit foreign owner created=%t err=%v", created, err)
-	}
-	conflictName := "conflict"
-	foreignNonce := fmt.Sprintf("%x", sha256.Sum256([]byte(session.ID+":"+conflictName)))
-	if _, err := db.ExecContext(ctx, `with reserved as (
- insert into dorf.sandboxes(id,session_id,name,active_resource_id) values($1,$2,$3,$1 || ':initial') returning id,active_resource_id
-) insert into dorf.sandbox_resources(id,sandbox_id,ownership_nonce) select active_resource_id,id,$4 from reserved`,
-		core.NamedSandboxID(session.ID, conflictName), foreign.ID, "foreign", foreignNonce); err != nil {
-		t.Fatal(err)
-	}
-
-	externals := &integrationExternals{}
-	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim)
-	profile := session.SandboxProfile
-	resolver := integrationRuntimeResolver{execution: execution, profile: profile}
-	client := newFaultClient(t, store, "dorf-handle-sandbox-identity-"+session.ID)
-	application := core.Application{Store: store, Tasks: client, SandboxRuntimes: resolver}
-	taskName := "dorf-handle-sandbox-identity-v1"
-	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.SessionTaskParams) (core.TaskResultV1, error) {
-		handle, err := application.OpenSession(taskCtx, session.ID)
-		if err != nil {
-			return core.TaskResultV1{}, err
-		}
-		for _, ensure := range []func(context.Context) (core.SandboxHandle, error){
-			handle.EnsureDefaultSandbox,
-			handle.EnsureDefaultSandbox,
-			func(ctx context.Context) (core.SandboxHandle, error) { return handle.EnsureNamedSandbox(ctx, "review") },
-			func(ctx context.Context) (core.SandboxHandle, error) { return handle.EnsureNamedSandbox(ctx, "review") },
-		} {
-			if _, err := ensure(taskCtx); err != nil {
-				return core.TaskResultV1{}, err
-			}
-		}
-		if _, err := handle.EnsureNamedSandbox(taskCtx, conflictName); err == nil {
-			return core.TaskResultV1{}, fmt.Errorf("foreign Sandbox identity was accepted")
-		}
-		return core.TaskResultV1{SessionID: session.ID, Outcome: "sandboxes-ensured"}, nil
-	}))
-	spawned, err := client.Spawn(ctx, taskName, core.SessionTaskParams{SessionID: session.ID}, absurd.SpawnOptions{IdempotencyKey: taskName + ":" + session.ID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.AttachSessionTask(ctx, session.ID, "", spawned.TaskID, taskName); err != nil {
-		t.Fatal(err)
-	}
-	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "handle-sandbox-identity", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.AwaitTaskResult(ctx, client.QueueName(), spawned.TaskID); err != nil {
-		t.Fatal(err)
-	}
-	for name, id := range map[string]string{
-		core.DefaultSandbox: core.NamedSandboxID(session.ID, core.DefaultSandbox),
-		"review":            core.NamedSandboxID(session.ID, "review"),
-	} {
-		owned, err := store.Sandbox(ctx, id)
-		if err != nil || owned.SessionID != session.ID || owned.Name != name {
-			t.Fatalf("Sandbox %q=%#v err=%v", name, owned, err)
-		}
-		action, err := store.GetOrCreateSandboxAction(ctx, id, core.ActionSandboxCreate)
-		if err != nil || action.State != core.ActionSucceeded {
-			t.Fatalf("Sandbox %q create Action=%#v err=%v", name, action, err)
-		}
-	}
-	if effects := externals.effectKinds(); len(effects) != 2 || effects[0] != core.ActionSandboxCreate || effects[1] != core.ActionSandboxCreate {
-		t.Fatalf("idempotent Sandbox effects=%v", effects)
-	}
-}
-
 func TestSandboxCleanupRequiresRouteRevoke(t *testing.T) {
 	_, store, session := actionIntegrationSession(t, "cleanup-order")
 	ctx := context.Background()
@@ -2147,7 +1982,7 @@ func TestSandboxDeleteBeforeRevokeHasZeroProviderEffects(t *testing.T) {
 		}
 		return core.TaskResultV1{SessionID: session.ID, Outcome: "delete-refused"}, nil
 	}))
-	if err := store.RequestCleanup(ctx, session.ID); err != nil {
+	if err := requestCleanupFixture(ctx, store, session.ID); err != nil {
 		t.Fatal(err)
 	}
 	spawned, err := client.Spawn(ctx, core.CleanupTaskName, core.SessionTaskParams{SessionID: session.ID}, absurd.SpawnOptions{IdempotencyKey: "delete-before-revoke:" + session.ID})
@@ -2228,7 +2063,7 @@ func TestCleanupOnlyObservesAcceptedSteerAndBlocksDestructiveActions(t *testing.
 		}
 		return core.TaskResultV1{SessionID: session.ID, Outcome: "accepted-steer-retained"}, nil
 	}))
-	if err := store.RequestCleanup(ctx, session.ID); err != nil {
+	if err := requestCleanupFixture(ctx, store, session.ID); err != nil {
 		t.Fatal(err)
 	}
 	spawned, err := client.Spawn(ctx, core.CleanupTaskName, core.SessionTaskParams{SessionID: session.ID}, absurd.SpawnOptions{IdempotencyKey: "cleanup-accepted-steer:" + session.ID})
@@ -2320,7 +2155,7 @@ func TestClosedAdmissionCleanupRecoversOrdinaryDirectRunWithoutExecutionEligibil
 		}
 		return core.TaskResultV1{SessionID: session.ID, Outcome: "ordinary-cleanup-complete"}, nil
 	}))
-	if err := store.RequestCleanup(ctx, session.ID); err != nil {
+	if err := requestCleanupFixture(ctx, store, session.ID); err != nil {
 		t.Fatal(err)
 	}
 	spawned, err := client.Spawn(ctx, core.CleanupTaskName, core.SessionTaskParams{SessionID: session.ID}, absurd.SpawnOptions{IdempotencyKey: "cleanup-ordinary-closed:" + session.ID})
@@ -2698,7 +2533,7 @@ func TestCleanupCompletesWithExplanatoryWorkflowAttention(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := store.RequestCleanup(ctx, session.ID); err != nil {
+	if err := requestCleanupFixture(ctx, store, session.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.AttachCleanupTask(ctx, session.ID, session.CurrentTaskID, "cleanup-task-"+session.ID, core.CleanupTaskName); err != nil {

@@ -55,7 +55,6 @@ internal/pi	parseSession	26
 internal/postgres	(Store).AgentMessage	20
 internal/postgres	(Store).BindAgentRun	31
 internal/postgres	(Store).CompleteCleanup	24
-internal/postgres	(Store).EnsureSandbox	21
 internal/postgres	(Store).RecordSandboxProfileUnavailable	16
 internal/postgres	(Store).RedeemEnrollment	19
 internal/postgres	(Store).RetryFailedSession	23

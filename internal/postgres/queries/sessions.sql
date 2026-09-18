@@ -59,12 +59,6 @@ join dorf.sandbox_profile_revisions p on p.name=j.sandbox_profile and p.definiti
 where j.id=sqlc.arg(session_id)
 for update of j;
 
--- name: GetSessionForSandboxEnsure :one
-select admission_open,cleanup_state
-from dorf.sessions
-where id=sqlc.arg(session_id)
-for update;
-
 -- name: GetSessionForSandboxActionAuthorization :one
 select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(creator.name,'') as created_by_client_name,j.client_reference,
        p.harness,coalesce(j.thread_id,'') as thread_id,

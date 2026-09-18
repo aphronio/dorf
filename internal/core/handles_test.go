@@ -2,142 +2,10 @@ package core
 
 import (
 	"context"
-	"errors"
 	"strings"
-	"sync"
 	"testing"
 	"time"
-
-	"github.com/aphronio/dorf/internal/sandbox"
 )
-
-type handleTestFileReader struct {
-	read func(context.Context, Session, Sandbox, string) ([]byte, error)
-}
-
-func (r handleTestFileReader) ReadSandboxFile(ctx context.Context, session Session, sandbox Sandbox, path string) ([]byte, error) {
-	return r.read(ctx, session, sandbox, path)
-}
-
-type handleTestRuntimeResolver struct{ files SandboxFileReader }
-
-func (r handleTestRuntimeResolver) ResolveSandbox(_ context.Context, profile SandboxProfileRef) (SandboxRuntime, error) {
-	return SandboxRuntime{Files: r.files, SandboxProfile: profile}, nil
-}
-
-func TestSandboxHandleReadFileReturnsExactRepeatedBytesAndEnforcesOwnership(t *testing.T) {
-	session := Session{ID: "job-files", SandboxProfile: "profile", AdmissionOpen: true, CleanupState: CleanupPending}
-	owned := Sandbox{ID: "sandbox-files", SessionID: session.ID}
-	other := Sandbox{ID: "sandbox-other", SessionID: session.ID}
-	reader := handleTestFileReader{read: func(_ context.Context, _ Session, gotSandbox Sandbox, _ string) ([]byte, error) {
-		return []byte(gotSandbox.ID), nil
-	}}
-	store := handleTestStore{session: session, sandboxes: map[string]Sandbox{owned.ID: owned, other.ID: other}}
-	application := Application{Store: store, SandboxRuntimes: handleTestRuntimeResolver{files: reader}}
-	handle := application.sessionHandle(session.ID).sandboxHandle(owned.ID)
-	got, err := handle.ReadFile(context.Background(), "result.txt")
-	if err != nil || string(got) != owned.ID {
-		t.Fatalf("owned Sandbox read=%q err=%v", got, err)
-	}
-	got, err = application.sessionHandle(session.ID).sandboxHandle(other.ID).ReadFile(context.Background(), "result.txt")
-	if err != nil || string(got) != other.ID {
-		t.Fatalf("same-Session other-Sandbox read=%q err=%v", got, err)
-	}
-	closed := store
-	closed.session.AdmissionOpen = false
-	closedApplication := Application{Store: closed, SandboxRuntimes: handleTestRuntimeResolver{files: reader}}
-	got, err = closedApplication.sessionHandle(session.ID).sandboxHandle(owned.ID).ReadFile(context.Background(), "result.txt")
-	if err != nil || string(got) != owned.ID {
-		t.Fatalf("closed-admission read=%q err=%v", got, err)
-	}
-	foreign := handleTestStore{session: session, sandbox: Sandbox{ID: owned.ID, SessionID: "job-foreign"}}
-	foreignApplication := Application{Store: foreign, SandboxRuntimes: handleTestRuntimeResolver{files: reader}}
-	if _, err := foreignApplication.sessionHandle(session.ID).sandboxHandle(owned.ID).ReadFile(context.Background(), "result.txt"); err == nil || !strings.Contains(err.Error(), "does not belong") {
-		t.Fatalf("foreign Sandbox read error=%v", err)
-	}
-	cleaning := store
-	cleaning.session.AdmissionOpen, cleaning.session.CleanupState = false, CleanupRequested
-	cleaningApplication := Application{Store: cleaning, SandboxRuntimes: handleTestRuntimeResolver{files: reader}}
-	if _, err := cleaningApplication.sessionHandle(session.ID).sandboxHandle(owned.ID).ReadFile(context.Background(), "result.txt"); !errors.Is(err, ErrSandboxFileCleanupFenced) {
-		t.Fatalf("cleanup read error=%v", err)
-	}
-}
-
-func TestSandboxHandleReadFileRejectsOversizeCustomRuntimeResult(t *testing.T) {
-	session := Session{ID: "job-files", SandboxProfile: "profile", AdmissionOpen: true, CleanupState: CleanupPending}
-	owned := Sandbox{ID: "sandbox-files", SessionID: session.ID}
-	contents := make([]byte, sandbox.MaxFileReadBytes)
-	var runtimeErr error
-	reader := handleTestFileReader{read: func(context.Context, Session, Sandbox, string) ([]byte, error) {
-		return contents, runtimeErr
-	}}
-	application := Application{
-		Store:           handleTestStore{session: session, sandbox: owned},
-		SandboxRuntimes: handleTestRuntimeResolver{files: reader},
-	}
-	handle := application.sessionHandle(session.ID).sandboxHandle(owned.ID)
-	got, err := handle.ReadFile(context.Background(), "result.txt")
-	if err != nil || len(got) != sandbox.MaxFileReadBytes {
-		t.Fatalf("exact-limit custom runtime bytes=%d err=%v", len(got), err)
-	}
-	contents = append(contents, 1)
-	got, err = handle.ReadFile(context.Background(), "result.txt")
-	if got != nil || !errors.Is(err, sandbox.ErrFileTooLarge) {
-		t.Fatalf("oversize custom runtime bytes=%d err=%v", len(got), err)
-	}
-	originalErr := errors.New("runtime ownership failure")
-	runtimeErr = originalErr
-	got, err = handle.ReadFile(context.Background(), "result.txt")
-	if got != nil || !errors.Is(err, originalErr) || errors.Is(err, sandbox.ErrFileTooLarge) {
-		t.Fatalf("oversize partial runtime bytes=%d err=%v", len(got), err)
-	}
-}
-
-func TestSandboxHandleReadFileHoldsCleanupFence(t *testing.T) {
-	session := Session{ID: "job-fence", SandboxProfile: "profile", AdmissionOpen: true, CleanupState: CleanupPending}
-	owned := Sandbox{ID: "sandbox-fence", SessionID: session.ID}
-	fence := &sync.Mutex{}
-	arrived := make(chan struct{}, 2)
-	cleanupEntered := make(chan struct{})
-	store := handleTestStore{session: session, sandbox: owned, cleanupEntered: cleanupEntered, withFence: func(run func() error) error {
-		arrived <- struct{}{}
-		fence.Lock()
-		defer fence.Unlock()
-		return run()
-	}}
-	started, release := make(chan struct{}), make(chan struct{})
-	reader := handleTestFileReader{read: func(context.Context, Session, Sandbox, string) ([]byte, error) {
-		close(started)
-		<-release
-		return []byte("retained by caller"), nil
-	}}
-	application := Application{Store: store, SandboxRuntimes: handleTestRuntimeResolver{files: reader}}
-	handle := application.sessionHandle(session.ID).sandboxHandle(owned.ID)
-	readDone := make(chan error, 1)
-	go func() {
-		_, err := handle.ReadFile(context.Background(), "result.txt")
-		readDone <- err
-	}()
-	<-started
-	<-arrived
-	cleanupDone := make(chan error, 1)
-	go func() {
-		cleanupDone <- store.WithSessionFence(context.Background(), session.ID, func() error { return store.RequestCleanup(context.Background(), session.ID) })
-	}()
-	<-arrived
-	select {
-	case <-cleanupEntered:
-		t.Fatal("cleanup crossed active read fence")
-	default:
-	}
-	close(release)
-	if err := <-readDone; err != nil {
-		t.Fatal(err)
-	}
-	if err := <-cleanupDone; err != nil {
-		t.Fatal(err)
-	}
-}
 
 func TestAgentMessageDefaultsFollowAndBindsExactSandbox(t *testing.T) {
 	admittedAt := time.Now().UTC()
@@ -268,41 +136,22 @@ func (a handleTestAdmissions) AdmitAgentMessage(ctx context.Context, input Messa
 }
 
 type handleTestStore struct {
-	session        Session
-	sandbox        Sandbox
-	sandboxes      map[string]Sandbox
-	withFence      func(func() error) error
-	cleanupEntered chan struct{}
+	session Session
+	sandbox Sandbox
 }
 
 func (s handleTestStore) Session(context.Context, string) (Session, error) {
 	return s.session, nil
 }
 func (s handleTestStore) Sandbox(_ context.Context, id string) (Sandbox, error) {
-	if s.sandboxes != nil {
-		return s.sandboxes[id], nil
-	}
 	return s.sandbox, nil
 }
-func (handleTestStore) EnsureSandbox(context.Context, string, string) (Sandbox, error) {
-	return Sandbox{}, nil
-}
 func (handleTestStore) SessionTasks(context.Context, string) ([]SessionTask, error) { return nil, nil }
-func (handleTestStore) CleanupRequests(context.Context) ([]string, error)           { return nil, nil }
 
 func (s handleTestStore) WithSessionFence(_ context.Context, _ string, run func() error) error {
-	if s.withFence != nil {
-		return s.withFence(run)
-	}
 	return run()
 }
 func (handleTestStore) AttachSessionTask(context.Context, string, string, string, string) error {
-	return nil
-}
-func (s handleTestStore) RequestCleanup(context.Context, string) error {
-	if s.cleanupEntered != nil {
-		close(s.cleanupEntered)
-	}
 	return nil
 }
 func (handleTestStore) AttachCleanupTask(context.Context, string, string, string, string) error {
@@ -319,9 +168,6 @@ func (handleTestStore) SetCleanupAttention(context.Context, string, string) erro
 func (handleTestStore) CompleteCleanup(context.Context, string, string) error     { return nil }
 
 func (handleTestStore) ScheduleCleanup(context.Context, string, string, string) error { return nil }
-func (handleTestStore) ScheduleSessionTask(context.Context, string, string, string, string) error {
-	return nil
-}
 
 func (s handleTestStore) BeginSandboxActivity(context.Context, string) error  { return nil }
 func (s handleTestStore) FinishSandboxActivity(context.Context, string) error { return nil }

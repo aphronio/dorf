@@ -80,7 +80,7 @@ func admitSession(ctx context.Context, store Store, coreInput core.SessionAdmiss
 	if err := reserveAdmittedSandbox(ctx, queries, id, sandboxID); err != nil {
 		return core.Session{}, false, err
 	}
-	if err := scheduleSessionTaskTx(ctx, tx, queueName, id, taskName, taskKey, true); err != nil {
+	if err := scheduleSessionTaskTx(ctx, tx, queueName, id, taskName, taskKey); err != nil {
 		return core.Session{}, false, err
 	}
 	if err := tx.Commit(); err != nil {

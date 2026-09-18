@@ -37,14 +37,14 @@ func spawnSessionTaskTx(ctx context.Context, tx *sql.Tx, queue, sessionID, previ
 	return taskID, nil
 }
 
-func scheduleSessionTaskTx(ctx context.Context, tx *sql.Tx, queue, sessionID, name, key string, admission bool) error {
+func scheduleSessionTaskTx(ctx context.Context, tx *sql.Tx, queue, sessionID, name, key string) error {
 	queries := dbsql.New(tx)
 	current, err := queries.GetCurrentSessionTaskForUpdate(ctx, sessionID)
 	if err != nil {
 		return err
 	}
 	// Admission replay must preserve an existing handoff or closed Session.
-	if admission && (current.TaskID != "" || !current.AdmissionOpen) {
+	if current.TaskID != "" || !current.AdmissionOpen {
 		return nil
 	}
 	if !current.AdmissionOpen || current.CleanupState != core.CleanupPending {
@@ -55,21 +55,6 @@ func scheduleSessionTaskTx(ctx context.Context, tx *sql.Tx, queue, sessionID, na
 		return err
 	}
 	return attachSessionTaskTx(ctx, queries, sessionID, current.TaskID, taskID, name, false)
-}
-
-func (s Store) ScheduleSessionTask(ctx context.Context, queue, sessionID, name, key string) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if err := acquireSessionFenceTx(ctx, tx, sessionID); err != nil {
-		return err
-	}
-	if err := scheduleSessionTaskTx(ctx, tx, queue, sessionID, name, key, false); err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 
 // ScheduleCleanup closes admission, cancels the previous task, and attaches

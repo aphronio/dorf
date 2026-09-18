@@ -201,7 +201,10 @@ authorized by this cleanup.
 | Delete obsolete fixtures and contract residue | Admission tests still include a foreign coding workflow; baseline migration tests preserve retired coding/investigation records. OpenAPI `GitCommitOID` is unreachable from all paths. | Keep fresh initialization, idempotent migration, direct input/resource preservation, and conflicting native-binding proofs. Published migration history does not require preserving retired application fixtures. |
 
 Progress: the unused FIFO wake channel and its query/tests are removed. Message admission signals
-only the execution wake already consumed by the Session loop.
+only the execution wake already consumed by the Session loop. Unused Core file reading, named
+Sandbox reservation, ordinary task scheduling, and the old cleanup-request polling loop are removed.
+Default provisioning uses the reservation already committed by admission. The cleanup race proof
+now enters through atomic admission; file access proofs remain at the active control-reader boundary.
 
 `WorkflowAttention` is a misleading name for still-used execution, provider, upgrade, and recovery
 attention. Rename that responsibility rather than delete it. Similarly, fault barriers still support

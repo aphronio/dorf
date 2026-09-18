@@ -72,62 +72,6 @@ func (h SandboxHandle) Agent() AgentHandle {
 	return AgentHandle{sessionID: h.sessionID, sandboxID: h.id, application: h.application}
 }
 
-// ReadFile returns at most sandbox.MaxFileReadBytes exact bytes of one regular
-// Sandbox file while holding the Session resource fence. Core does not discover,
-// interpret, or retain the file; callers must read what they need before
-// requesting cleanup.
-func (h SandboxHandle) ReadFile(ctx context.Context, relativePath string) ([]byte, error) {
-	if h.application == nil || h.application.Store == nil || h.application.SandboxRuntimes == nil || h.sessionID == "" || h.id == "" {
-		return nil, fmt.Errorf("Sandbox handle is not bound to Core file access")
-	}
-	if err := provider.ValidateFilePath(relativePath); err != nil {
-		return nil, err
-	}
-	var contents []byte
-	err := h.application.Store.WithSessionFence(ctx, h.sessionID, func() error {
-		session, err := h.application.Store.Session(ctx, h.sessionID)
-		if err != nil {
-			return err
-		}
-		if session.CleanupState != CleanupPending {
-			return fmt.Errorf("%w for Session %s", ErrSandboxFileCleanupFenced, session.ID)
-		}
-		owned, err := h.application.Store.Sandbox(ctx, h.id)
-		if err != nil {
-			return err
-		}
-		if owned.SessionID != session.ID || owned.ID != h.id {
-			return fmt.Errorf("Sandbox %s does not belong to Session %s", h.id, session.ID)
-		}
-		runtime, err := h.application.SandboxRuntimes.ResolveSandbox(ctx, session.ProfileRef())
-		if err != nil {
-			return fmt.Errorf("resolve Sandbox profile %q for file read: %w", session.SandboxProfile, err)
-		}
-		if runtime.SandboxProfile != session.ProfileRef() || runtime.Files == nil {
-			return fmt.Errorf("Sandbox runtime does not provide file access for Session profile %q", session.SandboxProfile)
-		}
-		contents, err = readBoundedSandboxFile(ctx, h.application.Store, runtime.Files, session, owned, relativePath)
-		return err
-	})
-	return contents, err
-}
-
-func readBoundedSandboxFile(ctx context.Context, store SandboxActivityStore, files SandboxFileReader, session Session, owned Sandbox, relativePath string) (contents []byte, err error) {
-	err = WithSandboxActivity(ctx, store, session.ID, func() error {
-		contents, err = files.ReadSandboxFile(ctx, session, owned, relativePath)
-		if err != nil {
-			contents = nil
-			return err
-		}
-		if len(contents) > provider.MaxFileReadBytes {
-			contents = nil
-			return provider.ErrFileTooLarge
-		}
-		return nil
-	})
-	return contents, err
-}
-
 func (a Application) OpenSession(ctx context.Context, id string) (SessionHandle, error) {
 	id = strings.TrimSpace(id)
 	session, err := a.Store.Session(ctx, id)
@@ -139,18 +83,6 @@ func (a Application) OpenSession(ctx context.Context, id string) (SessionHandle,
 
 func (a Application) sessionHandle(id string) SessionHandle {
 	return SessionHandle{id: id, application: &a}
-}
-
-func (h SessionHandle) EnsureDefaultSandbox(ctx context.Context) (SandboxHandle, error) {
-	return h.ensureSandbox(ctx, DefaultSandbox)
-}
-
-func (h SessionHandle) EnsureNamedSandbox(ctx context.Context, name string) (SandboxHandle, error) {
-	name = strings.TrimSpace(name)
-	if name == "" || name == DefaultSandbox {
-		return SandboxHandle{}, fmt.Errorf("named Sandbox requires a nonempty name other than %q", DefaultSandbox)
-	}
-	return h.ensureSandbox(ctx, name)
 }
 
 // DefaultSandbox returns the already-owned default Sandbox without creating
@@ -181,7 +113,7 @@ func (h SessionHandle) sandboxHandle(id string) SandboxHandle {
 	return SandboxHandle{id: id, sessionID: h.id, application: h.application}
 }
 
-func (h SessionHandle) ensureSandbox(ctx context.Context, name string) (SandboxHandle, error) {
+func (h SessionHandle) EnsureDefaultSandbox(ctx context.Context) (SandboxHandle, error) {
 	if h.application == nil || h.application.Store == nil || h.id == "" {
 		return SandboxHandle{}, fmt.Errorf("Session handle is not bound to Core")
 	}
@@ -202,11 +134,14 @@ func (h SessionHandle) ensureSandbox(ctx context.Context, name string) (SandboxH
 			return err
 		}
 		if !session.AdmissionOpen || session.CleanupState != CleanupPending {
-			return fmt.Errorf("Session %s cannot ensure Sandbox %q after cleanup begins", h.id, name)
+			return fmt.Errorf("Session %s cannot ensure Sandbox after cleanup begins", h.id)
 		}
-		owned, err = h.application.Store.EnsureSandbox(ctx, h.id, name)
+		owned, err = h.application.Store.Sandbox(ctx, MainSandboxName(h.id))
 		if err != nil {
 			return err
+		}
+		if owned.ID != MainSandboxName(h.id) || owned.SessionID != h.id || owned.Name != DefaultSandbox {
+			return fmt.Errorf("Session %s has a foreign default Sandbox reservation", h.id)
 		}
 		return nil
 	})

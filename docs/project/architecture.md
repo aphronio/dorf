@@ -96,7 +96,7 @@ semantics are described in the [Remote Control API](../control-api.md).
 One admission creates one durable execution owner with its configuration and a stable
 idempotency identity. Admission records the
 Session, admitted configuration, Sandbox reservation, Absurd task, and task attachment in one
-PostgreSQL transaction. Ordinary task handoffs also commit scheduling and attachment together.
+PostgreSQL transaction. Cleanup scheduling and attachment use the same atomic boundary.
 The direct runtime supplies task identity. Absurd's public SQL functions provide this transaction boundary. Message text, ordered
 attachment manifests, and AgentRuns are admitted separately through the same Message operation
 regardless of sequence position.
@@ -132,9 +132,9 @@ do not reload. [Message semantics](../control-api.md#resources) own the client c
 A requested cleanup closes admission, cancels the previous task, and schedules and attaches cleanup
 in one transaction under the Session's external-effect fence. A task requesting its own cleanup may
 complete, but loses execution authority when the cleanup attachment commits. A failed scheduling
-transaction rolls back admission closure and cancellation along with the new task. Replay and
-recovery still reconcile incomplete admission and cleanup records from older writers, including
-during a rolling upgrade.
+transaction rolls back admission closure and cancellation along with the new task. Cleanup retries
+reconcile the retained task and exact resource receipts; there is no separate polling loop for
+requests written by pre-atomic writers.
 
 A Session records an append-only ordered chain of Absurd task attachments. The latest attachment is its
 current execution task; task names are observations, not hard-coded Session phases. Cleanup may replace the current task without changing retry semantics.
@@ -270,7 +270,7 @@ Message attachments are accepted user input. Their explicit filenames and bounde
 durable Message custody before execution. They do not authorize generic output discovery or
 retention.
 
-`SandboxHandle.ReadFile` returns the exact bytes of one caller-named regular file from that exact
+The public workspace file API returns the exact bytes of one caller-named regular file from that exact
 Session-owned Sandbox. Paths may be absolute, workspace-relative, or relative to the Sandbox user's
 home through `~/`. Core checks Session and Sandbox ownership, executes the read under the Session cleanup
 fence, and rejects traversal and symlinks. It does not add listing, discovery, stat, glob, archive, batch, or directory-download

@@ -12,9 +12,6 @@ set admission_open=false,
     cleanup_state=case when cleanup_state='pending' then 'requested' else cleanup_state end
 where id=sqlc.arg(session_id) and cleanup_state in ('pending','requested');
 
--- name: ListCleanupRequests :many
-select id from dorf.sessions where not admission_open and cleanup_state='requested' order by id;
-
 -- name: CountUnsettledSandboxCleanupActions :one
 select count(*)
 from dorf.sandboxes s

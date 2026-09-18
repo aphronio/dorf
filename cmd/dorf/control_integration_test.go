@@ -100,7 +100,7 @@ func TestControlAPIMultipartAttachmentsPersistAndReplayAfterCleanup(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RequestCleanup(ctx, session.ID); err != nil {
+	if err := store.ScheduleCleanup(ctx, tasks.QueueName(), session.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	postCleanupResponse := controlTestMultipartMessage(t, restarted, session.ID, credential, messageKey, "", "follow", attachments)

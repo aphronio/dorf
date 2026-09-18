@@ -81,16 +81,10 @@ func TestWorkerControlReaderFailureCancelsDurableProcesses(t *testing.T) {
 	}
 
 	var workerCancelled atomic.Bool
-	var recoveryCancelled atomic.Bool
 	err = runWorkerProcesses(context.Background(), reader,
 		func(ctx context.Context) error {
 			<-ctx.Done()
 			workerCancelled.Store(true)
-			return ctx.Err()
-		},
-		func(ctx context.Context) error {
-			<-ctx.Done()
-			recoveryCancelled.Store(true)
 			return ctx.Err()
 		},
 		nil,
@@ -98,8 +92,8 @@ func TestWorkerControlReaderFailureCancelsDurableProcesses(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "control reader stopped") {
 		t.Fatalf("error=%v", err)
 	}
-	if !workerCancelled.Load() || !recoveryCancelled.Load() {
-		t.Fatalf("worker cancelled=%t recovery cancelled=%t", workerCancelled.Load(), recoveryCancelled.Load())
+	if !workerCancelled.Load() {
+		t.Fatal("worker was not cancelled")
 	}
 }
 
@@ -107,10 +101,6 @@ func TestWorkerProcessesWithoutReaderRetainManualLifecycle(t *testing.T) {
 	want := errors.New("worker stopped")
 	err := runWorkerProcesses(context.Background(), nil,
 		func(context.Context) error { return want },
-		func(ctx context.Context) error {
-			<-ctx.Done()
-			return ctx.Err()
-		},
 		nil,
 	)
 	if !errors.Is(err, want) || err.Error() != want.Error() {
@@ -133,7 +123,7 @@ func TestWorkerProcessesGracefullyShutDownReaderWithParent(t *testing.T) {
 		<-ctx.Done()
 		return ctx.Err()
 	}
-	go func() { done <- runWorkerProcesses(ctx, reader, wait, wait, nil) }()
+	go func() { done <- runWorkerProcesses(ctx, reader, wait, nil) }()
 
 	client, err := controlreader.NewClient("http://"+reader.listener.Addr().String(), token, nil)
 	if err != nil {

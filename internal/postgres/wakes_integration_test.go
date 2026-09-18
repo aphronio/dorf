@@ -180,7 +180,7 @@ func TestNativeTerminalWakeAcceptsFastBindRaceAndRejectsForeignOrClosedTargets(t
 	if _, err := store.SignalNativeTerminalWake(ctx, client.QueueName(), foreign); err == nil {
 		t.Fatal("foreign terminal binding was accepted")
 	}
-	if err := store.RequestCleanup(ctx, session.ID); err != nil {
+	if err := requestCleanupFixture(ctx, store, session.ID); err != nil {
 		t.Fatal(err)
 	}
 	if signaled, err := store.SignalNativeTerminalWake(ctx, client.QueueName(), target); err != nil || signaled {

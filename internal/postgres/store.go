@@ -23,7 +23,6 @@ var migrationFiles embed.FS
 var ErrNotFound = errors.New("Dorf Session not found")
 var ErrAdmissionConflict = errors.New("admission key is bound to different complete Session input")
 var sha256Digest = regexp.MustCompile(`^[0-9a-f]{64}$`)
-var sandboxName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,126}$`)
 
 const (
 	AbsurdReleaseCommit = "550d3b9e6f9382d96178de6ab8c90c7f8edf2227"
@@ -546,30 +545,6 @@ func timeValue(value sql.NullTime) time.Time {
 	return value.Time
 }
 
-func (s Store) RequestCleanup(ctx context.Context, sessionID string) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	queries := dbsql.New(s.DB).WithTx(tx)
-	if _, err := queries.GetCleanupSessionForUpdate(ctx, sessionID); err != nil {
-		return err
-	}
-	closed, err := queries.RequestCleanup(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-	if closed != 1 {
-		return fmt.Errorf("Session %s cannot record cleanup request from its current state", sessionID)
-	}
-	return tx.Commit()
-}
-
-func (s Store) CleanupRequests(ctx context.Context) ([]string, error) {
-	return dbsql.New(s.DB).ListCleanupRequests(ctx)
-}
-
 func (s Store) AttachCleanupTask(ctx context.Context, sessionID, expectedCurrentTaskID, taskID, taskName string) error {
 	return s.attachSessionTask(ctx, sessionID, expectedCurrentTaskID, taskID, taskName, true)
 }
@@ -686,69 +661,6 @@ func (s Store) Sandboxes(ctx context.Context, sessionID string) ([]core.Sandbox,
 		out = append(out, core.Sandbox{ID: r.ID, SessionID: r.SessionID, Name: r.Name, OwnershipNonce: r.OwnershipNonce, ResourceID: r.ActiveResourceID, ProviderID: r.ProviderID})
 	}
 	return out, nil
-}
-
-// EnsureSandbox durably reserves one stable logical Sandbox identity. Provider
-// reconciliation is deliberately outside this transaction and is protected by
-// the Session effect fence plus the Sandbox's stable Action.
-func (s Store) EnsureSandbox(ctx context.Context, sessionID, name string) (core.Sandbox, error) {
-	sessionID = strings.TrimSpace(sessionID)
-	name = strings.TrimSpace(name)
-	if name == "" {
-		name = core.DefaultSandbox
-	}
-	if sessionID == "" || !sandboxName.MatchString(name) {
-		return core.Sandbox{}, fmt.Errorf("Sandbox ensure requires a Session and a lowercase name containing only letters, digits, and hyphens")
-	}
-	id := core.NamedSandboxID(sessionID, name)
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return core.Sandbox{}, err
-	}
-	defer tx.Rollback()
-	queries := dbsql.New(tx)
-	session, err := queries.GetSessionForSandboxEnsure(ctx, sessionID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return core.Sandbox{}, ErrNotFound
-	}
-	if err != nil {
-		return core.Sandbox{}, err
-	}
-	if !session.AdmissionOpen || session.CleanupState != core.CleanupPending {
-		return core.Sandbox{}, fmt.Errorf("Session %s cannot admit Sandbox %q after cleanup begins", sessionID, name)
-	}
-	row, err := queries.GetSessionSandboxByNameForUpdate(ctx, dbsql.GetSessionSandboxByNameForUpdateParams{SessionID: sessionID, Name: name})
-	if errors.Is(err, sql.ErrNoRows) {
-		foreign, foreignErr := queries.GetSandboxForUpdate(ctx, id)
-		if foreignErr == nil {
-			return core.Sandbox{}, fmt.Errorf("Sandbox identity %s is already owned by Session %s as name %q", id, foreign.SessionID, foreign.Name)
-		}
-		if !errors.Is(foreignErr, sql.ErrNoRows) {
-			return core.Sandbox{}, foreignErr
-		}
-		nonce, nonceErr := ownershipNonce()
-		if nonceErr != nil {
-			return core.Sandbox{}, nonceErr
-		}
-		inserted, insertErr := queries.ReserveSandbox(ctx, dbsql.ReserveSandboxParams{ID: id, SessionID: sessionID, Name: name, OwnershipNonce: nonce})
-		if insertErr != nil {
-			return core.Sandbox{}, insertErr
-		}
-		if inserted != 1 {
-			return core.Sandbox{}, fmt.Errorf("Sandbox %q conflicts with an existing durable resource", name)
-		}
-		row, err = queries.GetSessionSandboxByNameForUpdate(ctx, dbsql.GetSessionSandboxByNameForUpdateParams{SessionID: sessionID, Name: name})
-	}
-	if err != nil {
-		return core.Sandbox{}, err
-	}
-	if row.ID != id || row.SessionID != sessionID || row.Name != name || !sha256Digest.MatchString(row.OwnershipNonce) {
-		return core.Sandbox{}, fmt.Errorf("Sandbox %q conflicts with its exact Session-owned identity", name)
-	}
-	if err := tx.Commit(); err != nil {
-		return core.Sandbox{}, err
-	}
-	return core.Sandbox{ID: row.ID, SessionID: row.SessionID, Name: row.Name, OwnershipNonce: row.OwnershipNonce, ResourceID: row.ActiveResourceID, ProviderID: row.ProviderID}, nil
 }
 
 func (s Store) Deliveries(ctx context.Context, sessionID string) ([]core.Delivery, error) {

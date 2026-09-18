@@ -68,7 +68,7 @@ func TestMessageAttachmentManifestPersistsAndReplaysInExactOrderAfterCleanup(t *
 			t.Fatal(err)
 		}
 	}
-	if err := store.RequestCleanup(ctx, session.ID); err != nil {
+	if err := requestCleanupFixture(ctx, store, session.ID); err != nil {
 		t.Fatal(err)
 	}
 	cleanupTaskID := "attachment-cleanup-" + session.ID
