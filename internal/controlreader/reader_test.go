@@ -131,93 +131,6 @@ func TestFileReadEnforcesPathOwnershipAndCleanup(t *testing.T) {
 
 }
 
-func TestAuthenticatedClientObservesOnlyExactOwnedMessageWithBoundedResult(t *testing.T) {
-	session := core.Session{ID: "job-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
-	owned := core.Sandbox{ID: "sandbox-1", SessionID: session.ID, OwnershipNonce: strings.Repeat("a", 64)}
-	delivery := core.Delivery{
-		Message:  core.Message{ID: "message-1", SessionID: session.ID},
-		AgentRun: core.AgentRun{ID: "run-1", SessionID: session.ID, MessageID: "message-1", SandboxID: owned.ID, State: core.AgentRunCompleted, TurnOutcome: "completed"},
-	}
-	observation := &readerTestObservation{result: core.MessageResult{MessageID: "message-1", Outcome: "completed", Output: "exact output"}}
-	store := &readerTestStore{session: session, sandbox: owned, execution: core.AgentMessageExecution{
-		Session: session, Message: delivery.Message, AgentRun: delivery.AgentRun, Sandbox: owned,
-	}}
-	service := Service{
-		Store:    store,
-		Runtimes: readerTestRuntimes{profile: session.SandboxProfile, files: &readerTestFiles{}, execution: observation},
-	}
-	handler, err := NewHandler(strings.Repeat("d", 64), service)
-	if err != nil {
-		t.Fatal(err)
-	}
-	clientHTTP := &http.Client{Transport: readerHandlerTransport{handler: handler}}
-	client, err := NewClient("http://control-reader.test:8756", strings.Repeat("d", 64), clientHTTP)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	result, err := client.ObserveMessage(context.Background(), session.ID, "message-1")
-	if err != nil || result != observation.result || observation.sessionID != session.ID || observation.messageID != "message-1" || store.fences != 1 || store.executionCalls != 1 {
-		t.Fatalf("ObserveMessage()=%+v err=%v call=%q/%q fences=%d aggregate_calls=%d", result, err, observation.sessionID, observation.messageID, store.fences, store.executionCalls)
-	}
-
-	observation.result.Output = strings.Repeat("x", MaxObservationBytes+1)
-	if _, err := client.ObserveMessage(context.Background(), session.ID, "message-1"); !errors.Is(err, ErrResponseTooLarge) {
-		t.Fatalf("oversized ObserveMessage() error=%v", err)
-	}
-	if _, err := client.ObserveMessage(context.Background(), session.ID, "message-foreign"); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("foreign ObserveMessage() error=%v", err)
-	}
-
-	observation.result = core.MessageResult{MessageID: "message-1"}
-	if _, err := client.ObserveMessage(context.Background(), session.ID, "message-1"); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("unsettled ObserveMessage() error=%v", err)
-	}
-
-	observation.result = core.MessageResult{MessageID: "message-1", Outcome: "failed"}
-	if _, err := client.ObserveMessage(context.Background(), session.ID, "message-1"); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("drifted ObserveMessage() error=%v", err)
-	}
-}
-
-func TestMessageObservationRequiresDurableCompletedOwnershipBeforeProvider(t *testing.T) {
-	session := core.Session{ID: "job-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
-	observation := &readerTestObservation{result: core.MessageResult{MessageID: "message-1", Outcome: "completed"}}
-	service := Service{
-		Store: &readerTestStore{session: session, execution: core.AgentMessageExecution{
-			Session: session,
-			Message: core.Message{ID: "message-1", SessionID: "foreign-session"},
-			AgentRun: core.AgentRun{
-				ID: "run-1", SessionID: session.ID, MessageID: "message-1", SandboxID: "sandbox-1", State: core.AgentRunCompleted,
-			},
-			Sandbox: core.Sandbox{ID: "sandbox-1", SessionID: session.ID, OwnershipNonce: strings.Repeat("a", 64)},
-		}},
-		Runtimes: readerTestRuntimes{profile: session.SandboxProfile, execution: observation},
-	}
-	if _, err := service.ObserveMessage(context.Background(), session.ID, "message-1"); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("ObserveMessage() error=%v", err)
-	}
-	if observation.messageID != "" {
-		t.Fatal("foreign durable Message reached provider observation")
-	}
-
-	pending := service
-	pending.Store = &readerTestStore{session: session, execution: core.AgentMessageExecution{
-		Session: session,
-		Message: core.Message{ID: "message-1", SessionID: session.ID},
-		AgentRun: core.AgentRun{
-			ID: "run-1", SessionID: session.ID, MessageID: "message-1", SandboxID: "sandbox-1", State: core.AgentRunActive,
-		},
-		Sandbox: core.Sandbox{ID: "sandbox-1", SessionID: session.ID, OwnershipNonce: strings.Repeat("a", 64)},
-	}}
-	if _, err := pending.ObserveMessage(context.Background(), session.ID, "message-1"); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("pending ObserveMessage() error=%v", err)
-	}
-	if observation.messageID != "" {
-		t.Fatal("unsettled durable Message reached provider observation")
-	}
-}
-
 func TestAuthenticatedClientUsesFixedAdmissionObservations(t *testing.T) {
 	provider := &readerTestProvider{defaultConnection: "primary", defaultModel: "gpt-5.6-sol"}
 	handler, err := NewHandler(strings.Repeat("f", 64), Service{Provider: provider})
@@ -345,36 +258,6 @@ func TestHandlerAppliesProviderWorkDeadline(t *testing.T) {
 	}
 }
 
-func TestHandlerBoundsEncodedMessageObservation(t *testing.T) {
-	session := core.Session{ID: "job-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
-	delivery := core.Delivery{
-		Message:  core.Message{ID: "message-1", SessionID: session.ID},
-		AgentRun: core.AgentRun{ID: "run-1", SessionID: session.ID, MessageID: "message-1", State: core.AgentRunCompleted, TurnOutcome: "completed"},
-	}
-	owned := core.Sandbox{ID: "sandbox-1", SessionID: session.ID, OwnershipNonce: strings.Repeat("a", 64)}
-	delivery.AgentRun.SandboxID = owned.ID
-	observation := &readerTestObservation{result: core.MessageResult{
-		MessageID: "message-1", Outcome: "completed", Output: strings.Repeat("\x00", MaxObservationBytes/6+1),
-	}}
-	handler, err := NewHandler(strings.Repeat("a", 64), Service{
-		Store: &readerTestStore{session: session, execution: core.AgentMessageExecution{
-			Session: session, Message: delivery.Message, AgentRun: delivery.AgentRun, Sandbox: owned,
-		}},
-		Runtimes: readerTestRuntimes{profile: session.SandboxProfile, execution: observation},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodPost, MessageObservationPath, strings.NewReader(`{"session_id":"job-1","message_id":"message-1"}`))
-	request.Header.Set("Authorization", "Bearer "+strings.Repeat("a", 64))
-	request.Header.Set("Content-Type", "application/json")
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusConflict || response.Body.Len() > maxProblemBytes {
-		t.Fatalf("encoded observation status=%d bytes=%d", response.Code, response.Body.Len())
-	}
-}
-
 func TestClientDisablesRedirectsForInternalCredential(t *testing.T) {
 	client, err := NewClient("http://control-reader:8756", strings.Repeat("a", 64), &http.Client{})
 	if err != nil {
@@ -392,32 +275,6 @@ func TestClientDisablesRedirectsForInternalCredential(t *testing.T) {
 	transport, ok := client.http.Transport.(*http.Transport)
 	if !ok || transport.Proxy != nil {
 		t.Fatalf("internal client transport=%T proxy=%v", client.http.Transport, ok && transport.Proxy != nil)
-	}
-}
-
-func TestClientRequiresExactJSONMessageResponse(t *testing.T) {
-	for _, test := range []struct {
-		name, contentType, body string
-	}{
-		{name: "content type", contentType: "text/plain", body: `{"message_id":"message-1","outcome":"completed"}`},
-		{name: "trailing JSON", contentType: "application/json", body: `{"message_id":"message-1","outcome":"completed"}{}`},
-		{name: "unknown field", contentType: "application/json", body: `{"message_id":"message-1","outcome":"completed","provider":"incus"}`},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			client, err := NewClient("http://control-reader:8756", strings.Repeat("a", 64), &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Header:     http.Header{"Content-Type": []string{test.contentType}},
-					Body:       io.NopCloser(strings.NewReader(test.body)),
-				}, nil
-			})})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := client.ObserveMessage(context.Background(), "job-1", "message-1"); err == nil {
-				t.Fatal("malformed Message response was accepted")
-			}
-		})
 	}
 }
 
@@ -463,7 +320,6 @@ type readerTestStore struct {
 	inFence            bool
 	fences             int
 	sandboxCalls       int
-	execution          core.AgentMessageExecution
 	executionCalls     int
 }
 
@@ -490,14 +346,6 @@ func (s *readerTestStore) WithSessionFence(_ context.Context, _ string, run func
 	s.inFence = true
 	defer func() { s.inFence = false }()
 	return run()
-}
-
-func (s *readerTestStore) AgentMessageExecution(_ context.Context, messageID string) (core.AgentMessageExecution, error) {
-	s.executionCalls++
-	if s.execution.Message.ID == "" || s.execution.Message.ID != messageID {
-		return core.AgentMessageExecution{}, postgres.ErrNotFound
-	}
-	return s.execution, nil
 }
 
 type readerTestRuntimes struct {
@@ -527,24 +375,6 @@ func (r *readerTestFiles) ReadSandboxFile(_ context.Context, session core.Sessio
 	r.calls++
 	r.path, r.session, r.sandbox = path, session, sandbox
 	return append([]byte(nil), r.contents...), nil
-}
-
-type readerTestObservation struct {
-	result    core.MessageResult
-	sessionID string
-	messageID string
-}
-
-func (o *readerTestObservation) ObserveSettledAgentMessage(_ context.Context, sessionID, messageID string) (core.MessageResult, error) {
-	o.sessionID, o.messageID = sessionID, messageID
-	if o.result.MessageID != messageID {
-		return core.MessageResult{}, ErrUnavailable
-	}
-	return o.result, nil
-}
-
-func (*readerTestObservation) ExecuteSandboxAction(context.Context, string, string, core.ActionKind) error {
-	return nil
 }
 
 type readerHandlerTransport struct{ handler http.Handler }
@@ -625,14 +455,14 @@ func TestFileWritesUseAuthenticatedOwnershipAndCleanupFence(t *testing.T) {
 }
 
 func (s *readerTestStore) BeginSandboxActivity(_ context.Context, sessionID string) error {
-	if !s.inFence || sessionID != s.session.ID && sessionID != s.execution.Session.ID {
+	if !s.inFence || sessionID != s.session.ID {
 		panic("activity outside exact Session fence")
 	}
 	s.activityStarts++
 	return nil
 }
 func (s *readerTestStore) FinishSandboxActivity(ctx context.Context, sessionID string) error {
-	if !s.inFence || sessionID != s.session.ID && sessionID != s.execution.Session.ID || ctx.Err() != nil {
+	if !s.inFence || sessionID != s.session.ID || ctx.Err() != nil {
 		panic("activity completion lost fence or cancellation protection")
 	}
 	s.activityFinishes++

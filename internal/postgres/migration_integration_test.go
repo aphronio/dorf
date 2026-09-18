@@ -131,6 +131,37 @@ update dorf.agent_runs set harness='pi' where id='run-current'`); err != nil {
 	if _, err := tx.ExecContext(ctx, `rollback to savepoint profile_mismatch`); err != nil {
 		t.Fatal(err)
 	}
+	// Exercise the contract transition with an existing checkpoint and recovery hold.
+	for _, name := range dorfMigrations[1:] {
+		if name == "027_native_session_guard.sql" {
+			break
+		}
+		contents, err := migrationFiles.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.ExecContext(ctx, string(contents)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+insert into dorf.sandbox_checkpoints(repository,snapshot_id,sandbox_id,resource_id,
+    profile_name,profile_revision,last_activity_at,message_sequence,completed_turn_sequence,
+    delivery_hold_count,cleanup)
+values('test-backups',repeat('e',64),'sandbox-current','sandbox-current:initial',
+    'current-profile',repeat('b',64),clock_timestamp(),1,1,0,false);
+insert into dorf.sandbox_delivery_holds(id,sandbox_id,reason)
+values('recovery-current','sandbox-current','checkpoint_recovery');
+savepoint recovery_in_progress`); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateDorf(ctx, tx); err == nil || !strings.Contains(err.Error(), "finish checkpoint recovery") {
+		t.Fatalf("migration discarded active recovery custody: %v", err)
+	}
+	if _, err := tx.ExecContext(ctx, `rollback to savepoint recovery_in_progress;
+update dorf.sandbox_delivery_holds set released_at=clock_timestamp() where id='recovery-current'`); err != nil {
+		t.Fatal(err)
+	}
 	if err := migrateDorf(ctx, tx); err != nil {
 		t.Fatalf("baseline replay: %v", err)
 	}
@@ -165,14 +196,6 @@ update dorf.agent_runs set harness='pi' where id='run-current'`); err != nil {
 	var harness, thread string
 	if err := tx.QueryRowContext(ctx, `select p.harness,j.thread_id from dorf.sessions j join dorf.sandbox_profile_revisions p on p.name=j.sandbox_profile and p.definition_hash=j.sandbox_profile_revision where j.id='job-current'`).Scan(&harness, &thread); err != nil || harness != "codex" || thread != "thread-current" {
 		t.Fatalf("migrated Session Thread=%s/%s err=%v", harness, thread, err)
-	}
-	var queuedThread sql.NullString
-	if err := tx.QueryRowContext(ctx, `select thread_id from dorf.agent_runs where id='run-queued'`).Scan(&queuedThread); err != nil || queuedThread.Valid {
-		t.Fatalf("migration changed queued delivery attribution: thread=%v err=%v", queuedThread, err)
-	}
-	var retainedInput string
-	if err := tx.QueryRowContext(ctx, `select input from dorf.session_messages where id='message-current'`).Scan(&retainedInput); err != nil || retainedInput != "run direct caller intent" {
-		t.Fatalf("original Message changed during migration: %q err=%v", retainedInput, err)
 	}
 	var migrationCount int
 	if err := tx.QueryRowContext(ctx, `select count(*) from dorf.schema_migrations`).Scan(&migrationCount); err != nil {

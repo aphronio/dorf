@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
-	"github.com/aphronio/dorf/internal/blob"
+
 	"github.com/aphronio/dorf/internal/codex"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/core"
@@ -87,6 +87,7 @@ func (r profileRuntimeResolver) ResolveSandbox(ctx context.Context, ref core.San
 		return core.SandboxRuntime{}, err
 	}
 	return core.SandboxRuntime{
+		Native:         resolved.Externals,
 		Execution:      resolved.Execution,
 		Files:          resolved.Externals,
 		Commands:       resolved.Externals,
@@ -130,14 +131,6 @@ type resolvedBaseRuntime struct {
 	Ownership      func(context.Context, string) (provider.Ownership, error)
 }
 
-func (r profileRuntimeResolver) SupportsMessageImages(ctx context.Context, ref core.SandboxProfileRef) (bool, error) {
-	profile, err := r.store.SandboxProfileRevision(ctx, ref)
-	if err != nil {
-		return false, err
-	}
-	return profile.Harness == codex.Harness, nil
-}
-
 // Runtime resolution is downstream of Session admission. The Session's immutable
 // reference to this definition remains usable while a later verification
 // receipt is unsettled or failed; only new admission and default selection
@@ -156,7 +149,7 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, ref core.Sandbo
 	case codex.Harness:
 		agent = codex.Agent{Sandbox: sandbox, Port: r.cfg.AppServerPort, Timeout: r.cfg.TurnTimeout, Observations: r.observations}
 	case piagent.Harness:
-		agent = piagent.Agent{Sandbox: sandbox, Timeout: r.cfg.TurnTimeout}
+		agent = piagent.Agent{Sandbox: sandbox}
 	default:
 		return resolvedBaseRuntime{}, fmt.Errorf("unsupported Harness %q in Sandbox profile %q", profile.Harness, profile.Name)
 	}
@@ -169,36 +162,14 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, ref core.Sandbo
 	}
 	externals := terminal.Externals{
 		Sandbox: sandbox, Gateway: configuredProviderGateway(r.cfg),
-		Blobs: blob.Store{Root: r.cfg.BlobRoot},
 		Agent: agent, Ownership: ownership,
 	}
-	execution := core.NewExecutionService(r.store, externals, r.barrier, absurdruntime.RequireClaim).
-		WithAgentExecution(composedAgentExecution{externals: externals})
+	execution := core.NewExecutionService(r.store, externals, r.barrier, absurdruntime.RequireClaim)
 	return resolvedBaseRuntime{
 		SandboxProfile: profile.Ref(),
 		Execution:      execution,
 		Externals:      externals, Sandbox: sandbox, Ownership: ownership,
 	}, nil
-}
-
-// composedAgentExecution binds direct input to its selected Harness operation.
-type composedAgentExecution struct {
-	externals terminal.Externals
-}
-
-func (s composedAgentExecution) ResolveAgentRunOperation(_ context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
-	if err := validateDirectAgentExecution(execution); err != nil {
-		return nil, err
-	}
-	return terminal.NewAgentRunOperation(s.externals, execution)
-}
-func validateDirectAgentExecution(execution core.AgentMessageExecution) error {
-	session, run := execution.Session, execution.AgentRun
-	if run.SandboxID != core.MainSandboxName(session.ID) ||
-		execution.Sandbox.Name != core.DefaultSandbox {
-		return fmt.Errorf("Message %s conflicts with the exact client-directed Agent contract", execution.Message.ID)
-	}
-	return nil
 }
 
 func sandboxForProfile(cfg config.Config, profile core.SandboxProfile) (provider.Sandbox, error) {

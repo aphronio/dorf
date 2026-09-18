@@ -1,25 +1,12 @@
 # Remote Control API
 
-This document describes the currently implemented API. The accepted
-[native Session boundary](project/north-star.md#product-boundary) replaces queued Message custody
-with native acceptance in a subsequent implementation slice. Existing Message endpoints and replay
-guarantees remain current until that coordinated API/client change; no new endpoints are implied
-by the proposal.
+Dorf exposes one authenticated boundary for operating a configured Deployment. The embedded
+[OpenAPI document](../internal/controlapi/openapi.json), served at `GET /v1/openapi.json`, owns the
+exact operation, schema, limit and Problem inventory. Discovery links to it.
 
-Dorf exposes one deliberately narrow HTTPS boundary for operating one configured Deployment. The
-machine-readable authority is the embedded OpenAPI 3.1 document served by that Deployment at
-`GET /v1/openapi.json`; discovery at `GET /v1` links to it and advertises supported capabilities.
-
-This is a projection of Dorf's existing Session custody, not a network serialization of Core. A Session is
-the long-running resource. Clients can also discover narrow Sandbox profile summaries for Session
-selection. PostgreSQL rows, Absurd tasks, AgentRuns, Threads, Turns, Actions, providers, Harnesses,
-profile configuration, and integration credentials are not public resources. Native timeline reads
-expose Harness, Thread, and Turn references without granting operations on those references.
-
-Session is Dorf's durable execution handle. Its input currently targets one native Thread;
-the Session ID is opaque and need not equal that Thread ID. The admitted profile selects the
-Harness. Native subagent threads remain Harness-owned; additional explicitly controlled Threads
-are outside the current contract.
+Session is the durable resource for configuration, one native Thread binding, compute and scoped
+model access. The Harness owns conversation input, Turns and history. Dorf stores neither an input
+inbox nor a second transcript. Native subagent threads remain Harness-owned.
 
 ## Client and authentication boundary
 
@@ -60,291 +47,92 @@ agent-specific protocol.
 
 ## Resources
 
-[`internal/controlapi/openapi.json`](../internal/controlapi/openapi.json) is the checked-in authority
-for the complete HTTP operation, request, response, schema, status, and Problem inventory. Each
-Deployment serves that same OpenAPI document at `GET /v1/openapi.json`; discovery at `GET /v1`
-links to it. Use the document served by the Deployment when generating a client or making direct
-HTTP calls. The prose below explains behavior that clients need to handle, but it is not an
-operation or schema inventory.
+Create a Session, wait for resource readiness, prepare its workspace, then submit a Session event.
+Creation does not start a model Turn. The admitted profile selects the Harness and immutable provider
+configuration. New native-event Sessions currently require Codex; Pi support needs a new adapter proof.
+Profile listing exposes recorded verification, not a live readiness guarantee. Exact Session creation
+replay retains its original profile and creator. `client_reference` is opaque client attribution.
+All deployment Clients share the deployment-operator authority; creator attribution is not an ACL.
 
-Authenticated Clients can list all configured Sandbox profiles with `dorf profile list`, including
-`--output json` for automation. Discovery advertises this operation as `profile_list`. The response
-contains each profile's name, Sandbox provider, Harness, default status, and `verified` flag, sorted
-by name. Empty deployments return an empty array. Credentials, artifacts, Gateway URLs, host
-configuration, and verification diagnostics remain private. Profile creation, inspection of full
-configuration, verification, updates, and default selection remain deployment-host operations.
+### Input and controls
 
-`verified` reports whether stored proof matches the current definition and verification contract,
-with a completed probe and cleanup and no recorded error. Listing performs no live provider or model
-check and does not guarantee admission or execution. A profile may change between listing and Session
-admission; admission remains authoritative. An unknown explicit profile returns the
-`profile_not_found` Problem, and the CLI directs the caller to `dorf profile list`. Exact Session replay
-continues to use the admitted profile without rechecking its current verification eligibility.
+Submit `input.message` with text and optional ordered attachments, or `input.tool_output` with
+application-generated text. Supply a `client_id` for native attribution. It is **not an idempotency
+key**. Input uses one native `turn/start` call: the Harness decides whether it joins active work or
+starts a new Turn. There is no Follow/Steer mode, FIFO queue or offline inbox.
 
-Session listing is newest-first keyset traversal of current facts, not a frozen snapshot. `limit`
-defaults to 50 and accepts 1–100. Each item includes `id`, `kind`, `admitted_at`, and creator attribution;
-read the Session for mutable execution and cleanup state. Pass `next_cursor` back unchanged. Cursors are
-opaque, and malformed or altered cursors return the published `invalid_cursor` Problem. The index
-contains direct Sessions. Clients own repository setup, instructions, review, publication, and result
-meaning. Retired workflow Sessions are excluded from public listing and inspection.
+A successful `input.accepted` response includes Harness, Thread and Turn IDs. Several inputs can
+return the same Turn. Acceptance does not prove a durable native history write or completion.
+Repeating an input, including its `client_id`, may execute it again. Neither the API nor SDK retries
+native mutations. Session creation and fixed lifecycle operations keep their own documented retry
+identities; those identities do not extend to subsequent input.
 
-Each Sandbox in Session inspection includes its active resource record ID and the provider VM ID when
-that locator has been attested and recorded. A missing provider ID means it has not been recorded;
-it does not prove the VM is absent. The live Sandbox status operation returns a freshly attested
-provider ID when present. These are diagnostic locators; clients keep addressing the logical Sandbox.
-The nested resource history retains reservation, observation, and deletion receipts after cleanup.
-Ownership tokens are never included. A deletion receipt records confirmed cleanup; a missing
-receipt does not establish that the provider VM still exists.
+Preparing, unavailable and maintenance-held Sessions reject input with `native_unavailable`.
+Clients retain unsent input. A timeout, broken response or `native_outcome_unknown` requires native
+evidence inspection, not resubmission. Missing history is not proof that input was rejected. Dorf
+retains an unresolved mutation guard to prevent unsafe maintenance or another ambiguous dispatch;
+only exact positive native evidence can settle it automatically.
 
-An active Sandbox delivery hold is included in Session inspection. Pending follows remain `accepted`
-and carry the exact hold reason, `workspace_upgrade` or `checkpoint_recovery`; they have no
-fabricated completion result. New automatic input queues as a follow while held. Explicit steering
-is unavailable, while already-admitted steers and active turns may finish. Workspace file, command,
-and native-history access can return their existing unavailable Problems during maintenance.
-Passive Session inspection remains available. The hold primitive does not expose a public upgrade
-request or authorize package mutations.
+`input.cancel` selects the currently active native Turn once and sends its exact native interruption
+request. Its acknowledgement reports the selected Turn, or no Turn when none was active. It does
+not promise completion. Observe that Turn afterward. A new cancel request can target newer work;
+do not retry an ambiguous cancel or treat it as an idempotent stop handle.
 
-Session admission defaults `keep_running` to false for direct Sessions.
-E2B Sandboxes become eligible for pause after one minute without native activity, when no AgentRun
-remains pending, active, or uncertain. The existing durable polling loop performs the pause, usually
-within the following 30 seconds. Providers without the memory-pause capability retain their existing lifecycle. Set `keep_running: true` at admission to
-keep background services running between turns. The value is immutable, included in Session inspection,
-and part of admission replay equality. It does not close admission or imply cleanup. Native history,
-file, and command access can wake a paused Sandbox. These operations hold the Session fence through
-completion and start a fresh idle minute even when they fail. Native timeline and reply reads also
-count as activity. Passive Sandbox status and database-only Session polling do not wake the Sandbox or
-extend the grace period. A process started inside the Sandbox does not keep it awake after the
-Dorf-managed command returns. Use `keep_running` for background services.
-Provider deadlines still apply, including with the override enabled.
+Attachments travel inline by value as base64 bytes. The server validates bounded filenames, bytes
+and supported image decoding, then writes disposable workspace files and passes supported images
+natively. Files and native history follow workspace retention; Dorf does not retain attachment blobs
+for replay after cleanup.
 
-Session admission records the authenticated Client as `created_by_client`, with its ID and name.
-Inspection, watch, and listing expose that creator even after credential expiry or revocation.
-Older Sessions and internal admissions without a Client return null. Replaying an admission with another
-Client preserves the original creator, including an unknown creator. Attribution does not restrict
-which Sessions another authenticated deployment Client can inspect or clean up.
+`developer_instructions` and `refresh_skills` are per-request native adapter options. Instructions
+are injected before that input; skill refresh uses the native catalog reload. Neither creates a
+Dorf delivery envelope or a deferred refresh queue. Workspace AGENTS.md and SOUL.md remain client-owned.
+Application tool output uses native tool-output attribution and is omitted from the conversational
+raw-history view; completed-item observations retain its correlation for client publication.
 
-Callers may supply `client_reference` to correlate a Session with a thread or task. It is an opaque,
-optional string; omission and empty mean no reference. Dorf retains it exactly and includes it in
-admission replay equality, so changing it with the same idempotency key returns a conflict. It
-carries no authority and must not contain credentials. The API derives creator identity from bearer
-authentication and rejects caller-supplied creator fields.
+### Turns, history and events
 
-Session creation prepares its execution configuration and resources without starting a conversation.
-All input, including the first, uses Message admission. Direct clients may supply workspace
-`AGENTS.md` contents at creation; Dorf installs the file before starting the Harness. After setup
-settles, retries do not overwrite changes the agent makes to that file. The client owns the
-instructions and the Harness interprets them.
+Turn listing returns native IDs, status, accepted input correlation and available output. The
+history view returns bounded native conversation items. An explicit Turn selects that Turn; omission
+selects the latest native Turn once. Unavailable, incomplete or oversized history fails honestly.
+A native Thread ID is a binding observed through a Session, not a caller-created Dorf resource.
 
-Codex Messages may carry `developer_instructions`, a complete application instruction snapshot distinct
-from user-owned workspace files. Omitted or null leaves the current application instructions
-unchanged; an explicit empty string clears them on a fresh Turn. The exact nullable value is part
-of immutable admission and replay equality. Codex applies it only before a fresh Turn, never to
-active steering or accepted-turn recovery. A steer does not defer its snapshot to another Message;
-clients send the desired complete snapshot with the next follow. Built-in Harness instructions
-remain intact. User-owned AGENTS.md and SOUL.md retain user authority.
+The existing SSE observation transport now watches a native Turn through Session events. It emits
+completed items and status, not token-by-token text. `turn.updated` and `turn.completed` are the
+payload types. Ordinary Turn observation reads remain available without SSE. Session watch remains
+a separate stream of resource snapshots.
 
-Codex Messages may set `observation: true` to deliver application-generated text rather than
-human input. Observations allow `intent: "auto"` or `"follow"` and no attachments. They use the
-same durable delivery queue. Auto resumes an idle Agent or joins its active Turn at the native input
-boundary; explicit Follow waits for active work to finish. Explicit Steer observations remain
-unsupported because native tool output has no exact-target precondition.
-Human steering retains its priority and exact-Turn semantics. Unsupported profiles reject the
-request before admission. The flag is immutable and included in idempotent replay equality.
-The Codex adapter uses native tool output and retains an input identity for completed Message
-attribution across cold reads. If an automatic observation starts a new native Turn while its
-selected target finishes, exact delivery attribution atomically adopts that accepted Follow; it is
-not submitted twice. Raw timeline views omit observation payloads. Dorf does not decide
-which application events to produce, how to interpret them, or whether to notify the user.
+Observation cursors bind the exact Session, Thread, Turn and completed-item prefix. Supply the cursor
+unchanged; streaming also accepts the matching `Last-Event-ID`. A gap requires an explicit native
+read and reconciliation of the published prefix. `resync_deferred` means the passive cache cannot
+answer yet. Completion is proven only with a terminal native status and completion watermark.
+There is no durable Dorf event log or promise to replay every missed notification. Worker observers
+outlive HTTP clients; disconnecting does not stop accepted native work.
 
-Direct admission may select a named AI connection. Omission uses the deployment
-default, and the admitted Session retains the resolved connection. Model is also optional. Omission
-uses that resolved connection's default, while an explicit model overrides it for this Session. The
-admitted Session always returns and retains the exact resolved model. Session and Message admission and
-explicit retry take caller-known request identity before transmission.
-Direct HTTP callers supply `Idempotency-Key`; the CLI generates it, retries one ambiguous transport
-or server failure with the same key, and includes it in structured receipts. Exact replay returns the
-same resource, while changed input returns `idempotency_conflict`. Cleanup is inherently idempotent.
-A server-generated response key would not resolve a lost admission response.
+### Lifecycle and workspace access
 
-Session inspection is the canonical snapshot and supports representation ETags. Watch is an SSE delivery
-optimization over complete canonical snapshots: it may coalesce intermediate values and reconnects
-by reading current truth rather than replaying a second event log. Follow is durable FIFO input;
-explicit steer remains bound to the exact active Turn and never degrades into Follow. An automatic
-Message may become follow only when reconciliation proves its selected Turn became terminal without
-accepting that exact Message. Retry accepts only an
-eligible failed execution. Cleanup remains separate from execution and application success. A settled Message whose
-internal encoded JSON observation exceeds 16 MiB returns
-the published `message_unavailable` Problem rather than a partial result.
+Session inspection reports resource preparation, attention, maintenance and cleanup receipts.
+Its resource-ready `idle` state is not a native Turn completion claim; inspect native Turns for work.
+Resource history preserves exact reservations, provider locators and deletion receipts without
+exposing ownership tokens. A missing locator or receipt does not prove provider absence.
 
-After Sandbox and model access setup, a direct Session reports `awaiting_agent` while a delivery is
-pending or being submitted, and `running` while an agent Turn is active. Active work takes
-precedence over queued follow-ups. Unresolved delivery attention takes precedence over both;
-settled failures do not mask newer work. When no work remains, the latest settled result determines
-whether execution needs attention or is `idle`. A steer acknowledgement without a Turn result does
-not change this status. Direct Session `idle` means no outstanding work, not that the caller's task is
-finished.
+Maintenance gates native mutation, file, command and native-history access. Passive Session and
+resource inspection remain available. New input stays with the client. Recovery and package upgrade
+receipts identify their exact resource and checkpoint; success never synthesizes native output.
 
-A failed Sandbox creation caused by a recognized VM or instance limit reports
-`sandbox_capacity_exhausted` in Session attention. Its fixed detail explains that capacity must be freed
-or the limit increased before retry. Unknown execution failures retain generic attention. Public
-Session attention does not expose provider error text, and cleanup failure takes precedence.
+The default idle policy can pause supported E2B compute after the grace period when native work is
+settled and no mutation remains uncertain. `keep_running` preserves background compute between
+Turns, subject to provider deadlines. Native/file/command access can resume compute and extends its
+activity window; passive resource status and Session watch do not. Polling for lifecycle reconciliation
+does not wake paused compute. A shell process is not itself an idle-policy exemption.
 
-A completed Codex Message result preserves final answers from its bound native Turn in order.
-Multiple final answers are separated by blank lines in `output`; explicit commentary remains in
-the native timeline. A steer can produce another final answer within the same Turn, so clients
-receive the complete final text rather than only the last answer. Messages whose phase is absent
-or null retain their text because the Harness has not classified them. Text fragments within one
-message are concatenated without added separators.
+File access preserves bounded exact bytes, path checks, integrity and ownership. Paths may be
+workspace-relative, absolute or `~/`-relative; traversal, symlinks and directories are rejected.
+Exec accepts bounded argv and optional stdin, returning exit status and capped stdout/stderr. It has
+no replay identity: inspect external effects after ambiguous failure before attempting another command.
 
-The Session snapshot's optional `latest_reply_id` identifies the latest settled reply in its main
-Sandbox. It derives from retained Message and AgentRun facts; queued follow-ups and steer delivery
-acknowledgements do not replace it. The Message inspection path accepts `latest` in place of a
-Message ID and resolves the same reply. A Session with no settled reply returns `message_not_found`.
-
-The `session_timeline` capability exposes one passive native conversation turn in the Session's default
-Sandbox. Omission of `turn_id` selects the latest started native turn once. An explicit ID selects
-that turn in the Session's retained thread. The result keeps original `userMessage` and `agentMessage`
-objects in native order, including content, phase, IDs, and optional fields. Tool and reasoning
-items are excluded. Items are neither summaries nor correlations between Dorf Messages and replies.
-
-The native Harness owns this history. Dorf reads the selected full turn without retaining a
-transcript, resuming execution, refreshing skills, or registering an observation subscription.
-Historical selection follows native turn pages; the selected turn's status and items come from one
-native response. Later reads can differ as work progresses. Native item IDs are returned as supplied
-and are not stable client cursors or guaranteed matches for notification IDs. Each read has a
-15-second native deadline and a 16 MiB total native response budget. Invalid pagination progress or
-an exceeded bound fails the whole read rather than returning truncated success.
-
-A Message timeline reads completed inputs and final assistant replies from that Message's exact
-bound Turn, even while the Turn remains active. The endpoint returns a flat Session and Message
-identity, native Harness/Thread/Turn references, Turn status, and ordered entries. Each entry has
-an `index`, diagnostic `native_item_id`, and `kind`. Reply entries carry complete nonempty `text`.
-Empty replies are omitted; whitespace is preserved. Input
-entries carry `message_id` only when the input matches a stored delivery in that same native Turn.
-Several Messages can share a Turn after steering. Input origin does not establish which reply
-answers which input. Commentary remains available through the raw Session timeline.
-
-Use the retained `thread_id`, `turn_id`, and entry `index` to identify completed entries across
-reads. The index counts only inputs and final replies. Equal reply text can appear at different
-indexes and must remain distinct. Native IDs can change between active and persisted reads.
-This identity holds within the retained session and its existing history mode. It does not cover
-rewriting the session or migrating its history mode. Clients own notification deduplication.
-
-A Message that has not bound a native Turn returns `timeline_unavailable`. Clients may retry while
-its delivery remains nonterminal. The Message timeline uses the same read bounds and cleanup
-custody as raw timelines. It stores no transcript and does not change terminal `result.output`.
-
-A Message observation returns delivery state, effective intent, interruption state, optional native
-binding, and a suffix of completed inputs and final replies. Its cursor is scoped to the exact Session,
-Message, native binding, and consumed prefix. Clients treat it as opaque. `from_index` and
-`next_index` describe the returned contiguous suffix. A terminal outcome alone does not prove all
-replies have arrived: clients finish after consuming through the `completion_watermark` of a
-complete observation. A terminal failure before native binding has an empty completed prefix.
-
-The observation SSE endpoint returns the same envelopes when native items or durable status change.
-It accepts a cursor query or `Last-Event-ID`; conflicting values are rejected. Clients acknowledge a
-cursor only after their publication is durable and tolerate overlapping replay. Native item IDs
-remain diagnostic. The stream uses bounded buffering and authenticated lifetimes; reconnecting is
-part of the contract. The OpenAPI document owns exact paths, states, and response fields.
-
-Worker projection memory is ephemeral and bounded. A passive stream with unavailable replay returns
-`resync_deferred`, and an inconsistent prefix returns `gap`. Neither state authorizes a transparent
-Sandbox resume. An explicit observation read may hydrate native history under the existing read
-fence. Full timeline inspection remains available separately. Subscription lifetime, status checks,
-and heartbeats do not count as Sandbox activity, so a control connection may remain open while the
-Sandbox sleeps. SSE is driven by native projection changes; its compact durable-state check does
-not perform native history polling.
-
-Live observation streams require the worker's private control-reader capability, which shares the
-native observer's projection. A manually supervised inline reader supports explicit observation
-snapshots but returns `timeline_unavailable` for streaming; it does not advertise a detached cache
-as a live native source.
-
-An unknown selected turn returns `turn_not_found`. Missing or conflicting thread custody, cleanup,
-unsupported Harness APIs, and unavailable history return `timeline_unavailable`. An existing Session
-without native history does not return an empty success. Cleanup waits for an active read's fence,
-then prevents later reads. [Timeline support](support.md#native-conversation-timelines) describes
-the native API prerequisite. A client that needs durable history must own that requirement itself.
-
-Message requests default to `auto`: initially choose steer against the active Turn at admission,
-otherwise admit a follow. The stored request intent distinguishes automatic selection from explicit
-follow or steer. If the exact selected Turn terminates without accepting an automatic Message,
-Dorf changes that same Message's effective intent to follow and reselects it through the FIFO. It
-does not resubmit, duplicate, or retarget the request. Replay returns that current effective intent
-while enforcing the original request equality. A delivered steer
-can have a null result while its Turn is still active; clients wait for the result, not merely
-delivery acknowledgement, before presenting the final answer.
-
-Message admission keeps the existing JSON text request and also accepts multipart input with
-ordered files sent by value. Multipart input carries the same intent and skill-refresh request. It
-includes a text field, which may be empty when the Message has an attachment. Dorf derives each
-attachment's metadata and digest from its bytes; clients do not supply a manifest or a remote URL.
-The exact filenames, bytes, and order join the idempotency contract. An exact replay returns the
-same receipt after completed cleanup without starting new work.
-
-Image admission requires both a valid image and a selected profile with native image support. Other
-accepted bytes become generic file attachments. Dorf rejects an unsupported image before retaining
-the Message or publishing its blob. The [OpenAPI document](../internal/controlapi/openapi.json) owns
-the accepted image formats, limits, and Problem codes. During delivery, Dorf verifies the retained
-bytes and creates working files in the Session-owned Sandbox. The prompt identifies every file path,
-and the Harness also receives images through its native image input. Cleanup removes the working
-files but keeps the Message attachment bytes.
-
-A client that changes installed skills can set `refresh_skills` on its next Message. A Follow
-reloads before starting its fresh Turn. A Steer leaves the active Turn unchanged and retains the
-request for the next fresh Turn, including a Follow that was queued before the Steer arrived.
-Automatic intent uses the same existing delivery selection. Starting or recovering work keeps
-later Follows queued. A failed refresh remains pending; an accepted fresh Turn proves the refresh
-ran. The original request flag stays immutable on replay. Unsupported profiles reject the request
-before admission; currently only Codex supports it. A completed Steer result confirms its target
-Turn's outcome and does not acknowledge a skill refresh. Clients own safe file activation and
-must not treat refresh admission as permission to replace software during active work.
-
-A direct Codex Message can request interruption of its exact native Turn. This idempotent request
-also accepts a steer attached to that Turn; it never targets a successor and does not close Session
-admission or clean up the Sandbox. Dorf stores acceptance before contacting Codex, prioritizes Stop
-over pending message delivery, and reconciles the native outcome after an uncertain acknowledgement.
-`interrupt_requested` is acceptance, while the Message result is the observed outcome. An already
-terminal target is a no-op. Unbound Messages and unsupported Session or Harness combinations return
-`interrupt_unavailable`. Interruption is available through the `message_interrupt` discovery capability.
-
-Sandbox files are exact, caller-selected regular files inside a Session-owned Sandbox. Paths may be
-absolute, relative to the workspace, or start with `~/` for the Sandbox execution user's home.
-Paths never refer to the deployment host. Symlinks and non-canonical paths are rejected.
-The server enforces Session custody and the cleanup fence; the response includes exact bytes, length, and
-digest. Reads have an explicit byte limit enforced during capture; an oversized file returns HTTP
-409 with Problem code `file_too_large`, without partial file contents. The OpenAPI document owns
-the public size limit. Each HTTP listener has a separate bounded transfer budget, including slow
-response delivery, while the Session cleanup fence protects only capture. Waiting file downloads do
-not consume capacity reserved for other control operations. A bounded write can atomically replace
-one regular file, creating missing parent directories.
-Files use mode 0600 and new directories use mode 0700. Create-only
-writes preserve an existing file, including an intentionally empty file. The same custody and
-cleanup fence apply. There is no listing, glob, archive, or directory API.
-
-Sandbox exec runs caller-supplied argv and optional stdin inside the same attested Session-owned
-Sandbox, under the existing authentication and cleanup fence. It supports bounded setup commands
-such as installing a CLI without rebuilding an image. The caller must explicitly invoke a shell
-when shell interpretation is needed. Responses include the exit code, capped stdout and stderr,
-and a truncation flag; nonzero exit codes are command results, not transport failures. The OpenAPI
-document owns input, output, and timeout limits. Exec has no replay identity: after an ambiguous
-transport failure, inspect the effect or repeat only an operation the caller knows is idempotent.
-Clients own installed software and configuration. Exec does not admit a Message or start an
-AgentRun.
-
-Sandbox exec and internal commands use the same mandatory cancellation-aware provider runner.
-E2B starts the requested process directly, preserves stdin and partial output, and attempts remote
-termination when the request is cancelled or observation is lost. Incus uses its exec control socket
-to signal cancellation and waits for the operation's exit status; a provider-local process deadline
-also bounds commands whose start or observation is lost. A provider process deadline becomes exit code
-124 only after termination is confirmed. Unconfirmed termination remains an ambiguous command
-failure. Cancellation does not make replay safe, and the process deadline remains the fallback if
-the process identity or stop acknowledgement is unavailable. This is not a cross-provider process-tree termination guarantee.
-
-Dorf-origin failures use RFC 9457 Problem Details. Stable `code`, `retryable`, and `details` fields
-let automation avoid parsing prose. The same central catalog constructs runtime responses and is
-published as `x-dorf-problems` in the OpenAPI document. Failures generated by an ingress may not use
-that representation, so clients must also handle transport and generic HTTP server failure.
+Release closes admission, revokes model authority and deletes all exact owned resources. It is
+terminal for that Session. Native files and history need not remain readable afterward. Metadata and
+lifecycle receipts remain; there is no retained input archive. Retrieve application artifacts first.
 
 ## Deployment services
 
@@ -365,12 +153,10 @@ Sandbox       -> HTTPS model origin -> Provider Gateway
 ```
 
 The API receives its database URL, read-only API state, and an independently derived reader token
-through the protected Compose environment. The shared `state/blobs` subdirectory has a separate
-writable bind mount so Message admission can retain attachments. Setup creates and attests that
-directory before Compose starts; the rest of API state remains read-only. It receives no Incus
+through the protected Compose environment. It receives no Incus
 socket or identity, E2B key, Gateway state, or provider configuration. The worker's narrow reader answers
 only default and named AI-connection observation, exact Session-owned Sandbox file reads and bounded Sandbox file writes, and one
-settled Message result or native conversation turn. It has no generic proxy, provider selector,
+native Session event submission or native conversation read. It has no generic proxy, provider selector,
 or credential response.
 
 The Compose manifest encodes startup dependencies, health checks, published ports, profile-gated
@@ -420,8 +206,7 @@ These observations are not stored and may change immediately after a response.
 Session Sandbox projections include retained `upgrades` alongside resource history. Upgrade records
 identify the requested package version, source and optional destination resource, checkpoint,
 verification time, terminal outcome, and failure code. Status is derived from recovery receipts and
-current upgrade attention. Accepted messages keep `wait_reason: workspace_upgrade` while held;
-upgrade success does not synthesize a Message result.
+current upgrade attention. Native input is unavailable while held; clients retain unsent work.
 
 Package admission is currently operator-only through `dorf upgrade request`. API clients can inspect
 progress but cannot install packages. `dorf upgrade show SESSION` includes the detailed retained receipt.

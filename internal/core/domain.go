@@ -24,7 +24,7 @@ const (
 // Sequence expresses handoff order; Absurd remains authoritative for task
 // execution, attempts, checkpoints, and terminal state.
 type SessionTask struct {
-	SessionID  string    `json:"job_id"`
+	SessionID  string    `json:"session_id"`
 	Sequence   int64     `json:"sequence"`
 	TaskID     string    `json:"task_id"`
 	TaskName   string    `json:"task_name"`
@@ -46,18 +46,6 @@ const (
 	ActionUnsettled ActionState = "unsettled"
 	ActionSucceeded ActionState = "succeeded"
 	ActionFailed    ActionState = "failed"
-)
-
-type AgentRunState string
-
-const (
-	AgentRunPending     AgentRunState = "pending"
-	AgentRunSubmitting  AgentRunState = "submitting"
-	AgentRunActive      AgentRunState = "active"
-	AgentRunCompleted   AgentRunState = "completed"
-	AgentRunFailed      AgentRunState = "failed"
-	AgentRunInterrupted AgentRunState = "interrupted"
-	AgentRunUncertain   AgentRunState = "uncertain"
 )
 
 type SandboxProvider string
@@ -182,11 +170,11 @@ type Session struct {
 	CleanedAt                time.Time    `json:"cleaned_at,omitempty"`
 }
 
-// Sandbox is infrastructure owned for the lifetime of a Session. AgentRuns use a
+// Sandbox is infrastructure owned for the lifetime of a Session. native execution use a
 // Sandbox, but never own it.
 type Sandbox struct {
 	ID             string `json:"id"`
-	SessionID      string `json:"job_id"`
+	SessionID      string `json:"session_id"`
 	Name           string `json:"name"`
 	OwnershipNonce string `json:"-"`
 	ResourceID     string `json:"resource_id"`
@@ -212,127 +200,9 @@ type Route struct {
 	SandboxID string `json:"sandbox_id"`
 }
 
-type MessageFromKind string
-
-const (
-	MessageFromHuman MessageFromKind = "human"
-	MessageFromAgent MessageFromKind = "agent"
-)
-
-type MessageAttachmentKind string
-
-const (
-	MessageAttachmentImage MessageAttachmentKind = "image"
-	MessageAttachmentFile  MessageAttachmentKind = "file"
-)
-
-// MessageAttachment is one ordered immutable byte reference owned by a
-// Message. Slice position is its order; the record deliberately has no second
-// ordinal field.
-type MessageAttachment struct {
-	Kind      MessageAttachmentKind `json:"kind"`
-	Filename  string                `json:"filename"`
-	MediaType string                `json:"media_type"`
-	Digest    string                `json:"digest"`
-	ByteSize  int64                 `json:"byte_size"`
-}
-
-type Message struct {
-	Observation           bool                  `json:"observation,omitempty"`
-	DeveloperInstructions *string               `json:"developer_instructions,omitempty"`
-	RefreshSkills         bool                  `json:"refresh_skills,omitempty"`
-	RequestedIntent       MessageDeliveryIntent `json:"-"`
-	ID                    string                `json:"id"`
-	SessionID             string                `json:"job_id"`
-	FromKind              MessageFromKind       `json:"from_kind"`
-	FromID                string                `json:"from_id"`
-	Sequence              int64                 `json:"sequence"`
-	Input                 string                `json:"input"`
-	Attachments           []MessageAttachment   `json:"attachments,omitempty"`
-	Intent                MessageDeliveryIntent `json:"intent"`
-	TargetTurnID          string                `json:"target_turn_id,omitempty"`
-	AdmittedAt            time.Time             `json:"admitted_at,omitempty"`
-}
-
-type MessageDeliveryIntent string
-
-const (
-	MessageAuto   MessageDeliveryIntent = "auto"
-	MessageFollow MessageDeliveryIntent = "follow"
-	MessageSteer  MessageDeliveryIntent = "steer"
-)
-
-func (intent MessageDeliveryIntent) accepts(resolved MessageDeliveryIntent) bool {
-	return intent == MessageAuto || intent == resolved
-}
-
-// AgentRun is the durable delivery of one Message to an agent harness. A Follow
-// binds a new Turn. An explicit Steer remains bound to the exact active Turn
-// captured at admission; an Auto Message may become a Follow before acceptance
-// when Core proves that its selected Steer target is terminal.
-type AgentRun struct {
-	ID                 string        `json:"id"`
-	SessionID          string        `json:"job_id"`
-	MessageID          string        `json:"message_id"`
-	Harness            string        `json:"harness,omitempty"`
-	ThreadID           string        `json:"thread_id,omitempty"`
-	State              AgentRunState `json:"state"`
-	BaselineRecorded   bool          `json:"baseline_recorded"`
-	BaselineTurnID     string        `json:"baseline_turn_id,omitempty"`
-	TurnID             string        `json:"turn_id,omitempty"`
-	TurnOutcome        string        `json:"turn_outcome,omitempty"`
-	InterruptRequested bool          `json:"interrupt_requested"`
-	Attention          string        `json:"attention,omitempty"`
-	SandboxID          string        `json:"sandbox_id,omitempty"`
-	StartedAt          time.Time     `json:"started_at,omitempty"`
-	FinishedAt         time.Time     `json:"finished_at,omitempty"`
-}
-
-// MessageInterruptTarget is the original Turn-starting run selected by Stop.
-type MessageInterruptTarget struct {
-	AgentRunID         string
-	SessionID          string
-	InterruptRequested bool
-}
-
-type Delivery struct {
-	Message  Message  `json:"message"`
-	AgentRun AgentRun `json:"agent_run"`
-}
-
-// AgentMessageExecution is Core's authoritative private execution aggregate.
-// Consumers address work by Message identity; Core reloads the internal
-// AgentRun and exact Session-owned Sandbox before touching the Harness.
-type AgentMessageExecution struct {
-	RefreshSkills bool
-	Session       Session
-	Message       Message
-	AgentRun      AgentRun
-	Sandbox       Sandbox
-}
-
-// MessageResult is the smallest consumer observation of one admitted Message.
-// An empty Outcome means that the Harness work has not reached a terminal
-// result yet. Harness Thread, Turn, and AgentRun identity remain internal.
-type MessageResult struct {
-	MessageID string `json:"message_id"`
-	Outcome   string `json:"outcome,omitempty"`
-	Output    string `json:"output,omitempty"`
-}
-
-func (r MessageResult) Terminal() bool { return r.Outcome != "" }
-
-// AgentMessageWork is the opaque static-composition result that one exact
-// Message in one exact Sandbox still needs Core reconciliation. Core consumes
-// it inside the Session fence; clients address Messages instead.
-type AgentMessageWork struct {
-	MessageID string `json:"message_id"`
-	SandboxID string `json:"sandbox_id"`
-}
-
 type Action struct {
 	ID        string      `json:"id"`
-	SessionID string      `json:"job_id"`
+	SessionID string      `json:"session_id"`
 	Kind      ActionKind  `json:"kind"`
 	State     ActionState `json:"state"`
 	Scope     string      `json:"scope"`
@@ -360,10 +230,10 @@ type SandboxActionAuthorization struct {
 }
 
 type HarnessTurn struct {
-	ID                 string   `json:"id"`
-	Status             string   `json:"status"`
-	AcceptedMessageIDs []string `json:"accepted_message_ids,omitempty"`
-	Output             string   `json:"output,omitempty"`
+	ID        string   `json:"id"`
+	Status    string   `json:"status"`
+	ClientIDs []string `json:"client_ids,omitempty"`
+	Output    string   `json:"output,omitempty"`
 }
 
 // Terminal reports whether the Harness has settled this Turn.
@@ -371,36 +241,15 @@ func (t HarnessTurn) Terminal() bool {
 	return t.Status == "completed" || t.Status == "failed" || t.Status == "interrupted"
 }
 
-// HarnessBinding is the complete runner-neutral identity of one harness turn.
-type HarnessBinding struct {
-	Harness  string
-	ThreadID string
-	Turn     HarnessTurn
-}
-
 type HarnessHistory struct {
-	Harness  string
-	ThreadID string
-	Turns    []HarnessTurn
-}
-
-type Reconciliation struct {
-	Classification string
-	Turn           HarnessTurn
-	Reason         string
+	Harness  string        `json:"harness"`
+	ThreadID string        `json:"thread_id"`
+	Turns    []HarnessTurn `json:"turns"`
 }
 
 // SessionID preserves existing opaque admission identities.
 func SessionID(admissionKey string) string {
 	return "job-" + digest(admissionKey, 20)
-}
-
-func MessageID(sessionID string, fromKind MessageFromKind, fromID string) string {
-	return "message-" + digest(sessionID+"\x00"+string(fromKind)+"\x00"+fromID, 24)
-}
-
-func AgentRunID(messageID string) string {
-	return "agent-run-" + digest(messageID, 24)
 }
 
 const DefaultSandbox = "default"

@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
-	"database/sql"
+
 	"encoding/json"
 	"errors"
 	"flag"
@@ -20,9 +20,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/clientconfig"
-	"github.com/aphronio/dorf/internal/codex"
+
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
@@ -231,7 +230,7 @@ func remoteRun(ctx context.Context, client *controlclient.Client, cfg clientconf
 	if err := validateOutput(*output); err != nil {
 		return err
 	}
-	input, err := readMessageInput(*inputFile, "run", attachmentPaths)
+	input, err := readEventInput(*inputFile, "run", attachmentPaths)
 	if err != nil {
 		return err
 	}
@@ -256,28 +255,33 @@ func remoteRun(ctx context.Context, client *controlclient.Client, cfg clientconf
 	if err != nil {
 		return err
 	}
-	input.Intent = "follow"
-	message, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Message may have been accepted.", func() (controlapi.Message, error) {
-		return client.SendMessage(ctx, session.ID, requestKey, input)
-	})
+	// Creation is idempotent; native input is not. Wait only for readiness,
+	// then submit once and surface an unknown response without replay.
+	session, err = waitNativeReady(ctx, client, session.ID)
 	if err != nil {
 		return err
 	}
+	input.ClientID = requestKey
+	acknowledgement, err := client.SubmitEvent(ctx, session.ID, input)
+	if err != nil {
+		return err
+	}
+
 	if *output == "json" {
-		return writeJSON(stdout, remoteRunReceipt{Deployment: cfg.DeploymentURL, RequestID: requestKey, Session: session, Message: message})
+		return writeJSON(stdout, remoteRunReceipt{Deployment: cfg.DeploymentURL, RequestID: requestKey, Session: session, Acknowledgement: acknowledgement})
 	}
 	fmt.Fprintf(stdout, "Session %s accepted by %s\n", session.ID, cfg.DeploymentURL)
 	renderRemoteSession(stdout, session)
-	renderRemoteMessage(stdout, message)
+	writeJSON(stdout, acknowledgement)
 	fmt.Fprintf(stdout, "Next: dorf session inspect %s\n", session.ID)
 	return nil
 }
 
 type remoteRunReceipt struct {
-	Deployment string             `json:"deployment"`
-	RequestID  string             `json:"request_id"`
-	Session    controlapi.Session `json:"session"`
-	Message    controlapi.Message `json:"message"`
+	Deployment      string                     `json:"deployment"`
+	RequestID       string                     `json:"request_id"`
+	Session         controlapi.Session         `json:"session"`
+	Acknowledgement core.NativeAcknowledgement `json:"acknowledgement"`
 }
 
 func remoteSessionCommand(ctx context.Context, args []string, stdout, stderr io.Writer) (err error) {
@@ -287,7 +291,7 @@ func remoteSessionCommand(ctx context.Context, args []string, stdout, stderr io.
 	}
 	defer func() { err = sessionControlError(cfg.DeploymentURL, err) }()
 	if len(args) == 0 {
-		return fmt.Errorf("session requires: list, inspect, watch, message, retry, or cleanup")
+		return fmt.Errorf("session requires: list, inspect, watch, event, cancel, turns, history, retry, or cleanup")
 	}
 	switch args[0] {
 	case "list":
@@ -296,18 +300,14 @@ func remoteSessionCommand(ctx context.Context, args []string, stdout, stderr io.
 		return remoteSessionSnapshot(ctx, cfg, client, args, stdout, stderr)
 	case "watch":
 		return remoteSessionWatch(ctx, client, args[1:], stdout, stderr)
-	case "message":
-		if len(args) > 1 && args[1] == "interrupt" {
-			return remoteMessageInterrupt(ctx, cfg, client, args[2:], stdout, stderr)
-		}
-		if len(args) > 1 && args[1] == "inspect" {
-			return remoteMessageInspect(ctx, client, args[2:], stdout, stderr)
-		}
-		return remoteMessageSend(ctx, cfg, client, args[1:], stdout, stderr)
+	case "event":
+		return remoteEventSend(ctx, client, args[1:], stdout, stderr)
+	case "cancel", "turns", "history":
+		return remoteNativeReadOrCancel(ctx, client, args, stdout)
 	case "retry":
 		return remoteSessionRetry(ctx, cfg, client, args[1:], stdout, stderr)
 	default:
-		return fmt.Errorf("session requires: list, inspect, watch, message, retry, or cleanup")
+		return fmt.Errorf("session requires: list, inspect, watch, event, cancel, turns, history, retry, or cleanup")
 	}
 }
 
@@ -379,81 +379,6 @@ func remoteSessionWatch(ctx context.Context, client *controlclient.Client, args 
 	return err
 }
 
-func remoteMessageSend(ctx context.Context, cfg clientconfig.Config, client *controlclient.Client, args []string, stdout, stderr io.Writer) error {
-	set := flag.NewFlagSet("session message", flag.ContinueOnError)
-	set.SetOutput(stderr)
-	var attachmentPaths attachmentFlags
-	key := set.String("key", "", "stable request identity for explicit replay")
-	inputFile := set.String("input-file", "", "path containing the complete Message")
-	refreshSkills := set.Bool("refresh-skills", false, "reload installed skills before the next fresh Turn (Codex)")
-	intent := set.String("intent", "auto", "delivery intent: auto (steer active work, follow when idle), follow, or steer")
-	output := set.String("output", "human", "output format: human or json")
-	set.Var(&attachmentPaths, "attach", "local file to attach to the Message (repeatable)")
-	if err := set.Parse(args); err != nil {
-		return err
-	}
-	if set.NArg() != 1 {
-		return fmt.Errorf("session message requires one Session ID")
-	}
-	if err := validateOutput(*output); err != nil {
-		return err
-	}
-	if *intent != "auto" && *intent != "follow" && *intent != "steer" {
-		return fmt.Errorf("message intent must be auto, follow, or steer")
-	}
-	input, err := readMessageInput(*inputFile, "session message", attachmentPaths)
-	if err != nil {
-		return err
-	}
-	requestKey, generated, err := operationKey("message", *key, rand.Reader)
-	if err != nil {
-		return err
-	}
-	input.Intent, input.RefreshSkills = *intent, *refreshSkills
-	message, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Message may have been accepted.", func() (controlapi.Message, error) {
-		return client.SendMessage(ctx, set.Arg(0), requestKey, input)
-	})
-	if err != nil {
-		return err
-	}
-	if *output == "json" {
-		return writeJSON(stdout, remoteMessageReceipt{Deployment: cfg.DeploymentURL, RequestID: requestKey, Message: message})
-	}
-	fmt.Fprintf(stdout, "Message %s accepted for Session %s\n", message.ID, message.SessionID)
-	renderRemoteMessage(stdout, message)
-	fmt.Fprintf(stdout, "Next: dorf session message inspect %s %s\n", message.SessionID, message.ID)
-	return nil
-}
-
-func remoteMessageInspect(ctx context.Context, client *controlclient.Client, args []string, stdout, stderr io.Writer) error {
-	set := flag.NewFlagSet("session message inspect", flag.ContinueOnError)
-	set.SetOutput(stderr)
-	output := set.String("output", "human", "output format: human or json")
-	if err := set.Parse(args); err != nil {
-		return err
-	}
-	if set.NArg() < 1 || set.NArg() > 2 {
-		return fmt.Errorf("session message inspect requires one Session ID and an optional Message ID")
-	}
-	if err := validateOutput(*output); err != nil {
-		return err
-	}
-	messageID := "latest"
-	if set.NArg() == 2 {
-		messageID = set.Arg(1)
-	}
-	message, err := client.Message(ctx, set.Arg(0), messageID)
-	if err != nil {
-		return err
-	}
-	if *output == "json" {
-		return writeJSON(stdout, message)
-	}
-	fmt.Fprintf(stdout, "Message %s for Session %s\n", message.ID, message.SessionID)
-	renderRemoteMessage(stdout, message)
-	return nil
-}
-
 func remoteSessionRetry(ctx context.Context, cfg clientconfig.Config, client *controlclient.Client, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("session retry", flag.ContinueOnError)
 	set.SetOutput(stderr)
@@ -498,47 +423,6 @@ func remoteSandboxCommand(ctx context.Context, client *controlclient.Client, arg
 	})
 }
 
-func renderRemoteMessage(output io.Writer, message controlapi.Message) {
-	fmt.Fprintf(output, "  sequence: %d\n  intent: %s\n  delivery: %s\n  admitted: %s\n",
-		message.Sequence, message.Intent, humanMessageState(message), message.AdmittedAt.Format(time.RFC3339))
-	if message.InterruptRequested {
-		fmt.Fprintln(output, "  interrupt: requested")
-	}
-	if message.Result != nil {
-		fmt.Fprintf(output, "  outcome: %s\n", message.Result.Outcome)
-		if message.Result.Output != "" {
-			fmt.Fprintf(output, "  output: %q\n", message.Result.Output)
-		}
-	}
-	if message.Attention != nil {
-		fmt.Fprintf(output, "  attention: %s\n", message.Attention.Detail)
-	}
-}
-
-func humanMessageState(message controlapi.Message) string {
-	if message.Attention != nil {
-		return "Needs attention"
-	}
-	if message.Result != nil {
-		if message.Result.Outcome == "completed" {
-			return "Finished"
-		}
-		return "Needs attention"
-	}
-	switch message.Delivery.State {
-	case "accepted":
-		return "Queued"
-	case "running":
-		return "Working"
-	case "completed":
-		return "Delivered; awaiting result"
-	case "failed":
-		return "Needs attention"
-	default:
-		return message.Delivery.State
-	}
-}
-
 func humanSessionState(session controlapi.Session) string {
 	if session.Attention != nil {
 		return "Needs attention"
@@ -548,14 +432,8 @@ func humanSessionState(session controlapi.Session) string {
 		return "Starting"
 	case "connecting_model_access":
 		return "Connecting"
-	case "awaiting_agent":
-		return "Queued"
-	case "running":
-		return "Working"
 	case "idle":
 		return "Idle"
-	case "complete":
-		return "Finished"
 	case "stopped":
 		return "Stopped"
 	case "failed":
@@ -563,12 +441,6 @@ func humanSessionState(session controlapi.Session) string {
 	default:
 		return session.Execution.State
 	}
-}
-
-type remoteMessageReceipt struct {
-	Deployment string             `json:"deployment"`
-	RequestID  string             `json:"request_id"`
-	Message    controlapi.Message `json:"message"`
 }
 
 type remoteRetryReceipt struct {
@@ -751,8 +623,6 @@ type controlAPISessions struct {
 	tasks            *absurd.Client
 	directAdmissions direct.AdmissionService
 	reader           controlReader
-	blobs            blob.Store
-	messageImages    messageImageCapability
 }
 
 type controlReader interface {
@@ -760,7 +630,6 @@ type controlReader interface {
 	Exec(context.Context, string, provider.Command) (provider.CommandResult, error)
 	ReadFile(context.Context, string, string) ([]byte, error)
 	WriteFile(context.Context, string, string, []byte, bool) error
-	ObserveMessage(context.Context, string, string) (core.MessageResult, error)
 	DefaultConnection() (string, error)
 	DefaultModel(string) (string, error)
 	Check(context.Context, string) error
@@ -844,210 +713,8 @@ func (a controlAPISessions) Get(ctx context.Context, sessionID string) (controla
 	if err != nil {
 		return controlapi.Session{}, err
 	}
-	deliveries, err := a.store.Deliveries(ctx, sessionID)
-	if err != nil {
-		return controlapi.Session{}, err
-	}
-	view.LatestReplyID = latestReplyID(sessionID, deliveries)
+
 	return view, nil
-}
-
-func latestReplyID(sessionID string, deliveries []core.Delivery) string {
-	var id string
-	var sequence int64
-	for _, delivery := range deliveries {
-		run, message := delivery.AgentRun, delivery.Message
-		if run.SandboxID != core.MainSandboxName(sessionID) || message.Sequence <= sequence {
-			continue
-		}
-		if run.State == core.AgentRunCompleted && run.TurnOutcome != "" || run.State == core.AgentRunFailed || run.State == core.AgentRunInterrupted {
-			id, sequence = message.ID, message.Sequence
-		}
-	}
-	return id
-}
-
-func (a controlAPISessions) SendMessage(ctx context.Context, sessionID, key string, input controlapi.SendMessageRequest) (controlapi.Message, bool, error) {
-	session, err := a.loadSession(ctx, sessionID)
-	if err != nil {
-		return controlapi.Message{}, false, err
-	}
-	var options []core.MessageOption
-	switch input.Intent {
-	case "", string(core.MessageAuto):
-		input.Intent = string(core.MessageAuto)
-		options = append(options, core.PreferSteer())
-	case string(core.MessageFollow):
-	case string(core.MessageSteer):
-		options = append(options, core.Steer())
-	default:
-		return controlapi.Message{}, false, controlapi.ErrInvalidInput
-	}
-	if !core.ValidObservationDelivery(input.Observation, core.MessageDeliveryIntent(input.Intent), len(input.Attachments)) ||
-		(len(input.Attachments) == 0 && strings.TrimSpace(input.Text) == "") ||
-		!core.ValidDeveloperInstructions(&input.Text) || !core.ValidDeveloperInstructions(input.DeveloperInstructions) {
-		return controlapi.Message{}, false, controlapi.ErrInvalidInput
-	}
-	attachments, err := a.retainMessageAttachments(ctx, session.ProfileRef(), input.Attachments)
-	if err != nil {
-		return controlapi.Message{}, false, err
-	}
-	if input.RefreshSkills {
-		options = append(options, core.RefreshSkills())
-	}
-	handle, err := a.application().OpenSession(ctx, session.ID)
-	if err != nil {
-		return controlapi.Message{}, false, err
-	}
-	sandbox, err := handle.DefaultSandbox(ctx)
-	if err != nil {
-		return controlapi.Message{}, false, err
-	}
-	receipt, err := sandbox.Agent().Message(ctx, key, core.MessageInput{Text: input.Text, Attachments: attachments, Observation: input.Observation, DeveloperInstructions: input.DeveloperInstructions}, options...)
-	if err != nil {
-		return controlapi.Message{}, receipt.Created, controlMessageError(err)
-	}
-	message, err := a.GetMessage(ctx, session.ID, receipt.MessageID)
-	return message, receipt.Created, err
-}
-
-func (a controlAPISessions) GetMessage(ctx context.Context, sessionID, messageID string) (controlapi.Message, error) {
-	session, err := a.loadSession(ctx, sessionID)
-	if err != nil {
-		return controlapi.Message{}, err
-	}
-	deliveries, err := a.store.Deliveries(ctx, session.ID)
-	if err != nil {
-		return controlapi.Message{}, err
-	}
-	if messageID == "latest" {
-		messageID = latestReplyID(session.ID, deliveries)
-	}
-	index := slices.IndexFunc(deliveries, func(delivery core.Delivery) bool { return delivery.Message.ID == messageID })
-	if index < 0 {
-		return controlapi.Message{}, controlapi.ErrMessageNotFound
-	}
-	delivery := deliveries[index]
-	message, run := delivery.Message, delivery.AgentRun
-	waitReason, err := a.messageWaitReason(ctx, delivery)
-	if err != nil {
-		return controlapi.Message{}, err
-	}
-	deliveryState, err := publicMessageDeliveryState(run.State)
-	if err != nil {
-		return controlapi.Message{}, err
-	}
-	result, err := a.messageResult(ctx, session, delivery)
-	if err != nil {
-		return controlapi.Message{}, err
-	}
-	attention := (*controlapi.Attention)(nil)
-	if run.Attention != "" || run.State == core.AgentRunUncertain {
-		attention = &controlapi.Attention{Code: "agent_delivery_attention", Detail: "Message delivery needs operator attention; inspect the deployment service logs."}
-	}
-	return controlapi.Message{
-		ID: message.ID, SessionID: session.ID, Sequence: message.Sequence, Intent: string(message.Intent),
-		InterruptRequested: run.InterruptRequested,
-		WaitReason:         waitReason,
-		Delivery:           controlapi.State{State: deliveryState}, Result: result, Attention: attention, AdmittedAt: message.AdmittedAt,
-	}, nil
-}
-
-func (a controlAPISessions) messageResult(ctx context.Context, session core.Session, delivery core.Delivery) (*controlapi.MessageResult, error) {
-	message, run := delivery.Message, delivery.AgentRun
-	result := (*controlapi.MessageResult)(nil)
-	if session.CleanupState == core.CleanupPending {
-		switch run.State {
-		case core.AgentRunCompleted:
-			if run.TurnOutcome == "" {
-				break
-			}
-			if a.reader == nil {
-				return nil, fmt.Errorf("control reader is not configured")
-			}
-			observed, observeErr := a.reader.ObserveMessage(ctx, session.ID, message.ID)
-			if observeErr != nil {
-				if errors.Is(observeErr, controlreader.ErrUnavailable) || errors.Is(observeErr, controlreader.ErrResponseTooLarge) {
-					return nil, controlapi.ErrMessageUnavailable
-				}
-				return nil, observeErr
-			}
-			result = &controlapi.MessageResult{Outcome: observed.Outcome, Output: observed.Output}
-		case core.AgentRunFailed, core.AgentRunInterrupted:
-			outcome := run.TurnOutcome
-			if outcome == "" {
-				outcome = string(run.State)
-			}
-			result = &controlapi.MessageResult{Outcome: outcome}
-		}
-	}
-	return result, nil
-}
-
-func (a controlAPISessions) InterruptMessage(ctx context.Context, sessionID, messageID string) (controlapi.Message, error) {
-	session, err := a.loadSession(ctx, sessionID)
-	if err != nil {
-		return controlapi.Message{}, err
-	}
-	execution, err := a.store.AgentMessageExecution(ctx, messageID)
-	if errors.Is(err, postgres.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
-		return controlapi.Message{}, controlapi.ErrMessageNotFound
-	}
-	if err != nil {
-		return controlapi.Message{}, err
-	}
-	if execution.Session.ID != session.ID {
-		return controlapi.Message{}, controlapi.ErrMessageNotFound
-	}
-	if execution.AgentRun.Harness != codex.Harness {
-		return controlapi.Message{}, controlapi.ErrInterruptUnavailable
-	}
-	if _, err := a.application().RequestMessageInterrupt(ctx, session.ID, messageID); err != nil {
-		if errors.Is(err, core.ErrMessageInterruptUnavailable) || errors.Is(err, core.ErrMessageAdmissionClosed) {
-			return controlapi.Message{}, controlapi.ErrInterruptUnavailable
-		}
-		return controlapi.Message{}, err
-	}
-	return a.GetMessage(ctx, session.ID, messageID)
-}
-
-func remoteMessageInterrupt(ctx context.Context, cfg clientconfig.Config, client *controlclient.Client, args []string, stdout, stderr io.Writer) error {
-	set := flag.NewFlagSet("session message interrupt", flag.ContinueOnError)
-	set.SetOutput(stderr)
-	output := set.String("output", "human", "output format: human or json")
-	if err := set.Parse(args); err != nil {
-		return err
-	}
-	if set.NArg() != 2 {
-		return fmt.Errorf("session message interrupt requires one Session ID and Message ID")
-	}
-	if err := validateOutput(*output); err != nil {
-		return err
-	}
-	message, err := client.InterruptMessage(ctx, set.Arg(0), set.Arg(1))
-	if err != nil {
-		return err
-	}
-	if *output == "json" {
-		return writeJSON(stdout, remoteMessageReceipt{Deployment: cfg.DeploymentURL, Message: message})
-	}
-	renderRemoteMessage(stdout, message)
-	return nil
-}
-
-func publicMessageDeliveryState(state core.AgentRunState) (string, error) {
-	switch state {
-	case core.AgentRunPending, core.AgentRunSubmitting:
-		return "accepted", nil
-	case core.AgentRunActive, core.AgentRunUncertain:
-		return "running", nil
-	case core.AgentRunCompleted:
-		return "completed", nil
-	case core.AgentRunFailed, core.AgentRunInterrupted:
-		return "failed", nil
-	default:
-		return "", fmt.Errorf("unknown Agent delivery state %q", state)
-	}
 }
 
 func (a controlAPISessions) Retry(ctx context.Context, sessionID, key string) (controlapi.Retry, bool, error) {
@@ -1126,19 +793,6 @@ func (a controlAPISessions) WriteSandboxFile(ctx context.Context, sandboxID, rel
 	}
 }
 
-func controlMessageError(err error) error {
-	switch {
-	case errors.Is(err, core.ErrMessageAdmissionClosed):
-		return controlapi.ErrMessageUnavailable
-	case errors.Is(err, core.ErrMessageSteerUnavailable):
-		return controlapi.ErrSteerUnavailable
-	case errors.Is(err, core.ErrMessageReplayConflict):
-		return controlapi.ErrIdempotencyConflict
-	default:
-		return err
-	}
-}
-
 func controlRetryError(err error) error {
 	switch {
 	case errors.Is(err, core.ErrRetryReplayConflict):
@@ -1192,8 +846,6 @@ func (a controlAPISessions) projectSession(ctx context.Context, session core.Ses
 	executionState := map[direct.ExecutionState]string{
 		direct.ExecutionProvisioningSandbox: "provisioning_sandbox",
 		direct.ExecutionConnectingRoute:     "connecting_model_access",
-		direct.ExecutionQueued:              "awaiting_agent",
-		direct.ExecutionWorking:             "running",
 		direct.ExecutionAttention:           "stopped",
 		direct.ExecutionIdle:                "idle",
 	}[projection.State]
@@ -1235,7 +887,7 @@ func publicSession(session core.Session, executionState string, attention *contr
 		attention = publicExecutionFailure(task)
 	}
 	if session.CleanupState != core.CleanupPending {
-		if executionState == "provisioning_sandbox" || executionState == "connecting_model_access" || executionState == "awaiting_agent" || executionState == "running" {
+		if executionState == "provisioning_sandbox" || executionState == "connecting_model_access" {
 			executionState = "stopped"
 		}
 		if session.CleanupState == core.CleanupScheduled && failedExecutionTask(task.State) {
@@ -1311,11 +963,11 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 	sessions := controlAPISessions{
 		store: store, tasks: tasks,
 		directAdmissions: direct.NewAdmissionService(store, config.QueueName, reader),
-		reader:           reader, blobs: blob.Store{Root: cfg.BlobRoot}, messageImages: runtimes,
+		reader:           reader,
 	}
 	server := controlapi.NewServer(controlapi.Discovery{
 		Product: "dorf", Version: version.Version,
-		Capabilities: []string{"direct_sessions", "session_list", "profile_list", "session_watch", "session_timeline", "messages", "message_interrupt", "session_retry", "sandbox_files", "sandbox_exec", "sandbox_status", "latest_reply"},
+		Capabilities: []string{"direct_sessions", "session_list", "profile_list", "session_watch", "session_history", "session_events", "native_turns", "session_retry", "sandbox_files", "sandbox_exec", "sandbox_status"},
 	}, auth, sessions, controlAPIProfiles{store: store})
 	serverCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -15,8 +15,7 @@ import (
 )
 
 // RequestCheckpointRecovery atomically retains exact checkpoint intent, holds
-// new native delivery, and wakes the Session's existing task. Accepted Messages
-// remain durable behind the hold.
+// native mutations, and wakes the Session's existing task.
 func (s Store) RequestCheckpointRecovery(ctx context.Context, queue string, request persistence.RecoveryRequest) (persistence.RecoveryReceipt, error) {
 	if err := request.Validate(); err != nil {
 		return persistence.RecoveryReceipt{}, err
@@ -129,7 +128,7 @@ func (s Store) SessionRecoveries(ctx context.Context, sessionID string) ([]persi
 func recoveryReceipt(row dbsql.GetCheckpointRecoveryRow) persistence.RecoveryReceipt {
 	checkpoint := checkpointFromValues(
 		row.SessionID, row.SandboxID, row.CheckpointResourceID, row.ProfileName, row.ProfileRevision,
-		row.EffectiveUpgradeID, row.LastActivityAt, row.MessageSequence, row.CompletedTurnSequence,
+		row.EffectiveUpgradeID, row.LastActivityAt, row.NativeRevision,
 		row.DeliveryHoldCount, row.Cleanup, row.CheckpointRepository, row.CheckpointSnapshotID, row.PublishedAt,
 	)
 	return persistence.RecoveryReceipt{
@@ -146,13 +145,13 @@ func recoveryReceipt(row dbsql.GetCheckpointRecoveryRow) persistence.RecoveryRec
 }
 
 func (s Store) RecoveryNativeStateSafe(ctx context.Context, receipt persistence.RecoveryReceipt) (bool, error) {
-	if receipt.SandboxID == "" || receipt.Checkpoint.MessageSequence < 0 {
+	if receipt.SandboxID == "" || receipt.Checkpoint.NativeRevision < 0 {
 		return false, fmt.Errorf("recovery safety requires an exact checkpoint boundary")
 	}
 	safe, err := dbsql.New(s.DB).RecoveryNativeStateSafe(ctx, dbsql.RecoveryNativeStateSafeParams{
-		SandboxID: receipt.SandboxID, MessageSequence: receipt.Checkpoint.MessageSequence,
+		SandboxID: receipt.SandboxID, NativeRevision: receipt.Checkpoint.NativeRevision,
 	})
-	return safe.Valid && safe.Bool, err
+	return safe, err
 }
 
 // RecordRecoveryRestored binds the replacement only after exact restore succeeds.
@@ -255,12 +254,12 @@ func authorizeRecoveryRelease(ctx context.Context, q *dbsql.Queries, profileName
 		return fmt.Errorf("recovery profile revision changed")
 	}
 	safe, err := q.RecoveryNativeStateSafe(ctx, dbsql.RecoveryNativeStateSafeParams{
-		SandboxID: receipt.SandboxID, MessageSequence: receipt.Checkpoint.MessageSequence,
+		SandboxID: receipt.SandboxID, NativeRevision: receipt.Checkpoint.NativeRevision,
 	})
 	if err != nil {
 		return err
 	}
-	if !safe.Valid || !safe.Bool {
+	if !safe {
 		return fmt.Errorf("native work exists beyond the selected checkpoint")
 	}
 	if receipt.DestinationProviderID == "" || !receipt.DestinationDeletedAt.IsZero() {

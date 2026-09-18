@@ -14,7 +14,7 @@ import (
 // SessionExecutionWakeV1 is a disposable hint that asks a Session's current task to
 // reload authoritative Session and Harness state.
 type SessionExecutionWakeV1 struct {
-	SessionID string `json:"job_id"`
+	SessionID string `json:"session_id"`
 	Revision  int64  `json:"revision"`
 	CauseKey  string `json:"cause_key"`
 }
@@ -22,11 +22,10 @@ type SessionExecutionWakeV1 struct {
 // NativeTerminalWakeTarget carries the exact native coordinates already
 // authenticated by a Harness observer. It authorizes only a wake hint.
 type NativeTerminalWakeTarget struct {
-	SessionID  string
-	SandboxID  string
-	AgentRunID string
-	ThreadID   string
-	TurnID     string
+	SessionID string
+	SandboxID string
+	ThreadID  string
+	TurnID    string
 }
 
 type sessionExecutionWakeRevisionStore interface {
@@ -42,16 +41,7 @@ type nativeTerminalWakeStore interface {
 }
 
 func SessionExecutionWakeEvent(sessionID string, revision int64) string {
-	return fmt.Sprintf("dorf.job-execution:v1:%s:%020d", sessionID, revision)
-}
-
-// EmitMessageWake emits a disposable wake hint for one durably accepted FIFO
-// Message. Re-emission is safe because the event identity is deterministic.
-func (a Application) EmitMessageWake(ctx context.Context, message Message) error {
-	if _, err := a.signalSessionExecutionWake(ctx, message.SessionID, "message:"+message.ID); err != nil {
-		return fmt.Errorf("message %s sequence %d was accepted, but its execution wake hint failed; retry the same send key and complete Message request: %w", message.ID, message.Sequence, err)
-	}
-	return nil
+	return fmt.Sprintf("dorf.session-execution:v1:%s:%020d", sessionID, revision)
 }
 
 func (a Application) SessionExecutionWakeRevision(ctx context.Context, sessionID string) (int64, error) {
@@ -78,7 +68,7 @@ func (a Application) signalSessionExecutionWake(ctx context.Context, sessionID, 
 }
 
 // SignalNativeTerminalWake turns one exact observer binding into a wake hint.
-// PostgreSQL and the Harness remain authoritative for AgentRun settlement.
+// PostgreSQL and the Harness remain authoritative for native settlement.
 func (a Application) SignalNativeTerminalWake(ctx context.Context, target NativeTerminalWakeTarget) error {
 	wakes, ok := a.Store.(nativeTerminalWakeStore)
 	if !ok || a.Tasks == nil {
@@ -113,7 +103,7 @@ func resolveSessionExecutionWake(sessionID string, revision int64, wake SessionE
 // a worker has resumed or completed the Session.
 type RetryReceipt struct {
 	RequestKey string `json:"request_key"`
-	SessionID  string `json:"job_id"`
+	SessionID  string `json:"session_id"`
 	TaskID     string `json:"task_id"`
 	Retry      string `json:"retry"`
 	RunID      string `json:"run_id"`

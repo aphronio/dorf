@@ -42,26 +42,24 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 	}
 
 	wantOperations := map[string][]string{
-		"/v1":                         {"get"},
-		"/v1/openapi.json":            {"get"},
-		"/v1/auth/enrollments/redeem": {"post"},
-		"/v1/me":                      {"get"},
-		"/v1/profiles":                {"get"},
-		"/v1/sessions":                {"get", "post"},
-		"/v1/sessions/{session}":      {"get"},
-		"/v1/sessions/{session}/messages/{message}/observation":        {"get"},
-		"/v1/sessions/{session}/messages/{message}/observation/stream": {"get"},
-		"/v1/sessions/{session}/messages/{message}/timeline":           {"get"},
-		"/v1/sessions/{session}/timeline":                              {"get"},
-		"/v1/sessions/{session}/watch":                                 {"get"},
-		"/v1/sessions/{session}/messages":                              {"post"},
-		"/v1/sessions/{session}/messages/{message}":                    {"get"},
-		"/v1/sessions/{session}/messages/{message}/interrupt":          {"put"},
-		"/v1/sessions/{session}/retries":                               {"post"},
-		"/v1/sessions/{session}/cleanup":                               {"put"},
-		"/v1/sandboxes/{sandbox}/status":                               {"get"},
-		"/v1/sandboxes/{sandbox}/exec":                                 {"post"},
-		"/v1/sandboxes/{sandbox}/files":                                {"get", "put"},
+		"/v1":                                  {"get"},
+		"/v1/openapi.json":                     {"get"},
+		"/v1/auth/enrollments/redeem":          {"post"},
+		"/v1/me":                               {"get"},
+		"/v1/profiles":                         {"get"},
+		"/v1/sessions":                         {"get", "post"},
+		"/v1/sessions/{session}":               {"get"},
+		"/v1/sessions/{session}/events":        {"post"},
+		"/v1/sessions/{session}/events/stream": {"get"},
+		"/v1/sessions/{session}/turns":         {"get"},
+		"/v1/sessions/{session}/turns/{turn}":  {"get"},
+		"/v1/sessions/{session}/history":       {"get"},
+		"/v1/sessions/{session}/watch":         {"get"},
+		"/v1/sessions/{session}/retries":       {"post"},
+		"/v1/sessions/{session}/cleanup":       {"put"},
+		"/v1/sandboxes/{sandbox}/status":       {"get"},
+		"/v1/sandboxes/{sandbox}/exec":         {"post"},
+		"/v1/sandboxes/{sandbox}/files":        {"get", "put"},
 	}
 	paths := objectAt(t, document, "paths")
 	if len(paths) != len(wantOperations) {
@@ -105,7 +103,6 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 	wantHoldReasons := []any{"workspace_upgrade", "checkpoint_recovery"}
 	for _, path := range [][]string{
 		{"components", "schemas", "SandboxDeliveryHold", "properties", "reason"},
-		{"components", "schemas", "Message", "properties", "wait_reason"},
 	} {
 		reasons := arrayAt(t, objectAt(t, document, path...), "enum")
 		if !reflect.DeepEqual(reasons, wantHoldReasons) {

@@ -43,13 +43,13 @@ func newLivePersistenceGatewayRecovery(t *testing.T, recovery checkpointRecovery
 	return &livePersistenceGatewayRecovery{checkpointRecovery: recovery, fixture: fixture, gateway: controlled}
 }
 
-func (d *livePersistenceGatewayRecovery) VerifyAndRenew(ctx context.Context, session core.Session, destination core.Sandbox, checkpoint persistence.Checkpoint, pkg persistence.EffectivePackage, runs []core.AgentRun) error {
+func (d *livePersistenceGatewayRecovery) VerifyAndRenew(ctx context.Context, session core.Session, destination core.Sandbox, checkpoint persistence.Checkpoint, pkg persistence.EffectivePackage) error {
 	d.verifyAttempts++
 	owner := livePersistenceOwner(destination)
 	if err := d.assertReplacementState(ctx, owner); err != nil {
 		return err
 	}
-	if err := d.checkpointRecovery.VerifyAndRenew(ctx, session, destination, checkpoint, pkg, runs); err != nil {
+	if err := d.checkpointRecovery.VerifyAndRenew(ctx, session, destination, checkpoint, pkg); err != nil {
 		return err
 	}
 	digest, err := routeKeyDigest(ctx, d.capture.sandbox, owner)
@@ -66,7 +66,7 @@ func (d *livePersistenceGatewayRecovery) VerifyAndRenew(ctx context.Context, ses
 	if d.verifyAttempts != 2 || digest == d.firstKeyDigest {
 		return fmt.Errorf("verification replay did not rotate fresh route authority")
 	}
-	if err := d.capture.agent.Quiesce(ctx, owner, runs); err != nil {
+	if err := d.capture.agent.Quiesce(ctx, owner, session.ThreadID); err != nil {
 		return err
 	}
 	if err := d.gateway.revoke(ctx, destination); err != nil {

@@ -18,6 +18,7 @@ import (
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
 	"github.com/aphronio/dorf/internal/controlclient"
+	"github.com/aphronio/dorf/internal/core"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
@@ -38,7 +39,7 @@ func TestMessageCLIForwardsImageAndFileToAnotherSession(t *testing.T) {
 		t.Fatalf("initial message attachment count=%d", len(parentInput.Attachments))
 	}
 	workspace := t.TempDir()
-	forwardArgs := []string{"--key", "forward-to-worker", "--intent", "steer", "--refresh-skills", "--output", "json"}
+	forwardArgs := []string{"--client-id", "forward-to-worker", "--refresh-skills"}
 	for ordinal, received := range parentInput.Attachments {
 		original, err := os.ReadFile(files[ordinal])
 		if err != nil || received.Filename != filepath.Base(files[ordinal]) || !bytes.Equal(original, received.Contents) {
@@ -51,14 +52,14 @@ func TestMessageCLIForwardsImageAndFileToAnotherSession(t *testing.T) {
 		forwardArgs = append(forwardArgs, "--attach", localPath)
 	}
 	forwardArgs = append(forwardArgs, "worker-session")
-	if err := remoteMessageSend(context.Background(), cfg, client, forwardArgs, io.Discard, io.Discard); err != nil {
+	if err := remoteEventSend(context.Background(), client, forwardArgs, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if len(sessions.messages) != 2 {
 		t.Fatalf("forward message count=%d", len(sessions.messages))
 	}
 	forwarded := sessions.messages[1]
-	if forwarded.sessionID != "worker-session" || forwarded.key != "forward-to-worker" || forwarded.input.Intent != "steer" || !forwarded.input.RefreshSkills ||
+	if forwarded.sessionID != "worker-session" || forwarded.key != "forward-to-worker" || forwarded.input.Type != core.InputMessage || !forwarded.input.RefreshSkills ||
 		!reflect.DeepEqual(forwarded.input.Attachments, parentInput.Attachments) {
 		t.Fatalf("forwarding changed the destination, intent, or ordered file bytes: %+v", forwarded)
 	}
@@ -100,7 +101,7 @@ func TestAttachmentCLIRejectsInvalidLocalInputBeforeRemoteEffects(t *testing.T) 
 			if err := remoteRun(context.Background(), client, clientconfig.Config{}, args, io.Discard, io.Discard); err == nil {
 				t.Fatal("run accepted invalid local input")
 			}
-			if err := remoteMessageSend(context.Background(), clientconfig.Config{}, client, append(append([]string{}, args...), "worker"), io.Discard, io.Discard); err == nil {
+			if err := remoteEventSend(context.Background(), client, append(append([]string{}, args...), "worker"), io.Discard, io.Discard); err == nil {
 				t.Fatal("session message accepted invalid local input")
 			}
 		})
@@ -143,7 +144,7 @@ func attachmentCLIClient(t *testing.T, sessions *attachmentCLISessions) *control
 
 type capturedAttachmentMessage struct {
 	sessionID, key string
-	input          controlapi.SendMessageRequest
+	input          core.NativeEvent
 }
 
 type attachmentCLISessions struct {
@@ -154,7 +155,13 @@ type attachmentCLISessions struct {
 func (*attachmentCLISessions) Create(context.Context, string, string, controlapi.CreateSessionRequest) (controlapi.Session, bool, error) {
 	return controlapi.Session{ID: "direct-session"}, true, nil
 }
-func (j *attachmentCLISessions) SendMessage(_ context.Context, sessionID, key string, input controlapi.SendMessageRequest) (controlapi.Message, bool, error) {
-	j.messages = append(j.messages, capturedAttachmentMessage{sessionID: sessionID, key: key, input: input})
-	return controlapi.Message{ID: "message", SessionID: sessionID, Intent: input.Intent}, true, nil
+func (j *attachmentCLISessions) SubmitEvent(_ context.Context, sessionID string, input core.NativeEvent) (core.NativeAcknowledgement, error) {
+	j.messages = append(j.messages, capturedAttachmentMessage{sessionID: sessionID, key: input.ClientID, input: input})
+	return core.NativeAcknowledgement{Type: "input.accepted", Harness: "codex", ThreadID: "thread", TurnID: "turn"}, nil
+}
+func (j *attachmentCLISessions) Get(context.Context, string) (controlapi.Session, error) {
+	return controlapi.Session{ID: "direct-session", Admission: controlapi.Admission{Open: true}, Execution: controlapi.State{State: "idle"}}, nil
+}
+func (j *attachmentCLISessions) ReadNativeTurns(context.Context, string) (core.HarnessHistory, error) {
+	return core.HarnessHistory{}, nil
 }

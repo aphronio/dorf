@@ -42,8 +42,8 @@ func (d NativeDriver) InspectPackage(ctx context.Context, s core.Sandbox, r Requ
 	}
 	return version, nil
 }
-func (d NativeDriver) Quiesce(ctx context.Context, s core.Sandbox, runs []core.AgentRun) error {
-	return d.Agent.Quiesce(ctx, upgradeOwner(s), runs)
+func (d NativeDriver) Quiesce(ctx context.Context, s core.Sandbox, threadID string) error {
+	return d.Agent.Quiesce(ctx, upgradeOwner(s), threadID)
 }
 func (d NativeDriver) Capture(ctx context.Context, s core.Sandbox, key string) (provider.Checkpoint, error) {
 	return d.Checkpointer.CaptureCheckpoint(ctx, upgradeOwner(s), key)
@@ -79,7 +79,7 @@ func (d NativeDriver) Restore(ctx context.Context, source, destination core.Sand
 	}
 	return id, d.ready(ctx, destination)
 }
-func (d NativeDriver) Verify(ctx context.Context, s core.Sandbox, version string, runs []core.AgentRun) error {
+func (d NativeDriver) Verify(ctx context.Context, s core.Sandbox, version string, threadID string) error {
 	result, err := d.Sandbox.Exec(ctx, upgradeOwner(s), nil, "codex", "--version")
 	if err != nil {
 		return err
@@ -87,7 +87,7 @@ func (d NativeDriver) Verify(ctx context.Context, s core.Sandbox, version string
 	if result.ExitCode != 0 || strings.TrimSpace(result.Stdout) != "codex-cli "+version {
 		return fmt.Errorf("restored runner version does not match")
 	}
-	return d.Agent.VerifyUpgrade(ctx, upgradeOwner(s), runs)
+	return d.Agent.VerifyUpgrade(ctx, upgradeOwner(s), threadID)
 }
 func (d NativeDriver) DeleteResource(ctx context.Context, s core.Sandbox) error {
 	return d.Sandbox.DeleteOwned(ctx, upgradeOwner(s))

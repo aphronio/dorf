@@ -9,7 +9,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/core"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
@@ -24,8 +23,8 @@ func (f *attachmentFlags) Set(value string) error {
 	if strings.TrimSpace(value) == "" {
 		return fmt.Errorf("--attach requires a local file path")
 	}
-	if len(*f) == core.MaxMessageAttachments {
-		return fmt.Errorf("--attach accepts at most %d files", core.MaxMessageAttachments)
+	if len(*f) == core.MaxAttachments {
+		return fmt.Errorf("--attach accepts at most %d files", core.MaxAttachments)
 	}
 	*f = append(*f, value)
 	return nil
@@ -38,7 +37,7 @@ func readMessageText(filename, command string, hasAttachments bool) (string, err
 		}
 		return "", fmt.Errorf("%s requires a file with complete Message", command)
 	}
-	contents, err := readBoundedLocalFile(filename, core.MaxMessageInputBytes, "Message")
+	contents, err := readBoundedLocalFile(filename, core.MaxInputBytes, "Message")
 	if err != nil {
 		return "", err
 	}
@@ -51,30 +50,30 @@ func readMessageText(filename, command string, hasAttachments bool) (string, err
 	return string(contents), nil
 }
 
-func readMessageInput(filename, command string, paths []string) (controlapi.SendMessageRequest, error) {
+func readEventInput(filename, command string, paths []string) (core.NativeEvent, error) {
 	attachments, err := readMessageAttachments(paths)
 	if err != nil {
-		return controlapi.SendMessageRequest{}, err
+		return core.NativeEvent{}, err
 	}
 	text, err := readMessageText(filename, command, len(attachments) != 0)
 	if err != nil {
-		return controlapi.SendMessageRequest{}, err
+		return core.NativeEvent{}, err
 	}
-	return controlapi.SendMessageRequest{Text: text, Attachments: attachments}, nil
+	return core.NativeEvent{Type: core.InputMessage, Text: text, Attachments: attachments}, nil
 }
 
-func readMessageAttachments(paths []string) ([]controlapi.SendMessageAttachment, error) {
-	attachments := make([]controlapi.SendMessageAttachment, 0, len(paths))
+func readMessageAttachments(paths []string) ([]core.NativeAttachment, error) {
+	attachments := make([]core.NativeAttachment, 0, len(paths))
 	for _, localPath := range paths {
 		contents, err := readBoundedLocalFile(localPath, provider.MaxFileWriteBytes, "attachment")
 		if err != nil {
 			return nil, err
 		}
-		filename, err := messageAttachmentFilename(filepath.Base(localPath))
+		filename, err := inputAttachmentFilename(filepath.Base(localPath))
 		if err != nil {
 			return nil, fmt.Errorf("attachment %q has an invalid filename", localPath)
 		}
-		attachments = append(attachments, controlapi.SendMessageAttachment{Filename: filename, Contents: contents})
+		attachments = append(attachments, core.NativeAttachment{Filename: filename, Contents: contents})
 	}
 	return attachments, nil
 }

@@ -27,14 +27,6 @@ sql:
             go_type:
               import: "github.com/aphronio/dorf/internal/core"
               type: "CleanupState"
-          - column: "dorf.session_messages.from_kind"
-            go_type:
-              import: "github.com/aphronio/dorf/internal/core"
-              type: "MessageFromKind"
-          - column: "dorf.session_messages.delivery_intent"
-            go_type:
-              import: "github.com/aphronio/dorf/internal/core"
-              type: "MessageDeliveryIntent"
           - column: "dorf.actions.kind"
             go_type:
               import: "github.com/aphronio/dorf/internal/core"
@@ -43,7 +35,3 @@ sql:
             go_type:
               import: "github.com/aphronio/dorf/internal/core"
               type: "ActionState"
-          - column: "dorf.agent_runs.state"
-            go_type:
-              import: "github.com/aphronio/dorf/internal/core"
-              type: "AgentRunState"

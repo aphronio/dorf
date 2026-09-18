@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/aphronio/dorf/internal/core"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
 const replyFeedMaxTurns = 128
@@ -17,9 +18,20 @@ type ReplyBinding struct {
 }
 
 type ReplySnapshot struct {
+	Status   string
 	Items    []core.HarnessConversationItem
 	Complete bool
 	Gap      bool
+}
+
+func (f *ReplyFeed) Status(binding ReplyBinding, status string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	entry := f.entry(binding)
+	if entry.snapshot.Status != status {
+		entry.snapshot.Status = status
+		notifyReply(entry)
+	}
 }
 
 type replyEntry struct {
@@ -133,7 +145,7 @@ func (f *ReplyFeed) Seed(binding ReplyBinding, items []core.HarnessConversationI
 		notifyReply(entry)
 		return
 	}
-	entry.snapshot = ReplySnapshot{Items: append([]core.HarnessConversationItem{}, items...), Complete: complete}
+	entry.snapshot = ReplySnapshot{Status: entry.snapshot.Status, Items: append([]core.HarnessConversationItem{}, items...), Complete: complete}
 	entry.bytes = len(raw)
 	f.trim(binding)
 	notifyReply(entry)
@@ -289,5 +301,21 @@ func (p *protocol) seedReadTurn(threadID string, turn map[string]any) {
 	if err != nil {
 		return
 	}
-	p.observations.Replies.Seed(ReplyBinding{SessionID: p.owner.SessionID, SandboxID: p.owner.SandboxID, OwnershipNonce: p.owner.OwnershipNonce, Harness: Harness, ThreadID: threadID, TurnID: full.ID}, items, true)
+	binding := ReplyBinding{SessionID: p.owner.SessionID, SandboxID: p.owner.SandboxID, OwnershipNonce: p.owner.OwnershipNonce, Harness: Harness, ThreadID: threadID, TurnID: full.ID}
+	p.observations.Replies.Seed(binding, items, true)
+	p.observations.Replies.Status(binding, full.Status)
+}
+
+func (f *ReplyFeed) Latest(owner provider.Ownership, threadID string) (ReplySnapshot, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := len(f.order) - 1; i >= 0; i-- {
+		key := f.order[i]
+		if key.SessionID == owner.SessionID && key.SandboxID == owner.SandboxID && key.OwnershipNonce == owner.OwnershipNonce && key.ThreadID == threadID {
+			snapshot := f.entries[key].snapshot
+			snapshot.Items = nil
+			return snapshot, true
+		}
+	}
+	return ReplySnapshot{}, false
 }

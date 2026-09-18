@@ -13,7 +13,7 @@ Dorf's direction is to carry a supported agent setup into compatible isolated in
 without rebuilding it in a new agent framework. Dorf provides a stable API and manages Session
 configuration, compute, access, supported recovery, and requested cleanup. The native harness owns
 the conversation and execution. The [North Star](docs/project/north-star.md) describes this accepted
-direction; the current Message API is being simplified in the [Session slices](docs/implementation/session-product-proposals.md).
+direction; implementation is tracked in the [Session slices](docs/implementation/session-product-proposals.md).
 
 ```text
 Deployment-host CLI      Remote clients
@@ -29,7 +29,7 @@ Deployment-host CLI      Remote clients
 
 Dorf is a stateful, self-hosted control plane, not an agent framework or an embeddable runtime SDK.
 An enrolled CLI admits a direct Session and operates its interaction
-loop—Messages, observation, eligible recovery, exact Sandbox files,
+loop—native events, observation, eligible recovery, exact Sandbox files,
 cleanup, and bounded Session listing—through one configured Dorf deployment. The deployment-host CLI
 uses fixed authenticated loopback HTTP; remote clients use operator-owned HTTPS ingress. Each
 deployment publishes its OpenAPI and typed Problem catalog. Static release manifests define

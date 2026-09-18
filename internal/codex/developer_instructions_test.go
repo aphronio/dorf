@@ -11,7 +11,7 @@ import (
 
 func TestDeveloperSnapshotOnlyInjectsBeforeFreshSubmission(t *testing.T) {
 	value, empty := "Application generation A", ""
-	for _, route := range []string{"initial", "follow", "steer"} {
+	for _, route := range []string{"initial", "follow"} {
 		for _, snapshot := range []*string{nil, &value, &empty} {
 			t.Run(route, func(t *testing.T) {
 				var injected atomic.Int32
@@ -54,11 +54,9 @@ func TestDeveloperSnapshotOnlyInjectsBeforeFreshSubmission(t *testing.T) {
 				var err error
 				switch route {
 				case "initial":
-					_, _, err = p.reconcileInitialTurn(context.Background(), "/workspace/job", "run", input, "model", "high", "danger-full-access")
+					_, _, err = p.initialFixture(context.Background(), "/workspace/job", "run", input, "model", "high", "danger-full-access")
 				case "follow":
-					_, err = p.resumeAndStartTurn(context.Background(), "thread", "/workspace/job", "run", input, "model", "high", "danger-full-access")
-				case "steer":
-					_, err = p.steerTurn(context.Background(), "thread", "active", "run", input)
+					_, err = p.resumeFixture(context.Background(), "thread", "/workspace/job", "run", input, "model", "high", "danger-full-access")
 				}
 				if err != nil {
 					t.Fatal(err)

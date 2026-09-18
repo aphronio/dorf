@@ -4,10 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
-
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
+	"time"
 )
 
 type ExecutionStore interface {
@@ -16,81 +15,32 @@ type ExecutionStore interface {
 	Session(context.Context, string) (Session, error)
 	SessionTasks(context.Context, string) ([]SessionTask, error)
 	Sandboxes(context.Context, string) ([]Sandbox, error)
-	Deliveries(context.Context, string) ([]Delivery, error)
-	AgentMessage(context.Context, string) (*AgentMessageWork, error)
-	AgentMessageExecution(context.Context, string) (AgentMessageExecution, error)
-	InterruptAgentRun(context.Context, string, string) error
+	NativeState(context.Context, string) (NativeState, error)
+	FinishNativeMutation(context.Context, string, int64) error
 	WithSessionFence(context.Context, string, func() error) error
 	AuthorizeSandboxAction(context.Context, string, string, string) (SandboxActionAuthorization, error)
 	RecordSandboxActionSuccess(context.Context, string) error
 	BindSandboxResource(context.Context, Sandbox, string) error
 	SetExecutionAttention(context.Context, string, string, string) error
 	ClearExecutionAttention(context.Context, string, string) error
-	PrepareAgentRun(context.Context, string, string, string) error
-	BindAgentRun(context.Context, string, string, string, string, string) error
-	BindSteer(context.Context, string, string, string) error
-	RequeueAutoMessageAsFollow(context.Context, string, string, string) error
-	FailAgentRun(context.Context, string, string) error
-	UncertainAgentRun(context.Context, string, string) error
-	AgentRunAttention(context.Context, string, string) error
-	UnsettledAgentMessages(context.Context, string) ([]AgentMessageWork, error)
 	GetOrCreateSandboxAction(context.Context, string, ActionKind) (Action, error)
 	CompleteCleanup(context.Context, string, string) error
 	SetCleanupAttention(context.Context, string, string) error
 }
-
-type SteerExternals interface {
-	SteerHistory(context.Context, Session, string, string) (HarnessHistory, error)
-	AgentSteer(context.Context, Session, Delivery) (string, error)
-}
-
 type Externals interface {
-	SteerExternals
 	SandboxCreate(context.Context, Session, Sandbox) (string, error)
 	RouteCreate(context.Context, Session, Sandbox, Route) error
 	RouteRevoke(context.Context, Session, Sandbox, Route) error
 	SandboxDelete(context.Context, Session, Sandbox) error
 }
-
-// ScopedSteerExternals optionally retains adapter resources only while Core
-// executes one Steer's existing history, durable baseline, mutation, and
-// recovery sequence.
-type ScopedSteerExternals interface {
-	WithSteerScope(context.Context, Session, Delivery, func(context.Context, SteerExternals) error) error
-}
-
 type FaultBarrier interface {
-	Reach(context.Context, string, Delivery) error
 	ReachOperation(context.Context, string, string, string) error
 }
 
-// AgentRunOperation is the internal adapter operation for one authoritative
-// Message execution. Core alone owns lifecycle mode and recovery ordering; the
-// operation translates the already-bound run to its selected Harness.
-type AgentRunOperation interface {
-	Harness() string
-	Submit(context.Context, AgentRun, string) (HarnessBinding, error)
-	Recover(context.Context, AgentRun) (HarnessBinding, error)
-	History(context.Context, AgentRun) (HarnessHistory, error)
-}
-
-// ScopedAgentRunOperation optionally retains adapter resources for one contract
-// execution inside the existing Session fence and Sandbox activity boundary.
-type ScopedAgentRunOperation interface {
-	WithScope(context.Context, AgentRun, func(context.Context, AgentRunOperation) error) error
-}
-
-type AgentExecutionResolver interface {
-	ResolveAgentRunOperation(context.Context, AgentMessageExecution) (AgentRunOperation, error)
-}
-
 const (
-	BarrierBeforeSubmit          = "before-submit"
-	BarrierAfterSubmitBeforeBind = "after-submit-before-bind"
-	BarrierHarnessActive         = "harness-active"
-	BarrierSandboxCreated        = "sandbox-created-before-record"
-	BarrierRouteRevoked          = "route-revoked-before-record"
-	BarrierSandboxDeleted        = "sandbox-deleted-before-record"
+	BarrierSandboxCreated = "sandbox-created-before-record"
+	BarrierRouteRevoked   = "route-revoked-before-record"
+	BarrierSandboxDeleted = "sandbox-deleted-before-record"
 )
 
 type ExecutionService struct {
@@ -98,16 +48,6 @@ type ExecutionService struct {
 	externals  Externals
 	barrier    FaultBarrier
 	claimCheck func(context.Context) error
-	agents     AgentExecutionResolver
-}
-
-type immediatelyEligibleAgentMessageStore interface {
-	HasImmediatelyEligibleAgentMessage(context.Context, string) (bool, error)
-}
-
-func (s ExecutionService) WithAgentExecution(agents AgentExecutionResolver) ExecutionService {
-	s.agents = agents
-	return s
 }
 
 func NewExecutionService(store ExecutionStore, externals Externals, barrier FaultBarrier, claimCheck func(context.Context) error) ExecutionService {
@@ -126,45 +66,6 @@ func (s ExecutionService) requireClaim(ctx context.Context) error {
 	return s.claimCheck(ctx)
 }
 
-func (s ExecutionService) recordAgentRun(ctx context.Context, record func() error) error {
-	return claimBeforeAgentRunRecord(ctx, s.requireClaim, record)
-}
-
-func claimBeforeAgentRunRecord(ctx context.Context, claimCheck func(context.Context) error, record func() error) error {
-	if err := claimCheck(ctx); err != nil {
-		return err
-	}
-	return record()
-}
-
-func (s ExecutionService) agentRunAttention(ctx context.Context, runID, detail string) error {
-	return s.recordAgentRun(ctx, func() error { return s.store.AgentRunAttention(ctx, runID, detail) })
-}
-
-func (s ExecutionService) prepareAgentRun(ctx context.Context, runID, harness, baseline string) error {
-	return s.recordAgentRun(ctx, func() error { return s.store.PrepareAgentRun(ctx, runID, harness, baseline) })
-}
-
-func (s ExecutionService) bindAgentRun(ctx context.Context, runID, harness, threadID, turnID, outcome string) error {
-	return s.recordAgentRun(ctx, func() error { return s.store.BindAgentRun(ctx, runID, harness, threadID, turnID, outcome) })
-}
-
-func (s ExecutionService) bindSteer(ctx context.Context, runID, turnID, outcome string) error {
-	return s.recordAgentRun(ctx, func() error { return s.store.BindSteer(ctx, runID, turnID, outcome) })
-}
-
-func (s ExecutionService) requeueAutoMessageAsFollow(ctx context.Context, runID, targetTurnID, acceptedTurnID string) error {
-	return s.recordAgentRun(ctx, func() error { return s.store.RequeueAutoMessageAsFollow(ctx, runID, targetTurnID, acceptedTurnID) })
-}
-
-func (s ExecutionService) failAgentRun(ctx context.Context, runID, reason string) error {
-	return s.recordAgentRun(ctx, func() error { return s.store.FailAgentRun(ctx, runID, reason) })
-}
-
-func (s ExecutionService) uncertainAgentRun(ctx context.Context, runID, reason string) error {
-	return s.recordAgentRun(ctx, func() error { return s.store.UncertainAgentRun(ctx, runID, reason) })
-}
-
 func attentionNeeded(err error) bool {
 	var attention interface{ AttentionNeeded() bool }
 	return errors.As(err, &attention) && attention.AttentionNeeded()
@@ -177,329 +78,6 @@ func (s ExecutionService) reachOperation(ctx context.Context, point, sessionID, 
 	return s.barrier.ReachOperation(ctx, point, sessionID, identity)
 }
 
-// ReconcileSessionAgent advances at most one Message after its consumer has made
-// the Session's Agent infrastructure ready. Core keeps generic Message ordering plus
-// Message, Sandbox, AgentRun, and Harness lifecycle identities inside the Session fence.
-func (s ExecutionService) ReconcileSessionAgent(ctx context.Context, sessionID string) (AgentReconciliationProgress, error) {
-	if sessionID == "" {
-		return AgentReconciliationIdle, fmt.Errorf("Agent reconciliation requires an exact Session identity")
-	}
-	progress := AgentReconciliationIdle
-	err := s.store.WithSessionFence(ctx, sessionID, func() error {
-		if err := s.requireClaim(ctx); err != nil {
-			return err
-		}
-		attachedSession, err := exactCurrentAttachedTask(ctx, s.store, sessionID, "")
-		if err != nil {
-			return err
-		}
-		if !attachedSession.AdmissionOpen || attachedSession.CleanupState != CleanupPending {
-			return fmt.Errorf("current task cannot reconcile an Agent Message outside an open Session")
-		}
-		if s.agents == nil {
-			return fmt.Errorf("Agent execution resolution is not configured")
-		}
-		selected, err := s.store.AgentMessage(ctx, attachedSession.ID)
-		if err != nil || selected == nil {
-			return err
-		}
-		progress = AgentReconciliationPending
-		messageID, sandboxID := selected.MessageID, selected.SandboxID
-		if messageID == "" || sandboxID == "" {
-			return fmt.Errorf("Agent Message selection returned an incomplete identity")
-		}
-		authoritative, err := s.store.AgentMessageExecution(ctx, messageID)
-		if err != nil {
-			return err
-		}
-		if authoritative.Session.ID != sessionID || authoritative.Message.ID != messageID ||
-			authoritative.Sandbox.ID != sandboxID || authoritative.AgentRun.SandboxID != sandboxID {
-			return fmt.Errorf("Message %s does not belong to the exact bound Session Sandbox", messageID)
-		}
-		if authoritative.Session.CurrentTaskID != attachedSession.CurrentTaskID || !authoritative.Session.AdmissionOpen || authoritative.Session.CleanupState != CleanupPending {
-			return fmt.Errorf("Message %s changed exact current open Session authority", messageID)
-		}
-		input := authoritative.Message.Input
-		if input == "" {
-			return fmt.Errorf("Message %s resolved empty agent input", messageID)
-		}
-		return WithSandboxActivity(ctx, s.store, sessionID, func() error {
-			delivery := Delivery{Message: authoritative.Message, AgentRun: authoritative.AgentRun}
-			run := authoritative.AgentRun
-			operation, err := s.agents.ResolveAgentRunOperation(ctx, authoritative)
-			if err != nil {
-				return err
-			}
-			if run.hasPendingInterrupt() {
-				return s.interruptAgentMessage(ctx, run, operation)
-			}
-			switch run.State {
-			case AgentRunCompleted, AgentRunActive:
-				_, err := s.executeAgentRun(ctx, delivery, operation, "")
-				return err
-			case AgentRunFailed, AgentRunInterrupted:
-				return nil
-			}
-			if err := s.deliver(ctx, authoritative.Session, delivery, operation, input); err != nil {
-				return err
-			}
-			settled, err := s.store.AgentMessageExecution(ctx, messageID)
-			if err != nil {
-				return err
-			}
-			if settled.AgentRun.State == AgentRunCompleted {
-				settledOperation, resolveErr := s.agents.ResolveAgentRunOperation(ctx, settled)
-				if resolveErr != nil {
-					return resolveErr
-				}
-				_, err := s.executeAgentRun(ctx, Delivery{Message: settled.Message, AgentRun: settled.AgentRun}, settledOperation, "")
-				return err
-			}
-			return nil
-		})
-	})
-	return s.classifyAgentReconciliation(ctx, sessionID, progress, err)
-}
-
-func (s ExecutionService) classifyAgentReconciliation(ctx context.Context, sessionID string, progress AgentReconciliationProgress, reconcileErr error) (AgentReconciliationProgress, error) {
-	if reconcileErr != nil || progress != AgentReconciliationPending {
-		return progress, reconcileErr
-	}
-	store, ok := s.store.(immediatelyEligibleAgentMessageStore)
-	if !ok {
-		return progress, nil
-	}
-	ready, err := store.HasImmediatelyEligibleAgentMessage(ctx, sessionID)
-	if err != nil || !ready {
-		return progress, err
-	}
-	return AgentReconciliationReady, nil
-}
-
-// ObserveSettledAgentMessage reads the exact Harness Turn after Core has
-// durably settled its Message. It never
-// prepares, submits, steers, binds, or otherwise mutates AgentRun lifecycle.
-func (s ExecutionService) ObserveSettledAgentMessage(ctx context.Context, sessionID, messageID string) (MessageResult, error) {
-	if sessionID == "" || messageID == "" {
-		return MessageResult{}, fmt.Errorf("settled Agent observation requires exact Session and Message identities")
-	}
-	authoritative, err := s.store.AgentMessageExecution(ctx, messageID)
-	if err != nil {
-		return MessageResult{}, err
-	}
-	if authoritative.Session.ID != sessionID || authoritative.Message.SessionID != sessionID || authoritative.AgentRun.SessionID != sessionID {
-		return MessageResult{}, fmt.Errorf("Message %s does not belong to Session %s", messageID, sessionID)
-	}
-	run := authoritative.AgentRun
-	if run.State == AgentRunFailed || run.State == AgentRunInterrupted {
-		return terminalMessageResult(messageID, HarnessTurn{ID: run.TurnID, Status: run.TurnOutcome}, run.State), nil
-	}
-	if run.State != AgentRunCompleted || run.Harness == "" || run.ThreadID == "" || run.TurnID == "" {
-		return MessageResult{}, fmt.Errorf("Message %s has no settled exact Harness Turn", messageID)
-	}
-	if s.agents == nil {
-		return MessageResult{}, fmt.Errorf("Agent execution resolution is not configured")
-	}
-	operation, err := s.agents.ResolveAgentRunOperation(ctx, authoritative)
-	if err != nil {
-		return MessageResult{}, err
-	}
-	if operation == nil {
-		return MessageResult{}, fmt.Errorf("Message %s has no resolved Agent Harness operation", messageID)
-	}
-	history, err := operation.History(ctx, run)
-	if err != nil {
-		return MessageResult{}, err
-	}
-	if history.Harness != run.Harness || history.ThreadID != run.ThreadID {
-		return MessageResult{}, fmt.Errorf("Message %s Harness history conflicts with its durable binding", messageID)
-	}
-	for _, turn := range history.Turns {
-		if turn.ID == run.TurnID {
-			return terminalMessageResult(messageID, turn, run.State), nil
-		}
-	}
-	return MessageResult{}, fmt.Errorf("Message %s settled Turn is missing from Harness history", messageID)
-}
-
-func terminalMessageResult(messageID string, turn HarnessTurn, fallback AgentRunState) MessageResult {
-	result := MessageResult{MessageID: messageID}
-	if turn.Terminal() {
-		result.Outcome, result.Output = turn.Status, turn.Output
-	} else if fallback == AgentRunFailed || fallback == AgentRunInterrupted {
-		result.Outcome = string(fallback)
-	}
-	return result
-}
-
-func (s ExecutionService) executeAgentRun(ctx context.Context, delivery Delivery, operation AgentRunOperation, input string) (HarnessTurn, error) {
-	contract := agentRunContract{
-		store: s.store, reachBarrier: s.reach, delivery: delivery, run: delivery.AgentRun,
-		operation: operation, input: input, label: "harness",
-		beforeRecord: s.requireClaim,
-		onReadError: func(ctx context.Context, runID string, err error) {
-			_ = s.agentRunAttention(ctx, runID, "Harness history is unavailable: "+err.Error())
-		},
-		onRecoverError: func(ctx context.Context, run AgentRun, err error) error {
-			if persistErr := s.agentRunAttention(ctx, run.ID, "Harness recovery is unavailable: "+err.Error()); persistErr != nil {
-				return persistErr
-			}
-			return err
-		},
-		onSubmitError: func(ctx context.Context, run AgentRun, _ HarnessBinding, err error) (HarnessTurn, error) {
-			var definite interface{ DefiniteNoSubmit() bool }
-			if errors.As(err, &definite) && definite.DefiniteNoSubmit() {
-				if persistErr := s.failAgentRun(ctx, run.ID, err.Error()); persistErr != nil {
-					return HarnessTurn{}, persistErr
-				}
-				return HarnessTurn{Status: "failed"}, nil
-			}
-			if persistErr := s.uncertainAgentRun(ctx, run.ID, err.Error()); persistErr != nil {
-				return HarnessTurn{}, persistErr
-			}
-			return HarnessTurn{}, err
-		},
-	}
-	if scoped, ok := operation.(ScopedAgentRunOperation); ok {
-		var turn HarnessTurn
-		err := scoped.WithScope(ctx, delivery.AgentRun, func(ctx context.Context, bound AgentRunOperation) error {
-			contract.operation = bound
-			var err error
-			turn, err = contract.execute(ctx)
-			return err
-		})
-		return turn, err
-	}
-	return contract.execute(ctx)
-}
-
-func (s ExecutionService) deliver(ctx context.Context, session Session, delivery Delivery, operation AgentRunOperation, input string) error {
-	if delivery.Message.Intent == MessageSteer && (delivery.AgentRun.TurnID == "" || delivery.AgentRun.TurnID == delivery.Message.TargetTurnID) {
-		if scoped, ok := s.externals.(ScopedSteerExternals); ok {
-			return scoped.WithSteerScope(ctx, session, delivery, func(ctx context.Context, bound SteerExternals) error {
-				return s.deliverSteer(ctx, session, delivery, bound)
-			})
-		}
-		return s.deliverSteer(ctx, session, delivery, s.externals)
-	}
-	_, err := s.executeAgentRun(ctx, delivery, operation, input)
-	return err
-}
-
-func (s ExecutionService) deliverSteer(ctx context.Context, session Session, delivery Delivery, externals SteerExternals) error {
-	run := delivery.AgentRun
-	history, err := externals.SteerHistory(ctx, session, run.SandboxID, run.ThreadID)
-	if err != nil {
-		_ = s.agentRunAttention(ctx, run.ID, "harness thread history is currently unavailable: "+err.Error())
-		return err
-	}
-	turns := history.Turns
-	reconciliation := ReconcileSteer(run.ID, delivery.Message.TargetTurnID, turns)
-	if reconciliation.Classification == "completed" {
-		return s.bindSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciliation.Turn.Status)
-	}
-	if reconciliation.Classification == "target-terminal" {
-		return s.settleTerminalSteerTarget(ctx, delivery, turns)
-	}
-	if reconciliation.Classification == "uncertain" {
-		return s.uncertainAgentRun(ctx, run.ID, reconciliation.Reason)
-	}
-	if !run.BaselineRecorded {
-		if err := s.prepareAgentRun(ctx, run.ID, run.Harness, delivery.Message.TargetTurnID); err != nil {
-			return err
-		}
-		delivery.AgentRun.BaselineRecorded = true
-		delivery.AgentRun.BaselineTurnID = delivery.Message.TargetTurnID
-	}
-	if err := s.reach(ctx, BarrierBeforeSubmit, delivery); err != nil {
-		return err
-	}
-	acceptedTurnID, err := externals.AgentSteer(ctx, session, delivery)
-	if err != nil {
-		observedHistory, inspectErr := externals.SteerHistory(ctx, session, run.SandboxID, run.ThreadID)
-		if inspectErr != nil {
-			reason := "harness steer acknowledgement is genuinely uncertain: " + err.Error() + "; history inspection failed: " + inspectErr.Error()
-			return s.uncertainAgentRun(ctx, run.ID, reason)
-		}
-		observed := observedHistory.Turns
-		reconciled := ReconcileSteer(run.ID, delivery.Message.TargetTurnID, observed)
-		if reconciled.Classification == "completed" {
-			return s.bindSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciled.Turn.Status)
-		}
-		if reconciled.Classification == "target-terminal" {
-			return s.settleTerminalSteerTarget(ctx, delivery, observed)
-		}
-		if reconciled.Classification == "uncertain" {
-			return s.uncertainAgentRun(ctx, run.ID, reconciled.Reason)
-		}
-		return err
-	}
-	if acceptedTurnID != delivery.Message.TargetTurnID {
-		return s.uncertainAgentRun(ctx, run.ID, "harness steer acknowledgement named a different active turn")
-	}
-	if err := s.reach(ctx, BarrierAfterSubmitBeforeBind, delivery); err != nil {
-		return err
-	}
-	return s.bindSteer(ctx, run.ID, acceptedTurnID, reconciliation.Turn.Status)
-}
-
-func (s ExecutionService) settleTerminalSteerTarget(ctx context.Context, delivery Delivery, turns []HarnessTurn) error {
-	if delivery.Message.RequestedIntent == MessageAuto {
-		accepted, err := automaticObservationTurn(delivery, turns)
-		if err != nil {
-			return s.uncertainAgentRun(ctx, delivery.AgentRun.ID, err.Error())
-		}
-		return s.requeueAutoMessageAsFollow(ctx, delivery.AgentRun.ID, delivery.Message.TargetTurnID, accepted)
-	}
-	return s.failAgentRun(ctx, delivery.AgentRun.ID, "steer target became terminal before the exact Message was accepted")
-}
-
-// Standalone tool output uses a native start-or-steer operation. If the target
-// finished in flight, recover its exact accepted delivery in a later turn.
-func automaticObservationTurn(delivery Delivery, turns []HarnessTurn) (string, error) {
-	if !delivery.Message.Observation {
-		return "", nil
-	}
-	accepted := ""
-	afterTarget := false
-	for _, turn := range turns {
-		if turn.ID == delivery.Message.TargetTurnID {
-			afterTarget = true
-			continue
-		}
-		for _, id := range turn.AcceptedMessageIDs {
-			if id != delivery.AgentRun.ID {
-				continue
-			}
-			if !afterTarget || accepted != "" {
-				return "", fmt.Errorf("automatic observation has conflicting native attribution")
-			}
-			accepted = turn.ID
-		}
-	}
-	return accepted, nil
-}
-
-func (s ExecutionService) reach(ctx context.Context, point string, delivery Delivery) error {
-	if s.barrier == nil {
-		return nil
-	}
-	return s.barrier.Reach(ctx, point, delivery)
-}
-
-func terminalHarness(status string) bool {
-	return status == "completed" || status == "failed" || status == "interrupted"
-}
-
-func activeHarness(status string) bool {
-	// "inProgress" is the app-server thread/read spelling. "running" is
-	// Dorf's local status immediately after turn/start acceptance.
-	return status == "running" || status == "inProgress"
-}
-
-// PrepareCleanup reconciles harness ownership and returns the exact Sandboxes
-// whose cleanup Actions Core/Application executes under their own stable
-// Action Steps.
 func (s ExecutionService) PrepareCleanup(ctx context.Context, sessionID string) (Session, []Sandbox, error) {
 	var session Session
 	var sandboxes []Sandbox
@@ -512,46 +90,11 @@ func (s ExecutionService) PrepareCleanup(ctx context.Context, sessionID string) 
 		if err != nil {
 			return err
 		}
-		if session.AdmissionOpen {
-			return fmt.Errorf("cleanup recovery requires closed admission and a stopped ordinary run")
-		}
-		if session.CleanupState == CleanupComplete {
-			return nil
-		}
-		if session.CleanupState != CleanupScheduled {
-			return fmt.Errorf("cleanup recovery requires a durably scheduled cleanup task")
-		}
-		if err := s.cleanupStep(ctx, session.ID, "reconciling every unsettled harness mutation", func() error {
-			return s.reconcileHarnessMutations(ctx, session)
-		}); err != nil {
-			return err
-		}
-		deliveries, err := s.store.Deliveries(ctx, session.ID)
-		if err != nil {
-			return err
-		}
-		for _, delivery := range deliveries {
-			run := delivery.AgentRun
-			settled := run.State == AgentRunCompleted || run.State == AgentRunFailed || run.State == AgentRunInterrupted
-			if settled {
-				continue
-			}
-			if run.State != AgentRunPending || run.BaselineRecorded {
-				return cleanupBlocked(delivery, "a possibly accepted harness mutation remains")
-			}
-			if err := s.requireClaim(ctx); err != nil {
-				return err
-			}
-			if err := s.store.InterruptAgentRun(ctx, run.ID, "admission closed before any harness mutation; Session resources are being reclaimed"); err != nil {
-				return err
-			}
-		}
-		sandboxes, err = s.store.Sandboxes(ctx, session.ID)
+		sandboxes, err = s.store.Sandboxes(ctx, sessionID)
 		return err
 	})
 	return session, sandboxes, err
 }
-
 func (s ExecutionService) requireCleanupTask(ctx context.Context, sessionID string) error {
 	if err := s.requireClaim(ctx); err != nil {
 		return err
@@ -564,174 +107,6 @@ func (s ExecutionService) requireCleanupTask(ctx context.Context, sessionID stri
 		return fmt.Errorf("cleanup task cannot act before cleanup is requested for Session %s", sessionID)
 	}
 	return nil
-}
-
-func (s ExecutionService) cleanupStep(ctx context.Context, sessionID, detail string, fn func() error) error {
-	if err := s.store.SetCleanupAttention(ctx, sessionID, detail); err != nil {
-		return err
-	}
-	if err := fn(); err != nil {
-		var active cleanupStillActive
-		if errors.As(err, &active) {
-			return err
-		}
-		_ = s.store.SetCleanupAttention(ctx, sessionID, detail+": "+err.Error())
-		return err
-	}
-	return nil
-}
-
-func (s ExecutionService) reconcileHarnessMutations(ctx context.Context, session Session) error {
-	messages, err := s.store.UnsettledAgentMessages(ctx, session.ID)
-	if err != nil {
-		return err
-	}
-	var settlementErrors []error
-	for _, message := range messages {
-		execution, err := s.store.AgentMessageExecution(ctx, message.MessageID)
-		if err == nil && (execution.Session.ID != session.ID || execution.Sandbox.ID != message.SandboxID) {
-			err = fmt.Errorf("unsettled Message %s no longer matches its authoritative Session and Sandbox", message.MessageID)
-		}
-		if err == nil {
-			err = s.reconcileCleanupMessage(ctx, execution)
-		}
-		if err != nil {
-			settlementErrors = append(settlementErrors, err)
-		}
-	}
-	return errors.Join(settlementErrors...)
-}
-
-func (s ExecutionService) reconcileCleanupMessage(ctx context.Context, execution AgentMessageExecution) error {
-	delivery := Delivery{Message: execution.Message, AgentRun: execution.AgentRun}
-	run := execution.AgentRun
-	if s.agents == nil {
-		return cleanupBlocked(delivery, "Agent execution resolution is not configured")
-	}
-	operation, err := s.agents.ResolveAgentRunOperation(ctx, execution)
-	if err != nil {
-		return cleanupBlocked(delivery, "resolve exact Harness operation: "+err.Error())
-	}
-	if operation == nil {
-		return cleanupBlocked(delivery, "resolve exact Harness operation: no operation returned")
-	}
-	if err := s.requireClaim(ctx); err != nil {
-		return err
-	}
-	history := operation.History
-	if delivery.Message.Intent == MessageSteer && (run.TurnID == "" || run.TurnID == delivery.Message.TargetTurnID) {
-		observed, err := history(ctx, run)
-		if err != nil {
-			return s.retainCleanupMutation(ctx, delivery, "bound Harness history is unavailable: "+err.Error())
-		}
-		steer := ReconcileSteer(run.ID, delivery.Message.TargetTurnID, observed.Turns)
-		switch steer.Classification {
-		case "completed":
-			if err := s.bindSteer(ctx, run.ID, delivery.Message.TargetTurnID, steer.Turn.Status); err != nil {
-				return err
-			}
-			if !terminalHarness(steer.Turn.Status) {
-				return cleanupStillActive{MessageID: delivery.Message.ID, Reason: "accepted steer remains active"}
-			}
-			return nil
-		case "no-submit":
-			return s.failAgentRun(ctx, run.ID, "cleanup closed steer after exact Harness history proved it was not accepted")
-		case "target-terminal":
-			return s.cleanupTerminalSteerTarget(ctx, delivery, observed.Turns)
-		case "uncertain":
-			return s.retainCleanupMutation(ctx, delivery, steer.Reason)
-		default:
-			return s.retainCleanupMutation(ctx, delivery, "unsupported steer recovery classification")
-		}
-	}
-	contractOperation := agentRunHistoryOperation{AgentRunOperation: operation}
-	if run.ThreadID == "" && run.BaselineRecorded {
-		initial, err := operation.History(ctx, run)
-		if err != nil {
-			return s.retainCleanupMutation(ctx, delivery, "initial Harness recovery is unavailable: "+err.Error())
-		}
-		if len(initial.Turns) != 1 {
-			return s.retainCleanupMutation(ctx, delivery, fmt.Sprintf("initial Harness recovery returned %d turns, not one exact accepted mutation", len(initial.Turns)))
-		}
-		binding := HarnessBinding{Harness: initial.Harness, ThreadID: initial.ThreadID, Turn: initial.Turns[0]}
-		contractOperation.recovered = &binding
-	}
-	contract := agentRunContract{
-		store: s.store, delivery: delivery, run: run,
-		operation: contractOperation,
-		label:     "cleanup harness", beforeRecord: s.requireClaim, settleOnly: true,
-		onNoSubmit: func(ctx context.Context, run AgentRun) (HarnessTurn, error) {
-			if err := s.failAgentRun(ctx, run.ID, "cleanup closed delivery after exact Harness history proved no turn was submitted"); err != nil {
-				return HarnessTurn{}, err
-			}
-			return HarnessTurn{Status: "failed"}, nil
-		},
-	}
-	turn, err := contract.execute(ctx)
-	if err != nil {
-		return s.retainCleanupMutation(ctx, delivery, err.Error())
-	}
-	if activeHarness(turn.Status) {
-		return cleanupStillActive{MessageID: delivery.Message.ID, Reason: "accepted Harness mutation remains active"}
-	}
-	return nil
-}
-
-func (s ExecutionService) cleanupTerminalSteerTarget(ctx context.Context, delivery Delivery, turns []HarnessTurn) error {
-	accepted, err := automaticObservationTurn(delivery, turns)
-	if err != nil {
-		return s.retainCleanupMutation(ctx, delivery, err.Error())
-	}
-	if delivery.Message.RequestedIntent == MessageAuto && accepted != "" {
-		if err := s.requeueAutoMessageAsFollow(ctx, delivery.AgentRun.ID, delivery.Message.TargetTurnID, accepted); err != nil {
-			return err
-		}
-		return cleanupStillActive{MessageID: delivery.Message.ID, Reason: "accepted observation follow requires settlement"}
-	}
-	return s.failAgentRun(ctx, delivery.AgentRun.ID, "steer target became terminal before the exact Message was accepted")
-}
-
-type agentRunHistoryOperation struct {
-	AgentRunOperation
-	observed  *HarnessHistory
-	recovered *HarnessBinding
-}
-
-func (o agentRunHistoryOperation) History(ctx context.Context, run AgentRun) (HarnessHistory, error) {
-	if o.observed != nil {
-		return *o.observed, nil
-	}
-	return o.AgentRunOperation.History(ctx, run)
-}
-
-func (o agentRunHistoryOperation) Recover(ctx context.Context, run AgentRun) (HarnessBinding, error) {
-	if o.recovered != nil {
-		return *o.recovered, nil
-	}
-	return o.AgentRunOperation.Recover(ctx, run)
-}
-
-func (s ExecutionService) retainCleanupMutation(ctx context.Context, delivery Delivery, reason string) error {
-	if err := s.agentRunAttention(ctx, delivery.AgentRun.ID, reason); err != nil {
-		return err
-	}
-	return cleanupBlocked(delivery, reason)
-}
-
-func cleanupBlocked(delivery Delivery, reason string) error {
-	if reason == "" {
-		reason = string(delivery.AgentRun.State)
-	}
-	return fmt.Errorf("cleanup retained Sandbox and route: message sequence %d is not safely settled (%s)", delivery.Message.Sequence, reason)
-}
-
-type cleanupStillActive struct {
-	MessageID string
-	Reason    string
-}
-
-func (e cleanupStillActive) Error() string {
-	return fmt.Sprintf("cleanup is waiting for active Message %s: %s", e.MessageID, e.Reason)
 }
 
 // ExecuteSandboxAction reconciles one provider-owned mutation through the
@@ -801,11 +176,6 @@ func (s ExecutionService) executeSandboxAction(ctx context.Context, sessionID, a
 		if expectedKind != "" && authoritative.Kind != expectedKind {
 			return fmt.Errorf("Sandbox Action %s is %s, not expected %s", actionID, authoritative.Kind, expectedKind)
 		}
-		if authoritative.Kind == ActionRouteRevoke || authoritative.Kind == ActionSandboxDelete {
-			if err := s.rejectUnsettledHarnessMutations(ctx, sessionID, string(authoritative.Kind)); err != nil {
-				return err
-			}
-		}
 		if authoritative.State == ActionSucceeded {
 			return nil
 		}
@@ -858,15 +228,4 @@ func (s ExecutionService) CompleteCleanup(ctx context.Context, sessionID string)
 		}
 		return s.store.CompleteCleanup(ctx, sessionID, task.TaskID())
 	})
-}
-
-func (s ExecutionService) rejectUnsettledHarnessMutations(ctx context.Context, sessionID, operation string) error {
-	unsettled, err := s.store.UnsettledAgentMessages(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-	if len(unsettled) != 0 {
-		return fmt.Errorf("%s rejected while %d Harness mutations remain unsettled", operation, len(unsettled))
-	}
-	return nil
 }

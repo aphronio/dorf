@@ -19,7 +19,6 @@ var (
 	ErrProfileNotFound                = errors.New("control API Sandbox profile not found")
 	ErrInvalidCursor                  = errors.New("invalid control API Session cursor")
 	ErrSessionNotFound                = errors.New("control API Session not found")
-	ErrMessageNotFound                = errors.New("control API Message not found")
 	ErrSandboxStatusUnavailable       = errors.New("Sandbox status is unavailable")
 	ErrSandboxExecUnavailable         = errors.New("Sandbox command is unavailable")
 	ErrSandboxExecFailed              = errors.New("Sandbox command outcome is unknown")
@@ -28,11 +27,6 @@ var (
 	ErrFileNotFound                   = errors.New("control API Sandbox file not found")
 	ErrFileTooLarge                   = errors.New("control API Sandbox file exceeds read limit")
 	ErrFileUnavailable                = errors.New("control API Sandbox file unavailable")
-	ErrMessageUnavailable             = errors.New("control API Message cannot be accepted")
-	ErrSteerUnavailable               = errors.New("control API steer cannot be accepted")
-	ErrSkillRefreshUnavailable        = errors.New("control API skill refresh is unsupported for this profile")
-	ErrMessageImageUnsupported        = errors.New("control API image attachments are unsupported for this profile")
-	ErrInterruptUnavailable           = errors.New("control API interrupt cannot be accepted")
 	ErrRetryUnavailable               = errors.New("control API Session retry unavailable")
 	ErrIdempotencyConflict            = errors.New("idempotency key is bound to different input")
 )
@@ -114,7 +108,6 @@ type SessionList struct {
 // Session is the canonical public execution context.
 type Session struct {
 	KeepRunning     bool            `json:"keep_running"`
-	LatestReplyID   string          `json:"latest_reply_id,omitempty"`
 	CreatedByClient *SessionCreator `json:"created_by_client"`
 	ClientReference string          `json:"client_reference"`
 	ID              string          `json:"id"`
@@ -181,42 +174,6 @@ type SandboxResource struct {
 	DeletedAt  *time.Time `json:"deleted_at,omitempty"`
 }
 
-type SendMessageRequest struct {
-	Observation           bool                    `json:"observation,omitempty"`
-	DeveloperInstructions *string                 `json:"developer_instructions,omitempty"`
-	RefreshSkills         bool                    `json:"refresh_skills,omitempty"`
-	Text                  string                  `json:"text"`
-	Intent                string                  `json:"intent,omitempty"`
-	Attachments           []SendMessageAttachment `json:"-"`
-}
-
-// SendMessageAttachment is one caller-supplied filename and byte body. The
-// server derives media type, image kind, digest, and size before Core sees it.
-type SendMessageAttachment struct {
-	Filename string
-	Contents []byte
-}
-
-// Message projects one accepted delivery without exposing its Harness Thread,
-// Turn, or internal AgentRun identity.
-type Message struct {
-	WaitReason         string         `json:"wait_reason,omitempty"`
-	InterruptRequested bool           `json:"interrupt_requested"`
-	ID                 string         `json:"id"`
-	SessionID          string         `json:"session_id"`
-	Sequence           int64          `json:"sequence"`
-	Intent             string         `json:"intent"`
-	Delivery           State          `json:"delivery"`
-	Result             *MessageResult `json:"result"`
-	Attention          *Attention     `json:"attention"`
-	AdmittedAt         time.Time      `json:"admitted_at"`
-}
-
-type MessageResult struct {
-	Outcome string `json:"outcome"`
-	Output  string `json:"output"`
-}
-
 // Retry acknowledges one caller-keyed request against the Session's existing
 // execution authority. Internal task and run identities remain private.
 type Retry struct {
@@ -250,9 +207,6 @@ type Sessions interface {
 	List(context.Context, int, string) (SessionList, error)
 	Create(context.Context, string, string, CreateSessionRequest) (Session, bool, error)
 	Get(context.Context, string) (Session, error)
-	SendMessage(context.Context, string, string, SendMessageRequest) (Message, bool, error)
-	GetMessage(context.Context, string, string) (Message, error)
-	InterruptMessage(context.Context, string, string) (Message, error)
 	Retry(context.Context, string, string) (Retry, bool, error)
 	ReadSandboxFile(context.Context, string, string) ([]byte, error)
 	WriteSandboxFile(context.Context, string, string, []byte, bool) error

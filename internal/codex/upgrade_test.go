@@ -5,48 +5,11 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/aphronio/dorf/internal/core"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
-func TestNativePersistenceReadinessDoesNotResumeThread(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		resume bool
-		want   []string
-	}{
-		{"persistence read", false, []string{"thread/read"}},
-		{"upgrade compatibility", true, []string{"thread/resume", "thread/read"}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			server, requests := testProtocolServer(t, func(method string, _ map[string]any) (map[string]any, bool) {
-				switch method {
-				case "initialize":
-					return map[string]any{}, false
-				case "thread/resume":
-					return map[string]any{"thread": map[string]any{"id": "thread"}}, false
-				case "thread/read":
-					return map[string]any{"thread": map[string]any{"id": "thread", "turns": []any{map[string]any{"id": "turn", "status": "completed"}}}}, false
-				default:
-					t.Errorf("unexpected native operation %s", method)
-					return nil, true
-				}
-			})
-			defer server.Close()
-			protocol := dialTestProtocol(t, server)
-			expected := []core.AgentRun{{ThreadID: "thread", TurnID: "turn", TurnOutcome: "completed"}}
-			if err := verifyRetainedThread(context.Background(), protocol, "thread", expected, test.resume); err != nil {
-				t.Fatal(err)
-			}
-			if got := protocolMethods(requests); !reflect.DeepEqual(got, test.want) {
-				t.Fatalf("native readiness methods=%v, want %v", got, test.want)
-			}
-		})
-	}
-}
-
 func TestUpgradeVerificationRequiresExactSettledNativeHistory(t *testing.T) {
-	expected := []core.AgentRun{{ThreadID: "thread", TurnID: "turn", TurnOutcome: "completed"}}
+	expected := []retainedTurn{{ThreadID: "thread", TurnID: "turn", TurnOutcome: "completed"}}
 	for _, tc := range []struct {
 		name  string
 		turns []TurnOutcome
@@ -76,7 +39,7 @@ func TestQuiesceNeverStartsOrStopsAnUnownedServer(t *testing.T) {
 		{"1\n1\n", true},  // tracked but missing authentication
 	} {
 		sandbox := quiesceProbeSandbox{t: t, probe: test.probe}
-		if err := (Agent{Sandbox: sandbox}).Quiesce(context.Background(), testOwner("quiesce"), nil); (err != nil) != test.wantErr {
+		if err := (Agent{Sandbox: sandbox}).Quiesce(context.Background(), testOwner("quiesce"), ""); (err != nil) != test.wantErr {
 			t.Fatalf("probe %q: %v", test.probe, err)
 		}
 	}

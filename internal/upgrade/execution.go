@@ -11,15 +11,15 @@ type Execution struct {
 	Upgrades Service
 }
 
-func (e Execution) ReconcileSessionAgent(ctx context.Context, sessionID string) (core.AgentReconciliationProgress, error) {
+func (e Execution) ReconcileSession(ctx context.Context, sessionID string) (core.SessionReconciliationProgress, error) {
 	progress, err := absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (bool, error) { return e.Upgrades.Reconcile(workCtx, sessionID) })
 	if err != nil {
-		return core.AgentReconciliationIdle, err
+		return core.SessionReconciliationIdle, err
 	}
 	if progress {
-		return core.AgentReconciliationReady, nil
+		return core.SessionReconciliationReady, nil
 	}
-	return e.ExecutionService.ReconcileSessionAgent(ctx, sessionID)
+	return e.ExecutionService.ReconcileSession(ctx, sessionID)
 }
 func (e Execution) PrepareCleanup(ctx context.Context, sessionID string) (core.Session, []core.Sandbox, error) {
 	session, sandboxes, err := e.ExecutionService.PrepareCleanup(ctx, sessionID)

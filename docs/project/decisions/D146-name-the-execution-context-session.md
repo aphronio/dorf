@@ -25,5 +25,5 @@
   cleanup, retry, and ownership tests exercise the renamed contract. No native protocol or provider
   transport is changed.
 - **Authority:** [North Star vocabulary](../north-star.md#vocabulary),
-  [Architecture](../architecture.md#messages-and-agentruns),
+  [Architecture](../architecture.md#execution-model),
   [Remote Control API](../../control-api.md).

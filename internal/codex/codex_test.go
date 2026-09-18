@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
-	"strconv"
+
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -361,31 +361,9 @@ func TestProtocolBindsResumeStartAndSteerToExactIdentity(t *testing.T) {
 			}
 		})
 		defer server.Close()
-		outcome, err := dialTestProtocol(t, server).resumeAndStartTurn(context.Background(), sessionID, "/workspace/job", messageID, core.HarnessInput{Text: "input"}, "gpt-5.6-sol", "high", "danger-full-access")
+		outcome, err := dialTestProtocol(t, server).resumeFixture(context.Background(), sessionID, "/workspace/job", messageID, core.HarnessInput{Text: "input"}, "gpt-5.6-sol", "high", "danger-full-access")
 		if err != nil || outcome.ID != turnID {
 			t.Fatalf("resume and start outcome=%#v err=%v", outcome, err)
-		}
-	})
-
-	t.Run("steer", func(t *testing.T) {
-		server, _ := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
-			switch method {
-			case "initialize":
-				return map[string]any{}, false
-			case "thread/resume":
-				requireProtocolParams(t, method, params, map[string]any{"threadId": sessionID})
-				return map[string]any{"thread": map[string]any{"id": sessionID}}, false
-			case "turn/steer":
-				requireProtocolParams(t, method, params, map[string]any{"threadId": sessionID, "expectedTurnId": turnID, "clientUserMessageId": messageID})
-				return map[string]any{"turnId": turnID}, false
-			default:
-				return nil, true
-			}
-		})
-		defer server.Close()
-		accepted, err := dialTestProtocol(t, server).steerTurn(context.Background(), sessionID, turnID, messageID, core.HarnessInput{Text: "correction"})
-		if err != nil || accepted != turnID {
-			t.Fatalf("steer accepted=%q err=%v", accepted, err)
 		}
 	})
 
@@ -402,7 +380,7 @@ func TestProtocolBindsResumeStartAndSteerToExactIdentity(t *testing.T) {
 			return nil, true
 		})
 		defer server.Close()
-		_, err := dialTestProtocol(t, server).resumeAndStartTurn(context.Background(), sessionID, "/workspace/job", messageID, core.HarnessInput{Text: "input"}, "gpt-5.6-sol", "high", "danger-full-access")
+		_, err := dialTestProtocol(t, server).resumeFixture(context.Background(), sessionID, "/workspace/job", messageID, core.HarnessInput{Text: "input"}, "gpt-5.6-sol", "high", "danger-full-access")
 		var definite interface{ DefiniteNoSubmit() bool }
 		if !errors.As(err, &definite) || !definite.DefiniteNoSubmit() {
 			t.Fatalf("substitute resume error=%T %v", err, err)
@@ -410,93 +388,8 @@ func TestProtocolBindsResumeStartAndSteerToExactIdentity(t *testing.T) {
 	})
 }
 
-func TestInitialRecoveryDropsLostEmptyThreadAndAdoptsAcceptedTurn(t *testing.T) {
-	var threadStarts atomic.Int32
-	var turnStarts atomic.Int32
-	var skillReloads atomic.Int32
-	var persisted atomic.Bool
-	var durableSession atomic.Value
-	server, _ := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
-		switch method {
-		case "initialize":
-			return map[string]any{}, false
-		case "skills/list":
-			skillReloads.Add(1)
-			return map[string]any{}, false
-		case "thread/list":
-			if !persisted.Load() {
-				return map[string]any{"data": []any{}}, false
-			}
-			return map[string]any{"data": []any{map[string]any{"id": durableSession.Load().(string), "status": map[string]any{"type": "notLoaded"}}}}, false
-		case "thread/start":
-			id := "session-empty-" + strconv.Itoa(int(threadStarts.Add(1)))
-			return map[string]any{"thread": map[string]any{"id": id}}, false
-		case "turn/start":
-			turnStarts.Add(1)
-			durableSession.Store(params["threadId"].(string))
-			persisted.Store(true)
-			return map[string]any{"turn": map[string]any{"id": "turn-native-1"}}, false
-		case "thread/read":
-			id := durableSession.Load().(string)
-			return map[string]any{"thread": map[string]any{"id": id, "turns": []any{map[string]any{"id": "turn-native-1", "status": "inProgress"}}}}, false
-		default:
-			return nil, true
-		}
-	})
-	defer server.Close()
-
-	firstConnection := dialTestProtocol(t, server)
-	lostSession, err := firstConnection.startThread(context.Background(), "/workspace/job", "gpt-5.6-sol", "danger-full-access")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := firstConnection.connection.CloseNow(); err != nil {
-		t.Fatal(err)
-	}
-	if lostSession != "session-empty-1" || persisted.Load() {
-		t.Fatalf("empty thread unexpectedly durable: thread=%s persisted=%v", lostSession, persisted.Load())
-	}
-
-	inspectionConnection := dialTestProtocol(t, server)
-	inspectedSession, inspectedTurns, err := inspectionConnection.inspectInitialTurns(context.Background(), "/workspace/job")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := inspectionConnection.connection.CloseNow(); err != nil {
-		t.Fatal(err)
-	}
-	if inspectedSession != "" || len(inspectedTurns) != 0 || threadStarts.Load() != 1 || turnStarts.Load() != 0 {
-		t.Fatalf("read-only initial inspection thread=%s turns=%#v thread starts=%d turn starts=%d", inspectedSession, inspectedTurns, threadStarts.Load(), turnStarts.Load())
-	}
-
-	secondConnection := dialTestProtocol(t, server)
-	secondConnection.refreshSkills = true
-	sessionID, turn, err := secondConnection.reconcileInitialTurn(context.Background(), "/workspace/job", "agent-run-stable", core.HarnessInput{Text: "initial input"}, "gpt-5.6-sol", "high", "danger-full-access")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := secondConnection.connection.CloseNow(); err != nil {
-		t.Fatal(err)
-	}
-	if sessionID != "session-empty-2" || !reflect.DeepEqual(turn, TurnOutcome{ID: "turn-native-1", Status: "running"}) {
-		t.Fatalf("accepted binding thread=%s turn=%#v", sessionID, turn)
-	}
-
-	thirdConnection := dialTestProtocol(t, server)
-	thirdConnection.refreshSkills = true
-	// The fake app-server implements no clientUserMessageId deduplication. A
-	// deliberately different hint still adopts by isolated thread history.
-	recoveredSession, recoveredTurn, err := thirdConnection.reconcileInitialTurn(context.Background(), "/workspace/job", "different-native-hint", core.HarnessInput{Text: "initial input"}, "gpt-5.6-sol", "high", "danger-full-access")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if recoveredSession != sessionID || !reflect.DeepEqual(recoveredTurn, TurnOutcome{ID: "turn-native-1", Status: "inProgress"}) {
-		t.Fatalf("recovered binding thread=%s turn=%#v", recoveredSession, recoveredTurn)
-	}
-	if threadStarts.Load() != 2 || turnStarts.Load() != 1 || skillReloads.Load() != 1 {
-		t.Fatalf("thread starts=%d turn starts=%d skill reloads=%d", threadStarts.Load(), turnStarts.Load(), skillReloads.Load())
-	}
-}
+// The fake app-server implements no clientUserMessageId deduplication. A
+// deliberately different hint still adopts by isolated thread history.
 
 func protocolMethods(requests <-chan map[string]any) []string {
 	var methods []string

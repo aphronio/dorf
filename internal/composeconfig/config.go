@@ -88,7 +88,7 @@ type Config struct {
 	Image           Image
 	IncusOverlay    bool
 	environment     []byte
-	hostDirectories [4]string
+	hostDirectories [3]string
 	uid             int
 	gid             int
 }
@@ -113,7 +113,7 @@ func Render(spec Spec) (Config, error) {
 		Image:           spec.Image,
 		IncusOverlay:    socket != nil,
 		environment:     renderEnvironment(spec, databaseURL, socket, incusDigest),
-		hostDirectories: [4]string{spec.ConfigDir, spec.DataDir, spec.StateDir, filepath.Join(spec.StateDir, "blobs")},
+		hostDirectories: [3]string{spec.ConfigDir, spec.DataDir, spec.StateDir},
 		uid:             spec.UID,
 		gid:             spec.GID,
 	}, nil

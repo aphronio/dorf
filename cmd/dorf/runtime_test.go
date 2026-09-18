@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aphronio/dorf/internal/codex"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/deployment"
@@ -34,35 +33,6 @@ func TestConfiguredObservationsSurviveUnavailableExport(t *testing.T) {
 			}
 			if got := strings.Contains(stderr.String(), "could not initialize"); got != test.warning {
 				t.Fatalf("initialization warning=%t, want %t", got, test.warning)
-			}
-		})
-	}
-}
-
-func TestSessionOperationRejectsForeignSandbox(t *testing.T) {
-	session := core.Session{ID: "job-direct"}
-	message := core.Message{ID: "message-direct", SessionID: session.ID, Input: "raw caller prompt\nwith exact spacing\n"}
-	sandbox := core.Sandbox{ID: core.MainSandboxName(session.ID), SessionID: session.ID, Name: core.DefaultSandbox}
-	execution := core.AgentMessageExecution{
-		Session: session, Message: message, Sandbox: sandbox,
-		AgentRun: core.AgentRun{ID: core.AgentRunID(message.ID), SessionID: session.ID, MessageID: message.ID, SandboxID: sandbox.ID},
-	}
-	resolved := composedAgentExecution{externals: terminal.Externals{
-		Sandbox: ordinarySandbox{}, Agent: ordinaryHarness{Harness: codex.Agent{}},
-	}}
-	if _, err := resolved.ResolveAgentRunOperation(context.Background(), execution); err != nil {
-		t.Fatalf("direct operation: %v", err)
-	}
-
-	for name, mutate := range map[string]func(*core.AgentMessageExecution){
-		"run Sandbox":  func(value *core.AgentMessageExecution) { value.AgentRun.SandboxID = "foreign" },
-		"Sandbox name": func(value *core.AgentMessageExecution) { value.Sandbox.Name = "foreign" },
-	} {
-		t.Run(name, func(t *testing.T) {
-			changed := execution
-			mutate(&changed)
-			if _, err := resolved.ResolveAgentRunOperation(context.Background(), changed); err == nil {
-				t.Fatal("changed direct Agent contract resolved a Harness operation")
 			}
 		})
 	}

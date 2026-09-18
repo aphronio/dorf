@@ -10,20 +10,21 @@ import (
 
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
+	"github.com/aphronio/dorf/internal/core"
 )
 
 type observationSessions struct {
 	*fakeSessions
-	value          controlapi.MessageObservation
+	value          controlapi.TurnObservation
 	stopped        chan struct{}
 	resume         chan string
 	waitBeforeEmit bool
 }
 
-func (j *observationSessions) ReadMessageObservation(context.Context, string, string, string) (controlapi.MessageObservation, error) {
+func (j *observationSessions) ReadTurnObservation(context.Context, string, string, string) (controlapi.TurnObservation, error) {
 	return j.value, nil
 }
-func (j *observationSessions) StreamMessageObservation(ctx context.Context, _, _, cursor string, emit func(controlapi.MessageObservation) error) error {
+func (j *observationSessions) StreamTurnObservation(ctx context.Context, _, _, cursor string, emit func(controlapi.TurnObservation) error) error {
 	defer close(j.stopped)
 	j.resume <- cursor
 	if j.waitBeforeEmit {
@@ -37,14 +38,14 @@ func (j *observationSessions) StreamMessageObservation(ctx context.Context, _, _
 	return ctx.Err()
 }
 
-func TestMessageObservationStreamRemainsAfterCompleteAndCancelsAtCredentialExpiry(t *testing.T) {
+func TestTurnObservationStreamRemainsAfterCompleteAndCancelsAtCredentialExpiry(t *testing.T) {
 	const credential = "dcr_observation-test"
 	outcome, cursor := "completed", "opaque-resume"
 	watermark := 2
-	sessions := &observationSessions{fakeSessions: &fakeSessions{}, value: controlapi.MessageObservation{State: "complete", Outcome: &outcome, Cursor: &cursor, NextIndex: 2, CompletionWatermark: &watermark, Items: []controlapi.MessageTimelineItem{}}, stopped: make(chan struct{}), resume: make(chan string, 1)}
+	sessions := &observationSessions{fakeSessions: &fakeSessions{}, value: controlapi.TurnObservation{State: "complete", Status: outcome, Cursor: &cursor, NextIndex: 2, CompletionWatermark: &watermark, Items: []core.HarnessConversationItem{}}, stopped: make(chan struct{}), resume: make(chan string, 1)}
 	auth := &fakeAuth{credential: credential, client: controlauth.Client{CredentialExpiresAt: time.Now().Add(150 * time.Millisecond)}}
 	server := controlapi.NewServer(controlapi.Discovery{}, auth, sessions, nil)
-	request := httptest.NewRequest(http.MethodGet, "/v1/sessions/session/messages/message/observation/stream", nil)
+	request := httptest.NewRequest(http.MethodGet, "/v1/sessions/session/events/stream?turn_id=turn", nil)
 	request.Header.Set("Authorization", "Bearer "+credential)
 	request.Header.Set("Accept", "text/event-stream")
 	request.Header.Set("Last-Event-ID", cursor)
@@ -75,35 +76,35 @@ func TestMessageObservationStreamRemainsAfterCompleteAndCancelsAtCredentialExpir
 	}
 }
 
-func TestMessageObservationRejectsMalformedQueriesAndUnauthenticatedStreams(t *testing.T) {
+func TestTurnObservationRejectsMalformedQueriesAndUnauthenticatedStreams(t *testing.T) {
 	const credential = "dcr_observation-test"
 	sessions := &observationSessions{fakeSessions: &fakeSessions{}}
 	server := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, sessions, nil)
 	for _, target := range []string{"?other=x", "?cursor=a&cursor=b", "?cursor="} {
-		request := httptest.NewRequest(http.MethodGet, "/v1/sessions/session/messages/message/observation"+target, nil)
+		request := httptest.NewRequest(http.MethodGet, "/v1/sessions/session/turns/turn"+target, nil)
 		request.Header.Set("Authorization", "Bearer "+credential)
 		response := httptest.NewRecorder()
 		server.Handler.ServeHTTP(response, request)
 		requireProblem(t, response, http.StatusBadRequest, "invalid_cursor")
 	}
-	request := httptest.NewRequest(http.MethodGet, "/v1/sessions/session/messages/message/observation/stream?cursor=a", nil)
+	request := httptest.NewRequest(http.MethodGet, "/v1/sessions/session/events/stream?turn_id=turn&cursor=a", nil)
 	request.Header.Set("Authorization", "Bearer "+credential)
 	request.Header.Set("Last-Event-ID", "b")
 	response := httptest.NewRecorder()
 	server.Handler.ServeHTTP(response, request)
 	requireProblem(t, response, http.StatusBadRequest, "invalid_cursor")
-	request = httptest.NewRequest(http.MethodGet, "/v1/sessions/session/messages/message/observation/stream", nil)
+	request = httptest.NewRequest(http.MethodGet, "/v1/sessions/session/events/stream?turn_id=turn", nil)
 	response = httptest.NewRecorder()
 	server.Handler.ServeHTTP(response, request)
 	requireProblem(t, response, http.StatusUnauthorized, "unauthenticated")
 }
 
-func TestMessageObservationReturnsAuthenticationProblemIfExpiryPrecedesFirstFrame(t *testing.T) {
+func TestTurnObservationReturnsAuthenticationProblemIfExpiryPrecedesFirstFrame(t *testing.T) {
 	const credential = "dcr_observation-expiry"
 	sessions := &observationSessions{fakeSessions: &fakeSessions{}, waitBeforeEmit: true, stopped: make(chan struct{}), resume: make(chan string, 1)}
 	auth := &fakeAuth{credential: credential, client: controlauth.Client{CredentialExpiresAt: time.Now().Add(25 * time.Millisecond)}}
 	server := controlapi.NewServer(controlapi.Discovery{}, auth, sessions, nil)
-	request := httptest.NewRequest(http.MethodGet, "/v1/sessions/session/messages/message/observation/stream", nil)
+	request := httptest.NewRequest(http.MethodGet, "/v1/sessions/session/events/stream?turn_id=turn", nil)
 	request.Header.Set("Authorization", "Bearer "+credential)
 	request.Header.Set("Accept", "text/event-stream")
 	response := httptest.NewRecorder()

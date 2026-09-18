@@ -146,8 +146,7 @@ func TestResolvePathsIsTheOneXDGHostLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.DeploymentPath != filepath.Join(paths.ConfigDir, "deployment.json") ||
-		cfg.GatewayStatePath != filepath.Join(paths.DataDir, "provider-gateway") ||
-		cfg.BlobRoot != filepath.Join(paths.StateDir, "blobs") {
+		cfg.GatewayStatePath != filepath.Join(paths.DataDir, "provider-gateway") {
 		t.Fatalf("configuration did not use resolved paths: %#v", cfg)
 	}
 }

@@ -14,7 +14,7 @@ import (
 // delivery hold and makes an operator retry idempotent.
 type RecoveryRequest struct {
 	ID         string `json:"id"`
-	SessionID  string `json:"job_id"`
+	SessionID  string `json:"session_id"`
 	SandboxID  string `json:"sandbox_id"`
 	Repository string `json:"repository"`
 	SnapshotID string `json:"snapshot_id"`
@@ -68,7 +68,7 @@ type RecoveryReceipt struct {
 // new Turn. Repeating either method after a lost receipt must be safe.
 type RecoveryDriver interface {
 	Restore(context.Context, core.Session, core.Sandbox, Checkpoint) (string, error)
-	VerifyAndRenew(context.Context, core.Session, core.Sandbox, Checkpoint, EffectivePackage, []core.AgentRun) error
+	VerifyAndRenew(context.Context, core.Session, core.Sandbox, Checkpoint, EffectivePackage) error
 	DeleteResource(context.Context, core.Sandbox) error
 }
 
@@ -76,7 +76,6 @@ type RecoveryStore interface {
 	WithSessionFence(context.Context, string, func() error) error
 	Session(context.Context, string) (core.Session, error)
 	Sandbox(context.Context, string) (core.Sandbox, error)
-	Deliveries(context.Context, string) ([]core.Delivery, error)
 	SessionRecoveries(context.Context, string) ([]RecoveryReceipt, error)
 	SandboxResource(context.Context, string, string, string) (core.Sandbox, error)
 	RecoveryNativeStateSafe(context.Context, RecoveryReceipt) (bool, error)
@@ -151,11 +150,7 @@ func (s RecoveryService) step(ctx context.Context, session core.Session, receipt
 			}
 			return s.record(ctx, func() error { return s.Store.RecordRecoveryRestored(ctx, receipt, providerID) })
 		}
-		runs, err := s.coveredRuns(ctx, receipt)
-		if err != nil {
-			return err
-		}
-		if err := s.Driver.VerifyAndRenew(ctx, session, destination, receipt.Checkpoint, receipt.Package, runs); err != nil {
+		if err := s.Driver.VerifyAndRenew(ctx, session, destination, receipt.Checkpoint, receipt.Package); err != nil {
 			return err
 		}
 		return s.record(ctx, func() error { return s.Store.RecordRecoveryVerified(ctx, receipt.ID) })
@@ -171,20 +166,6 @@ func (s RecoveryService) step(ctx context.Context, session core.Session, receipt
 		return s.record(ctx, func() error { return s.Store.RecordSandboxResourceDeleted(ctx, source) })
 	}
 	return s.Store.FinishCheckpointRecovery(ctx, s.Queue, receipt)
-}
-
-func (s RecoveryService) coveredRuns(ctx context.Context, receipt RecoveryReceipt) ([]core.AgentRun, error) {
-	deliveries, err := s.Store.Deliveries(ctx, receipt.SessionID)
-	if err != nil {
-		return nil, err
-	}
-	var runs []core.AgentRun
-	for _, delivery := range deliveries {
-		if delivery.AgentRun.SandboxID == receipt.SandboxID && delivery.Message.Sequence <= receipt.Checkpoint.MessageSequence && delivery.AgentRun.ThreadID != "" {
-			runs = append(runs, delivery.AgentRun)
-		}
-	}
-	return runs, nil
 }
 
 func (s RecoveryService) requireSafe(ctx context.Context, receipt RecoveryReceipt) error {

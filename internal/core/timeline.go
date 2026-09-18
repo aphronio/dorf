@@ -17,7 +17,6 @@ type HarnessConversationItem struct {
 	Kind         string `json:"kind"`
 	Text         string `json:"text,omitempty"`
 	ClientID     string `json:"client_id,omitempty"`
-	MessageID    string `json:"message_id,omitempty"`
 }
 
 type HarnessTimeline struct {

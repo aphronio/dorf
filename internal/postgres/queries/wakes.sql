@@ -30,9 +30,7 @@ insert into dorf.session_execution_wake_causes(session_id,cause_key,revision)
 values(sqlc.arg(session_id),sqlc.arg(cause_key),sqlc.arg(revision));
 
 -- name: GetNativeTerminalWakeBinding :one
-select ar.session_id,ar.sandbox_id,coalesce(ar.thread_id,'') as thread_id,
-       coalesce(ar.turn_id,'') as turn_id,j.admission_open,j.cleanup_state
-from dorf.agent_runs ar
-join dorf.sessions j on j.id=ar.session_id
-join dorf.sandboxes s on s.id=ar.sandbox_id and s.session_id=ar.session_id
-where ar.id=sqlc.arg(run_id);
+select j.id as session_id,s.id as sandbox_id,coalesce(j.thread_id,'') as thread_id,
+       j.admission_open,j.cleanup_state
+from dorf.sessions j join dorf.sandboxes s on s.session_id=j.id
+where j.id=sqlc.arg(session_id) and s.id=sqlc.arg(sandbox_id);

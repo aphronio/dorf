@@ -66,7 +66,7 @@ func TestObservationsRetainExactTurnAfterSubmissionReturns(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		p := &protocol{connection: conn, observations: observations, execution: core.AgentRun{ID: runID, SessionID: "session", MessageID: "message-" + runID}}
+		p := &protocol{connection: conn, observations: observations, execution: telemetry.NativeExecution{ID: runID, SessionID: "session"}}
 		turn, err := p.startTurn(context.Background(), "thread", "/tmp", runID, core.HarnessInput{Text: "same prompt"}, "model", "high", "danger-full-access")
 		if err != nil {
 			t.Fatal(err)
@@ -81,8 +81,8 @@ func TestObservationsRetainExactTurnAfterSubmissionReturns(t *testing.T) {
 	for range 8 {
 		select {
 		case event := <-events:
-			runID := event.Attributes["dorf.agent_run_id"].(string)
-			if event.Attributes["dorf.message_id"] != "message-"+runID || event.Attributes["native.turn_id"] != "native-"+runID {
+			runID := event.Attributes["dorf.input_id"].(string)
+			if event.Attributes["native.turn_id"] != "native-"+runID {
 				t.Fatalf("incorrect ownership: %#v", event)
 			}
 			counts[runID]++
@@ -128,7 +128,7 @@ func TestObservationsRecoverOnlyDurablyBoundTurn(t *testing.T) {
 	defer server.Close()
 	p := dialTestProtocol(t, server)
 	p.observations = observations
-	p.execution = core.AgentRun{ID: "run", MessageID: "message", SessionID: "session", TurnID: "bound"}
+	p.execution = telemetry.NativeExecution{ID: "run", SessionID: "session", TurnID: "bound"}
 	turns, err := p.readTurns(context.Background(), "thread")
 	if err != nil || len(turns) != 2 {
 		t.Fatalf("turns=%v err=%v", turns, err)
@@ -157,7 +157,7 @@ func TestTerminalWakeIsAsynchronousExactAndCoalesced(t *testing.T) {
 		return nil
 	})
 	p := &protocol{observations: observations, observed: &observedTurn{
-		run:      core.AgentRun{ID: "run", SessionID: "session", SandboxID: "sandbox"},
+		run:      telemetry.NativeExecution{ID: "run", SessionID: "session", SandboxID: "sandbox"},
 		threadID: "thread", turnID: "turn", complete: true,
 	}}
 	p.signalTerminalWake()
@@ -165,7 +165,7 @@ func TestTerminalWakeIsAsynchronousExactAndCoalesced(t *testing.T) {
 	close(release)
 	select {
 	case target := <-wakes:
-		want := (core.NativeTerminalWakeTarget{SessionID: "session", SandboxID: "sandbox", AgentRunID: "run", ThreadID: "thread", TurnID: "turn"})
+		want := (core.NativeTerminalWakeTarget{SessionID: "session", SandboxID: "sandbox", ThreadID: "thread", TurnID: "turn"})
 		if target != want {
 			t.Fatalf("terminal wake target=%+v want=%+v", target, want)
 		}
@@ -184,13 +184,13 @@ func TestTerminalWakeFailureEmitsBoundedDiagnostic(t *testing.T) {
 		return errors.New("database unavailable")
 	})
 	p := &protocol{observations: observations, observed: &observedTurn{
-		run:      core.AgentRun{ID: "run", SessionID: "session", SandboxID: "sandbox"},
+		run:      telemetry.NativeExecution{ID: "run", SessionID: "session", SandboxID: "sandbox"},
 		threadID: "thread", turnID: "turn", complete: true,
 	}}
 	p.signalTerminalWake()
 	select {
 	case event := <-events:
-		if event.Name != "codex.native-terminal-wake.failed" || !event.Failed || event.Attributes["dorf.agent_run_id"] != "run" || event.Attributes["native.turn_id"] != "turn" {
+		if event.Name != "codex.native-terminal-wake.failed" || !event.Failed || event.Attributes["dorf.input_id"] != "run" || event.Attributes["native.turn_id"] != "turn" {
 			t.Fatalf("terminal wake diagnostic=%+v", event)
 		}
 	case <-time.After(time.Second):

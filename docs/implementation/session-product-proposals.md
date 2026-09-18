@@ -2,7 +2,7 @@
 
 Status: iterative tracker. Slices 1–3, 5, and 5a are complete. Slice 6 is withdrawn. Slice 8
 records the agreed thin native boundary and completed capability review; the runtime replacement
-in slice 9 remains proposed. Each implementation slice is discussed before it starts.
+in slice 9 is implemented with local verification; live provider proofs remain. Each implementation slice is discussed before it starts.
 
 This tracker explores a smaller product centered on one durable Session, with application goals,
 evaluation, and external application effects owned by clients. The current
@@ -42,7 +42,7 @@ decision record. This proposal tracker is not a substitute for either.
 | 6. Separate delivery from Turn execution | Dropped | Withdraw the uncommitted shared-Turn schema and delivery refactor. | D148 assigns messages and Turns to the Harness; do not add another durable aggregate. |
 | 7. Finish application removal | Dropped | Application evidence and application-only tables are removed with coding. | Remaining Message/AgentRun removal belongs to the native API replacement. |
 | 8. Native boundary and capability proof | Verified | Record the thin control-plane contract, inspect Codex and client use, and remove the abandoned shared-Turn patch. | Source and isolated-server evidence are recorded below; runtime behavior is unchanged. |
-| 9. Replace queued Messages with native input and observation | Proposed | One ready-Session send path, native history and controls, coordinated client replacement, and deletion of the old input pipeline. | Agree exact public shapes and resolve the capability review's input, uncertainty, observation, maintenance and recovery proofs. |
+| 9. Replace queued Messages with native input and observation | Implementing | One ready-Session send path, native history and controls, coordinated client replacement, and deletion of the old input pipeline. | Resolve exact event shapes and the capability review's input, uncertainty, observation, maintenance and recovery proofs; no new streaming capability is required. |
 
 ```text
 Completed: separate review contracts -> remove investigation -> remove coding
@@ -52,7 +52,7 @@ Completed: Session naming (slice 5a)
 Completed: audited leftover removal
 Completed: thin native boundary and capability review (slice 8)
 Withdrawn: shared Turn ownership (slice 6)
-Next proposal: native input/API/client replacement (slice 9)
+Implemented: native input/API/client replacement (slice 9); provider proofs outstanding
 Deferred: setup/activation, pending what the native surface already provides
 
 Each arrow is a proposed dependency, not approval to start the next slice.
@@ -190,21 +190,29 @@ Each arrow is a proposed dependency, not approval to start the next slice.
 
 ### Slice 9: native input and observation replacement
 
-- Proposed scope: replace the current Message-facing contract and consumer path with ready-Session
+- Agreed scope: replace the current Message-facing contract and consumer path with ready-Session
   input, native history/events, and controls. Remove FIFO/Auto selection, durable Message input,
   AgentRun outcomes, delivery wakes, public aliases, and tests specific to retired semantics when
   the replacement is authoritative. No shared Turn table or second production execution path.
 - Keep configuration, compute, model access, Session binding, exact ownership and release. Keep
   existing file/process operations until native alternatives prove smaller and equally useful.
-- Settle exact operation names, shapes, attachment handling, application tool output, developer
+- Vocabulary: use Session events for input, controls and native notifications, with native Turns
+  and history for reads. No separate input resource or required new streaming capability; adapt
+  the existing SSE observation path when retiring its Message dependency. The
+  [native contract](native-session-contract.md#responsibility-and-proposed-surface) owns these semantics.
+- Settle exact event shapes, attachment handling, application tool output, developer
   instructions and refresh behavior against the native capabilities before implementation.
 - Prove unknown-send behavior and remove client retries based on the retired Message replay
   contract. Preserve client reply publication without Follow/Steer-based ownership.
 - Replace Message-dependent pause, upgrade, checkpoint and release guards before removing their
   storage. Native idle status or missing history alone cannot prove absence of an unresolved send.
-- Implementation and verification: pending discussion. The
-  [capability review](native-session-contract.md#client-change-and-remaining-proof) owns the detailed
-  proof questions. Native lifecycle scheduling and guest transport replacement remain separate.
+- Implemented: Session events, native Turn/history reads and adapted SSE; direct Codex submission
+  without an input queue; monotonic mutation/uncertainty guard; native checkpoint continuity proof;
+  coordinated consumer replacement; deletion of old Message/AgentRun storage and transport.
+- Verification: PostgreSQL and protocol tests plus the isolated real Codex input/restart probe.
+  [Implementation evidence](native-session-contract.md#implementation-and-verification) records the
+  limits. Live provider pause, upgrade and recovery proofs remain outstanding; no deployment was
+  migrated. Native lifecycle scheduling and guest transport replacement remain separate.
 
 ## Client API review
 
@@ -212,10 +220,10 @@ Apply [Build a small thing that composes](../project/principles.md#build-a-small
 inspect real callers, describe the client simplification, and keep application policy outside Dorf.
 Consumer-specific source evidence belongs outside this public repository.
 
-Session naming and application retirement are complete. The next client simplification is native
-input and observation: remove effective-intent reconciliation, repeated Message-to-Turn discovery,
-and assumptions that a Dorf input receipt owns the native reply. Native execution and application
-reply publication retain their separate responsibilities. See slice 9 for the coordinated change.
+Session naming, application retirement and native input/observation replacement are implemented.
+The client no longer reconciles effective delivery intent or discovers a Turn through Message
+receipts. Native execution and application reply publication retain their separate responsibilities.
+See slice 9 for verification limits.
 
 Workspace access convenience and explicit setup/activation remain proposals. Evaluate the existing
 create → prepare → send flow and native configuration capabilities before adding public resources,
@@ -239,11 +247,15 @@ check` passed against the migrated disposable PostgreSQL database, including SQL
 Go tests, lint, complexity and vet. The bounded checkpoint scan test now places and retires its own
 fixture so accumulated fixtures cannot displace it from the scan page.
 
-Opaque IDs, provider ownership labels, queued task payloads, and task/event names retain older Job
-strings. They do not implement a second public API. Distinguish those existing authority references
-from unnecessary compatibility branches; any change to retained identities needs an explicit
-transition for active resources and work. Do not retain unused fields solely for nonexistent
-application history.
+After slice 9, queue names, payload fields and wake/fence keys use Session names. The agreed
+transition assumes no outstanding old queue work; restart API and workers together. Opaque IDs and
+provider ownership labels still identify retained compute. Changing those requires a resource
+transition, independent of queue retirement.
+
+The native-contract cleanup removes unused Pi submission/history code and tests, AgentRun-shaped
+Codex test bindings, Message-shaped consumer fixtures, and unreachable public execution states.
+Pre-contract checkpoint references are retired by the migration; no runtime compatibility flag
+remains. Published migration history and meaningful resource/native safety tests remain.
 
 Effect fences, infrastructure retry receipts, resource generations and honest native uncertainty
 remain control-plane responsibilities. D148 changes input custody; re-evaluate the existing

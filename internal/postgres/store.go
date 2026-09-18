@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"embed"
-	"encoding/json"
+
 	"errors"
 	"fmt"
 	"regexp"
@@ -30,7 +30,7 @@ const (
 	AbsurdSchemaSHA256  = "d34309370c539f3a51f2b36b69b1f77551f8e4a14480a1c8def8bb8f40fd9aab"
 )
 
-var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql", "009_message_attachments.sql", "010_job_idle_policy.sql", "011_message_developer_instructions.sql", "012_sandbox_idle_grace.sql", "013_message_observation.sql", "014_job_execution_wakes.sql", "015_observation_auto.sql", "016_profile_revisions.sql", "017_sandbox_resources.sql", "018_sandbox_delivery_holds.sql", "019_sandbox_upgrades.sql", "020_sandbox_checkpoints.sql", "021_checkpoint_recovery.sql", "022_remove_investigation.sql", "023_remove_coding.sql", "024_job_thread.sql", "025_sessions.sql", "026_session_execution_facts.sql"}
+var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql", "009_message_attachments.sql", "010_job_idle_policy.sql", "011_message_developer_instructions.sql", "012_sandbox_idle_grace.sql", "013_message_observation.sql", "014_job_execution_wakes.sql", "015_observation_auto.sql", "016_profile_revisions.sql", "017_sandbox_resources.sql", "018_sandbox_delivery_holds.sql", "019_sandbox_upgrades.sql", "020_sandbox_checkpoints.sql", "021_checkpoint_recovery.sql", "022_remove_investigation.sql", "023_remove_coding.sql", "024_job_thread.sql", "025_sessions.sql", "026_session_execution_facts.sql", "027_native_session_guard.sql"}
 
 type Store struct{ DB *sql.DB }
 
@@ -98,12 +98,12 @@ func (s Store) Migrate(ctx context.Context) error {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	client, err := absurd.New(absurd.Options{DB: s.DB, QueueName: "dorf_jobs"})
+	client, err := absurd.New(absurd.Options{DB: s.DB, QueueName: "dorf_sessions"})
 	if err != nil {
 		return err
 	}
-	if err := client.CreateQueue(ctx, "dorf_jobs"); err != nil {
-		return fmt.Errorf("create Absurd queue dorf_jobs: %w", err)
+	if err := client.CreateQueue(ctx, "dorf_sessions"); err != nil {
+		return fmt.Errorf("create Absurd queue dorf_sessions: %w", err)
 	}
 	return nil
 }
@@ -169,181 +169,6 @@ func migrateDorf(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-func (s Store) admitMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
-	input, err := normalizeMessage(input)
-	if err != nil {
-		return core.MessageAdmissionResult{}, err
-	}
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return core.MessageAdmissionResult{}, err
-	}
-	defer tx.Rollback()
-	message, created, err := admitMessageTx(ctx, tx, input)
-	if err != nil {
-		return core.MessageAdmissionResult{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return core.MessageAdmissionResult{}, err
-	}
-	return core.MessageAdmissionResult{Message: message, SandboxID: input.SandboxID, Created: created}, nil
-}
-
-func normalizeMessage(input core.MessageAdmission) (core.MessageAdmission, error) {
-	input.SessionID = strings.TrimSpace(input.SessionID)
-	input.SandboxID = strings.TrimSpace(input.SandboxID)
-	input.FromKind = core.MessageFromKind(strings.TrimSpace(string(input.FromKind)))
-	input.FromID = strings.TrimSpace(input.FromID)
-	if input.FromKind == "" {
-		input.FromKind = core.MessageFromHuman
-	}
-	if input.Intent == "" {
-		input.Intent = core.MessageFollow
-	}
-	if input.SessionID == "" || input.SandboxID == "" || input.FromID == "" {
-		return core.MessageAdmission{}, fmt.Errorf("message admission requires Session ID, exact Sandbox ID, from ID, and text or attachments")
-	}
-	if input.FromKind != core.MessageFromHuman && input.FromKind != core.MessageFromAgent {
-		return core.MessageAdmission{}, fmt.Errorf("invalid message from kind")
-	}
-	if len(input.FromID) > 256 {
-		return core.MessageAdmission{}, fmt.Errorf("from ID must be at most 256 characters")
-	}
-	if input.Intent != core.MessageFollow && input.Intent != core.MessageSteer && input.Intent != core.MessageAuto {
-		return core.MessageAdmission{}, fmt.Errorf("message intent must be auto, follow, or steer")
-	}
-	if !core.ValidObservationDelivery(input.Observation, input.Intent, len(input.Attachments)) {
-		return core.MessageAdmission{}, fmt.Errorf("observations require text-only follow or auto delivery")
-	}
-	if !core.ValidMessageInput(core.MessageInput{Text: input.Input, Attachments: input.Attachments, Observation: input.Observation, DeveloperInstructions: input.DeveloperInstructions}) {
-		return core.MessageAdmission{}, fmt.Errorf("message text or attachments are invalid")
-	}
-	input.Attachments = append([]core.MessageAttachment(nil), input.Attachments...)
-	return input, nil
-}
-
-func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission) (core.Message, bool, error) {
-	queries := dbsql.New(tx)
-	session, err := queries.GetSessionAdmissionForUpdate(ctx, input.SessionID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return core.Message{}, false, ErrNotFound
-		}
-		return core.Message{}, false, err
-	}
-	row, err := queries.GetMessageBySender(ctx, dbsql.GetMessageBySenderParams{SessionID: input.SessionID, FromKind: input.FromKind, FromID: input.FromID})
-	if err == nil {
-		return replayMessageAdmission(ctx, queries, row, input)
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return core.Message{}, false, err
-	}
-	if !session.AdmissionOpen {
-		return core.Message{}, false, fmt.Errorf("%w for Session %s", core.ErrMessageAdmissionClosed, input.SessionID)
-	}
-	if input.SandboxID != core.MainSandboxName(input.SessionID) {
-		return core.Message{}, false, fmt.Errorf("Message requires the exact Session Sandbox")
-	}
-	target, err := resolveMessageTarget(ctx, queries, input)
-	if err != nil {
-		return core.Message{}, false, err
-	}
-	var message core.Message
-	message.TargetTurnID = target.turnID
-	message.RefreshSkills = input.RefreshSkills
-	message.Observation = input.Observation
-	message.DeveloperInstructions = input.DeveloperInstructions
-	message.Sequence, err = queries.NextMessageSequence(ctx, input.SessionID)
-	if err != nil {
-		return core.Message{}, false, err
-	}
-	message.ID = core.MessageID(input.SessionID, input.FromKind, input.FromID)
-	message.SessionID, message.FromKind, message.FromID, message.Input, message.Attachments, message.Intent = input.SessionID, input.FromKind, input.FromID, input.Input, input.Attachments, target.intent
-	message.RequestedIntent = input.Intent
-	attachments, err := encodeMessageAttachments(message.Attachments)
-	if err != nil {
-		return core.Message{}, false, err
-	}
-	if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{ID: message.ID, SessionID: message.SessionID, FromKind: message.FromKind, FromID: message.FromID, Sequence: message.Sequence, Input: message.Input, Attachments: attachments, DeliveryIntent: message.Intent, RequestedIntent: string(input.Intent), Observation: input.Observation, DeveloperInstructions: instructionSQL(input.DeveloperInstructions), RefreshSkills: input.RefreshSkills, SteerTargetTurnID: message.TargetTurnID}); err != nil {
-		return core.Message{}, false, err
-	}
-	runID := core.AgentRunID(message.ID)
-	rows, err := queries.InsertAdmittedAgentRun(ctx, dbsql.InsertAdmittedAgentRunParams{
-		ID: runID, SessionID: message.SessionID, MessageID: message.ID,
-		Harness: nullableString(target.harness), ThreadID: nullableString(target.threadID),
-		SandboxID: input.SandboxID,
-	})
-	if err := expectOneRows(rows, err); err != nil {
-		return core.Message{}, false, fmt.Errorf("insert Message AgentRun: %w", err)
-	}
-	storedMessage, err := queries.GetMessageBySender(ctx, dbsql.GetMessageBySenderParams{SessionID: message.SessionID, FromKind: message.FromKind, FromID: message.FromID})
-	if err != nil {
-		return core.Message{}, false, err
-	}
-	message.AdmittedAt = storedMessage.AdmittedAt
-	return message, true, nil
-}
-
-func replayMessageAdmission(ctx context.Context, queries *dbsql.Queries, row dbsql.GetMessageBySenderRow, input core.MessageAdmission) (core.Message, bool, error) {
-	message, err := messageFromSenderRow(row)
-	if err != nil {
-		return core.Message{}, false, err
-	}
-	run, err := queries.GetAgentRunByMessage(ctx, message.ID)
-	if err != nil {
-		return core.Message{}, false, fmt.Errorf("load durable AgentRun for Message replay: %w", err)
-	}
-	stored := core.MessageAdmission{
-		SessionID: run.SessionID, SandboxID: run.SandboxID, FromKind: message.FromKind, FromID: message.FromID,
-		Input: message.Input, Attachments: message.Attachments, Intent: core.MessageDeliveryIntent(row.RequestedIntent), RefreshSkills: message.RefreshSkills, Observation: message.Observation, DeveloperInstructions: message.DeveloperInstructions,
-	}
-	if !sameMessageAdmission(stored, input) {
-		return core.Message{}, false, fmt.Errorf("%w: sender %s/%q", core.ErrMessageReplayConflict, input.FromKind, input.FromID)
-	}
-	return message, false, nil
-}
-
-type messageTarget struct {
-	intent   core.MessageDeliveryIntent
-	harness  string
-	threadID string
-	turnID   string
-}
-
-func resolveMessageTarget(ctx context.Context, queries *dbsql.Queries, input core.MessageAdmission) (messageTarget, error) {
-	target := messageTarget{intent: core.MessageFollow}
-	held, err := queries.SandboxDeliveryHeld(ctx, input.SandboxID)
-	if err != nil {
-		return messageTarget{}, err
-	}
-	if held {
-		if input.Intent == core.MessageSteer {
-			return messageTarget{}, core.ErrMessageSteerUnavailable
-		}
-		return target, nil
-	}
-	if input.Intent == core.MessageFollow {
-		return target, nil
-	}
-	active, err := queries.GetActiveAgentTurn(ctx, dbsql.GetActiveAgentTurnParams{
-		SessionID: input.SessionID, SandboxID: input.SandboxID,
-	})
-	if errors.Is(err, sql.ErrNoRows) {
-		if input.Intent == core.MessageSteer {
-			return messageTarget{}, core.ErrMessageSteerUnavailable
-		}
-		return target, nil
-	}
-	if err != nil {
-		return messageTarget{}, err
-	}
-	return messageTarget{intent: core.MessageSteer, harness: active.Harness, threadID: active.ThreadID, turnID: active.TurnID}, nil
-}
-
-func allocateMessageSequenceTx(ctx context.Context, tx *sql.Tx, sessionID string) (int64, error) {
-	return dbsql.New(tx).NextMessageSequence(ctx, sessionID)
-}
-
 func (s Store) Session(ctx context.Context, id string) (core.Session, error) {
 	row, err := dbsql.New(s.DB).GetSession(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -389,8 +214,7 @@ func (s Store) SessionTasks(ctx context.Context, sessionID string) ([]core.Sessi
 }
 
 // WithSessionFence serializes harness and other external mutation for one Session
-// independently of an expiring Absurd claim. Message admission intentionally
-// does not take this long-lived fence.
+// independently of an expiring Absurd claim. Native mutation uses the same fence.
 func (s Store) WithSessionFence(ctx context.Context, sessionID string, fn func() error) error {
 	conn, err := s.DB.Conn(ctx)
 	if err != nil {
@@ -412,7 +236,7 @@ func (s Store) WithSessionFence(ctx context.Context, sessionID string, fn func()
 }
 
 func acquireSessionFenceTx(ctx context.Context, tx *sql.Tx, sessionID string) error {
-	if _, err := tx.ExecContext(ctx, `select pg_advisory_xact_lock(hashtextextended('dorf-job-effect:' || $1, 0))`, sessionID); err != nil {
+	if _, err := tx.ExecContext(ctx, `select pg_advisory_xact_lock(hashtextextended('dorf-session-effect:' || $1, 0))`, sessionID); err != nil {
 		return fmt.Errorf("acquire Session execution fence: %w", err)
 	}
 	return nil
@@ -422,75 +246,6 @@ func acquireSessionFenceTx(ctx context.Context, tx *sql.Tx, sessionID string) er
 // idempotency key supplies task identity; Dorf records only ordered attachment.
 func (s Store) AttachSessionTask(ctx context.Context, sessionID, expectedCurrentTaskID, taskID, taskName string) error {
 	return s.attachSessionTask(ctx, sessionID, expectedCurrentTaskID, taskID, taskName, false)
-}
-
-func messageFromValues(id, sessionID string, fromKind core.MessageFromKind, fromID string, sequence int64, input string, intent core.MessageDeliveryIntent, targetTurnID string) core.Message {
-	return core.Message{ID: id, SessionID: sessionID, FromKind: fromKind, FromID: fromID, Sequence: sequence, Input: input, Intent: intent, TargetTurnID: targetTurnID}
-}
-
-func messageFromStoredValues(id, sessionID string, fromKind core.MessageFromKind, fromID string, sequence int64, input string, attachments []byte, intent core.MessageDeliveryIntent, targetTurnID string) (core.Message, error) {
-	message := messageFromValues(id, sessionID, fromKind, fromID, sequence, input, intent, targetTurnID)
-	decoded, err := decodeMessageAttachments(attachments)
-	if err != nil {
-		return core.Message{}, fmt.Errorf("Message %s has invalid durable attachments: %w", id, err)
-	}
-	message.Attachments = decoded
-	return message, nil
-}
-
-func messageFromSenderRow(row dbsql.GetMessageBySenderRow) (core.Message, error) {
-	message, err := messageFromStoredValues(
-		row.ID, row.SessionID, row.FromKind, row.FromID, row.Sequence, row.Input,
-		row.Attachments, row.DeliveryIntent, row.SteerTargetTurnID,
-	)
-	if err != nil {
-		return core.Message{}, err
-	}
-	message.AdmittedAt = row.AdmittedAt
-	message.RequestedIntent = core.MessageDeliveryIntent(row.RequestedIntent)
-	message.RefreshSkills = row.RefreshSkills
-	message.Observation = row.Observation
-	message.DeveloperInstructions = instructionPointer(row.DeveloperInstructions)
-	return message, nil
-}
-
-func encodeMessageAttachments(attachments []core.MessageAttachment) ([]byte, error) {
-	if attachments == nil {
-		attachments = []core.MessageAttachment{}
-	}
-	encoded, err := json.Marshal(attachments)
-	if err != nil {
-		return nil, fmt.Errorf("encode Message attachments: %w", err)
-	}
-	return encoded, nil
-}
-
-func decodeMessageAttachments(encoded []byte) ([]core.MessageAttachment, error) {
-	var attachments []core.MessageAttachment
-	if err := json.Unmarshal(encoded, &attachments); err != nil {
-		return nil, err
-	}
-	if !core.ValidMessageAttachments(attachments) {
-		return nil, fmt.Errorf("invalid attachment manifest")
-	}
-	if len(attachments) == 0 {
-		return nil, nil
-	}
-	return attachments, nil
-}
-
-func sameMessageAdmission(left, right core.MessageAdmission) bool {
-	if left.Observation != right.Observation || !core.SameDeveloperInstructions(left.DeveloperInstructions, right.DeveloperInstructions) || left.RefreshSkills != right.RefreshSkills || left.SessionID != right.SessionID || left.SandboxID != right.SandboxID ||
-		left.FromKind != right.FromKind || left.FromID != right.FromID || left.Input != right.Input || left.Intent != right.Intent ||
-		len(left.Attachments) != len(right.Attachments) {
-		return false
-	}
-	for index := range left.Attachments {
-		if left.Attachments[index] != right.Attachments[index] {
-			return false
-		}
-	}
-	return true
 }
 
 func actionFromValues(id, sessionID string, kind core.ActionKind, state core.ActionState, scope string, createdAt time.Time, settledAt sql.NullTime) core.Action {
@@ -503,23 +258,6 @@ func exactScopedAction(row dbsql.DorfAction, sessionID string, kind core.ActionK
 		return core.Action{}, fmt.Errorf("Action %s conflicts with exact Session %s, kind %s, and scope %s", row.ID, sessionID, kind, scope)
 	}
 	return actionFromValues(row.ID, row.SessionID, row.Kind, row.State, row.ScopeKey, row.CreatedAt, row.SettledAt), nil
-}
-
-func agentRunFromValues(id, sessionID, messageID string, state core.AgentRunState, harness, threadID string, baselineRecorded bool, baselineTurnID, turnID, turnOutcome, attention string) core.AgentRun {
-	return core.AgentRun{ID: id, SessionID: sessionID, MessageID: messageID, Harness: harness, ThreadID: threadID, State: state, BaselineRecorded: baselineRecorded, BaselineTurnID: baselineTurnID, TurnID: turnID, TurnOutcome: turnOutcome, Attention: attention}
-}
-
-func agentRunOutcome(state core.AgentRunState, outcome string) string {
-	if state != core.AgentRunCompleted && state != core.AgentRunFailed && state != core.AgentRunInterrupted {
-		return ""
-	}
-	if outcome == "completed" || outcome == "failed" || outcome == "interrupted" {
-		return outcome
-	}
-	if state == core.AgentRunCompleted {
-		return ""
-	}
-	return string(state)
 }
 
 func timeValue(value sql.NullTime) time.Time {
@@ -645,95 +383,6 @@ func (s Store) Sandboxes(ctx context.Context, sessionID string) ([]core.Sandbox,
 		out = append(out, core.Sandbox{ID: r.ID, SessionID: r.SessionID, Name: r.Name, OwnershipNonce: r.OwnershipNonce, ResourceID: r.ActiveResourceID, ProviderID: r.ProviderID})
 	}
 	return out, nil
-}
-
-func (s Store) Deliveries(ctx context.Context, sessionID string) ([]core.Delivery, error) {
-	rows, err := dbsql.New(s.DB).ListDeliveries(ctx, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]core.Delivery, 0, len(rows))
-	for _, r := range rows {
-		if !r.AgentRunPresent {
-			return nil, fmt.Errorf("Message %s (sequence %d) has no AgentRun", r.MessageID, r.Sequence)
-		}
-		if r.AgentRunMessageID != r.MessageID || r.AgentRunSessionID != r.MessageSessionID {
-			return nil, fmt.Errorf("Message %s (Session %s) has mismatched AgentRun %s (Message %s, Session %s)", r.MessageID, r.MessageSessionID, r.AgentRunID, r.AgentRunMessageID, r.AgentRunSessionID)
-		}
-		message, err := messageFromStoredValues(r.MessageID, r.MessageSessionID, r.FromKind, r.FromID, r.Sequence, r.Input, r.Attachments, r.DeliveryIntent, r.SteerTargetTurnID)
-		if err != nil {
-			return nil, err
-		}
-		message.AdmittedAt = r.AdmittedAt
-		message.RequestedIntent = core.MessageDeliveryIntent(r.RequestedIntent)
-		message.RefreshSkills = r.RefreshSkills
-		message.Observation = r.Observation
-		message.DeveloperInstructions = instructionPointer(r.DeveloperInstructions)
-		run := agentRunFromValues(r.AgentRunID, r.AgentRunSessionID, r.AgentRunMessageID, r.State, r.Harness, r.ThreadID, r.BaselineRecorded, r.BaselineTurnID, r.TurnID, r.TurnOutcome, r.Attention)
-		run.SandboxID = r.SandboxID
-		run.InterruptRequested = r.InterruptRequested
-		run.StartedAt = timeValue(r.StartedAt)
-		run.FinishedAt = timeValue(r.FinishedAt)
-		out = append(out, core.Delivery{Message: message, AgentRun: run})
-	}
-	return out, nil
-}
-
-// AgentMessageExecution reloads the exact durable execution aggregate by the
-// stable Message identity. Callers that may touch the Harness invoke this only
-// while holding the owning Session's effect fence and discard earlier snapshots.
-func (s Store) AgentMessageExecution(ctx context.Context, messageID string) (core.AgentMessageExecution, error) {
-	queries := dbsql.New(s.DB)
-	messageRow, err := queries.GetMessage(ctx, messageID)
-	if err != nil {
-		return core.AgentMessageExecution{}, err
-	}
-	message, err := messageFromStoredValues(messageRow.ID, messageRow.SessionID, messageRow.FromKind, messageRow.FromID, messageRow.Sequence, messageRow.Input, messageRow.Attachments, messageRow.DeliveryIntent, messageRow.SteerTargetTurnID)
-	if err != nil {
-		return core.AgentMessageExecution{}, err
-	}
-	message.AdmittedAt = messageRow.AdmittedAt
-	message.RequestedIntent = core.MessageDeliveryIntent(messageRow.RequestedIntent)
-	message.RefreshSkills = messageRow.RefreshSkills
-	message.Observation = messageRow.Observation
-	message.DeveloperInstructions = instructionPointer(messageRow.DeveloperInstructions)
-	runRow, err := queries.GetAgentRunByMessage(ctx, message.ID)
-	if err != nil {
-		return core.AgentMessageExecution{}, fmt.Errorf("Message %s has no atomically admitted AgentRun: %w", message.ID, err)
-	}
-	run := agentRunFromValues(runRow.ID, runRow.SessionID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention)
-	run.SandboxID = runRow.SandboxID
-	run.InterruptRequested = runRow.InterruptRequested
-	run.StartedAt = timeValue(runRow.StartedAt)
-	run.FinishedAt = timeValue(runRow.FinishedAt)
-	session, err := s.Session(ctx, message.SessionID)
-	if err != nil {
-		return core.AgentMessageExecution{}, err
-	}
-	sandbox, err := s.Sandbox(ctx, run.SandboxID)
-	if err != nil {
-		return core.AgentMessageExecution{}, err
-	}
-	if run.MessageID != message.ID || run.SessionID != session.ID || message.SessionID != session.ID || sandbox.SessionID != session.ID || run.SandboxID != sandbox.ID {
-		return core.AgentMessageExecution{}, fmt.Errorf("Message %s execution does not match its authoritative Session, AgentRun, and Sandbox", message.ID)
-	}
-	refreshSkills, err := queries.AgentMessageNeedsSkillRefresh(ctx, messageID)
-	if err != nil {
-		return core.AgentMessageExecution{}, err
-	}
-	return core.AgentMessageExecution{Session: session, Message: message, AgentRun: run, Sandbox: sandbox, RefreshSkills: refreshSkills}, nil
-}
-
-func (s Store) InterruptAgentRun(ctx context.Context, runID, reason string) error {
-	q := dbsql.New(s.DB)
-	row, err := q.GetAgentRunForBinding(ctx, runID)
-	if err != nil {
-		return err
-	}
-	if row.State == core.AgentRunCompleted || row.State == core.AgentRunFailed || row.State == core.AgentRunInterrupted {
-		return nil
-	}
-	return expectOneRows(q.InterruptAgentRun(ctx, dbsql.InterruptAgentRunParams{Reason: reason, RunID: runID}))
 }
 
 func nullableString(value string) sql.NullString {
@@ -874,217 +523,6 @@ func authorizeSandboxActionTx(ctx context.Context, queries *dbsql.Queries, id, t
 	}, nil
 }
 
-// AgentMessage selects one opaque Message across the whole Session.
-// Steer priority, Follow FIFO, recovery ordering, and retained-Thread adoption
-// are invariant for every consumer.
-func (s Store) AgentMessage(ctx context.Context, sessionID string) (*core.AgentMessageWork, error) {
-	if strings.TrimSpace(sessionID) == "" {
-		return nil, fmt.Errorf("Agent Message selection requires an exact Session")
-	}
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	queries := dbsql.New(s.DB).WithTx(tx)
-	session, err := queries.GetSessionAdmissionForUpdate(ctx, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	if !session.AdmissionOpen || session.CleanupState != core.CleanupPending {
-		return nil, nil
-	}
-	row, err := queries.NextAgentMessage(ctx, sessionID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, tx.Commit()
-	}
-	if err != nil {
-		return nil, err
-	}
-	message := core.Message{
-		ID: row.ID, SessionID: row.SessionID, FromKind: core.MessageFromKind(row.FromKind), FromID: row.FromID,
-		RefreshSkills: row.RefreshSkills, Sequence: row.Sequence, Intent: core.MessageDeliveryIntent(row.DeliveryIntent), RequestedIntent: core.MessageDeliveryIntent(row.RequestedIntent), TargetTurnID: row.SteerTargetTurnID, AdmittedAt: row.AdmittedAt,
-	}
-	runRow, err := queries.GetAgentRunByMessage(ctx, message.ID)
-	if err != nil {
-		return nil, fmt.Errorf("delivery Message %s has no atomically admitted AgentRun: %w", message.ID, err)
-	}
-	run := agentRunFromValues(runRow.ID, runRow.SessionID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention)
-	run.SandboxID = runRow.SandboxID
-	if message.Intent == core.MessageFollow && run.State == core.AgentRunPending && run.ThreadID == "" && session.ThreadID != "" {
-		if err := expectOneRows(queries.BindPendingFollowToSessionThread(ctx, message.ID)); err != nil {
-			return nil, err
-		}
-		run.Harness, run.ThreadID = session.Harness, session.ThreadID
-	}
-	if run.SandboxID == "" {
-		return nil, fmt.Errorf("delivery candidate AgentRun %s has an incomplete execution envelope", run.ID)
-	}
-	if run.ThreadID != "" && (run.Harness != session.Harness || run.ThreadID != session.ThreadID) {
-		return nil, fmt.Errorf("AgentRun %s conflicts with Session %s Thread", run.ID, sessionID)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return &core.AgentMessageWork{MessageID: message.ID, SandboxID: run.SandboxID}, nil
-}
-
-func (s Store) HasImmediatelyEligibleAgentMessage(ctx context.Context, sessionID string) (bool, error) {
-	q := dbsql.New(s.DB)
-	selected, err := q.NextAgentMessage(ctx, sessionID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	run, err := q.GetAgentRunByMessage(ctx, selected.ID)
-	if err != nil {
-		return false, err
-	}
-	return run.State == core.AgentRunPending, nil
-}
-
-func (s Store) PrepareAgentRun(ctx context.Context, runID, harness, baselineTurnID string) error {
-	if strings.TrimSpace(harness) == "" {
-		return fmt.Errorf("AgentRun preparation requires a harness")
-	}
-	queries := dbsql.New(s.DB)
-	rows, err := queries.PrepareAgentRun(ctx, dbsql.PrepareAgentRunParams{Harness: sql.NullString{String: harness, Valid: true}, BaselineTurnID: sql.NullString{String: baselineTurnID, Valid: true}, RunID: runID})
-	if err != nil {
-		return err
-	}
-	if rows == 1 {
-		return nil
-	}
-	prepared, err := queries.GetAgentRunPreparation(ctx, runID)
-	if err != nil {
-		return err
-	}
-	if prepared.Harness != harness || !prepared.Recorded || prepared.BaselineTurnID != baselineTurnID {
-		return fmt.Errorf("AgentRun %s harness baseline conflicts with durable baseline", runID)
-	}
-	return nil
-}
-
-func (s Store) BindAgentRun(ctx context.Context, runID, harness, threadID, turnID, status string) error {
-	if strings.TrimSpace(harness) == "" || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
-		return fmt.Errorf("AgentRun binding requires harness, Thread ID, and Turn ID")
-	}
-	state := core.AgentRunActive
-	outcome := ""
-	attention := ""
-	if status == "completed" {
-		state, outcome = core.AgentRunCompleted, status
-	} else if status == "failed" {
-		state, outcome = core.AgentRunFailed, status
-	} else if status == "interrupted" {
-		state, outcome = core.AgentRunInterrupted, status
-	} else if status != "running" && status != "inProgress" {
-		state = core.AgentRunUncertain
-		attention = fmt.Sprintf("harness Turn %s has unsupported status %q", turnID, status)
-	}
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	queries := dbsql.New(s.DB).WithTx(tx)
-	// Lock the Session before the run, matching admission and delivery selection.
-	// The binding and accepted Turn commit together, including on recovery.
-	if err := expectOneRows(queries.BindSessionThread(ctx, dbsql.BindSessionThreadParams{RunID: runID, Harness: harness, ThreadID: nullableString(threadID)})); err != nil {
-		return fmt.Errorf("AgentRun %s cannot bind the Session Thread: %w", runID, err)
-	}
-	run, err := queries.GetAgentRunForBinding(ctx, runID)
-	if err != nil {
-		return err
-	}
-	if run.Harness != "" && run.Harness != harness || run.ThreadID != "" && run.ThreadID != threadID || run.TurnID != "" && run.TurnID != turnID {
-		return fmt.Errorf("AgentRun %s harness Thread/Turn binding conflicts with its durable identity", runID)
-	}
-	if run.State == core.AgentRunCompleted || run.State == core.AgentRunFailed || run.State == core.AgentRunInterrupted {
-		if run.State != state || run.TurnOutcome != outcome || run.Harness == "" || run.ThreadID == "" || run.TurnID == "" {
-			return fmt.Errorf("AgentRun %s terminal outcome conflicts with observed harness status %q", runID, status)
-		}
-		return tx.Commit()
-	}
-	if run.State == core.AgentRunPending {
-		return fmt.Errorf("AgentRun %s must be prepared before binding a harness Turn", runID)
-	}
-	if err := expectOneRows(queries.BindAgentRunIdentity(ctx, dbsql.BindAgentRunIdentityParams{Harness: sql.NullString{String: harness, Valid: true}, ThreadID: sql.NullString{String: threadID, Valid: true}, RunID: runID})); err != nil {
-		return err
-	}
-	if err := expectOneRows(queries.BindHarnessTurn(ctx, dbsql.BindHarnessTurnParams{TurnID: sql.NullString{String: turnID, Valid: true}, State: state, TurnOutcome: outcome, Attention: attention, RunID: runID, Harness: sql.NullString{String: harness, Valid: true}, ThreadID: sql.NullString{String: threadID, Valid: true}})); err != nil {
-		return err
-	}
-	if outcome != "" {
-		if err := queries.PropagateTurnOutcomeToSteers(ctx, dbsql.PropagateTurnOutcomeToSteersParams{TurnOutcome: sql.NullString{String: outcome, Valid: true}, RunID: runID, TurnID: sql.NullString{String: turnID, Valid: true}}); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
-func (s Store) BindSteer(ctx context.Context, runID, turnID, status string) error {
-	outcome := ""
-	if status == "completed" || status == "failed" || status == "interrupted" {
-		outcome = status
-	}
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	queries := dbsql.New(s.DB).WithTx(tx)
-	bound, err := queries.BindSteer(ctx, dbsql.BindSteerParams{TurnID: sql.NullString{String: turnID, Valid: true}, TurnOutcome: outcome, RunID: runID})
-	if err != nil {
-		return err
-	}
-	if outcome != "" && bound != outcome {
-		return fmt.Errorf("AgentRun %s outcome %s conflicts with observed %s", runID, bound, outcome)
-	}
-	return tx.Commit()
-}
-
-func (s Store) RequeueAutoMessageAsFollow(ctx context.Context, runID, targetTurnID, acceptedTurnID string) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	rows, err := dbsql.New(s.DB).WithTx(tx).RequeueAutoMessageAsFollow(ctx, dbsql.RequeueAutoMessageAsFollowParams{
-		RunID: runID, TargetTurnID: sql.NullString{String: targetTurnID, Valid: true}, AcceptedTurnID: acceptedTurnID,
-	})
-	if err := expectOneRows(rows, err); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-func (s Store) FailAgentRun(ctx context.Context, runID, reason string) error {
-	return expectOneRows(dbsql.New(s.DB).FailAgentRun(ctx, dbsql.FailAgentRunParams{Reason: sql.NullString{String: reason, Valid: true}, RunID: runID}))
-}
-
-func (s Store) UncertainAgentRun(ctx context.Context, runID, reason string) error {
-	return expectOneRows(dbsql.New(s.DB).MarkAgentRunUncertain(ctx, dbsql.MarkAgentRunUncertainParams{Reason: sql.NullString{String: reason, Valid: true}, RunID: runID}))
-}
-
-func (s Store) AgentRunAttention(ctx context.Context, runID, reason string) error {
-	return expectOneRows(dbsql.New(s.DB).SetAgentRunAttention(ctx, dbsql.SetAgentRunAttentionParams{Reason: sql.NullString{String: reason, Valid: true}, RunID: runID}))
-}
-
-func (s Store) UnsettledAgentMessages(ctx context.Context, sessionID string) ([]core.AgentMessageWork, error) {
-	rows, err := dbsql.New(s.DB).ListUnsettledAgentMessages(ctx, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	messages := make([]core.AgentMessageWork, 0, len(rows))
-	for _, row := range rows {
-		messages = append(messages, core.AgentMessageWork{MessageID: row.MessageID, SandboxID: row.SandboxID})
-	}
-	return messages, nil
-}
-
 func (s Store) SetCleanupAttention(ctx context.Context, sessionID, detail string) error {
 	detail = strings.TrimSpace(detail)
 	if len(detail) > 4096 {
@@ -1119,22 +557,6 @@ func (s Store) CompleteCleanup(ctx context.Context, sessionID, taskID string) er
 	}
 	if session.AdmissionOpen || session.CleanupState != core.CleanupScheduled {
 		return fmt.Errorf("cleanup cannot complete while admission or cleanup scheduling remains unsettled")
-	}
-	deliveries, err := queries.ListDeliveries(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-	for _, delivery := range deliveries {
-		if !delivery.AgentRunPresent {
-			return fmt.Errorf("cleanup cannot complete because Message %s has no AgentRun", delivery.MessageID)
-		}
-		if delivery.AgentRunMessageID != delivery.MessageID || delivery.AgentRunSessionID != delivery.MessageSessionID {
-			return fmt.Errorf("cleanup cannot complete because Message %s has a mismatched AgentRun %s", delivery.MessageID, delivery.AgentRunID)
-		}
-		run := delivery
-		if run.State != core.AgentRunCompleted && run.State != core.AgentRunFailed && run.State != core.AgentRunInterrupted {
-			return fmt.Errorf("cleanup cannot complete with unsettled AgentRun %s", run.AgentRunID)
-		}
 	}
 	unsettled, err := queries.CountUnsettledSandboxCleanupActions(ctx, sessionID)
 	if err != nil {
@@ -1183,17 +605,4 @@ func expectOneRows(rows int64, err error) error {
 		return ErrNotFound
 	}
 	return nil
-}
-
-func instructionSQL(value *string) sql.NullString {
-	if value == nil {
-		return sql.NullString{}
-	}
-	return sql.NullString{String: *value, Valid: true}
-}
-func instructionPointer(value sql.NullString) *string {
-	if !value.Valid {
-		return nil
-	}
-	return &value.String
 }

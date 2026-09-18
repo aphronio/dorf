@@ -54,7 +54,7 @@ func NewAdmissionService(store AdmissionStore, queueName string, provider Admiss
 	return AdmissionService{store: store, queueName: queueName, provider: provider}
 }
 
-// Admit prepares one direct client Session. All input uses Core Message admission.
+// Admit prepares one client Session; input is submitted separately to its native Harness.
 func (s AdmissionService) Admit(ctx context.Context, request AdmissionRequest) (core.Session, bool, error) {
 	if !core.ValidClientReference(request.ClientReference) {
 		return core.Session{}, false, ErrInvalidAdmission
@@ -93,6 +93,9 @@ func (s AdmissionService) admitNew(ctx context.Context, request AdmissionRequest
 			return core.Session{}, false, fmt.Errorf("%w: %w", ErrInvalidAdmission, err)
 		}
 		return core.Session{}, false, err
+	}
+	if profile.Harness != "codex" {
+		return core.Session{}, false, fmt.Errorf("%w: profile Harness does not support native Session events", ErrInvalidAdmission)
 	}
 	admission.SandboxProfile = profile.Name
 	admission.ProviderConnection, admission.Model, err = gateway.ResolveModel(s.provider, admission.ProviderConnection, admission.Model)

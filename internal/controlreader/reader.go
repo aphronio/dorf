@@ -31,13 +31,12 @@ const (
 	clientTimeout       = 20 * time.Second
 	handlerTimeout      = 18 * time.Second
 
-	HealthPath             = "/v1/health"
-	FileWritePath          = "/v1/files/write"
-	FileReadPath           = "/v1/files/read"
-	MessageObservationPath = "/v1/messages/observe"
-	DefaultConnectionPath  = "/v1/admission/default-connection"
-	DefaultModelPath       = "/v1/admission/default-model"
-	ConnectionCheckPath    = "/v1/admission/check-connection"
+	HealthPath            = "/v1/health"
+	FileWritePath         = "/v1/files/write"
+	FileReadPath          = "/v1/files/read"
+	DefaultConnectionPath = "/v1/admission/default-connection"
+	DefaultModelPath      = "/v1/admission/default-model"
+	ConnectionCheckPath   = "/v1/admission/check-connection"
 )
 
 var (
@@ -58,7 +57,6 @@ type Store interface {
 	core.SandboxActivityStore
 	Session(context.Context, string) (core.Session, error)
 	Sandbox(context.Context, string) (core.Sandbox, error)
-	AgentMessageExecution(context.Context, string) (core.AgentMessageExecution, error)
 	WithSessionFence(context.Context, string, func() error) error
 }
 
@@ -192,70 +190,6 @@ func (s Service) sandboxAuthority(ctx context.Context, owned core.Sandbox) (core
 	return runtime, session, nil
 }
 
-func (s Service) ObserveMessage(ctx context.Context, sessionID, messageID string) (core.MessageResult, error) {
-	if !validIdentity(sessionID) || !validIdentity(messageID) {
-		return core.MessageResult{}, ErrUnavailable
-	}
-	if s.Store == nil || s.Runtimes == nil {
-		return core.MessageResult{}, fmt.Errorf("control reader Message authority is not configured")
-	}
-	var result core.MessageResult
-	var idleRuntime core.Execution
-	defer func() { core.ReconcileIdle(ctx, idleRuntime, sessionID) }()
-	err := s.Store.WithSessionFence(ctx, sessionID, func() error {
-		authoritative, err := s.Store.AgentMessageExecution(ctx, messageID)
-		if errors.Is(err, postgres.ErrNotFound) {
-			return ErrUnavailable
-		}
-		if err != nil {
-			return err
-		}
-		session := authoritative.Session
-		if session.ID != sessionID || session.CleanupState != core.CleanupPending ||
-			authoritative.Message.ID != messageID || authoritative.Message.SessionID != session.ID ||
-			authoritative.AgentRun.SessionID != session.ID || authoritative.AgentRun.MessageID != messageID ||
-			!validIdentity(authoritative.AgentRun.ID) || authoritative.AgentRun.State != core.AgentRunCompleted ||
-			!terminalMessageOutcome(authoritative.AgentRun.TurnOutcome) ||
-			!validIdentity(authoritative.Sandbox.ID) || authoritative.Sandbox.SessionID != session.ID ||
-			!validIdentity(authoritative.Sandbox.OwnershipNonce) || authoritative.AgentRun.SandboxID != authoritative.Sandbox.ID {
-			return ErrUnavailable
-		}
-		runtime, _, err := s.sandboxAuthority(ctx, authoritative.Sandbox)
-		if err != nil {
-			return err
-		}
-		if runtime.SandboxProfile != session.ProfileRef() || runtime.Execution == nil {
-			return fmt.Errorf("resolved Sandbox runtime has no exact Message observation authority")
-		}
-		idleRuntime = runtime.Execution
-		err = core.WithSandboxActivity(ctx, s.Store, session.ID, func() error {
-			result, err = runtime.Execution.ObserveSettledAgentMessage(ctx, session.ID, messageID)
-			return err
-		})
-		if err != nil {
-			return err
-		}
-		if result.MessageID != messageID {
-			return ErrUnavailable
-		}
-		if !result.Terminal() || result.Outcome != authoritative.AgentRun.TurnOutcome {
-			return ErrUnavailable
-		}
-		if len(result.Output) > MaxObservationBytes {
-			return ErrResponseTooLarge
-		}
-		return nil
-	})
-	if err != nil {
-		return core.MessageResult{}, err
-	}
-	return result, nil
-}
-
-func terminalMessageOutcome(outcome string) bool {
-	return outcome == "completed" || outcome == "failed" || outcome == "interrupted"
-}
-
 func (s Service) DefaultConnection() (string, error) {
 	if s.Provider == nil {
 		return "", fmt.Errorf("AI connection observation authority is not configured")
@@ -310,11 +244,6 @@ type fileReadRequest struct {
 	Path      string `json:"path"`
 }
 
-type messageObservationRequest struct {
-	SessionID string `json:"session_id"`
-	MessageID string `json:"message_id"`
-}
-
 type connectionRequest struct {
 	Connection string `json:"connection"`
 }
@@ -343,8 +272,14 @@ func NewHandler(token string, service Service) (http.Handler, error) {
 	}
 	fileTransfers := make(chan struct{}, provider.MaxConcurrentFileReads)
 	routes := map[string]http.HandlerFunc{
-		CoherentObservationPath: jsonEndpoint(MaxObservationBytes, func(ctx context.Context, input observationRequest) (MessageObservation, error) {
-			return service.ReadMessageObservation(ctx, input.SessionID, input.MessageID, input.Cursor)
+		NativeEventPath: jsonEndpoint(MaxRequestBytes, func(ctx context.Context, input nativeEventRequest) (core.NativeAcknowledgement, error) {
+			return service.SubmitEvent(ctx, input.SessionID, input.Event)
+		}),
+		NativeTurnsPath: jsonEndpoint(MaxObservationBytes, func(ctx context.Context, input observationRequest) (core.HarnessHistory, error) {
+			return service.ReadNativeTurns(ctx, input.SessionID)
+		}),
+		CoherentObservationPath: jsonEndpoint(MaxObservationBytes, func(ctx context.Context, input observationRequest) (TurnObservation, error) {
+			return service.ReadTurnObservation(ctx, input.SessionID, input.TurnID, input.Cursor)
 		}),
 		ObservationStreamPath: observationStreamEndpoint(service),
 		HealthPath: jsonEndpoint(0, func(context.Context, struct{}) (healthResponse, error) {
@@ -355,16 +290,7 @@ func NewHandler(token string, service Service) (http.Handler, error) {
 		CommandPath:   commandEndpoint(service),
 		StatusPath:    statusEndpoint(service),
 		TimelinePath: jsonEndpoint(MaxObservationBytes, func(ctx context.Context, input timelineRequest) (core.HarnessTimeline, error) {
-			if input.MessageID != "" {
-				if input.TurnID != "" {
-					return core.HarnessTimeline{}, ErrInvalidRequest
-				}
-				return service.ReadMessageTimeline(ctx, input.SessionID, input.MessageID)
-			}
 			return service.ReadTimeline(ctx, input.SessionID, input.TurnID)
-		}),
-		MessageObservationPath: jsonEndpoint(MaxObservationBytes, func(ctx context.Context, input messageObservationRequest) (core.MessageResult, error) {
-			return service.ObserveMessage(ctx, input.SessionID, input.MessageID)
 		}),
 		DefaultConnectionPath: jsonEndpoint(0, func(context.Context, struct{}) (connectionResponse, error) {
 			connection, err := service.DefaultConnection()
@@ -478,6 +404,9 @@ func authenticated(r *http.Request, expected [sha256.Size]byte) bool {
 
 func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
 	limit := MaxRequestBytes
+	if r.URL.Path == NativeEventPath {
+		limit = MaxNativeEventBytes
+	}
 	if r.URL.Path == CommandPath {
 		limit = provider.MaxCommandRequestBytes
 	}
@@ -513,6 +442,12 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
 
 func writeServiceError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, core.ErrNativeUnknown):
+		writeProblem(w, 409, "native_outcome_unknown")
+	case errors.Is(err, core.ErrNativeUnavailable):
+		writeProblem(w, 409, "native_unavailable")
+	case errors.Is(err, core.ErrInvalidEvent):
+		writeProblem(w, 422, "invalid_event")
 	case errors.Is(err, ErrSessionNotFound):
 		writeProblem(w, http.StatusNotFound, "session_not_found")
 	case errors.Is(err, core.ErrTurnNotFound):
@@ -657,25 +592,6 @@ func (c Client) ReadFile(ctx context.Context, sandboxID, relativePath string) ([
 	return contents, nil
 }
 
-func (c Client) ObserveMessage(ctx context.Context, sessionID, messageID string) (core.MessageResult, error) {
-	response, err := c.request(ctx, MessageObservationPath, messageObservationRequest{SessionID: sessionID, MessageID: messageID})
-	if err != nil {
-		return core.MessageResult{}, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return core.MessageResult{}, decodeProblem(response)
-	}
-	var result core.MessageResult
-	if err := decodeJSONResponse(response, &result, MaxObservationBytes, "Message observation"); err != nil {
-		return core.MessageResult{}, err
-	}
-	if result.MessageID != messageID || !result.Terminal() || len(result.Output) > MaxObservationBytes {
-		return core.MessageResult{}, ErrUnavailable
-	}
-	return result, nil
-}
-
 func (c Client) DefaultConnection() (string, error) {
 	response, err := c.request(context.Background(), DefaultConnectionPath, struct{}{})
 	if err != nil {
@@ -778,7 +694,17 @@ func decodeProblem(response *http.Response) error {
 	if err := decodeJSONResponse(response, &value, maxProblemBytes, "JSON"); err != nil || !problemMatchesStatus(value.Code, response.StatusCode) {
 		return fmt.Errorf("control reader returned HTTP %d", response.StatusCode)
 	}
-	switch value.Code {
+	return problemError(value.Code, response.StatusCode)
+}
+
+func problemError(code string, status int) error {
+	switch code {
+	case "native_outcome_unknown":
+		return core.ErrNativeUnknown
+	case "native_unavailable":
+		return core.ErrNativeUnavailable
+	case "invalid_event":
+		return core.ErrInvalidEvent
 	case "session_not_found":
 		return ErrSessionNotFound
 	case "turn_not_found":
@@ -802,7 +728,7 @@ func decodeProblem(response *http.Response) error {
 	case "response_too_large":
 		return ErrResponseTooLarge
 	default:
-		return fmt.Errorf("control reader returned HTTP %d", response.StatusCode)
+		return fmt.Errorf("control reader returned HTTP %d", status)
 	}
 }
 
@@ -814,9 +740,9 @@ func problemMatchesStatus(code string, status int) bool {
 		return status == http.StatusBadRequest || status == http.StatusUnprocessableEntity
 	case "sandbox_not_found", "file_not_found", "session_not_found", "turn_not_found":
 		return status == http.StatusNotFound
-	case "invalid_file_path":
+	case "invalid_file_path", "invalid_event":
 		return status == http.StatusUnprocessableEntity
-	case "unavailable", "response_too_large", "timeline_unavailable", "file_too_large":
+	case "native_outcome_unknown", "native_unavailable", "unavailable", "response_too_large", "timeline_unavailable", "file_too_large":
 		return status == http.StatusConflict
 	default:
 		return false

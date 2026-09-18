@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aphronio/dorf/internal/core"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
@@ -58,7 +57,16 @@ type PersistenceCapture struct {
 // This guard does not close the durable admission-versus-publication race. The
 // caller must separately invalidate the attempt when new work is admitted and
 // publish the resulting snapshot under the same durable generation boundary.
-func (a Agent) BeginPersistenceCapture(ctx context.Context, owner provider.Ownership, workspace string, runs []core.AgentRun, extraPaths []string) (PersistenceCapture, error) {
+func (a Agent) BeginPersistenceCapture(ctx context.Context, owner provider.Ownership, workspace string, threadID string, extraPaths []string) (PersistenceCapture, error) {
+	var runs []retainedTurn
+	err := a.withServer(ctx, owner, func(p *protocol) error {
+		var err error
+		runs, err = a.captureContinuity(ctx, owner, p, threadID)
+		return err
+	})
+	if err != nil {
+		return PersistenceCapture{}, err
+	}
 	extras, err := normalizePersistenceExtraPaths(workspace, extraPaths)
 	if err != nil {
 		return PersistenceCapture{}, err
@@ -112,7 +120,7 @@ func (a Agent) BeginPersistenceCapture(ctx context.Context, owner provider.Owner
 	return PersistenceCapture{ID: id, Paths: paths}, nil
 }
 
-func (a Agent) verifyPersistedTurns(ctx context.Context, owner provider.Ownership, runs []core.AgentRun) error {
+func (a Agent) verifyPersistedTurns(ctx context.Context, owner provider.Ownership, runs []retainedTurn) error {
 	if len(runs) == 0 {
 		return nil
 	}

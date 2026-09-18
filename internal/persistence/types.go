@@ -14,27 +14,25 @@ var (
 )
 
 // CaptureBoundary is a comparable observation of the durable facts that can
-// affect a Sandbox while an unfenced upload runs. MessageSequence is the exact
-// contiguous execution boundary: eligibility means every AgentRun through it
-// is terminal. CompletedTurnSequence only proves that useful native work has
-// completed; it is not the restore cutoff.
+// affect a Sandbox while an unfenced upload runs. NativeRevision is the exact
+// native dispatch cutoff. Eligibility also requires settled native work and
+// no unresolved mutation.
 //
 // Cleanup selects the closed-admission eligibility rule. It does not create a
 // different checkpoint kind or storage path. Eligible is derived from current
 // facts and must still be true when publication rechecks the boundary.
 type CaptureBoundary struct {
-	SessionID             string    `json:"job_id"`
-	SandboxID             string    `json:"sandbox_id"`
-	ResourceID            string    `json:"resource_id"`
-	ProfileName           string    `json:"profile_name"`
-	ProfileRevision       string    `json:"profile_revision"`
-	EffectiveUpgradeID    string    `json:"effective_upgrade_id,omitempty"`
-	LastActivityAt        time.Time `json:"last_activity_at"`
-	MessageSequence       int64     `json:"message_sequence"`
-	CompletedTurnSequence int64     `json:"completed_turn_sequence"`
-	DeliveryHoldCount     int64     `json:"delivery_hold_count"`
-	Cleanup               bool      `json:"cleanup"`
-	Eligible              bool      `json:"eligible"`
+	SessionID          string    `json:"session_id"`
+	SandboxID          string    `json:"sandbox_id"`
+	ResourceID         string    `json:"resource_id"`
+	ProfileName        string    `json:"profile_name"`
+	ProfileRevision    string    `json:"profile_revision"`
+	EffectiveUpgradeID string    `json:"effective_upgrade_id,omitempty"`
+	LastActivityAt     time.Time `json:"last_activity_at"`
+	NativeRevision     int64     `json:"native_revision"`
+	DeliveryHoldCount  int64     `json:"delivery_hold_count"`
+	Cleanup            bool      `json:"cleanup"`
+	Eligible           bool      `json:"eligible"`
 }
 
 // Reference identifies an immutable restic snapshot within one configured

@@ -65,19 +65,18 @@ func TestScopedAccessCompletionPreservesNativeObservationAndInstructions(t *test
 	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
 	session := &instructionSession{runID: "scoped-run", initial: true, closed: make(chan struct{}), release: release}
 	f.sessions <- session
-	ctx, cancel := context.WithCancel(telemetry.WithExecution(context.Background(), core.AgentRun{
-		ID: session.runID, SessionID: owner.SessionID, SandboxID: owner.SandboxID, MessageID: "scoped-message",
-	}))
+	ctx, cancel := context.WithCancel(telemetry.WithExecution(context.Background(), telemetry.NativeExecution{
+		ID: session.runID, SessionID: owner.SessionID, SandboxID: owner.SandboxID}))
 	defer cancel()
-	binding, err := f.agent.StartInitialTurn(ctx, owner, "/workspace/job", session.runID, core.HarnessInput{Text: "hello"}, "model", "high", false)
-	if err != nil || binding.Turn.ID != "native-"+session.runID {
+	binding, err := f.agent.SubmitNative(ctx, owner, core.Session{ThreadID: "", Model: "model", ReasoningEffort: "high"}, core.NativeEvent{Type: core.InputMessage, ClientID: session.runID}, core.HarnessInput{Text: "hello"}, fixtureMutation(session.runID, true))
+	if err != nil || binding.TurnID != "native-"+session.runID {
 		t.Fatalf("accepted binding=%#v err=%v", binding, err)
 	}
 	if len(sandbox.scopes) != 1 || !errors.Is(sandbox.scopes[0].Err(), context.Canceled) {
 		t.Fatal("native submission did not finish its single provider scope")
 	}
 	cancel()
-	key := observationKey{scope: instructionScope{sessionID: owner.SessionID, sandboxID: owner.SandboxID, threadID: "retained-thread"}, turnID: binding.Turn.ID}
+	key := observationKey{scope: instructionScope{sessionID: owner.SessionID, sandboxID: owner.SandboxID, threadID: "retained-thread"}, turnID: binding.TurnID}
 	observations := f.agent.Observations
 	observations.mu.Lock()
 	active := observations.active[key]
@@ -91,7 +90,7 @@ func TestScopedAccessCompletionPreservesNativeObservationAndInstructions(t *test
 	releaseOnce.Do(func() { close(release) })
 	select {
 	case event := <-events:
-		if event.Name != "codex.turn/completed" || event.Attributes["native.turn_id"] != binding.Turn.ID || event.Attributes["dorf.agent_run_id"] != session.runID {
+		if event.Name != "codex.turn/completed" || event.Attributes["native.turn_id"] != binding.TurnID || event.Attributes["dorf.input_id"] != session.runID {
 			t.Fatalf("lost or misattributed completion: %#v", event)
 		}
 	case <-time.After(3 * time.Second):

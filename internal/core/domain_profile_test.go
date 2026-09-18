@@ -77,6 +77,6 @@ func TestSandboxProfileBaseVerifiedRequiresExactPersistedDefinition(t *testing.T
 	profile.DefinitionHash = ""
 	profile.Verification.DefinitionHash = ""
 	if profile.BaseVerified() {
-		t.Fatal("legacy rows without definition hashes became eligible")
+		t.Fatal("profile without a definition hash became eligible")
 	}
 }

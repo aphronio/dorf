@@ -1,9 +1,10 @@
 # Native Session contract: capability review
 
-Status: boundary agreed; Codex source review and isolated native input probe completed on
-2026-09-18. Runtime/API replacement remains a separate slice. This document owns the implementation
-evidence and open details for [D148](../project/decisions/D148-thin-native-session-control-plane.md),
-not the currently shipped API. The [tracker](session-product-proposals.md) owns sequencing.
+Status: native Session API and coordinated client replacement implemented in slice 9 on
+2026-09-19. This document owns implementation evidence and limits for
+[D148](../project/decisions/D148-thin-native-session-control-plane.md).
+The [API contract](../control-api.md) owns current behavior; the
+[tracker](session-product-proposals.md) owns sequencing.
 
 ## Responsibility and proposed surface
 
@@ -24,14 +25,25 @@ Do not introduce a Thread table, shared Turn table, durable input queue, or gene
 just to wrap the native protocol. Keep authentication, exact ownership, maintenance gates, and
 resource release around every exposed operation; this is not unrestricted JSON-RPC forwarding.
 
-The following describes responsibilities, not final endpoint names or generated schemas:
+Use Session **events** for submitted input and controls as well as native execution notifications.
+Input is an event type, not a separate `input` resource. Turns and saved items remain native read
+views. The [OpenAPI document](../../internal/controlapi/openapi.json) defines the event types and wire schemas.
+
+Event vocabulary does not require new streaming work. Dorf already exposes SSE for Session
+snapshots and Turn observations containing completed native items and status; see the
+[current API](../control-api.md). These are not token-by-token text streams. This scope clarification
+does not authorize removing existing streaming support. The existing observation path now uses native Turn identity, and ordinary native Turn/history reads remain available. Any expanded
+streaming surface needs a supported delivery and reconnect contract. Event vocabulary alone does
+not promise a replayable event collection or require Dorf to retain an event log.
+
+The following describes responsibilities, not final endpoint paths or generated schemas:
 
 | Client operation | Native responsibility | Dorf responsibility |
 | --- | --- | --- |
 | Create / inspect Session | Create or reopen its native conversation when ready | Configuration, provisioning, exact binding, readiness |
 | Send input | Decide start versus steer and acknowledge acceptance | Validate supported input, attest the Session, submit once, expose native result or uncertainty |
 | Read history / inspect Turn | Return saved items and native status | Bounded access through the Session binding; expose unavailable history honestly |
-| Observe | Produce native events | Authenticated stream and documented reconnect behavior; no durable event-log promise |
+| Observe | Produce native events and expose execution/history views | Authenticated native reads and adaptation of existing SSE; no new token-streaming or durable event-log promise |
 | Interrupt current execution | Validate and stop the selected native execution | Resolve a fresh native target for that call; do not retry against a successor |
 | Configure / refresh | Interpret native settings, tools and skills | Enforce admitted settings and credential ownership |
 | Files / commands | Optional native file/process transport | Keep existing path, size, ownership and unknown-command guarantees |
@@ -55,7 +67,7 @@ the same version. Package selection remains in the [package manifest](../../scri
 | `turn/start` | Calls native `start_or_steer_turn`; returns the selected Turn ID for either outcome. Ordinary send needs no Dorf read-active-then-select-Follow/Steer loop. |
 | `turn/steer` | Has an explicit `expectedTurnId` precondition. It is a different operation, unnecessary for ordinary native start-or-steer input. |
 | `turn/interrupt` | Accepts Thread and Turn IDs and validates the target. An adapter can hide target lookup from ordinary clients without inventing retargeting/retry semantics. |
-| `clientUserMessageId` | Carries input attribution. Repeating it is not deduplication; do not advertise Dorf's current same-key replay guarantee on this basis. |
+| `clientUserMessageId` | Carries input attribution. Repeating it is not deduplication; do not advertise the retired Message same-key replay guarantee on this basis. |
 | `thread/read`, `thread/turns/list`, `thread/items/list` | Native history and execution views. Paginated APIs and storage modes have version-specific constraints; use the already verified timeline path before adding another one. |
 | Turn/item/status notifications | Native live observations. A reconnect needs history reconciliation where supported, not replay of a Dorf Message. Connection and process lifetime need their own proof. |
 | `turn/start.toolOutput` | Supports standalone application tool output and start-or-steer placement. It cannot be combined with nonempty user input. Its attribution is not the user-message correlation field. |
@@ -115,43 +127,55 @@ Adopt the responsibility boundary and simple client vocabulary. Those documents 
 service's internal storage or prove the same acknowledgement, retry, restart, or retention guarantees
 for a self-hosted Codex app-server. The two products are not interchangeable protocol authorities.
 
-## Client change and remaining proof
+## Implementation and verification
 
-The inspected client already retains application input and prepares workspace capabilities before
-submission. Its conversation and task paths nevertheless depend on Dorf Message IDs, same-key
-replay, effective Follow/Steer intent, Message-specific observation cursors, and Message-targeted
-interruption. Replacing those uses is part of the API slice, not a drop-in server change.
-Consumer-specific source paths and operational details remain outside this public repository.
+The client now submits a Session event once, stores the returned native binding, and observes that
+Turn. Several application inputs can bind to one Turn; application reply publication retains one
+owner and its own durable deduplication. Uncertain submission is inspected using positive native
+correlation evidence; missing history never authorizes another send. Private client implementation
+and operational details remain outside this public repository.
 
-The expected simplification is one Session input path and native execution/history observation.
-Remove effective-intent reconciliation, Message-to-Turn discovery, duplicate reply ownership based
-on Follow versus Steer, and retries justified only by Dorf's old Message idempotency contract.
-Application publication and its own delivery deduplication still belong to the client.
+Dorf retains a monotonic native mutation revision and, while unresolved, one input dispatch marker
+or exact interrupt target. These contain no payload or transcript. The marker is written before
+native mutation, uses a fresh dispatch suffix even when the caller repeats a correlation ID, and
+blocks subsequent writes and maintenance until acknowledgement or exact positive native evidence.
+An empty Thread may be replaced only before any native mutation has begun. Pause, upgrade and
+checkpoint safety use this guard and native quiescence. Release retains resource custody.
 
-Before replacing the path, prove these concrete obligations:
+Checkpoint capture and upgrade quiescence write a bounded workspace manifest of settled native
+Thread/Turn identities and statuses. Restore checks that proof against native history. PostgreSQL
+retains the checkpoint's native revision. The migration retires pre-contract checkpoint references
+and completed recovery receipts; it refuses unfinished recovery and leaves remote backup objects
+untouched. No compatibility flag or automatic import remains. No accepted input is reconstructed
+or replayed from a backup.
 
-1. **Initial binding:** establish one Thread without unsolicited model work and account for loss
-   between native creation, local binding and first input. Never create another conversation merely
-   because a send acknowledgement was lost.
-2. **Send and uncertainty:** concurrent native input, explicit rejection, response loss, correlation
-   visibility, and no automatic resubmission. Do not add a permanent payload store to preserve a
-   retired promise. Any small retained uncertainty fact must have a concrete lifecycle purpose.
-3. **Observation and interruption:** live and cold history, reconnect gaps, native ID stability,
-   exact cancellation races, and work continuing after the public client disconnects. An ephemeral
-   observation cache must not become a second outcome authority.
-4. **Existing input capabilities:** attachments, application tool output, developer instructions,
-   workspace instructions and skill refresh. Map each to a supported native capability or explicitly
-   retire it with its consumer; do not silently change its authority or defer it to a later Turn.
-5. **Maintenance and release:** stop accepting native writes under the existing fence before
-   pause, upgrade, restore or cleanup. Native idle status alone does not prove no unresolved call
-   exists. Checkpoint safety currently uses Message sequences; replace that cutoff before deleting
-   the ledger. Native history and external tool effects cannot be recovered by replaying old input.
+Verification covers:
 
-Implement through one coordinated public/API/adapter/client path, then delete the old Message
-admission, FIFO/Auto selection, AgentRun outcome propagation, delivery wakes, dedicated schemas and
-tests of retired semantics. Preserve published migrations. Do not keep two production execution
-paths or aliases for hypothetical compatibility. Keep lifecycle orchestration until evidence shows
-which parts become unnecessary; a queue rewrite or guest daemon is not a prerequisite.
+- PostgreSQL migration/replay, concurrent mutation exclusion, stale completion, initial binding,
+  maintenance holds and closed admission.
+- Native protocol input, images, instructions, refresh, exact cancellation, observation handoff
+  after caller disconnect, and positive-evidence reconciliation of a lost acknowledgement.
+- Workspace continuity manifest capture/read, malformed or mismatched proof rejection, and native
+  settled-history comparison.
+- API acknowledgement and uncertainty responses, correlation without deduplication, native history,
+  completed-item SSE, bounded attachments, and public client changes.
+- The isolated real Codex probe above was rerun on 2026-09-19 and passed, including start-or-steer,
+  repeated correlation IDs, completed-history restart and the acknowledged-but-unpersisted case.
+
+Live Incus/E2B pause, upgrade and checkpoint replacement proofs have **not** been rerun for this
+slice. Existing provider verification does not establish this changed native recovery boundary.
+No live deployment was migrated. Deployment verification remains separate from local code checks.
+
+The old Message/AgentRun schema, delivery controller, queue wakes, multipart payload store,
+Follow/Steer selection and public aliases are removed. Published migrations remain intact.
+The cleanup also removes retired Pi input execution, Message-shaped consumer fixtures, obsolete
+Session execution states, and test adapters that reconstructed AgentRun-era bindings. Queue names,
+wake keys and payloads use Session vocabulary; this transition requires no outstanding old queue
+work and a coordinated worker restart. Existing provider ownership labels still identify retained
+compute and are not renamed by a queue transition.
+
+The lifecycle queue and provider transports remain; a scheduler rewrite or guest daemon is not a
+prerequisite for native input.
 
 [turn-processor]: https://github.com/openai/codex/blob/36eab01061df3cde5f95ec20a526777b430091ba/codex-rs/app-server/src/request_processors/turn_processor.rs
 [turn-types]: https://github.com/openai/codex/blob/36eab01061df3cde5f95ec20a526777b430091ba/codex-rs/app-server-protocol/src/protocol/v2/turn.rs

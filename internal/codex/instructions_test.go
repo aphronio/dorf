@@ -71,7 +71,7 @@ func TestInstructionTrackingRefreshesAfterObservationLoss(t *testing.T) {
 }
 
 func TestInstructionTrackingRequiresObservedAcceptance(t *testing.T) {
-	for _, failure := range []string{"missing execution", "wrong run", "wrong session", "wrong sandbox", "rejected", "missing turn ID", "lost acknowledgement", "closed observer"} {
+	for _, failure := range []string{"rejected", "missing turn ID", "lost acknowledgement", "closed observer"} {
 		t.Run(failure, func(t *testing.T) {
 			f := newInstructionFixture(t)
 			owner := testOwner("instructions")
@@ -122,15 +122,15 @@ func TestInstructionTrackingForgetsRefusedSubscription(t *testing.T) {
 	f.submit(t, owner, &instructionSession{initial: true}, "exact")
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
-	ctx := telemetry.WithExecution(context.Background(), core.AgentRun{ID: "duplicate", SessionID: owner.SessionID, SandboxID: owner.SandboxID, MessageID: "message"})
+	ctx := telemetry.WithExecution(context.Background(), telemetry.NativeExecution{ID: "duplicate", SessionID: owner.SessionID, SandboxID: owner.SandboxID})
 	for _, held := range []bool{true, false} {
 		s := &instructionSession{runID: "duplicate", closed: make(chan struct{})}
 		if held {
 			s.release = release
 		}
 		f.sessions <- s
-		turn, err := f.agent.StartTurn(ctx, owner, "/workspace/job", "retained-thread", s.runID, core.HarnessInput{Text: "retry"}, "model", "high", false)
-		if err != nil || turn.Turn.ID != "native-duplicate" {
+		turn, err := f.agent.SubmitNative(ctx, owner, core.Session{ThreadID: "retained-thread", Model: "model", ReasoningEffort: "high"}, core.NativeEvent{Type: core.InputMessage, ClientID: s.runID}, core.HarnessInput{Text: "retry"}, fixtureMutation(s.runID, false))
+		if err != nil || turn.TurnID != "native-duplicate" {
 			t.Fatalf("accepted turn=%#v err=%v", turn, err)
 		}
 	}
@@ -138,9 +138,9 @@ func TestInstructionTrackingForgetsRefusedSubscription(t *testing.T) {
 	f.nextRun++
 	next.runID, next.closed = fmt.Sprintf("run-%d", f.nextRun), make(chan struct{})
 	f.sessions <- next
-	ctx = telemetry.WithExecution(context.Background(), core.AgentRun{ID: next.runID, SessionID: owner.SessionID, SandboxID: owner.SandboxID, MessageID: "next"})
-	turn, err := f.agent.StartTurn(ctx, owner, "/workspace/job", "retained-thread", next.runID, core.HarnessInput{Text: "follow"}, "model", "high", false)
-	if err != nil || turn.Turn.ID != "native-"+next.runID {
+	ctx = telemetry.WithExecution(context.Background(), telemetry.NativeExecution{ID: next.runID, SessionID: owner.SessionID, SandboxID: owner.SandboxID})
+	turn, err := f.agent.SubmitNative(ctx, owner, core.Session{ThreadID: "retained-thread", Model: "model", ReasoningEffort: "high"}, core.NativeEvent{Type: core.InputMessage, ClientID: next.runID}, core.HarnessInput{Text: "follow"}, fixtureMutation(next.runID, false))
+	if err != nil || turn.TurnID != "native-"+next.runID {
 		t.Fatalf("follow turn=%#v err=%v", turn, err)
 	}
 	select {
@@ -199,7 +199,7 @@ func (f *instructionFixture) submit(t *testing.T, owner provider.Ownership, s *i
 	f.nextRun++
 	s.runID, s.closed = fmt.Sprintf("run-%d", f.nextRun), make(chan struct{})
 	f.sessions <- s
-	run := core.AgentRun{ID: s.runID, SessionID: owner.SessionID, SandboxID: owner.SandboxID, MessageID: "message", TurnID: "native-" + s.runID}
+	run := telemetry.NativeExecution{ID: s.runID, SessionID: owner.SessionID, SandboxID: owner.SandboxID, TurnID: "native-" + s.runID}
 	switch attribution {
 	case "wrong run":
 		run.ID = "other-run"
@@ -214,7 +214,7 @@ func (f *instructionFixture) submit(t *testing.T, owner provider.Ownership, s *i
 	}
 	const input = "  Ordinary user text stays unchanged.\n"
 	var err error
-	var turn TurnOutcome
+	var turnID string
 	settled := make(chan struct{})
 	go func() {
 		defer close(settled)
@@ -222,16 +222,16 @@ func (f *instructionFixture) submit(t *testing.T, owner provider.Ownership, s *i
 			var history core.HarnessHistory
 			history, err = f.agent.ReadTurns(ctx, owner, "retained-thread")
 			if len(history.Turns) == 1 {
-				turn = history.Turns[0]
+				turnID = history.Turns[0].ID
 			}
 		} else if s.initial {
-			var binding core.HarnessBinding
-			binding, err = f.agent.StartInitialTurn(ctx, owner, "/workspace/job", s.runID, core.HarnessInput{Text: input}, "model", "high", false)
-			turn = binding.Turn
+			var binding core.NativeAcknowledgement
+			binding, err = f.agent.SubmitNative(ctx, owner, core.Session{ThreadID: "", Model: "model", ReasoningEffort: "high"}, core.NativeEvent{Type: core.InputMessage, ClientID: s.runID}, core.HarnessInput{Text: input}, fixtureMutation(s.runID, true))
+			turnID = binding.TurnID
 		} else {
-			var binding core.HarnessBinding
-			binding, err = f.agent.StartTurn(ctx, owner, "/workspace/job", "retained-thread", s.runID, core.HarnessInput{Text: input}, "model", "high", false)
-			turn = binding.Turn
+			var binding core.NativeAcknowledgement
+			binding, err = f.agent.SubmitNative(ctx, owner, core.Session{ThreadID: "retained-thread", Model: "model", ReasoningEffort: "high"}, core.NativeEvent{Type: core.InputMessage, ClientID: s.runID}, core.HarnessInput{Text: input}, fixtureMutation(s.runID, false))
+			turnID = binding.TurnID
 		}
 		f.agent.Observations.wg.Wait()
 	}()
@@ -244,8 +244,8 @@ func (f *instructionFixture) submit(t *testing.T, owner provider.Ownership, s *i
 	if (err != nil) != wantError {
 		t.Fatalf("submission err=%v, want error=%t", err, wantError)
 	}
-	if !wantError && turn.ID != "native-"+s.runID {
-		t.Fatalf("native turn=%q, want %q", turn.ID, "native-"+s.runID)
+	if !wantError && turnID != "native-"+s.runID {
+		t.Fatalf("native turn=%q, want %q", turnID, "native-"+s.runID)
 	}
 	select {
 	case <-s.closed:
@@ -411,7 +411,7 @@ func TestUnreadableInstructionsPreventNativeSubmission(t *testing.T) {
 	failure := errors.New("transport unavailable")
 	sandbox := &instructionSandbox{readErr: failure}
 	agent := Agent{Sandbox: sandbox}
-	_, err := agent.StartTurn(context.Background(), testOwner("instructions"), "/workspace/job", "thread", "run", core.HarnessInput{Text: "hello"}, "model", "high", false)
+	_, err := agent.SubmitNative(context.Background(), testOwner("instructions"), core.Session{ThreadID: "thread", Model: "model", ReasoningEffort: "high"}, core.NativeEvent{Type: core.InputMessage, ClientID: "run"}, core.HarnessInput{Text: "hello"}, fixtureMutation("run", false))
 	if !errors.Is(err, failure) || sandbox.endpoints != 0 {
 		t.Fatalf("err=%v native connections=%d", err, sandbox.endpoints)
 	}
@@ -447,3 +447,5 @@ func (s *instructionSandbox) Exec(_ context.Context, _ provider.Ownership, _ []b
 	}
 	return provider.Result{Stdout: "1\n1\nscoped-test-capability\n"}, nil
 }
+
+func (s *instructionSandbox) Workspace() string { return "/workspace/job" }

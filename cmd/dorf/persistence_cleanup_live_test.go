@@ -81,7 +81,7 @@ func TestLivePersistenceCleanup(t *testing.T) {
 	markLivePersistenceBudgetConsumed(t, receipt)
 	workerStop := proof.startWorker()
 	message := proof.admit("cleanup-state", "Remember the synthetic cleanup marker CLEANUP_CHECKPOINT_154. Reply briefly without tools.")
-	if execution, _ := proof.waitMessage(message); execution.AgentRun.ThreadID == "" || proof.turnOutput(execution) == "" {
+	if execution, _ := proof.waitNativeTurn(message); message.ThreadID == "" || proof.turnOutput(execution) == "" {
 		t.Fatal("source turn omitted its retained thread or substantive output")
 	}
 	proof.prepareUsefulState()
@@ -98,8 +98,7 @@ func TestLivePersistenceCleanup(t *testing.T) {
 		store: store, sandboxID: proof.sandboxID,
 		publishedBeforeRoute: publishedBeforeRoute, publishedBeforeDelete: publishedBeforeDelete,
 	}
-	baseExecution := core.NewExecutionService(store, cleanupExternals, nil, absurdruntime.RequireClaim).
-		WithAgentExecution(composedAgentExecution{externals: cleanupExternals.Externals})
+	baseExecution := core.NewExecutionService(store, cleanupExternals, nil, absurdruntime.RequireClaim)
 	resolver := profileRuntimeResolver{cfg: cfg, store: store, client: tasks, emit: proof.emit}
 	cleanupExecution := checkpointExecution{
 		Execution: upgrade.Execution{ExecutionService: baseExecution, Upgrades: upgrade.Service{

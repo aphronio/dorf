@@ -108,7 +108,7 @@ func TestSessionExecutionWakeIsDurableBeforeWaitAndTimeoutReloads(t *testing.T) 
 		{name: "emit-before-wait", revision: 1, timeout: time.Second, signal: true},
 		{name: "timeout", revision: 2, timeout: 25 * time.Millisecond},
 	} {
-		taskName := "dorf-job-execution-wake-proof-" + test.name
+		taskName := "dorf-session-execution-wake-proof-" + test.name
 		client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.SessionTaskParams) (core.TaskResultV1, error) {
 			err := application.AwaitSessionExecutionWake(taskCtx, session.ID, test.revision, "test/wake/"+test.name, test.timeout)
 			return core.TaskResultV1{SessionID: session.ID, Outcome: test.name}, err
@@ -152,22 +152,12 @@ func TestNativeTerminalWakeAcceptsFastBindRaceAndRejectsForeignOrClosedTargets(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	delivery, err := nextDelivery(ctx, store, session.ID)
-	if err != nil || delivery == nil {
-		t.Fatalf("delivery=%+v err=%v", delivery, err)
-	}
-	target := core.NativeTerminalWakeTarget{
-		SessionID: session.ID, SandboxID: delivery.AgentRun.SandboxID, AgentRunID: delivery.AgentRun.ID,
-		ThreadID: "fast-thread", TurnID: "fast-turn",
+	target := core.NativeTerminalWakeTarget{SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), ThreadID: "fast-thread", TurnID: "fast-turn"}
+	if err := store.BindNativeThread(ctx, session.ID, target.ThreadID); err != nil {
+		t.Fatal(err)
 	}
 	if signaled, err := store.SignalNativeTerminalWake(ctx, client.QueueName(), target); err != nil || !signaled {
 		t.Fatalf("pre-bind terminal signal=%t err=%v", signaled, err)
-	}
-	if err := store.PrepareAgentRun(ctx, delivery.AgentRun.ID, "codex", ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.BindAgentRun(ctx, delivery.AgentRun.ID, "codex", target.ThreadID, target.TurnID, "completed"); err != nil {
-		t.Fatal(err)
 	}
 	if signaled, err := store.SignalNativeTerminalWake(ctx, client.QueueName(), target); err != nil || !signaled {
 		t.Fatalf("terminal replay signal=%t err=%v", signaled, err)
@@ -176,7 +166,7 @@ func TestNativeTerminalWakeAcceptsFastBindRaceAndRejectsForeignOrClosedTargets(t
 		t.Fatalf("terminal replay revision=%d err=%v", revision, err)
 	}
 	foreign := target
-	foreign.TurnID = "foreign-turn"
+	foreign.ThreadID = "foreign-thread"
 	if _, err := store.SignalNativeTerminalWake(ctx, client.QueueName(), foreign); err == nil {
 		t.Fatal("foreign terminal binding was accepted")
 	}
@@ -185,39 +175,5 @@ func TestNativeTerminalWakeAcceptsFastBindRaceAndRejectsForeignOrClosedTargets(t
 	}
 	if signaled, err := store.SignalNativeTerminalWake(ctx, client.QueueName(), target); err != nil || signaled {
 		t.Fatalf("closed Session terminal signal=%t err=%v", signaled, err)
-	}
-}
-
-func TestStopWakeReturnsAndReemitsOriginalTurnTarget(t *testing.T) {
-	_, store, client := testDatabase(t)
-	ctx := context.Background()
-	session, _, err := admitDirectFixture(t, store, ctx, core.SessionAdmission{
-		AdmissionKey: fmt.Sprintf("stop-wake-%d", time.Now().UnixNano()), SandboxProfile: "incus",
-		ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "low",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	delivery, err := nextDelivery(ctx, store, session.ID)
-	if err != nil || delivery == nil {
-		t.Fatalf("delivery=%+v err=%v", delivery, err)
-	}
-	if err := store.PrepareAgentRun(ctx, delivery.AgentRun.ID, "codex", ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.BindAgentRun(ctx, delivery.AgentRun.ID, "codex", "thread", "turn", "inProgress"); err != nil {
-		t.Fatal(err)
-	}
-	application := core.Application{Store: store, Tasks: client}
-	first, err := application.RequestMessageInterrupt(ctx, session.ID, delivery.Message.ID)
-	if err != nil || first.AgentRunID != delivery.AgentRun.ID || first.SessionID != session.ID || !first.InterruptRequested {
-		t.Fatalf("first Stop target=%+v err=%v", first, err)
-	}
-	replayed, err := application.RequestMessageInterrupt(ctx, session.ID, delivery.Message.ID)
-	if err != nil || replayed != first {
-		t.Fatalf("replayed Stop target=%+v err=%v", replayed, err)
-	}
-	if revision, err := store.SessionExecutionWakeRevision(ctx, session.ID); err != nil || revision != 1 {
-		t.Fatalf("Stop replay revision=%d err=%v", revision, err)
 	}
 }

@@ -84,7 +84,7 @@ func TestBackupQueueDoesNotConsumeOneSlotForegroundCapacity(t *testing.T) {
 	boundary := CaptureBoundary{
 		SessionID: "job-backup-capacity", SandboxID: "sandbox-backup-capacity", ResourceID: "resource-backup-capacity",
 		ProfileName: "codex-e2b", ProfileRevision: fmt.Sprintf("%064x", suffix),
-		LastActivityAt: time.Now().Add(-time.Minute), CompletedTurnSequence: 1, Eligible: true,
+		LastActivityAt: time.Now().Add(-time.Minute), NativeRevision: 1, Eligible: true,
 	}
 	wrongRevision := boundary
 	wrongRevision.SandboxID = "sandbox-wrong-revision"

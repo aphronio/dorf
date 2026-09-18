@@ -333,9 +333,9 @@ func (q *Queries) RequestUpgradeRollback(ctx context.Context, arg RequestUpgrade
 }
 
 const upgradeQuiescent = `-- name: UpgradeQuiescent :one
-select coalesce(not exists(select 1 from dorf.agent_runs ar join dorf.session_messages m on m.id=ar.message_id
-where ar.sandbox_id=$1 and ar.state not in ('completed','failed','interrupted')
-and (ar.state <> 'pending' or ar.baseline_turn_id is not null or m.delivery_intent='steer')),false)::boolean as quiet
+select (j.native_pending_input_id is null and j.native_pending_turn_id is null)::boolean as quiet
+from dorf.sessions j join dorf.sandboxes s on s.session_id=j.id
+where s.id=$1
 `
 
 func (q *Queries) UpgradeQuiescent(ctx context.Context, sandboxID string) (bool, error) {

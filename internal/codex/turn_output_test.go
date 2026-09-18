@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
-
-	"github.com/aphronio/dorf/internal/core"
 )
 
 const steeredFinalTurnJSON = `{
@@ -28,7 +26,7 @@ func TestParseTurnPreservesFinalRepliesAroundSteer(t *testing.T) {
 	}
 	got := parseTurn(turn)
 	want := TurnOutcome{ID: "turn-final", Status: "completed", Output: steeredFinalOutput,
-		AcceptedMessageIDs: []string{"request-original", "request-steer"}}
+		ClientIDs: []string{"request-original", "request-steer"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("parsed turn=%#v, want %#v", got, want)
 	}
@@ -90,11 +88,11 @@ func TestProtocolRecoversCompleteFinalRepliesWithoutResubmission(t *testing.T) {
 	}
 	_ = first.connection.CloseNow()
 	reconnected := dialTestProtocol(t, server)
-	thread, recovered, err := reconnected.reconcileInitialTurn(context.Background(), "/workspace/job", "request-original", core.HarnessInput{Text: "Create the report."}, "model", "low", "danger-full-access")
-	if err != nil || thread != "thread-final" || recovered.Output != steeredFinalOutput || !reflect.DeepEqual(recovered.AcceptedMessageIDs, []string{"request-original", "request-steer"}) {
-		t.Errorf("recovered thread=%q turn=%#v error=%v", thread, recovered, err)
+	recovered, err := reconnected.readTurns(context.Background(), "thread-final")
+	if err != nil || len(recovered) != 1 || recovered[0].Output != steeredFinalOutput {
+		t.Fatalf("recovered=%+v err=%v", recovered, err)
 	}
-	if methods := protocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/read", "thread/list", "thread/read"}) {
+	if methods := protocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/read", "thread/read"}) {
 		t.Fatalf("native methods=%v", methods)
 	}
 }

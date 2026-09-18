@@ -23,31 +23,32 @@ func (q *Queries) EnsureSessionExecutionWake(ctx context.Context, sessionID stri
 }
 
 const getNativeTerminalWakeBinding = `-- name: GetNativeTerminalWakeBinding :one
-select ar.session_id,ar.sandbox_id,coalesce(ar.thread_id,'') as thread_id,
-       coalesce(ar.turn_id,'') as turn_id,j.admission_open,j.cleanup_state
-from dorf.agent_runs ar
-join dorf.sessions j on j.id=ar.session_id
-join dorf.sandboxes s on s.id=ar.sandbox_id and s.session_id=ar.session_id
-where ar.id=$1
+select j.id as session_id,s.id as sandbox_id,coalesce(j.thread_id,'') as thread_id,
+       j.admission_open,j.cleanup_state
+from dorf.sessions j join dorf.sandboxes s on s.session_id=j.id
+where j.id=$1 and s.id=$2
 `
+
+type GetNativeTerminalWakeBindingParams struct {
+	SessionID string
+	SandboxID string
+}
 
 type GetNativeTerminalWakeBindingRow struct {
 	SessionID     string
 	SandboxID     string
 	ThreadID      string
-	TurnID        string
 	AdmissionOpen bool
 	CleanupState  core.CleanupState
 }
 
-func (q *Queries) GetNativeTerminalWakeBinding(ctx context.Context, runID string) (GetNativeTerminalWakeBindingRow, error) {
-	row := q.db.QueryRowContext(ctx, getNativeTerminalWakeBinding, runID)
+func (q *Queries) GetNativeTerminalWakeBinding(ctx context.Context, arg GetNativeTerminalWakeBindingParams) (GetNativeTerminalWakeBindingRow, error) {
+	row := q.db.QueryRowContext(ctx, getNativeTerminalWakeBinding, arg.SessionID, arg.SandboxID)
 	var i GetNativeTerminalWakeBindingRow
 	err := row.Scan(
 		&i.SessionID,
 		&i.SandboxID,
 		&i.ThreadID,
-		&i.TurnID,
 		&i.AdmissionOpen,
 		&i.CleanupState,
 	)

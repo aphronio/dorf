@@ -23,7 +23,7 @@ func TestApplicationObservationNativeSubmissionAndColdAttribution(t *testing.T) 
 	})
 	defer server.Close()
 	p := dialTestProtocol(t, server)
-	result, err := p.resumeAndStartTurn(context.Background(), "thread", "/workspace/job", "delivery-1", core.HarnessInput{Text: "Task finished", Observation: true}, "model", "high", "danger-full-access")
+	result, err := p.resumeFixture(context.Background(), "thread", "/workspace/job", "delivery-1", core.HarnessInput{Text: "Task finished", Observation: true}, "model", "high", "danger-full-access")
 	if err != nil || result.ID != "observed-turn" {
 		t.Fatalf("submit: %+v %v", result, err)
 	}
@@ -49,14 +49,8 @@ func TestApplicationObservationNativeSubmissionAndColdAttribution(t *testing.T) 
 		}
 	}
 	turn := parseTurn(map[string]any{"id": "observed-turn", "status": "completed", "items": []any{output}})
-	if !reflect.DeepEqual(turn.AcceptedMessageIDs, []string{"delivery-1"}) {
+	if !reflect.DeepEqual(turn.ClientIDs, []string{"delivery-1"}) {
 		t.Fatalf("accepted: %+v", turn)
-	}
-	if accepted, err := p.steerTurn(context.Background(), "thread", "observed-turn", "other", core.HarnessInput{Observation: true, Text: "update"}); err != nil || accepted != "observed-turn" {
-		t.Fatalf("active tool output: %s %v", accepted, err)
-	}
-	if len(submitted["input"].([]any)) != 0 || submitted["clientUserMessageId"] != nil || submitted["toolOutput"] == nil {
-		t.Fatal("active observation became user input")
 	}
 	output["namespace"] = "external"
 	if observationDeliveryID(output) != "" {

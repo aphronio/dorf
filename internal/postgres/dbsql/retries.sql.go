@@ -53,7 +53,7 @@ func (q *Queries) InsertSessionRetryRequest(ctx context.Context, arg InsertSessi
 }
 
 const lockSessionRetryRequest = `-- name: LockSessionRetryRequest :exec
-select pg_advisory_xact_lock(hashtextextended('dorf-job-retry:' || $1::text,0))
+select pg_advisory_xact_lock(hashtextextended('dorf-session-retry:' || $1::text,0))
 `
 
 func (q *Queries) LockSessionRetryRequest(ctx context.Context, requestKey string) error {

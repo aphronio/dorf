@@ -182,30 +182,7 @@ func registerWorkerTasks(store postgres.Store, client *absurd.Client, cfg config
 }
 
 func coreApplication(store postgres.Store, client *absurd.Client) core.Application {
-	return core.Application{Store: store, Tasks: client, AgentMessages: composedMessageAdmissions{store: store}}
-}
-
-// composedMessageAdmissions validates profile capabilities before direct admission.
-type composedMessageAdmissions struct{ store postgres.Store }
-
-func (a composedMessageAdmissions) AdmitAgentMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
-	session, err := a.store.Session(ctx, input.SessionID)
-	if err != nil {
-		return core.MessageAdmissionResult{}, err
-	}
-	if input.Observation || input.RefreshSkills || input.DeveloperInstructions != nil {
-		profile, err := a.store.SandboxProfileRevision(ctx, session.ProfileRef())
-		if err != nil {
-			return core.MessageAdmissionResult{}, err
-		}
-		if profile.Harness != codex.Harness {
-			if input.RefreshSkills {
-				return core.MessageAdmissionResult{}, controlapi.ErrSkillRefreshUnavailable
-			}
-			return core.MessageAdmissionResult{}, controlapi.ErrInvalidInput
-		}
-	}
-	return a.store.AdmitDirectMessage(ctx, input)
+	return core.Application{Store: store, Tasks: client}
 }
 
 func absurdClient(db *sql.DB) (*absurd.Client, error) {
@@ -263,7 +240,7 @@ func migrate(ctx context.Context, store postgres.Store, args []string, stdout, s
 	if err := store.Migrate(ctx); err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf schema and Absurd 0.5.0 queue dorf_jobs")
+	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf schema and Absurd 0.5.0 queue dorf_sessions")
 	return nil
 }
 
@@ -660,7 +637,7 @@ func newProviderGatewayStatusView(profile core.SandboxProfile, connection string
 		view.Impact = "new Sessions cannot use this Sandbox profile; " + detail
 		view.Next = next
 	case view.Authority.Status != "ready":
-		view.Impact = "new AgentRuns cannot obtain authenticated inference routes"
+		view.Impact = "new Sessions cannot obtain authenticated inference routes"
 		view.Next = "restore the named AI connection and private broker, then rerun provider status"
 	case profile.Provider == core.SandboxProviderE2B && view.SandboxPath.Status != "ready":
 		view.Impact = "remote Sandboxes using this profile cannot reach inference"

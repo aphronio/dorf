@@ -20,7 +20,3 @@ func (s Store) AdmitDirect(ctx context.Context, input core.SessionAdmission, que
 	}
 	return session, created, err
 }
-
-func (s Store) AdmitDirectMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
-	return s.admitMessage(ctx, input)
-}

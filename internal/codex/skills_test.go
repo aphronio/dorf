@@ -44,11 +44,11 @@ func TestRequestedNewTurnsReloadSkillsInRetainedThread(t *testing.T) {
 
 	first := dialTestProtocol(t, server)
 	first.refreshSkills = true
-	thread, turn, err := first.reconcileInitialTurn(context.Background(), workspace, "initial", core.HarnessInput{Text: "input"}, "model", "high", "danger-full-access")
+	thread, turn, err := first.initialFixture(context.Background(), workspace, "initial", core.HarnessInput{Text: "input"}, "model", "high", "danger-full-access")
 	if err != nil || thread != threadID || turn.ID != "turn-initial" {
 		t.Fatalf("initial thread=%q turn=%#v err=%v", thread, turn, err)
 	}
-	if methods := protocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/list", "thread/start", "skills/list", "turn/start"}) {
+	if methods := protocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/start", "skills/list", "turn/start"}) {
 		t.Fatalf("initial methods=%v", methods)
 	}
 	_ = first.connection.CloseNow()
@@ -58,7 +58,7 @@ func TestRequestedNewTurnsReloadSkillsInRetainedThread(t *testing.T) {
 		runID := fmt.Sprintf("follow-%d", i)
 		follow := dialTestProtocol(t, server)
 		follow.refreshSkills = true
-		turn, err := follow.resumeAndStartTurn(context.Background(), threadID, workspace, runID, core.HarnessInput{Text: "input"}, "model", "high", "danger-full-access")
+		turn, err := follow.resumeFixture(context.Background(), threadID, workspace, runID, core.HarnessInput{Text: "input"}, "model", "high", "danger-full-access")
 		if err != nil || turn.ID != "turn-"+runID {
 			t.Fatalf("follow turn=%#v err=%v", turn, err)
 		}
@@ -125,7 +125,7 @@ func TestOrdinaryTurnDoesNotReloadSkills(t *testing.T) {
 		}
 	})
 	defer server.Close()
-	turn, err := dialTestProtocol(t, server).resumeAndStartTurn(context.Background(), "thread", "/workspace/job", "run", core.HarnessInput{Text: "input"}, "model", "high", "danger-full-access")
+	turn, err := dialTestProtocol(t, server).resumeFixture(context.Background(), "thread", "/workspace/job", "run", core.HarnessInput{Text: "input"}, "model", "high", "danger-full-access")
 	if err != nil || turn.ID != "turn" {
 		t.Fatalf("turn=%+v err=%v", turn, err)
 	}

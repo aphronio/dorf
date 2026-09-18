@@ -11,8 +11,7 @@ select
     checkpoint.profile_revision,
     coalesce(checkpoint.effective_upgrade_id,'') as effective_upgrade_id,
     checkpoint.last_activity_at,
-    checkpoint.message_sequence,
-    checkpoint.completed_turn_sequence,
+    checkpoint.native_revision,
     checkpoint.delivery_hold_count,
     checkpoint.cleanup,
     checkpoint.published_at,
@@ -41,8 +40,7 @@ select
     checkpoint.profile_revision,
     coalesce(checkpoint.effective_upgrade_id,'') as effective_upgrade_id,
     checkpoint.last_activity_at,
-    checkpoint.message_sequence,
-    checkpoint.completed_turn_sequence,
+    checkpoint.native_revision,
     checkpoint.delivery_hold_count,
     checkpoint.cleanup,
     checkpoint.published_at,
@@ -73,22 +71,10 @@ values(
 );
 
 -- name: RecoveryNativeStateSafe :one
-select not exists (
-    select 1
-    from dorf.agent_runs run
-    join dorf.session_messages message on message.id=run.message_id
-    where run.sandbox_id=sqlc.arg(sandbox_id)
-      and message.sequence>sqlc.arg(message_sequence)
-      and (
-        run.state<>'pending'
-        or run.harness is not null
-        or run.thread_id is not null
-        or run.baseline_turn_id is not null
-        or run.turn_id is not null
-        or run.started_at is not null
-        or run.finished_at is not null
-      )
-)::boolean as safe;
+select (j.native_revision=sqlc.arg(native_revision) and j.native_pending_input_id is null
+        and j.native_pending_turn_id is null)::boolean as safe
+from dorf.sessions j join dorf.sandboxes s on s.session_id=j.id
+where s.id=sqlc.arg(sandbox_id);
 
 -- name: RecordRecoveryVerified :execrows
 update dorf.sandbox_recoveries set verified_at=coalesce(verified_at,clock_timestamp())

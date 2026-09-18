@@ -11,7 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
+
 	"strings"
 	"sync"
 	"testing"
@@ -61,9 +61,9 @@ func TestHandlerBoundary(t *testing.T) {
 		{http.MethodDelete, "/v1/sessions/job-1", nil},
 		{http.MethodGet, "/v1/sessions/job-1/watch", nil},
 		{http.MethodGet, "/v1/sessions?limit=1", nil},
-		{http.MethodPost, "/v1/sessions/job-1/messages", strings.NewReader(`{}`)},
-		{http.MethodGet, "/v1/sessions/job-1/messages/message-1", nil},
-		{http.MethodPut, "/v1/sessions/job-1/messages/message-1/interrupt", nil},
+		{http.MethodPost, "/v1/sessions/job-1/events", strings.NewReader(`{}`)},
+		{http.MethodGet, "/v1/sessions/job-1/turns/turn", nil},
+		{http.MethodPut, "/v1/sessions/job-1/events", nil},
 		{http.MethodPost, "/v1/sessions/job-1/retries", nil},
 		{http.MethodPut, "/v1/sessions/job-1/cleanup", nil},
 		{http.MethodGet, "/v1/sandboxes/sandbox-1/files?path=REPORT.md", nil},
@@ -226,82 +226,6 @@ func TestSessionListUsesStrictBoundedQueryAndExplicitEmptyCollection(t *testing.
 
 	sessions.listErr = controlapi.ErrInvalidCursor
 	requireProblem(t, do("/v1/sessions?cursor=tampered"), http.StatusBadRequest, "invalid_cursor")
-}
-
-func TestSessionConditionalGetAndDirectInteractionRoutes(t *testing.T) {
-	credential := "dcr_control-client"
-	message := controlapi.Message{
-		ID: "message-2", SessionID: "job-1", Sequence: 2, Intent: "follow",
-		Delivery: controlapi.State{State: "completed"}, Result: &controlapi.MessageResult{Outcome: "completed", Output: "done"},
-		AdmittedAt: time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC),
-	}
-	sessions := &fakeSessions{
-		session: controlapi.Session{ID: "job-1", Model: "ship", Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1", Name: "default"}}},
-		message: message, messageCreated: true,
-		retry: controlapi.Retry{SessionID: "job-1", State: "scheduled"}, retryCreated: true,
-	}
-	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, sessions, nil).Handler
-
-	request := func(method, target string, body io.Reader) *http.Request {
-		req := httptest.NewRequest(method, target, body)
-		req.Header.Set("Authorization", "Bearer "+credential)
-		return req
-	}
-	do := func(req *http.Request) *httptest.ResponseRecorder {
-		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, req)
-		return response
-	}
-
-	first := do(request(http.MethodGet, "/v1/sessions/job-1", nil))
-	requireStatusType(t, first, http.StatusOK, "application/json")
-	etag := first.Header().Get("ETag")
-	if len(etag) != 66 || etag[0] != '"' || etag[len(etag)-1] != '"' {
-		t.Fatalf("ETag=%q, want quoted SHA-256 representation hash", etag)
-	}
-	conditionalRequest := request(http.MethodGet, "/v1/sessions/job-1", nil)
-	conditionalRequest.Header.Set("If-None-Match", etag)
-	conditional := do(conditionalRequest)
-	if conditional.Code != http.StatusNotModified || conditional.Body.Len() != 0 || conditional.Header().Get("ETag") != etag {
-		t.Fatalf("conditional response status/body/etag=%d/%q/%q", conditional.Code, conditional.Body.String(), conditional.Header().Get("ETag"))
-	}
-
-	messageRequest := request(http.MethodPost, "/v1/sessions/job-1/messages", strings.NewReader(`{"text":"continue","intent":"follow"}`))
-	messageRequest.Header.Set("Content-Type", "application/json")
-	messageRequest.Header.Set("Idempotency-Key", "send-2")
-	sent := do(messageRequest)
-	requireStatusType(t, sent, http.StatusCreated, "application/json")
-	var accepted controlapi.Message
-	decode(t, sent, &accepted)
-	if accepted.ID != message.ID || accepted.Result == nil || *accepted.Result != *message.Result || sessions.messageKey != "send-2" || !reflect.DeepEqual(sessions.messageInput, controlapi.SendMessageRequest{Text: "continue", Intent: "follow"}) {
-		t.Fatalf("Message=%#v key/input=%q/%#v, want %#v/send-2", accepted, sessions.messageKey, sessions.messageInput, message)
-	}
-	retryRequest := request(http.MethodPost, "/v1/sessions/job-1/retries", nil)
-	retryRequest.Header.Set("Idempotency-Key", "retry-3")
-	retried := do(retryRequest)
-	requireStatusType(t, retried, http.StatusCreated, "application/json")
-	var retry controlapi.Retry
-	decode(t, retried, &retry)
-	if retry != sessions.retry || sessions.retryKey != "retry-3" {
-		t.Fatalf("Retry=%#v key=%q, want %#v/retry-3", retry, sessions.retryKey, sessions.retry)
-	}
-
-	query := do(request(http.MethodGet, "/v1/sessions/job-1?extra=true", nil))
-	requireProblem(t, query, http.StatusBadRequest, "invalid_query")
-	missingMessage := do(request(http.MethodGet, "/v1/sessions/job-1/messages/other", nil))
-	requireProblem(t, missingMessage, http.StatusNotFound, "message_not_found")
-	wrongWatchType := do(request(http.MethodGet, "/v1/sessions/job-1/watch", nil))
-	requireProblem(t, wrongWatchType, http.StatusNotAcceptable, "not_acceptable")
-	invalidResumeRequest := request(http.MethodGet, "/v1/sessions/job-1/watch", nil)
-	invalidResumeRequest.Header.Set("Accept", "text/event-stream")
-	invalidResumeRequest.Header.Set("Last-Event-ID", "not-a-representation-hash")
-	requireProblem(t, do(invalidResumeRequest), http.StatusBadRequest, "invalid_last_event_id")
-	conditionalCleanup := request(http.MethodPut, "/v1/sessions/job-1/cleanup", nil)
-	conditionalCleanup.Header.Set("If-None-Match", "*")
-	requireProblem(t, do(conditionalCleanup), http.StatusBadRequest, "unsupported_precondition")
-	if sessions.cleanupCalls != 0 {
-		t.Fatal("unsupported cleanup precondition reached the mutation")
-	}
 }
 
 func TestSandboxFileResponseContract(t *testing.T) {
@@ -575,7 +499,6 @@ type fakeSessions struct {
 	listLimit         int
 	listCursor        string
 	gotInput          controlapi.CreateSessionRequest
-	message           controlapi.Message
 	retry             controlapi.Retry
 	file              []byte
 	fileWrites        int
@@ -583,7 +506,6 @@ type fakeSessions struct {
 	filePath          string
 	messageKey        string
 	retryKey          string
-	messageInput      controlapi.SendMessageRequest
 	messageCreated    bool
 	messageErr        error
 	retryCreated      bool
@@ -619,32 +541,6 @@ func (j *fakeSessions) Get(ctx context.Context, id string) (controlapi.Session, 
 		return controlapi.Session{}, ctx.Err()
 	}
 	return view, nil
-}
-
-func (j *fakeSessions) SendMessage(_ context.Context, sessionID, key string, input controlapi.SendMessageRequest) (controlapi.Message, bool, error) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	if sessionID != j.session.ID {
-		return controlapi.Message{}, false, controlapi.ErrSessionNotFound
-	}
-	j.messageKey = key
-	j.messageInput = input
-	return j.message, j.messageCreated, j.messageErr
-}
-
-func (j *fakeSessions) GetMessage(_ context.Context, sessionID, messageID string) (controlapi.Message, error) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	if sessionID != j.session.ID || messageID != j.message.ID {
-		return controlapi.Message{}, controlapi.ErrMessageNotFound
-	}
-	return j.message, nil
-}
-
-func (j *fakeSessions) InterruptMessage(ctx context.Context, sessionID, messageID string) (controlapi.Message, error) {
-	message, err := j.GetMessage(ctx, sessionID, messageID)
-	message.InterruptRequested = err == nil
-	return message, err
 }
 
 func (j *fakeSessions) Retry(_ context.Context, sessionID, key string) (controlapi.Retry, bool, error) {

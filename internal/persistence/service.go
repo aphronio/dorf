@@ -98,7 +98,7 @@ func (s Service) idle(boundary CaptureBoundary) bool {
 	if delay <= 0 {
 		delay = DefaultIdleDelay
 	}
-	return boundary.CompletedTurnSequence > 0 && !boundary.LastActivityAt.IsZero() && time.Since(boundary.LastActivityAt) >= delay
+	return boundary.NativeRevision > 0 && !boundary.LastActivityAt.IsZero() && time.Since(boundary.LastActivityAt) >= delay
 }
 
 func (s Service) monitor(ctx context.Context, cancel context.CancelFunc, expected CaptureBoundary) error {
@@ -128,7 +128,6 @@ func (s Service) event(boundary CaptureBoundary, outcome string, elapsed time.Du
 	s.Emit(telemetry.Event{Name: "dorf.checkpoint." + outcome, At: time.Now(), Failed: outcome == "failed", Attributes: map[string]any{
 		"dorf.session_id": boundary.SessionID, "dorf.sandbox_id": boundary.SandboxID,
 		"dorf.resource_id": boundary.ResourceID, "dorf.checkpoint_outcome": outcome,
-		"dorf.completed_turn_sequence": boundary.CompletedTurnSequence,
-		"duration_ms":                  elapsed.Milliseconds(),
+		"duration_ms": elapsed.Milliseconds(),
 	}})
 }

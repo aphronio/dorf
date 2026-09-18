@@ -15,8 +15,8 @@ func TestProofBarrierIsDisabledByDefaultAndRequiresExplicitPhrase(t *testing.T) 
 	if err != nil || barrier != nil {
 		t.Fatalf("default barrier=%v err=%v", barrier, err)
 	}
-	t.Setenv("DORF_PROOF_FAULT_BARRIER", core.BarrierBeforeSubmit)
-	t.Setenv("DORF_PROOF_FAULT_BARRIER_SEQUENCE", "1")
+	t.Setenv("DORF_PROOF_FAULT_BARRIER", core.BarrierSandboxCreated)
+	t.Setenv("DORF_PROOF_FAULT_BARRIER_SESSION", "session")
 	t.Setenv("DORF_PROOF_FAULT_BARRIER_DIR", t.TempDir())
 	if _, err := FromEnv(); err == nil || !strings.Contains(err.Error(), "proof-only enable phrase") {
 		t.Fatalf("unsafe activation error=%v", err)
@@ -28,9 +28,8 @@ func TestProofBarrierIsDisabledByDefaultAndRequiresExplicitPhrase(t *testing.T) 
 }
 
 func TestProofBarrierRejectsTimingThatCouldOutliveItsClaim(t *testing.T) {
-	barrier := Barrier{Point: core.BarrierBeforeSubmit, Sequence: 1, Dir: t.TempDir(), Wait: 2 * time.Second, Lease: time.Second}
-	delivery := core.Delivery{Message: core.Message{SessionID: "job-proof", Sequence: 1}}
-	err := barrier.Reach(context.Background(), core.BarrierBeforeSubmit, delivery)
+	barrier := Barrier{Point: core.BarrierSandboxCreated, SessionID: "session", Dir: t.TempDir(), Wait: 2 * time.Second, Lease: time.Second}
+	err := barrier.ReachOperation(context.Background(), core.BarrierSandboxCreated, "session", "operation")
 	if err == nil || !strings.Contains(err.Error(), "unsafe proof barrier timing") {
 		t.Fatalf("timing error=%v", err)
 	}

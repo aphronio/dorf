@@ -7,9 +7,8 @@ isolated infrastructure. It provides a stable client API and manages the configu
 access, and lifecycle needed to use those Harnesses. The Harness owns the conversation and execution.
 
 This is the accepted direction in [D148](decisions/D148-thin-native-session-control-plane.md).
-The existing durable Message API has not yet been replaced; [Remote Control API](../control-api.md)
-and its OpenAPI document describe current behavior. The [slice tracker](../implementation/session-product-proposals.md)
-separates completed boundary work from proposed implementation.
+The [Remote Control API](../control-api.md) defines the native events contract. The
+[slice tracker](../implementation/session-product-proposals.md) records implementation and deferred work.
 
 ## Product boundary
 

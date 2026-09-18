@@ -46,8 +46,7 @@ select
     checkpoint.profile_revision,
     coalesce(checkpoint.effective_upgrade_id,'') as effective_upgrade_id,
     checkpoint.last_activity_at,
-    checkpoint.message_sequence,
-    checkpoint.completed_turn_sequence,
+    checkpoint.native_revision,
     checkpoint.delivery_hold_count,
     checkpoint.cleanup,
     checkpoint.published_at,
@@ -84,8 +83,7 @@ type GetCheckpointRecoveryRow struct {
 	ProfileRevision       string
 	EffectiveUpgradeID    string
 	LastActivityAt        time.Time
-	MessageSequence       int64
-	CompletedTurnSequence int64
+	NativeRevision        int64
 	DeliveryHoldCount     int64
 	Cleanup               bool
 	PublishedAt           time.Time
@@ -116,8 +114,7 @@ func (q *Queries) GetCheckpointRecovery(ctx context.Context, id string) (GetChec
 		&i.ProfileRevision,
 		&i.EffectiveUpgradeID,
 		&i.LastActivityAt,
-		&i.MessageSequence,
-		&i.CompletedTurnSequence,
+		&i.NativeRevision,
 		&i.DeliveryHoldCount,
 		&i.Cleanup,
 		&i.PublishedAt,
@@ -186,8 +183,7 @@ select
     checkpoint.profile_revision,
     coalesce(checkpoint.effective_upgrade_id,'') as effective_upgrade_id,
     checkpoint.last_activity_at,
-    checkpoint.message_sequence,
-    checkpoint.completed_turn_sequence,
+    checkpoint.native_revision,
     checkpoint.delivery_hold_count,
     checkpoint.cleanup,
     checkpoint.published_at,
@@ -225,8 +221,7 @@ type ListSessionCheckpointRecoveriesRow struct {
 	ProfileRevision       string
 	EffectiveUpgradeID    string
 	LastActivityAt        time.Time
-	MessageSequence       int64
-	CompletedTurnSequence int64
+	NativeRevision        int64
 	DeliveryHoldCount     int64
 	Cleanup               bool
 	PublishedAt           time.Time
@@ -263,8 +258,7 @@ func (q *Queries) ListSessionCheckpointRecoveries(ctx context.Context, sessionID
 			&i.ProfileRevision,
 			&i.EffectiveUpgradeID,
 			&i.LastActivityAt,
-			&i.MessageSequence,
-			&i.CompletedTurnSequence,
+			&i.NativeRevision,
 			&i.DeliveryHoldCount,
 			&i.Cleanup,
 			&i.PublishedAt,
@@ -311,32 +305,20 @@ func (q *Queries) RecordRecoveryVerified(ctx context.Context, id string) (int64,
 }
 
 const recoveryNativeStateSafe = `-- name: RecoveryNativeStateSafe :one
-select not exists (
-    select 1
-    from dorf.agent_runs run
-    join dorf.session_messages message on message.id=run.message_id
-    where run.sandbox_id=$1
-      and message.sequence>$2
-      and (
-        run.state<>'pending'
-        or run.harness is not null
-        or run.thread_id is not null
-        or run.baseline_turn_id is not null
-        or run.turn_id is not null
-        or run.started_at is not null
-        or run.finished_at is not null
-      )
-)::boolean as safe
+select (j.native_revision=$1 and j.native_pending_input_id is null
+        and j.native_pending_turn_id is null)::boolean as safe
+from dorf.sessions j join dorf.sandboxes s on s.session_id=j.id
+where s.id=$2
 `
 
 type RecoveryNativeStateSafeParams struct {
-	SandboxID       string
-	MessageSequence int64
+	NativeRevision int64
+	SandboxID      string
 }
 
-func (q *Queries) RecoveryNativeStateSafe(ctx context.Context, arg RecoveryNativeStateSafeParams) (sql.NullBool, error) {
-	row := q.db.QueryRowContext(ctx, recoveryNativeStateSafe, arg.SandboxID, arg.MessageSequence)
-	var safe sql.NullBool
+func (q *Queries) RecoveryNativeStateSafe(ctx context.Context, arg RecoveryNativeStateSafeParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, recoveryNativeStateSafe, arg.NativeRevision, arg.SandboxID)
+	var safe bool
 	err := row.Scan(&safe)
 	return safe, err
 }

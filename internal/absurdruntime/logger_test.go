@@ -20,7 +20,7 @@ func TestWorkerLogger(t *testing.T) {
 	}{
 		{"event timeout", taskExecutionFailedFormat, fmt.Errorf("timed out waiting for event %q: %w", "wake", &absurd.TimeoutError{}), "task attempt timed out waiting for event", "task execution failed"},
 		{"other failure", taskExecutionFailedFormat, errors.New("boom"), "task attempt failed: boom", "task execution failed"},
-		{"other log", "[absurd] worker started: %s", "dorf_jobs", "[absurd] worker started: dorf_jobs", ""},
+		{"other log", "[absurd] worker started: %s", "dorf_sessions", "[absurd] worker started: dorf_sessions", ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var output bytes.Buffer

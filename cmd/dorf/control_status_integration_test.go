@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
 	"github.com/aphronio/dorf/internal/core"
@@ -45,7 +44,7 @@ func TestControlStatusUsesPostgresCustodyAndLeavesSessionUnchanged(t *testing.T)
 		t.Fatal(err)
 	}
 	runtime := &statusControlRuntime{profile: profile}
-	handler := controlTestHandler(store, tasks, controlTestGateway(t), auth, runtime, blob.Store{Root: t.TempDir()})
+	handler := controlTestHandler(store, tasks, controlTestGateway(t), auth, runtime)
 	var session controlapi.Session
 	controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, "/v1/sessions", credential, fmt.Sprintf("status-%d", time.Now().UnixNano()), controlapi.CreateSessionRequest{AIConnection: "primary", Model: "model-test", Reasoning: "high"}), 201, &session)
 	owned, err := store.Sandbox(ctx, core.MainSandboxName(session.ID))

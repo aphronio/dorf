@@ -9,35 +9,35 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 )
 
-type messageObservationReader interface {
-	ReadMessageObservation(context.Context, string, string, string) (controlreader.MessageObservation, error)
-	StreamMessageObservation(context.Context, string, string, string, func(controlreader.MessageObservation) error) error
+type turnObservationReader interface {
+	ReadTurnObservation(context.Context, string, string, string) (controlreader.TurnObservation, error)
+	StreamTurnObservation(context.Context, string, string, string, func(controlreader.TurnObservation) error) error
 }
 
-func (a controlAPISessions) ReadMessageObservation(ctx context.Context, sessionID, messageID, cursor string) (controlapi.MessageObservation, error) {
+func (a controlAPISessions) ReadTurnObservation(ctx context.Context, sessionID, turnID, cursor string) (controlapi.TurnObservation, error) {
 	if _, err := a.loadSession(ctx, sessionID); err != nil {
-		return controlapi.MessageObservation{}, err
+		return controlapi.TurnObservation{}, err
 	}
-	reader, ok := a.reader.(messageObservationReader)
+	reader, ok := a.reader.(turnObservationReader)
 	if !ok {
-		return controlapi.MessageObservation{}, controlapi.ErrTimelineUnavailable
+		return controlapi.TurnObservation{}, controlapi.ErrTimelineUnavailable
 	}
-	result, err := reader.ReadMessageObservation(ctx, sessionID, messageID, cursor)
+	result, err := reader.ReadTurnObservation(ctx, sessionID, turnID, cursor)
 	if err != nil {
-		return controlapi.MessageObservation{}, observationError(err)
+		return controlapi.TurnObservation{}, observationError(err)
 	}
-	return publicMessageObservation(result), nil
+	return publicTurnObservation(result), nil
 }
 
-func (a controlAPISessions) StreamMessageObservation(ctx context.Context, sessionID, messageID, cursor string, emit func(controlapi.MessageObservation) error) error {
+func (a controlAPISessions) StreamTurnObservation(ctx context.Context, sessionID, turnID, cursor string, emit func(controlapi.TurnObservation) error) error {
 	if _, err := a.loadSession(ctx, sessionID); err != nil {
 		return err
 	}
-	reader, ok := a.reader.(messageObservationReader)
+	reader, ok := a.reader.(turnObservationReader)
 	if !ok {
 		return controlapi.ErrTimelineUnavailable
 	}
-	return observationError(reader.StreamMessageObservation(ctx, sessionID, messageID, cursor, func(value controlreader.MessageObservation) error { return emit(publicMessageObservation(value)) }))
+	return observationError(reader.StreamTurnObservation(ctx, sessionID, turnID, cursor, func(value controlreader.TurnObservation) error { return emit(publicTurnObservation(value)) }))
 }
 
 func observationError(err error) error {
@@ -47,26 +47,16 @@ func observationError(err error) error {
 	case errors.Is(err, controlreader.ErrInvalidRequest):
 		return controlapi.ErrInvalidCursor
 	case errors.Is(err, controlreader.ErrSessionNotFound):
-		return controlapi.ErrMessageNotFound
+		return controlapi.ErrTurnNotFound
 	default:
 		return err
 	}
 }
 
-func publicMessageObservation(value controlreader.MessageObservation) controlapi.MessageObservation {
-	result := controlapi.MessageObservation{SessionID: value.SessionID, MessageID: value.MessageID, Intent: value.Intent, InterruptRequested: value.InterruptRequested, Delivery: controlapi.State{State: value.Delivery.State}, Outcome: value.Outcome, Cursor: value.Cursor, FromIndex: value.FromIndex, NextIndex: value.NextIndex, CompletionWatermark: value.CompletionWatermark, State: value.State, Items: []controlapi.MessageTimelineItem{}}
-	if value.Attention != nil {
-		result.Attention = &controlapi.Attention{Code: value.Attention.Code, Detail: value.Attention.Detail}
-	}
+func publicTurnObservation(value controlreader.TurnObservation) controlapi.TurnObservation {
+	result := controlapi.TurnObservation{Type: value.Type, SessionID: value.SessionID, TurnID: value.TurnID, Status: value.Status, Items: value.Items, Cursor: value.Cursor, FromIndex: value.FromIndex, NextIndex: value.NextIndex, CompletionWatermark: value.CompletionWatermark, State: value.State}
 	if value.Binding != nil {
 		result.Binding = &controlapi.ObservationBinding{Harness: value.Binding.Harness, ThreadID: value.Binding.ThreadID, TurnID: value.Binding.TurnID}
-	}
-	for _, item := range value.Items {
-		projected := controlapi.MessageTimelineItem{Index: item.Index, NativeItemID: item.NativeItemID, Kind: item.Kind, MessageID: item.MessageID}
-		if item.Kind == "reply" {
-			projected.Text = &item.Text
-		}
-		result.Items = append(result.Items, projected)
 	}
 	return result
 }

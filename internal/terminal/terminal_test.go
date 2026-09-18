@@ -3,7 +3,7 @@ package terminal
 import (
 	"context"
 	"errors"
-	"fmt"
+
 	"testing"
 
 	"github.com/aphronio/dorf/internal/core"
@@ -51,36 +51,6 @@ func (s *instructionsSandbox) PutFile(_ context.Context, owner provider.Ownershi
 	}
 	s.owner, s.path, s.contents = owner, path, string(contents)
 	return s.writeErr
-}
-
-func TestHarnessObservationNeverFallsBackFromExactSandbox(t *testing.T) {
-	requested := make([]string, 0, 2)
-	externals := Externals{Ownership: func(_ context.Context, sandboxID string) (provider.Ownership, error) {
-		requested = append(requested, sandboxID)
-		return provider.Ownership{}, fmt.Errorf("stop after ownership resolution")
-	}}
-	session := core.Session{ID: "job-exact-sandbox"}
-	for _, test := range []struct {
-		sandboxID string
-		threadID  string
-	}{
-		{sandboxID: "sandbox-initial"},
-		{sandboxID: "sandbox-history", threadID: "thread-1"},
-	} {
-		run := core.AgentRun{ID: "run-1", SessionID: session.ID, SandboxID: test.sandboxID, ThreadID: test.threadID}
-		execution := core.AgentMessageExecution{Session: session, AgentRun: run, Sandbox: core.Sandbox{ID: test.sandboxID, SessionID: session.ID}}
-		operation, err := NewAgentRunOperation(externals, execution)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := operation.History(context.Background(), run); err == nil {
-			t.Fatal("observation continued after ownership resolution failure")
-		}
-	}
-	want := []string{"sandbox-initial", "sandbox-history"}
-	if fmt.Sprint(requested) != fmt.Sprint(want) {
-		t.Fatalf("ownership lookups=%v want=%v", requested, want)
-	}
 }
 
 func TestSandboxRoutesUseOnlyTheExactConfiguredProfileURL(t *testing.T) {

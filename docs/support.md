@@ -1,8 +1,8 @@
 # Support and diagnostics
 
-The [native Session capability review](implementation/native-session-contract.md) records an
-isolated Codex input-contract probe for the accepted redesign. That evidence does not change the
-currently supported Message API or extend provider/recovery guarantees.
+The [native Session implementation record](implementation/native-session-contract.md) records
+Codex input/restart evidence and the remaining provider proof limits. The
+[API contract](control-api.md) defines Session events and native observation.
 
 ## Native conversation timelines
 
@@ -12,7 +12,7 @@ The response preserves the selected turn's conversation objects and their native
 does not require `thread/items/list` or a guest image upgrade. Pi has no timeline adapter in this
 slice. An unsupported full-turn read returns `timeline_unavailable`.
 
-Completed Message timelines are verified with Codex 0.154.0 in legacy, paginated, and default
+Completed native Turn timelines are verified with Codex 0.154.0 in legacy, paginated, and default
 history modes. A completed assistant item can be read before its Turn settles. The adapter excludes
 commentary and unfinished assistant items. Missing or null phases remain eligible for legacy
 history. Entry order survives a cold read within the same retained history mode; raw native item
@@ -33,10 +33,10 @@ owned by the deployment operator with mode `0600`, then recreate the worker. Thi
 survives setup and application updates; do not edit the generated Compose `.env`. Standalone workers
 read their process environment. The official OpenTelemetry exporter owns batching and bounded retries.
 
-Each selected native notification carries the exact Dorf Session, Message, and AgentRun IDs plus
-the native Thread and Turn IDs. The Turn comes from the submission acknowledgement or the existing
-durable binding. This covers Follow turns, including an initial direct Message. Steers do not
-take ownership of another Message's model usage. API response types are unchanged.
+Native notifications carry the Dorf Session and Sandbox IDs plus native Thread and Turn IDs.
+`dorf.input_id` supplies transient input attribution when known; reconnect observation can use the
+native Turn identity. It is not a durable input receipt or complete per-input usage allocation.
+Several inputs may share one Turn.
 
 The selected events are turn start/settlement, completed user and assistant messages, tool
 start/completion, and token-usage updates. They can contain prompts, tool arguments, and outputs.
@@ -47,14 +47,13 @@ after submission so completion and interruption do not depend on another user me
 These logs are best-effort diagnostics. Worker reconciliation can reconnect to a still-active,
 durably bound Turn. A disconnect is reported when observed, but missed tools and usage are not
 replayed from session files or reconstructed from history. A terminal snapshot after reconnect
-records only the exact Turn's status. Export loss does not change Message results or execution.
+records only the exact Turn's status. Export loss does not change native results or execution.
 `event.id` identifies a repeated diagnostic payload for query deduplication; it is not a durable
 delivery receipt.
 
 Token-usage `last` describes the native latest model response, while `total` is conversation
 cumulative. Do not label `total` as per-Message usage or sum replayed snapshots. These observations
-do not establish complete billing or cost accounting. Configure the receiving backend to join its
-client's Run-to-Message records by `dorf.message_id`; timestamps and prompt text are unnecessary.
+do not establish complete billing or cost accounting. Join client records by the returned native binding. Input attribution may be absent after reconnect.
 
 This path exports from the Dorf host. It requires no exporter credential, plugin, collector, or
 telemetry configuration inside a Sandbox. It does not enable native internal spans or metrics.
@@ -74,7 +73,7 @@ E2B requires an exact qualified template and a stable deployment-owned HTTPS Pro
 Both current image recipes install the same Nix workstation, including `browser-use` and Chromium,
 with the upstream browser-use skill installed unchanged for Codex. Pi can use the same
 commands. No browser runs at boot and Dorf owns no browser service: the agent starts and manages a
-local headless browser when needed. Browser state survives subsequent Messages in the same Sandbox
+local headless browser when needed. Browser state survives subsequent inputs in the same Sandbox
 until the agent removes it or the VM is cleaned up. Local recordings are enabled and can be disabled
 through `browser-use`.
 This capability needs neither the operator's desktop browser nor a browser cloud account. Existing
@@ -169,7 +168,7 @@ Ownership guide:
 
 Never attach Enrollment codes, Client configuration, Provider Gateway state, credentials,
 environment dumps, Harness transcript contents, complete inspection output, watch snapshots, or
-Message output to a report. Those surfaces may contain the caller's full goal or agent output.
+native output to a report. Those surfaces may contain the caller's full goal or agent output.
 Report only the needed Session ID and reviewed state, attention, and cleanup facts; redact caller input
 first.
 

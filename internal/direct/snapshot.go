@@ -12,7 +12,6 @@ import (
 type InspectionStore interface {
 	Sandboxes(context.Context, string) ([]core.Sandbox, error)
 	Actions(context.Context, string) ([]core.Action, error)
-	Deliveries(context.Context, string) ([]core.Delivery, error)
 }
 
 // Snapshot is one factual read of a direct Session and the resources it owns.
@@ -21,7 +20,6 @@ type Snapshot struct {
 	MainSandbox core.Sandbox
 	Sandboxes   []core.Sandbox
 	Actions     []core.Action
-	Deliveries  []core.Delivery
 }
 
 // LoadSnapshot performs one staged load and fails closed when any fact does
@@ -60,17 +58,6 @@ func LoadSnapshot(ctx context.Context, store InspectionStore, session core.Sessi
 		}
 	}
 
-	snapshot.Deliveries, err = store.Deliveries(ctx, session.ID)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	for _, delivery := range snapshot.Deliveries {
-		message, run := delivery.Message, delivery.AgentRun
-		if message.SessionID != session.ID || run.SessionID != session.ID || run.MessageID != message.ID ||
-			run.SandboxID != mainID {
-			return Snapshot{}, fmt.Errorf("Message %s does not have an exact direct delivery for Session %s", message.ID, session.ID)
-		}
-	}
 	return snapshot, nil
 }
 
@@ -81,8 +68,6 @@ type ExecutionState string
 const (
 	ExecutionProvisioningSandbox ExecutionState = "provisioning-sandbox"
 	ExecutionConnectingRoute     ExecutionState = "connecting-route"
-	ExecutionQueued              ExecutionState = "queued"
-	ExecutionWorking             ExecutionState = "working"
 	ExecutionAttention           ExecutionState = "attention"
 	ExecutionIdle                ExecutionState = "idle"
 )
@@ -102,56 +87,6 @@ func (s Snapshot) Project() Projection {
 	}
 	if !core.HasSucceededAction(s.Actions, core.ActionRouteCreate, s.MainSandbox.ID) {
 		return Projection{State: ExecutionConnectingRoute}
-	}
-	state := ExecutionIdle
-	for _, delivery := range s.Deliveries {
-		run := delivery.AgentRun
-		switch run.State {
-		case core.AgentRunCompleted, core.AgentRunFailed, core.AgentRunInterrupted:
-			continue
-		}
-		if run.Attention != "" {
-			return Projection{State: ExecutionAttention, Detail: run.Attention}
-		}
-		switch run.State {
-		case core.AgentRunUncertain:
-			return Projection{State: ExecutionAttention, Detail: "agent delivery ended with state " + string(run.State)}
-		case core.AgentRunActive:
-			state = ExecutionWorking
-		default:
-			if state != ExecutionWorking {
-				state = ExecutionQueued
-			}
-		}
-	}
-	if state != ExecutionIdle {
-		return Projection{State: state}
-	}
-	return latestSettledProjection(s.Deliveries)
-}
-
-func latestSettledProjection(deliveries []core.Delivery) Projection {
-	var latest *core.Delivery
-	for _, delivery := range deliveries {
-		if delivery.Message.Intent == core.MessageSteer && delivery.AgentRun.State == core.AgentRunCompleted && delivery.AgentRun.TurnOutcome == "" {
-			continue
-		}
-		if latest == nil || delivery.Message.Sequence > latest.Message.Sequence {
-			latest = &delivery
-		}
-	}
-	if latest == nil {
-		return Projection{State: ExecutionIdle}
-	}
-	run := latest.AgentRun
-	if run.Attention != "" {
-		return Projection{State: ExecutionAttention, Detail: run.Attention}
-	}
-	if run.State != core.AgentRunCompleted {
-		return Projection{State: ExecutionAttention, Detail: "agent delivery ended with state " + string(run.State)}
-	}
-	if run.TurnOutcome != "completed" {
-		return Projection{State: ExecutionAttention, Detail: "agent completed without a successful Turn outcome"}
 	}
 	return Projection{State: ExecutionIdle}
 }

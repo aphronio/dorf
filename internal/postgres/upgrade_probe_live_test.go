@@ -41,16 +41,6 @@ func TestLiveUpgradeQuiesceProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deliveries, err := store.Deliveries(ctx, sessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var runs []core.AgentRun
-	for _, delivery := range deliveries {
-		if delivery.AgentRun.ThreadID != "" {
-			runs = append(runs, delivery.AgentRun)
-		}
-	}
 	owner := provider.Ownership{SessionID: sessionID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce}
 	a := codex.Agent{Sandbox: s, Port: 8755, Timeout: 30 * time.Second}
 	if err := store.WithSessionFence(ctx, sessionID, func() error {
@@ -69,11 +59,11 @@ func TestLiveUpgradeQuiesceProbe(t *testing.T) {
 			}
 			return store.RecordSandboxResourceDeleted(ctx, owned)
 		}
-		if err := a.VerifyUpgrade(ctx, owner, runs); err != nil {
+		if err := a.VerifyUpgrade(ctx, owner, session.ThreadID); err != nil {
 			return fmt.Errorf("native verification: %w", err)
 		}
 		t.Log("exact native history verified")
-		return a.Quiesce(ctx, owner, runs)
+		return a.Quiesce(ctx, owner, session.ThreadID)
 	}); err != nil {
 		t.Fatal(err)
 	}

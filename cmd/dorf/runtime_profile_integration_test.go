@@ -174,7 +174,7 @@ func TestAdmittedSessionRuntimeIgnoresLaterVerificationReceiptState(t *testing.T
 		t.Fatal(err)
 	}
 	resolver := profileRuntimeResolver{
-		cfg:   config.Config{Workspace: "/workspace", BlobRoot: t.TempDir(), TurnTimeout: time.Minute, Incus: &incusAuthority},
+		cfg:   config.Config{Workspace: "/workspace", TurnTimeout: time.Minute, Incus: &incusAuthority},
 		store: store,
 	}
 	assertRuntime := func(state string) {
@@ -229,13 +229,5 @@ func TestAdmittedSessionRuntimeIgnoresLaterVerificationReceiptState(t *testing.T
 	if err != nil || !created || newSession.SandboxProfileRevision != next.DefinitionHash || newSession.ProfileRef() == session.ProfileRef() {
 		t.Fatalf("new admission=%#v created=%v err=%v", newSession, created, err)
 	}
-	for _, check := range []struct {
-		ref    core.SandboxProfileRef
-		images bool
-	}{{session.ProfileRef(), true}, {newSession.ProfileRef(), false}} {
-		images, err := resolver.SupportsMessageImages(ctx, check.ref)
-		if err != nil || images != check.images {
-			t.Fatalf("images for %v=%v err=%v", check.ref, images, err)
-		}
-	}
+
 }

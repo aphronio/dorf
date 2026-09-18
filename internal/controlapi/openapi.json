@@ -4,7 +4,7 @@
   "info": {
     "title": "Dorf Remote Control API",
     "version": "1.0.0",
-    "description": "The authenticated, purpose-built remote boundary for one Dorf Deployment. A Session is the long-running resource; internal Tasks, AgentRuns, Actions, and providers are not exposed as resources. Timeline reads expose native Harness, Thread, and Turn references without granting control over them."
+    "description": "The authenticated, purpose-built remote boundary for one Dorf Deployment. A Session is the long-running resource; internal Tasks, Actions, and providers are not exposed as resources. Timeline reads expose native Harness, Thread, and Turn references without granting control over them."
   },
   "servers": [
     {
@@ -18,12 +18,24 @@
     }
   ],
   "tags": [
-    { "name": "Discovery" },
-    { "name": "Authentication" },
-    { "name": "Profiles" },
-    { "name": "Sessions" },
-    { "name": "Messages" },
-    { "name": "Sandboxes" }
+    {
+      "name": "Discovery"
+    },
+    {
+      "name": "Authentication"
+    },
+    {
+      "name": "Profiles"
+    },
+    {
+      "name": "Sessions"
+    },
+    {
+      "name": "Events"
+    },
+    {
+      "name": "Sandboxes"
+    }
   ],
   "x-dorf-problems": [],
   "paths": {
@@ -31,18 +43,24 @@
       "get": {
         "operationId": "discoverDeployment",
         "summary": "Discover the Deployment and its capabilities",
-        "tags": ["Discovery"],
+        "tags": [
+          "Discovery"
+        ],
         "security": [],
         "responses": {
           "200": {
             "description": "Deployment discovery",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/Discovery" }
+                "schema": {
+                  "$ref": "#/components/schemas/Discovery"
+                }
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Problem" }
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -50,18 +68,24 @@
       "get": {
         "operationId": "getOpenAPI",
         "summary": "Read the canonical OpenAPI document and Problem catalog",
-        "tags": ["Discovery"],
+        "tags": [
+          "Discovery"
+        ],
         "security": [],
         "responses": {
           "200": {
             "description": "OpenAPI 3.1 JSON document",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/OpenAPIDocument" }
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAPIDocument"
+                }
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Problem" }
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -69,13 +93,17 @@
       "post": {
         "operationId": "redeemEnrollment",
         "summary": "Redeem one short-lived Enrollment for a Client",
-        "tags": ["Authentication"],
+        "tags": [
+          "Authentication"
+        ],
         "security": [],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/RedeemRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/RedeemRequest"
+              }
             }
           }
         },
@@ -84,7 +112,9 @@
             "description": "Exact replay of an already redeemed Client binding",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/Identity" }
+                "schema": {
+                  "$ref": "#/components/schemas/Identity"
+                }
               }
             }
           },
@@ -92,11 +122,15 @@
             "description": "Client binding created",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/Identity" }
+                "schema": {
+                  "$ref": "#/components/schemas/Identity"
+                }
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Problem" }
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -104,17 +138,23 @@
       "get": {
         "operationId": "getIdentity",
         "summary": "Inspect the effective Principal and Client",
-        "tags": ["Authentication"],
+        "tags": [
+          "Authentication"
+        ],
         "responses": {
           "200": {
             "description": "Authenticated identity",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/Identity" }
+                "schema": {
+                  "$ref": "#/components/schemas/Identity"
+                }
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Problem" }
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -123,17 +163,23 @@
         "operationId": "listProfiles",
         "summary": "List Sandbox profiles available for Session selection",
         "description": "Returns all configured profiles in name order, including unverified profiles. Verification reflects stored proof for the current definition, not a live availability check. Infrastructure configuration and credentials remain private.",
-        "tags": ["Profiles"],
+        "tags": [
+          "Profiles"
+        ],
         "responses": {
           "200": {
             "description": "Narrow Sandbox profile summaries",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ProfileList" }
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileList"
+                }
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Problem" }
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -142,35 +188,51 @@
         "operationId": "listSessions",
         "summary": "List one newest-first page of Sessions",
         "description": "This is keyset traversal of current Session facts, not a frozen snapshot. Pass next_cursor unchanged to retrieve the next page.",
-        "tags": ["Sessions"],
+        "tags": [
+          "Sessions"
+        ],
         "parameters": [
-          { "$ref": "#/components/parameters/PageLimit" },
-          { "$ref": "#/components/parameters/PageCursor" }
+          {
+            "$ref": "#/components/parameters/PageLimit"
+          },
+          {
+            "$ref": "#/components/parameters/PageCursor"
+          }
         ],
         "responses": {
           "200": {
             "description": "One page of narrow Session summaries",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/SessionList" }
+                "schema": {
+                  "$ref": "#/components/schemas/SessionList"
+                }
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Problem" }
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       },
       "post": {
         "operationId": "createSession",
         "summary": "Admit or exactly replay a direct Session",
-        "tags": ["Sessions"],
+        "tags": [
+          "Sessions"
+        ],
         "parameters": [
-          { "$ref": "#/components/parameters/IdempotencyKey" }
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
         ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/CreateSessionRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/CreateSessionRequest"
+              }
             }
           }
         },
@@ -178,92 +240,32 @@
           "200": {
             "description": "Exact replay of the admitted Session",
             "headers": {
-              "ETag": { "$ref": "#/components/headers/ETag" }
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
             },
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/Session" }
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
               }
             }
           },
           "201": {
             "description": "Session admitted",
             "headers": {
-              "ETag": { "$ref": "#/components/headers/ETag" }
-            },
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/Session" }
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
               }
-            }
-          },
-          "default": { "$ref": "#/components/responses/Problem" }
-        }
-      }
-    },
-    "/v1/sessions/{session}": {
-      "get": {
-        "operationId": "getSession",
-        "summary": "Read one canonical Session snapshot",
-        "tags": ["Sessions"],
-        "parameters": [
-          { "$ref": "#/components/parameters/SessionID" },
-          { "$ref": "#/components/parameters/IfNoneMatch" }
-        ],
-        "responses": {
-          "200": {
-            "description": "Current complete Session representation",
-            "headers": {
-              "ETag": { "$ref": "#/components/headers/ETag" }
             },
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/Session" }
-              }
-            }
-          },
-          "304": {
-            "description": "The supplied representation ETag is still current",
-            "headers": {
-              "ETag": { "$ref": "#/components/headers/ETag" }
-            }
-          },
-          "default": { "$ref": "#/components/responses/Problem" }
-        }
-      }
-    },
-    "/v1/sessions/{session}/messages/{message}/timeline": {
-      "get": {
-        "operationId": "readMessageTimeline",
-        "summary": "Read completed replies and inputs in the Message's native turn",
-        "description": "A passive read of the exact bound turn, including completed final replies before the turn settles. Entries preserve native order. Use thread_id, turn_id and index to identify retained entries; native_item_id is diagnostic only. Input message_id is present only when verified against Dorf custody. Missing binding or unavailable history returns timeline_unavailable.",
-        "tags": [
-          "Messages"
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/SessionID"
-          },
-          {
-            "$ref": "#/components/parameters/MessageID"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Completed conversation entries available at read time",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MessageTimeline"
+                  "$ref": "#/components/schemas/Session"
                 }
               }
             }
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
           },
           "default": {
             "$ref": "#/components/responses/Problem"
@@ -271,11 +273,10 @@
         }
       }
     },
-    "/v1/sessions/{session}/timeline": {
+    "/v1/sessions/{session}": {
       "get": {
-        "operationId": "readSessionTimeline",
-        "summary": "Read one native conversation turn without starting work",
-        "description": "Returns original userMessage and agentMessage objects in native order. Omitted turn_id selects the latest started turn once. Unavailable, unsupported, oversized, or incomplete history fails without truncation.",
+        "operationId": "getSession",
+        "summary": "Read one canonical Session snapshot",
         "tags": [
           "Sessions"
         ],
@@ -284,32 +285,32 @@
             "$ref": "#/components/parameters/SessionID"
           },
           {
-            "name": "turn_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 255
-            }
+            "$ref": "#/components/parameters/IfNoneMatch"
           }
         ],
         "responses": {
           "200": {
-            "description": "Native conversation turn available at read time",
+            "description": "Current complete Session representation",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Timeline"
+                  "$ref": "#/components/schemas/Session"
                 }
               }
             }
           },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
+          "304": {
+            "description": "The supplied representation ETag is still current",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Problem"
@@ -322,131 +323,41 @@
         "operationId": "watchSession",
         "summary": "Watch newer complete Session snapshots",
         "description": "A non-durable server-sent event stream. Each snapshot event carries an id equal to the canonical representation digest and data containing one complete Session JSON object. Keepalives are comments. Reconnect by reading the canonical Session or by supplying the last event id; the stream closes for bounded reauthentication.",
-        "tags": ["Sessions"],
+        "tags": [
+          "Sessions"
+        ],
         "parameters": [
-          { "$ref": "#/components/parameters/SessionID" },
-          { "$ref": "#/components/parameters/SSEAccept" },
-          { "$ref": "#/components/parameters/LastEventID" }
+          {
+            "$ref": "#/components/parameters/SessionID"
+          },
+          {
+            "$ref": "#/components/parameters/SSEAccept"
+          },
+          {
+            "$ref": "#/components/parameters/LastEventID"
+          }
         ],
         "responses": {
           "200": {
             "description": "Server-sent snapshot events and keepalive comments",
             "content": {
               "text/event-stream": {
-                "schema": { "type": "string" },
+                "schema": {
+                  "type": "string"
+                },
                 "x-dorf-event": {
                   "name": "snapshot",
                   "id": "SHA-256 hex digest of data",
-                  "dataSchema": { "$ref": "#/components/schemas/Session" }
-                }
-              }
-            }
-          },
-          "default": { "$ref": "#/components/responses/Problem" }
-        }
-      }
-    },
-    "/v1/sessions/{session}/messages": {
-      "post": {
-        "operationId": "sendSessionMessage",
-        "summary": "Admit or exactly replay a follow or steer Message",
-        "tags": ["Messages"],
-        "parameters": [
-          { "$ref": "#/components/parameters/SessionID" },
-          { "$ref": "#/components/parameters/IdempotencyKey" }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": { "$ref": "#/components/schemas/SendMessageRequest" }
-            },
-            "multipart/form-data": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["text", "attachment"],
-                "properties": {
-                  "developer_instructions": { "type": "string", "description": "Complete application developer instruction snapshot; an omitted part leaves it unchanged and an empty part clears it for a fresh Turn." },
-                  "refresh_skills": { "type": "boolean", "default": false },
-                  "text": { "type": "string", "description": "Verbatim Message text. May be empty when attachments are present." },
-                  "intent": { "type": "string", "enum": ["auto", "follow", "steer"], "default": "auto" },
-                  "attachment": {
-                    "type": "array",
-                    "minItems": 1,
-                    "maxItems": 4,
-                    "items": { "type": "string", "format": "binary" },
-                    "description": "Ordered files sent by value with a filename. Dorf derives media type, kind, byte size, and SHA-256. Each file is limited to 8 MiB. Fully decoded PNG, JPEG, and static WebP inputs become image attachments and are limited to 25,000,000 decoded pixels; all other bytes become file attachments."
+                  "dataSchema": {
+                    "$ref": "#/components/schemas/Session"
                   }
                 }
               }
             }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
           }
-        },
-        "responses": {
-          "200": {
-            "description": "Exact replay of the accepted Message",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/Message" }
-              }
-            }
-          },
-          "201": {
-            "description": "Message accepted",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/Message" }
-              }
-            }
-          },
-          "default": { "$ref": "#/components/responses/Problem" }
-        }
-      }
-    },
-    "/v1/sessions/{session}/messages/{message}": {
-      "get": {
-        "operationId": "getSessionMessage",
-        "summary": "Inspect one accepted Message delivery",
-        "tags": ["Messages"],
-        "parameters": [
-          { "$ref": "#/components/parameters/SessionID" },
-          { "$ref": "#/components/parameters/MessageID" }
-        ],
-        "responses": {
-          "200": {
-            "description": "Current retained Message delivery",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/Message" }
-              }
-            }
-          },
-          "default": { "$ref": "#/components/responses/Problem" }
-        },
-        "description": " Use latest as the Message selector to inspect the latest settled reply in the main Sandbox."
-      }
-    },
-    "/v1/sessions/{session}/messages/{message}/interrupt": {
-      "put": {
-        "operationId": "interruptSessionMessage",
-        "summary": "Request interruption of the exact Turn for a direct Codex Message",
-        "description": "Idempotent. A Steer addresses its original Turn, never a successor. A settled target is a no-op. Inspect the result for the observed outcome.",
-        "tags": ["Messages"],
-        "parameters": [
-          { "$ref": "#/components/parameters/SessionID" },
-          { "$ref": "#/components/parameters/MessageID" }
-        ],
-        "responses": {
-          "200": {
-            "description": "Current Message after accepting Stop or observing a settled target",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/Message" }
-              }
-            }
-          },
-          "default": { "$ref": "#/components/responses/Problem" }
         }
       }
     },
@@ -454,17 +365,25 @@
       "post": {
         "operationId": "retrySession",
         "summary": "Retry the Session's eligible failed execution",
-        "tags": ["Sessions"],
+        "tags": [
+          "Sessions"
+        ],
         "parameters": [
-          { "$ref": "#/components/parameters/SessionID" },
-          { "$ref": "#/components/parameters/IdempotencyKey" }
+          {
+            "$ref": "#/components/parameters/SessionID"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
         ],
         "responses": {
           "200": {
             "description": "Exact replay of the retry request",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/Retry" }
+                "schema": {
+                  "$ref": "#/components/schemas/Retry"
+                }
               }
             }
           },
@@ -472,11 +391,15 @@
             "description": "Retry scheduled",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/Retry" }
+                "schema": {
+                  "$ref": "#/components/schemas/Retry"
+                }
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Problem" }
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -484,23 +407,33 @@
       "put": {
         "operationId": "requestSessionCleanup",
         "summary": "Request Session cleanup idempotently",
-        "tags": ["Sessions"],
+        "tags": [
+          "Sessions"
+        ],
         "parameters": [
-          { "$ref": "#/components/parameters/SessionID" }
+          {
+            "$ref": "#/components/parameters/SessionID"
+          }
         ],
         "responses": {
           "200": {
             "description": "Current complete Session representation after accepting the request",
             "headers": {
-              "ETag": { "$ref": "#/components/headers/ETag" }
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
             },
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/Session" }
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Problem" }
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -562,7 +495,9 @@
         "operationId": "getSandboxFile",
         "summary": "Read exact bytes from one Session-owned Sandbox",
         "description": "Reads up to 8 MiB from one regular file inside the Sandbox using an absolute, home-relative (~/), or workspace-relative path while Session cleanup still permits reads. Rejects symlinks and non-canonical paths. The client must verify Content-Digest before using or writing the bytes.",
-        "tags": ["Sandboxes"],
+        "tags": [
+          "Sandboxes"
+        ],
         "parameters": [
           {
             "$ref": "#/components/parameters/SandboxID"
@@ -584,16 +519,26 @@
             "headers": {
               "Content-Length": {
                 "description": "Exact byte length",
-                "schema": { "type": "integer", "minimum": 0 }
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                }
               },
               "Content-Digest": {
                 "description": "RFC 9530 SHA-256 digest in structured-field form",
-                "schema": { "type": "string", "pattern": "^sha-256=:[A-Za-z0-9+/]{43}=:$" }
+                "schema": {
+                  "type": "string",
+                  "pattern": "^sha-256=:[A-Za-z0-9+/]{43}=:$"
+                }
               }
             },
             "content": {
               "application/octet-stream": {
-                "schema": { "type": "string", "format": "binary", "maxLength": 8388608 }
+                "schema": {
+                  "type": "string",
+                  "format": "binary",
+                  "maxLength": 8388608
+                }
               }
             }
           },
@@ -601,11 +546,15 @@
             "description": "The file exceeds the 8 MiB read limit",
             "content": {
               "application/problem+json": {
-                "schema": { "$ref": "#/components/schemas/Problem" }
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Problem" }
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -613,11 +562,33 @@
       "get": {
         "operationId": "getSandboxStatus",
         "summary": "Observe provider state without waking or pausing the Sandbox",
-        "tags": ["Sandboxes"],
-        "parameters": [{ "name": "sandbox", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "tags": [
+          "Sandboxes"
+        ],
+        "parameters": [
+          {
+            "name": "sandbox",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
-          "200": { "description": "Fresh provider observation; unknown means an unrecognized provider state", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SandboxStatus" } } } },
-          "default": { "$ref": "#/components/responses/Problem" }
+          "200": {
+            "description": "Fresh provider observation; unknown means an unrecognized provider state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SandboxStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -669,20 +640,63 @@
         ]
       }
     },
-    "/v1/sessions/{session}/messages/{message}/observation": {
+    "/v1/sessions/{session}/history": {
       "get": {
-        "operationId": "readMessageObservation",
-        "summary": "Read coherent Message outcome and completed replies",
-        "description": "One coherent durable delivery/outcome and completed native reply projection. Binding and contiguous completed indexes identify entries; native IDs are diagnostic. An opaque cursor binds the exact Message and consumed-prefix digest. This explicit read may hydrate authoritative retained history if the ephemeral cache is missing or gapped. It does not fetch terminal result text separately. A completion watermark proves the complete final prefix as well as durable outcome; outcome alone is not sufficient.",
+        "operationId": "readSessionTimeline",
+        "summary": "Read one native conversation turn without starting work",
+        "description": "Returns original userMessage and agentMessage objects in native order. Omitted turn_id selects the latest started turn once. Unavailable, unsupported, oversized, or incomplete history fails without truncation.",
         "tags": [
-          "Messages"
+          "Sessions"
         ],
         "parameters": [
           {
             "$ref": "#/components/parameters/SessionID"
           },
           {
-            "$ref": "#/components/parameters/MessageID"
+            "name": "turn_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Native conversation turn available at read time",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Timeline"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{session}/turns/{turn}": {
+      "get": {
+        "operationId": "readTurn",
+        "summary": "Observe a native Turn",
+        "description": "Bounded native completed items and status. Cursor binds Session, Thread, Turn and consumed prefix. SSE uses an ephemeral cache; gaps require an explicit Turn/history read. Subscription does not resume compute. No persisted Dorf event log or token streaming.",
+        "tags": [
+          "Sessions"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SessionID"
           },
           {
             "name": "cursor",
@@ -693,15 +707,18 @@
               "minLength": 1,
               "maxLength": 4096
             }
+          },
+          {
+            "$ref": "#/components/parameters/TurnID"
           }
         ],
         "responses": {
           "200": {
-            "description": "Coherent Message observation",
+            "description": "Native Turn observation",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MessageObservation"
+                  "$ref": "#/components/schemas/TurnObservation"
                 }
               }
             }
@@ -721,20 +738,17 @@
         }
       }
     },
-    "/v1/sessions/{session}/messages/{message}/observation/stream": {
+    "/v1/sessions/{session}/events/stream": {
       "get": {
-        "operationId": "streamMessageObservation",
-        "summary": "Stream coherent Message outcome and completed replies",
-        "description": "One coherent durable delivery/outcome and completed native reply projection. Binding and contiguous completed indexes identify entries; native IDs are diagnostic. An opaque cursor binds the exact Message and consumed-prefix digest. Native events drive observation SSE frames. Each data field is MessageObservation; id is its cursor when bound. At-least-once reconnect may replay entries. Compact durable-status checks settle outcome without native history polling. A missing ephemeral cache returns resync_deferred; gaps require explicit observation or timeline hydration. Subscription and heartbeats never resume a Sandbox or count as activity. Streams remain open after complete, ending within one minute for authentication renewal; reconnect with the last fully processed cursor.",
+        "operationId": "streamSessionEvents",
+        "summary": "Observe a native Turn",
+        "description": "Bounded native completed items and status. Cursor binds Session, Thread, Turn and consumed prefix. SSE uses an ephemeral cache; gaps require an explicit Turn/history read. Subscription does not resume compute. No persisted Dorf event log or token streaming.",
         "tags": [
-          "Messages"
+          "Sessions"
         ],
         "parameters": [
           {
             "$ref": "#/components/parameters/SessionID"
-          },
-          {
-            "$ref": "#/components/parameters/MessageID"
           },
           {
             "name": "cursor",
@@ -765,16 +779,26 @@
               "type": "string",
               "const": "text/event-stream"
             }
+          },
+          {
+            "name": "turn_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Coherent Message observation",
+            "description": "Native Turn observation",
             "content": {
               "text/event-stream": {
                 "schema": {
                   "type": "string",
-                  "description": "SSE observation events whose data is MessageObservation."
+                  "description": "SSE observation events whose data is TurnObservation."
                 }
               }
             }
@@ -793,6 +817,75 @@
           }
         }
       }
+    },
+    "/v1/sessions/{session}/events": {
+      "post": {
+        "tags": [
+          "Sessions"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SessionID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Native response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeAcknowledgement"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "operationId": "submitSessionEvent",
+        "summary": "Submit one native input or cancellation event",
+        "description": "Requires a ready Session. Returns native acknowledgement, not durable queuing or completion. No idempotency guarantee; response loss is an unknown outcome. Cancellation captures one native target for this request.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NativeEvent"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sessions/{session}/turns": {
+      "get": {
+        "tags": [
+          "Sessions"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SessionID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Native response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeTurns"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "operationId": "listNativeTurns",
+        "summary": "Read bounded native Turn history"
+      }
     }
   },
   "components": {
@@ -808,66 +901,98 @@
         "name": "session",
         "in": "path",
         "required": true,
-        "schema": { "type": "string", "minLength": 1 }
-      },
-      "MessageID": {
-        "name": "message",
-        "in": "path",
-        "required": true,
-        "schema": { "type": "string", "minLength": 1 }
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        }
       },
       "SandboxID": {
         "name": "sandbox",
         "in": "path",
         "required": true,
-        "schema": { "type": "string", "minLength": 1 }
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        }
       },
       "IdempotencyKey": {
         "name": "Idempotency-Key",
         "in": "header",
         "required": true,
         "description": "Caller-retained request identity. Exact replay returns the same resource; changed input returns idempotency_conflict.",
-        "schema": { "type": "string", "minLength": 1, "maxLength": 255 }
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        }
       },
       "IfNoneMatch": {
         "name": "If-None-Match",
         "in": "header",
         "required": false,
         "description": "One or more canonical representation ETags",
-        "schema": { "type": "string" }
+        "schema": {
+          "type": "string"
+        }
       },
       "SSEAccept": {
         "name": "Accept",
         "in": "header",
         "required": true,
-        "schema": { "type": "string", "const": "text/event-stream" }
+        "schema": {
+          "type": "string",
+          "const": "text/event-stream"
+        }
       },
       "LastEventID": {
         "name": "Last-Event-ID",
         "in": "header",
         "required": false,
         "description": "Exact 64-character lowercase hexadecimal representation digest",
-        "schema": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
       },
       "PageLimit": {
         "name": "limit",
         "in": "query",
         "required": false,
         "description": "Maximum summaries in this page",
-        "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 }
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 50
+        }
       },
       "PageCursor": {
         "name": "cursor",
         "in": "query",
         "required": false,
         "description": "Opaque cursor returned as next_cursor by the preceding page",
-        "schema": { "type": "string", "minLength": 1 }
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "TurnID": {
+        "name": "turn",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        }
       }
     },
     "headers": {
       "ETag": {
         "description": "Strong SHA-256 identity of the complete canonical Session representation",
-        "schema": { "type": "string" }
+        "schema": {
+          "type": "string"
+        }
       }
     },
     "responses": {
@@ -876,112 +1001,58 @@
         "headers": {
           "Allow": {
             "description": "Allowed method or methods when code is method_not_allowed",
-            "schema": { "type": "string" }
+            "schema": {
+              "type": "string"
+            }
           },
           "Retry-After": {
             "description": "Seconds until another attempt when code is rate_limited",
-            "schema": { "type": "integer", "minimum": 1 }
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
           },
           "WWW-Authenticate": {
             "description": "Bearer challenge when code is unauthenticated",
-            "schema": { "type": "string" }
+            "schema": {
+              "type": "string"
+            }
           }
         },
         "content": {
           "application/problem+json": {
-            "schema": { "$ref": "#/components/schemas/Problem" }
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
           }
         }
       }
     },
     "schemas": {
       "SandboxStatus": {
-        "type": "object", "additionalProperties": false,
-        "required": ["provider", "state"],
-        "properties": {
-          "provider": { "type": "string" },
-          "provider_id": { "type": "string", "description": "Freshly attested provider resource locator, when present" },
-          "state": { "type": "string", "enum": ["running", "paused", "stopped", "missing", "unknown"] }
-        }
-      },
-      "MessageTimeline": {
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "session_id",
-          "message_id",
-          "harness",
-          "thread_id",
-          "turn_id",
-          "status",
-          "items"
+          "provider",
+          "state"
         ],
         "properties": {
-          "session_id": {
+          "provider": {
             "type": "string"
           },
-          "message_id": {
-            "type": "string"
+          "provider_id": {
+            "type": "string",
+            "description": "Freshly attested provider resource locator, when present"
           },
-          "harness": {
-            "type": "string"
-          },
-          "thread_id": {
-            "type": "string"
-          },
-          "turn_id": {
-            "type": "string"
-          },
-          "status": {
+          "state": {
             "type": "string",
             "enum": [
-              "inProgress",
-              "completed",
-              "failed",
-              "interrupted"
+              "running",
+              "paused",
+              "stopped",
+              "missing",
+              "unknown"
             ]
-          },
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/MessageTimelineItem"
-            }
-          }
-        }
-      },
-      "MessageTimelineItem": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "index",
-          "native_item_id",
-          "kind"
-        ],
-        "properties": {
-          "index": {
-            "type": "integer",
-            "minimum": 0,
-            "description": "Zero-based order among completed inputs and final replies in this retained turn."
-          },
-          "native_item_id": {
-            "type": "string",
-            "description": "Native diagnostic reference. May change across active and persisted reads."
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "input",
-              "reply"
-            ]
-          },
-          "text": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Complete nonempty final reply text. Present on replies only."
-          },
-          "message_id": {
-            "type": "string",
-            "description": "Verified Dorf input Message identity, when known. Present on inputs only."
           }
         }
       },
@@ -1031,39 +1102,75 @@
       "OpenAPIDocument": {
         "type": "object",
         "description": "The canonical OpenAPI 3.1 document. Its full recursive shape is defined by the OpenAPI specification.",
-        "required": ["openapi", "info", "paths", "components", "x-dorf-problems"]
+        "required": [
+          "openapi",
+          "info",
+          "paths",
+          "components",
+          "x-dorf-problems"
+        ]
       },
       "Discovery": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["product", "version", "capabilities", "links"],
+        "required": [
+          "product",
+          "version",
+          "capabilities",
+          "links"
+        ],
         "properties": {
-          "product": { "type": "string", "const": "dorf" },
-          "version": { "type": "string", "minLength": 1 },
+          "product": {
+            "type": "string",
+            "const": "dorf"
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          },
           "capabilities": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "uniqueItems": true,
             "description": "Supported feature names for this Deployment. Clients must ignore names they do not recognize; openapi identifies this document, session_list identifies paginated Session listing, and profile_list identifies Sandbox profile discovery."
           },
-          "links": { "$ref": "#/components/schemas/DiscoveryLinks" }
+          "links": {
+            "$ref": "#/components/schemas/DiscoveryLinks"
+          }
         }
       },
       "DiscoveryLinks": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["openapi"],
+        "required": [
+          "openapi"
+        ],
         "properties": {
-          "openapi": { "type": "string", "const": "/v1/openapi.json" }
+          "openapi": {
+            "type": "string",
+            "const": "/v1/openapi.json"
+          }
         }
       },
       "RedeemRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["enrollment_code", "client_name", "credential"],
+        "required": [
+          "enrollment_code",
+          "client_name",
+          "credential"
+        ],
         "properties": {
-          "enrollment_code": { "type": "string", "minLength": 1 },
-          "client_name": { "type": "string", "minLength": 1 },
+          "enrollment_code": {
+            "type": "string",
+            "minLength": 1
+          },
+          "client_name": {
+            "type": "string",
+            "minLength": 1
+          },
           "credential": {
             "type": "string",
             "minLength": 1,
@@ -1075,40 +1182,95 @@
       "Principal": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "name"],
+        "required": [
+          "id",
+          "name"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "name": { "type": "string", "minLength": 1 }
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       },
       "Client": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "name", "expires_at"],
+        "required": [
+          "id",
+          "name",
+          "expires_at"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "name": { "type": "string", "minLength": 1 },
-          "expires_at": { "type": ["string", "null"], "format": "date-time" }
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
         }
       },
       "Identity": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["principal", "client"],
+        "required": [
+          "principal",
+          "client"
+        ],
         "properties": {
-          "principal": { "$ref": "#/components/schemas/Principal" },
-          "client": { "$ref": "#/components/schemas/Client" }
+          "principal": {
+            "$ref": "#/components/schemas/Principal"
+          },
+          "client": {
+            "$ref": "#/components/schemas/Client"
+          }
         }
       },
       "ProfileSummary": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "provider", "harness", "default", "verified"],
+        "required": [
+          "name",
+          "provider",
+          "harness",
+          "default",
+          "verified"
+        ],
         "properties": {
-          "name": { "type": "string", "minLength": 1 },
-          "provider": { "type": "string", "enum": ["incus", "e2b"] },
-          "harness": { "type": "string", "enum": ["codex", "pi"] },
-          "default": { "type": "boolean" },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "incus",
+              "e2b"
+            ]
+          },
+          "harness": {
+            "type": "string",
+            "enum": [
+              "codex",
+              "pi"
+            ]
+          },
+          "default": {
+            "type": "boolean"
+          },
           "verified": {
             "type": "boolean",
             "description": "Stored verification matches the current profile definition and contract, and its probe and cleanup completed without an error. This is not a live readiness check or a guarantee that Session admission will succeed."
@@ -1118,11 +1280,15 @@
       "ProfileList": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["profiles"],
+        "required": [
+          "profiles"
+        ],
         "properties": {
           "profiles": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/ProfileSummary" },
+            "items": {
+              "$ref": "#/components/schemas/ProfileSummary"
+            },
             "description": "All configured profiles sorted by name; an empty deployment returns an empty array."
           }
         }
@@ -1131,28 +1297,62 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "keep_running": { "type": "boolean", "default": false, "description": "Disable pause between turns for this Session. E2B pauses idle Sandboxes by default; other providers retain their existing lifecycle. Does not bypass provider timeouts." },
-          "client_reference": { "type": "string", "maxLength": 255, "description": "Optional opaque caller thread or task reference; retained at admission. Empty means no reference." },
-          "agents_md": { "type": "string", "maxLength": 1048576, "description": "Initial workspace AGENTS.md, installed before the Harness starts" },
-          "profile": { "type": "string", "description": "Named verified profile; omitted or empty selects the Deployment default" },
-          "ai_connection": { "type": "string", "description": "Named AI connection; omitted or empty selects the Deployment default" },
-          "model": { "type": "string", "maxLength": 1024, "description": "Harness model override; omitted or empty selects the resolved AI connection's default. The admitted Session always returns the exact resolved model." },
-          "reasoning": { "$ref": "#/components/schemas/ReasoningEffort" }
+          "keep_running": {
+            "type": "boolean",
+            "default": false,
+            "description": "Disable pause between turns for this Session. E2B pauses idle Sandboxes by default; other providers retain their existing lifecycle. Does not bypass provider timeouts."
+          },
+          "client_reference": {
+            "type": "string",
+            "maxLength": 255,
+            "description": "Optional opaque caller thread or task reference; retained at admission. Empty means no reference."
+          },
+          "agents_md": {
+            "type": "string",
+            "maxLength": 1048576,
+            "description": "Initial workspace AGENTS.md, installed before the Harness starts"
+          },
+          "profile": {
+            "type": "string",
+            "description": "Named verified profile; omitted or empty selects the Deployment default"
+          },
+          "ai_connection": {
+            "type": "string",
+            "description": "Named AI connection; omitted or empty selects the Deployment default"
+          },
+          "model": {
+            "type": "string",
+            "maxLength": 1024,
+            "description": "Harness model override; omitted or empty selects the resolved AI connection's default. The admitted Session always returns the exact resolved model."
+          },
+          "reasoning": {
+            "$ref": "#/components/schemas/ReasoningEffort"
+          }
         }
       },
       "SessionList": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["sessions", "next_cursor"],
+        "required": [
+          "sessions",
+          "next_cursor"
+        ],
         "properties": {
           "sessions": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/SessionSummary" }
+            "items": {
+              "$ref": "#/components/schemas/SessionSummary"
+            }
           },
           "next_cursor": {
             "oneOf": [
-              { "type": "string", "minLength": 1 },
-              { "type": "null" }
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
             ]
           }
         }
@@ -1160,230 +1360,425 @@
       "SessionCreator": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "name"],
+        "required": [
+          "id",
+          "name"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "name": { "type": "string", "minLength": 1 }
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       },
       "SessionSummary": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "admitted_at"],
+        "required": [
+          "id",
+          "admitted_at"
+        ],
         "properties": {
-          "client_reference": { "type": "string", "maxLength": 255, "description": "Optional opaque caller thread or task reference; retained at admission. Empty means no reference." },
-          "created_by_client": { "oneOf": [{ "$ref": "#/components/schemas/SessionCreator" }, { "type": "null" }], "description": "Authenticated creator of the first admission; null for unattributed Sessions. Revoked Clients remain identifiable." },
-          "id": { "type": "string", "minLength": 1 },
-          "admitted_at": { "type": "string", "format": "date-time" }
+          "client_reference": {
+            "type": "string",
+            "maxLength": 255,
+            "description": "Optional opaque caller thread or task reference; retained at admission. Empty means no reference."
+          },
+          "created_by_client": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SessionCreator"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Authenticated creator of the first admission; null for unattributed Sessions. Revoked Clients remain identifiable."
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "admitted_at": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "ReasoningEffort": {
         "type": "string",
-        "enum": ["low", "medium", "high", "xhigh"],
+        "enum": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
         "default": "high",
         "description": "Omitted admission input defaults to high; Session responses always contain the effective value"
       },
       "Session": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "profile", "model", "reasoning", "admission", "execution", "attention", "cleanup", "sandboxes"],
+        "required": [
+          "id",
+          "profile",
+          "model",
+          "reasoning",
+          "admission",
+          "execution",
+          "attention",
+          "cleanup",
+          "sandboxes"
+        ],
         "properties": {
-          "keep_running": { "type": "boolean", "default": false, "description": "Disable pause between turns for this Session. E2B pauses idle Sandboxes by default; other providers retain their existing lifecycle. Does not bypass provider timeouts." },
-          "client_reference": { "type": "string", "maxLength": 255, "description": "Optional opaque caller thread or task reference; retained at admission. Empty means no reference." },
-          "created_by_client": { "oneOf": [{ "$ref": "#/components/schemas/SessionCreator" }, { "type": "null" }], "description": "Authenticated creator of the first admission; null for unattributed Sessions. Revoked Clients remain identifiable." },
-          "id": { "type": "string", "minLength": 1 },
-          "profile": { "type": "string", "minLength": 1 },
-          "model": { "type": "string", "minLength": 1 },
-          "reasoning": { "$ref": "#/components/schemas/ReasoningEffort" },
-          "admission": { "$ref": "#/components/schemas/Admission" },
-          "execution": { "$ref": "#/components/schemas/ExecutionState" },
+          "keep_running": {
+            "type": "boolean",
+            "default": false,
+            "description": "Disable pause between turns for this Session. E2B pauses idle Sandboxes by default; other providers retain their existing lifecycle. Does not bypass provider timeouts."
+          },
+          "client_reference": {
+            "type": "string",
+            "maxLength": 255,
+            "description": "Optional opaque caller thread or task reference; retained at admission. Empty means no reference."
+          },
+          "created_by_client": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SessionCreator"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Authenticated creator of the first admission; null for unattributed Sessions. Revoked Clients remain identifiable."
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "profile": {
+            "type": "string",
+            "minLength": 1
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reasoning": {
+            "$ref": "#/components/schemas/ReasoningEffort"
+          },
+          "admission": {
+            "$ref": "#/components/schemas/Admission"
+          },
+          "execution": {
+            "$ref": "#/components/schemas/ExecutionState"
+          },
           "attention": {
             "oneOf": [
-              { "$ref": "#/components/schemas/Attention" },
-              { "type": "null" }
+              {
+                "$ref": "#/components/schemas/Attention"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
-          "cleanup": { "$ref": "#/components/schemas/CleanupState" },
+          "cleanup": {
+            "$ref": "#/components/schemas/CleanupState"
+          },
           "sandboxes": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/Sandbox" }
-          },
-          "latest_reply_id": {
-            "type": "string",
-            "description": "Latest settled reply in the main Sandbox, derived from retained Messages and AgentRuns. Pending follow-ups and steer acknowledgements are excluded."
+            "items": {
+              "$ref": "#/components/schemas/Sandbox"
+            }
           }
         }
       },
       "Admission": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["open"],
+        "required": [
+          "open"
+        ],
         "properties": {
-          "open": { "type": "boolean" }
+          "open": {
+            "type": "boolean"
+          }
         }
       },
       "ExecutionState": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["state"],
+        "required": [
+          "state"
+        ],
         "properties": {
           "state": {
             "type": "string",
-            "enum": ["provisioning_sandbox", "connecting_model_access", "awaiting_agent", "running", "idle", "complete", "stopped", "failed"]
+            "enum": [
+              "provisioning_sandbox",
+              "connecting_model_access",
+              "idle",
+              "stopped",
+              "failed"
+            ]
           }
         }
       },
       "CleanupState": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["state"],
+        "required": [
+          "state"
+        ],
         "properties": {
           "state": {
             "type": "string",
-            "enum": ["not_requested", "requested", "running", "complete", "failed"]
+            "enum": [
+              "not_requested",
+              "requested",
+              "running",
+              "complete",
+              "failed"
+            ]
           }
         }
       },
       "Attention": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["code", "detail"],
+        "required": [
+          "code",
+          "detail"
+        ],
         "properties": {
-          "code": { "type": "string", "minLength": 1 },
-          "detail": { "type": "string", "minLength": 1 }
+          "code": {
+            "type": "string",
+            "minLength": 1
+          },
+          "detail": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       },
       "Sandbox": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "name"],
+        "required": [
+          "id",
+          "name"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "name": { "type": "string", "minLength": 1 },
-          "resource_id": { "type": "string", "minLength": 1 },
-          "provider_id": { "type": "string", "minLength": 1 },
-          "resources": { "type": "array", "items": { "$ref": "#/components/schemas/SandboxResource" } },
-          "upgrades": { "type": "array", "items": { "$ref": "#/components/schemas/SandboxUpgrade" } },
-          "delivery_hold": { "$ref": "#/components/schemas/SandboxDeliveryHold" }
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "resource_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "provider_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SandboxResource"
+            }
+          },
+          "upgrades": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SandboxUpgrade"
+            }
+          },
+          "delivery_hold": {
+            "$ref": "#/components/schemas/SandboxDeliveryHold"
+          }
         }
       },
       "SandboxDeliveryHold": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "reason", "requested_at"],
+        "required": [
+          "id",
+          "reason",
+          "requested_at"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "reason": { "type": "string", "enum": ["workspace_upgrade", "checkpoint_recovery"] },
-          "requested_at": { "type": "string", "format": "date-time" }
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "workspace_upgrade",
+              "checkpoint_recovery"
+            ]
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "SandboxUpgrade": {
         "type": "object",
-        "required": ["id", "status", "source_resource_id", "package_version", "requested_at"],
+        "required": [
+          "id",
+          "status",
+          "source_resource_id",
+          "package_version",
+          "requested_at"
+        ],
         "properties": {
-          "id": { "type": "string" },
-          "status": { "type": "string", "enum": ["upgrading", "verifying", "rolling_back", "ready", "failed"] },
-          "source_resource_id": { "type": "string" },
-          "destination_resource_id": { "type": "string" },
-          "package_version": { "type": "string" },
-          "previous_version": { "type": "string" },
-          "requested_at": { "type": "string", "format": "date-time" },
-          "verified_at": { "type": "string", "format": "date-time" },
-          "finished_at": { "type": "string", "format": "date-time" },
-          "outcome": { "type": "string", "enum": ["upgraded", "rolled_back"] },
-          "failure_code": { "type": "string" },
-          "checkpoint_reference": { "type": "string" }
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "upgrading",
+              "verifying",
+              "rolling_back",
+              "ready",
+              "failed"
+            ]
+          },
+          "source_resource_id": {
+            "type": "string"
+          },
+          "destination_resource_id": {
+            "type": "string"
+          },
+          "package_version": {
+            "type": "string"
+          },
+          "previous_version": {
+            "type": "string"
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "verified_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "upgraded",
+              "rolled_back"
+            ]
+          },
+          "failure_code": {
+            "type": "string"
+          },
+          "checkpoint_reference": {
+            "type": "string"
+          }
         }
       },
       "SandboxResource": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "reserved_at"],
+        "required": [
+          "id",
+          "reserved_at"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "provider_id": { "type": "string", "minLength": 1 },
-          "reserved_at": { "type": "string", "format": "date-time" },
-          "observed_at": { "type": "string", "format": "date-time" },
-          "deleted_at": { "type": "string", "format": "date-time" }
-        }
-      },
-      "SendMessageRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["text"],
-        "properties": {
-          "observation": { "type": "boolean", "default": false, "description": "Deliver application-generated text rather than human input. Requires follow or auto intent, no attachments, and a supporting profile. Retained on idempotent replay." },
-          "developer_instructions": { "type": ["string", "null"], "description": "Complete application developer instruction snapshot for a fresh Turn. Omitted or null leaves the current snapshot unchanged; empty clears it. Steer retains this immutable payload but never changes the active Turn or defers it to another Message. Idempotent replay requires the same value." },
-          "refresh_skills": { "type": "boolean", "default": false, "description": "Request an installed-skill reload on a supported profile (currently Codex). A follow refreshes before its fresh Turn. A steer leaves the running Turn unchanged and retains the request for the next fresh Turn. Auto uses its resolved delivery intent. Retained on idempotent replay." },
-          "text": { "type": "string", "description": "Verbatim Message text. JSON requests require nonempty text; multipart requests may use empty text when attachments are present." },
-          "intent": { "type": "string", "enum": ["auto", "follow", "steer"], "default": "auto", "description": "Steer active work or follow when idle, resolved once at admission." }
-        }
-      },
-      "Message": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "session_id", "sequence", "intent", "delivery", "result", "attention", "admitted_at", "interrupt_requested"],
-        "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "session_id": { "type": "string", "minLength": 1 },
-          "sequence": { "type": "integer", "minimum": 1 },
-          "interrupt_requested": { "type": "boolean", "description": "Stop was accepted for this exact Turn; the result reports its observed outcome." },
-          "wait_reason": { "type": "string", "enum": ["workspace_upgrade", "checkpoint_recovery"], "description": "Accepted input is waiting for a durable workspace delivery hold to be released." },
-          "intent": { "type": "string", "enum": ["follow", "steer"] },
-          "delivery": { "$ref": "#/components/schemas/MessageDeliveryState" },
-          "result": {
-            "oneOf": [
-              { "$ref": "#/components/schemas/MessageResult" },
-              { "type": "null" }
-            ]
+          "id": {
+            "type": "string",
+            "minLength": 1
           },
-          "attention": {
-            "oneOf": [
-              { "$ref": "#/components/schemas/Attention" },
-              { "type": "null" }
-            ]
+          "provider_id": {
+            "type": "string",
+            "minLength": 1
           },
-          "admitted_at": { "type": "string", "format": "date-time" }
-        }
-      },
-      "MessageDeliveryState": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["state"],
-        "properties": {
-          "state": { "type": "string", "enum": ["accepted", "running", "completed", "failed"] }
-        }
-      },
-      "MessageResult": {
-        "type": "object",
-        "description": "A settled result whose internal encoded observation is limited to 16 MiB.",
-        "additionalProperties": false,
-        "required": ["outcome", "output"],
-        "properties": {
-          "outcome": { "type": "string", "minLength": 1 },
-          "output": { "type": "string" }
+          "reserved_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deleted_at": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "Retry": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["session_id", "state"],
+        "required": [
+          "session_id",
+          "state"
+        ],
         "properties": {
-          "session_id": { "type": "string", "minLength": 1 },
-          "state": { "type": "string", "const": "scheduled" }
+          "session_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "state": {
+            "type": "string",
+            "const": "scheduled"
+          }
         }
       },
       "Problem": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "title", "status", "code", "retryable", "details"],
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "retryable",
+          "details"
+        ],
         "properties": {
-          "type": { "type": "string", "format": "uri" },
-          "title": { "type": "string", "minLength": 1 },
-          "status": { "type": "integer", "minimum": 400, "maximum": 599 },
-          "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
-          "retryable": { "type": "boolean" },
-          "details": { "type": "object", "additionalProperties": true }
+          "type": {
+            "type": "string",
+            "format": "uri"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "integer",
+            "minimum": 400,
+            "maximum": 599
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          }
         }
       },
       "SandboxCommand": {
@@ -1466,76 +1861,181 @@
           }
         }
       },
-      "MessageObservation": {
+      "NativeAttachment": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "attention",
-          "session_id",
-          "message_id",
-          "intent",
-          "interrupt_requested",
-          "delivery",
-          "outcome",
-          "binding",
-          "items",
-          "cursor",
-          "from_index",
-          "next_index",
-          "completion_watermark",
-          "state"
-        ],
         "properties": {
-          "attention": {"anyOf": [{"$ref": "#/components/schemas/Attention"}, {"type": "null"}]},
+          "filename": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "contents": {
+            "type": "string",
+            "contentEncoding": "base64",
+            "description": "Bounded attachment bytes encoded as base64."
+          }
+        },
+        "required": [
+          "filename",
+          "contents"
+        ]
+      },
+      "NativeEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "pattern": "^input\\.(message|tool_output|cancel)$"
+          },
+          "client_id": {
+            "type": "string",
+            "maxLength": 256,
+            "description": "Required for input. Correlation only; repeated IDs do not deduplicate submission."
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 1048576
+          },
+          "developer_instructions": {
+            "type": "string",
+            "maxLength": 1048576
+          },
+          "refresh_skills": {
+            "type": "boolean",
+            "default": false
+          },
+          "attachments": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "$ref": "#/components/schemas/NativeAttachment"
+            }
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "NativeAcknowledgement": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "client_id": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "turn_id": {
+            "type": "string"
+          },
+          "harness": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "harness"
+        ]
+      },
+      "NativeTurn": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "client_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "output": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ]
+      },
+      "NativeTurns": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "harness": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "turns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NativeTurn"
+            }
+          }
+        },
+        "required": [
+          "harness",
+          "thread_id",
+          "turns"
+        ]
+      },
+      "NativeItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "native_item_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "client_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "native_item_id",
+          "kind"
+        ]
+      },
+      "TurnObservation": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string"
+          },
           "session_id": {
             "type": "string"
           },
-          "message_id": {
+          "turn_id": {
             "type": "string"
           },
-          "intent": {
-            "type": "string",
-            "enum": [
-              "auto",
-              "follow",
-              "steer"
-            ]
-          },
-          "interrupt_requested": {
-            "type": "boolean"
-          },
-          "delivery": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "state"
-            ],
-            "properties": {
-              "state": {
-                "type": "string",
-                "enum": [
-                  "accepted",
-                  "running",
-                  "completed",
-                  "failed"
-                ]
-              }
-            }
-          },
-          "outcome": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "enum": [
-              "completed",
-              "failed",
-              "interrupted",
-              null
-            ]
+          "status": {
+            "type": "string"
           },
           "binding": {
-            "anyOf": [
+            "oneOf": [
               {
                 "$ref": "#/components/schemas/ObservationBinding"
               },
@@ -1547,15 +2047,14 @@
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/MessageTimelineItem"
+              "$ref": "#/components/schemas/NativeItem"
             }
           },
           "cursor": {
             "type": [
               "string",
               "null"
-            ],
-            "description": "Opaque exact Message/binding and consumed-prefix digest cursor. Persist only after processing the entire returned suffix."
+            ]
           },
           "from_index": {
             "type": "integer",
@@ -1570,20 +2069,25 @@
               "integer",
               "null"
             ],
-            "minimum": 0,
-            "description": "Final completed-prefix count, present only after authoritative native terminal history and durable outcome settle. Failure before native binding has zero watermark."
+            "minimum": 0
           },
           "state": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "observing",
-              "complete",
-              "resync_deferred",
-              "gap"
-            ]
+            "type": "string"
           }
-        }
+        },
+        "required": [
+          "type",
+          "session_id",
+          "turn_id",
+          "status",
+          "binding",
+          "items",
+          "cursor",
+          "from_index",
+          "next_index",
+          "completion_watermark",
+          "state"
+        ]
       }
     }
   }

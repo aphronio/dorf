@@ -108,11 +108,11 @@ func (c checkpointCapture) captureOwned(ctx context.Context, b persistence.Captu
 	if err := driver.InitializeRepository(ctx, owner); err != nil {
 		return persistence.Reference{}, err
 	}
-	runs, err := checkpointRuns(ctx, c.store, b)
+	session, err := c.store.Session(ctx, b.SessionID)
 	if err != nil {
 		return persistence.Reference{}, err
 	}
-	guard, err := c.agent.BeginPersistenceCapture(ctx, owner, c.sandbox.Workspace(), runs, c.config.AdditionalPaths)
+	guard, err := c.agent.BeginPersistenceCapture(ctx, owner, c.sandbox.Workspace(), session.ThreadID, c.config.AdditionalPaths)
 	if err != nil {
 		c.recordNativeFailure(b, "prepare", err)
 		return persistence.Reference{}, err
@@ -137,20 +137,6 @@ func (c checkpointCapture) captureOwned(ctx context.Context, b persistence.Captu
 func (c checkpointCapture) restic() persistence.Driver {
 	return persistence.Driver{Sandbox: c.sandbox, Repository: c.config.repository(), ResticPath: c.config.ResticPath,
 		OperationTimeout: time.Duration(c.config.BackupTimeoutSeconds) * time.Second}
-}
-
-func checkpointRuns(ctx context.Context, store postgres.Store, b persistence.CaptureBoundary) ([]core.AgentRun, error) {
-	deliveries, err := store.Deliveries(ctx, b.SessionID)
-	if err != nil {
-		return nil, err
-	}
-	var runs []core.AgentRun
-	for _, delivery := range deliveries {
-		if delivery.Message.Sequence <= b.MessageSequence && delivery.AgentRun.SandboxID == b.SandboxID && delivery.AgentRun.ThreadID != "" {
-			runs = append(runs, delivery.AgentRun)
-		}
-	}
-	return runs, nil
 }
 
 func (c checkpointCapture) record(b persistence.CaptureBoundary, r persistence.Result) {

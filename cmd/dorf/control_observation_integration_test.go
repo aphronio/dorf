@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/codex"
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
@@ -70,17 +69,12 @@ func TestControlObservationStreamsAcrossPrivateHTTPWithDurableCustody(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := controlapi.NewServer(controlapi.Discovery{Product: "dorf"}, auth, controlAPISessions{store: store, tasks: tasks, directAdmissions: direct.NewAdmissionService(store, tasks.QueueName(), reader), reader: reader, blobs: blob.Store{Root: t.TempDir()}}, controlAPIProfiles{store: store}).Handler
+	handler := controlapi.NewServer(controlapi.Discovery{Product: "dorf"}, auth, controlAPISessions{store: store, tasks: tasks, directAdmissions: direct.NewAdmissionService(store, tasks.QueueName(), reader), reader: reader}, controlAPIProfiles{store: store}).Handler
 	key := fmt.Sprintf("observation-%d", time.Now().UnixNano())
 	var session controlapi.Session
 	controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, "/v1/sessions", credential, key+"-session", controlapi.CreateSessionRequest{AIConnection: "primary", Model: "model-test", Reasoning: "high"}), 201, &session)
-	var message controlapi.Message
-	controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, "/v1/sessions/"+session.ID+"/messages", credential, key+"-message", controlapi.SendMessageRequest{Text: "observation input"}), 201, &message)
-	runID := core.AgentRunID(message.ID)
-	if err = store.PrepareAgentRun(ctx, runID, "codex", ""); err != nil {
-		t.Fatal(err)
-	}
-	if err = store.BindAgentRun(ctx, runID, "codex", "native-thread", "native-turn", "inProgress"); err != nil {
+	runID := "input/dispatch"
+	if err = store.BindNativeThread(ctx, session.ID, "native-thread"); err != nil {
 		t.Fatal(err)
 	}
 	owned, err := store.Sandbox(ctx, core.MainSandboxName(session.ID))
@@ -91,8 +85,8 @@ func TestControlObservationStreamsAcrossPrivateHTTPWithDurableCustody(t *testing
 	runtime.items = []core.HarnessConversationItem{{Index: 0, NativeItemID: "input-0", Kind: "input", ClientID: runID}}
 	publicServer := httptest.NewServer(handler)
 	defer publicServer.Close()
-	path := publicServer.URL + "/v1/sessions/" + session.ID + "/messages/" + message.ID + "/observation"
-	get := func(cursor string) controlapi.MessageObservation {
+	path := publicServer.URL + "/v1/sessions/" + session.ID + "/turns/native-turn"
+	get := func(cursor string) controlapi.TurnObservation {
 		t.Helper()
 		request, err := http.NewRequest(http.MethodGet, path, nil)
 		if err != nil {
@@ -112,17 +106,17 @@ func TestControlObservationStreamsAcrossPrivateHTTPWithDurableCustody(t *testing
 		if response.StatusCode != 200 {
 			t.Fatalf("observation status=%d", response.StatusCode)
 		}
-		var value controlapi.MessageObservation
+		var value controlapi.TurnObservation
 		if err = json.NewDecoder(response.Body).Decode(&value); err != nil {
 			t.Fatal(err)
 		}
 		return value
 	}
 	first := get("")
-	if first.State != "observing" || first.NextIndex != 1 || len(first.Items) != 1 || first.Items[0].MessageID != message.ID || first.Cursor == nil {
+	if first.State != "observing" || first.NextIndex != 1 || len(first.Items) != 1 || first.Items[0].ClientID != "input" || first.Cursor == nil {
 		t.Fatalf("snapshot=%+v", first)
 	}
-	stream := openObservationTestStream(t, publicServer.Client(), path+"/stream", credential, *first.Cursor)
+	stream := openObservationTestStream(t, publicServer.Client(), publicServer.URL+"/v1/sessions/"+session.ID+"/events/stream?turn_id=native-turn", credential, *first.Cursor)
 	initial := stream.next(t)
 	if len(initial.Items) != 0 || initial.NextIndex != 1 {
 		t.Fatalf("initial=%+v", initial)
@@ -133,11 +127,11 @@ func TestControlObservationStreamsAcrossPrivateHTTPWithDurableCustody(t *testing
 	runtime.mu.Unlock()
 	feed.Append(binding, item)
 	reply := stream.next(t)
-	if len(reply.Items) != 1 || reply.Items[0].Text == nil || *reply.Items[0].Text != "completed reply" || reply.FromIndex != 1 || reply.NextIndex != 2 || reply.Cursor == nil {
+	if len(reply.Items) != 1 || reply.Items[0].Text != "completed reply" || reply.FromIndex != 1 || reply.NextIndex != 2 || reply.Cursor == nil {
 		t.Fatalf("reply=%+v", reply)
 	}
 	stream.close(t)
-	stream = openObservationTestStream(t, publicServer.Client(), path+"/stream", credential, *reply.Cursor)
+	stream = openObservationTestStream(t, publicServer.Client(), publicServer.URL+"/v1/sessions/"+session.ID+"/events/stream?turn_id=native-turn", credential, *reply.Cursor)
 	replay := stream.next(t)
 	if len(replay.Items) != 0 || replay.NextIndex != 2 {
 		t.Fatalf("replay=%+v", replay)
@@ -151,11 +145,9 @@ func TestControlObservationStreamsAcrossPrivateHTTPWithDurableCustody(t *testing
 	if nativeOnly.State != "observing" || nativeOnly.CompletionWatermark != nil {
 		t.Fatalf("premature terminal=%+v", nativeOnly)
 	}
-	if err := store.BindAgentRun(ctx, runID, "codex", "native-thread", "native-turn", "completed"); err != nil {
-		t.Fatal(err)
-	}
+	feed.Status(binding, "completed")
 	terminal := stream.next(t)
-	if terminal.State != "complete" || terminal.Outcome == nil || *terminal.Outcome != "completed" || terminal.CompletionWatermark == nil || *terminal.CompletionWatermark != 2 || len(terminal.Items) != 0 {
+	if terminal.State != "complete" || terminal.Status != "completed" || terminal.CompletionWatermark == nil || *terminal.CompletionWatermark != 2 || len(terminal.Items) != 0 {
 		t.Fatalf("terminal=%+v", terminal)
 	}
 	stream.close(t)
@@ -166,7 +158,7 @@ func TestControlObservationStreamsAcrossPrivateHTTPWithDurableCustody(t *testing
 		t.Fatalf("stream performed native reads: got=%d want=1 initial hydration", reads)
 	}
 	feed.Gap(binding)
-	stream = openObservationTestStream(t, publicServer.Client(), path+"/stream", credential, *terminal.Cursor)
+	stream = openObservationTestStream(t, publicServer.Client(), publicServer.URL+"/v1/sessions/"+session.ID+"/events/stream?turn_id=native-turn", credential, *terminal.Cursor)
 	gap := stream.next(t)
 	if gap.State != "gap" || gap.Cursor == nil || *gap.Cursor != *terminal.Cursor || len(gap.Items) != 0 {
 		t.Fatalf("gap=%+v", gap)
@@ -203,7 +195,7 @@ func TestControlObservationStreamsAcrossPrivateHTTPWithDurableCustody(t *testing
 type observationTestStream struct {
 	cancel   context.CancelFunc
 	response *http.Response
-	values   chan controlapi.MessageObservation
+	values   chan controlapi.TurnObservation
 	done     chan error
 }
 
@@ -230,7 +222,7 @@ func openObservationTestStream(t *testing.T, client *http.Client, path, bearer, 
 		response.Body.Close()
 		t.Fatalf("stream status=%d content-type=%q", response.StatusCode, response.Header.Get("Content-Type"))
 	}
-	stream := &observationTestStream{cancel: cancel, response: response, values: make(chan controlapi.MessageObservation, 8), done: make(chan error, 1)}
+	stream := &observationTestStream{cancel: cancel, response: response, values: make(chan controlapi.TurnObservation, 8), done: make(chan error, 1)}
 	t.Cleanup(func() { cancel(); response.Body.Close() })
 	go func() {
 		scanner := bufio.NewScanner(response.Body)
@@ -240,7 +232,7 @@ func openObservationTestStream(t *testing.T, client *http.Client, path, bearer, 
 			if !strings.HasPrefix(line, "data: ") {
 				continue
 			}
-			var value controlapi.MessageObservation
+			var value controlapi.TurnObservation
 			if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &value); err != nil {
 				stream.done <- err
 				return
@@ -256,7 +248,7 @@ func openObservationTestStream(t *testing.T, client *http.Client, path, bearer, 
 	}()
 	return stream
 }
-func (s *observationTestStream) next(t *testing.T) controlapi.MessageObservation {
+func (s *observationTestStream) next(t *testing.T) controlapi.TurnObservation {
 	t.Helper()
 	select {
 	case value := <-s.values:
@@ -266,7 +258,7 @@ func (s *observationTestStream) next(t *testing.T) controlapi.MessageObservation
 	case <-time.After(5 * time.Second):
 		t.Fatal("stream failed to flush frame")
 	}
-	return controlapi.MessageObservation{}
+	return controlapi.TurnObservation{}
 }
 func (s *observationTestStream) close(t *testing.T) {
 	t.Helper()

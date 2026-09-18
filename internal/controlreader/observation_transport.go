@@ -19,7 +19,7 @@ func observationStreamEndpoint(service Service) http.HandlerFunc {
 		}
 		started := false
 		controller := http.NewResponseController(w)
-		err := service.StreamMessageObservation(r.Context(), input.SessionID, input.MessageID, input.Cursor, func(value MessageObservation) error {
+		err := service.StreamTurnObservation(r.Context(), input.SessionID, input.TurnID, input.Cursor, func(value TurnObservation) error {
 			raw, err := json.Marshal(value)
 			if err != nil {
 				return err
@@ -49,25 +49,25 @@ func observationStreamEndpoint(service Service) http.HandlerFunc {
 	}
 }
 
-func (c Client) ReadMessageObservation(ctx context.Context, sessionID, messageID, cursor string) (MessageObservation, error) {
-	response, err := c.request(ctx, CoherentObservationPath, observationRequest{SessionID: sessionID, MessageID: messageID, Cursor: cursor})
+func (c Client) ReadTurnObservation(ctx context.Context, sessionID, turnID, cursor string) (TurnObservation, error) {
+	response, err := c.request(ctx, CoherentObservationPath, observationRequest{SessionID: sessionID, TurnID: turnID, Cursor: cursor})
 	if err != nil {
-		return MessageObservation{}, err
+		return TurnObservation{}, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return MessageObservation{}, decodeProblem(response)
+		return TurnObservation{}, decodeProblem(response)
 	}
-	var value MessageObservation
+	var value TurnObservation
 	err = decodeJSONResponse(response, &value, MaxObservationBytes, "message observation")
 	return value, err
 }
 
-func (c Client) StreamMessageObservation(ctx context.Context, sessionID, messageID, cursor string, emit func(MessageObservation) error) error {
+func (c Client) StreamTurnObservation(ctx context.Context, sessionID, turnID, cursor string, emit func(TurnObservation) error) error {
 	client := *c.http
 	client.Timeout = ObservationStreamTimeout + 5*time.Second
 	c.http = &client
-	response, err := c.request(ctx, ObservationStreamPath, observationRequest{SessionID: sessionID, MessageID: messageID, Cursor: cursor})
+	response, err := c.request(ctx, ObservationStreamPath, observationRequest{SessionID: sessionID, TurnID: turnID, Cursor: cursor})
 	if err != nil {
 		return err
 	}
@@ -81,7 +81,7 @@ func (c Client) StreamMessageObservation(ctx context.Context, sessionID, message
 	scanner := bufio.NewScanner(response.Body)
 	scanner.Buffer(make([]byte, 4096), MaxObservationBytes+1)
 	for scanner.Scan() {
-		var value MessageObservation
+		var value TurnObservation
 		decoder := json.NewDecoder(strings.NewReader(scanner.Text()))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&value); err != nil {

@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gateway"
 	provider "github.com/aphronio/dorf/internal/sandbox"
@@ -15,7 +14,6 @@ import (
 
 type Externals struct {
 	Sandbox   provider.Sandbox
-	Blobs     blob.Store
 	Gateway   gateway.Gateway
 	Agent     Harness
 	Ownership func(context.Context, string) (provider.Ownership, error)
@@ -84,61 +82,6 @@ func (e Externals) RouteCreate(ctx context.Context, session core.Session, sandbo
 	return nil
 }
 
-func (e Externals) SteerHistory(ctx context.Context, _ core.Session, sandboxID, threadID string) (core.HarnessHistory, error) {
-	owner, err := e.owner(ctx, sandboxID)
-	if err != nil {
-		return core.HarnessHistory{}, err
-	}
-	return e.Agent.ReadTurns(ctx, owner, threadID)
-}
-
-func (e Externals) AgentSteer(ctx context.Context, session core.Session, delivery core.Delivery) (string, error) {
-	if delivery.AgentRun.SessionID != session.ID || delivery.AgentRun.MessageID != delivery.Message.ID {
-		return "", fmt.Errorf("steer requires the exact Message and Session-owned AgentRun")
-	}
-	owner, err := e.owner(ctx, delivery.AgentRun.SandboxID)
-	if err != nil {
-		return "", err
-	}
-	if owner.SessionID != session.ID {
-		return "", fmt.Errorf("steer requires the exact Session-owned Sandbox")
-	}
-	input, err := e.messageInput(ctx, owner, delivery.Message.ID, delivery.Message.Input, delivery.Message.Attachments)
-	if err != nil {
-		return "", err
-	}
-	return e.Agent.SteerTurn(ctx, owner, delivery.AgentRun.ThreadID, delivery.Message.TargetTurnID, delivery.AgentRun.ID, input)
-}
-
-func (e Externals) WithSteerScope(ctx context.Context, session core.Session, delivery core.Delivery, fn func(context.Context, core.SteerExternals) error) error {
-	scoped, ok := e.Agent.(ScopedHarness)
-	run := delivery.AgentRun
-	if !ok || delivery.Message.Intent != core.MessageSteer || run.ThreadID == "" || delivery.Message.TargetTurnID == "" ||
-		run.SessionID != session.ID || run.MessageID != delivery.Message.ID || run.SandboxID == "" {
-		return fn(ctx, e)
-	}
-	if run.Harness != "" && run.Harness != e.Agent.Name() {
-		return fn(ctx, e)
-	}
-	owner, err := e.owner(ctx, run.SandboxID)
-	if err != nil {
-		return err
-	}
-	if owner.SessionID != session.ID || owner.SandboxID != run.SandboxID {
-		return fn(ctx, e)
-	}
-	return scoped.WithOperation(ctx, owner, run.ThreadID, func(ctx context.Context, harness Harness) error {
-		e.Agent = harness
-		e.Ownership = func(_ context.Context, sandboxID string) (provider.Ownership, error) {
-			if sandboxID != owner.SandboxID {
-				return provider.Ownership{}, fmt.Errorf("scoped steer requires its exact Sandbox")
-			}
-			return owner, nil
-		}
-		return fn(ctx, e)
-	})
-}
-
 func (e Externals) RouteRevoke(ctx context.Context, session core.Session, sandbox core.Sandbox, route core.Route) error {
 	if sandbox.SessionID != session.ID || route.SandboxID != sandbox.ID || route.ID == "" {
 		return fmt.Errorf("Route cleanup has no exact Session-owned identity")
@@ -175,8 +118,7 @@ func (e Externals) owner(ctx context.Context, sandboxID string) (provider.Owners
 }
 
 var (
-	_ core.Externals            = Externals{}
-	_ core.ScopedSteerExternals = Externals{}
+	_ core.Externals = Externals{}
 )
 
 func (e Externals) WriteSandboxFile(ctx context.Context, session core.Session, owned core.Sandbox, name string, contents []byte, ifAbsent bool) error {

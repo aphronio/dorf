@@ -5,6 +5,9 @@ Status: the scoped Codex upgrade and shared workstation slices shipped in v0.16.
 [D132](../project/decisions/D132-profile-revisions-separate-promotion-from-job-custody.md).
 The sections below preserve implementation decisions and intermediate verification evidence.
 The release verification section records the final artifacts; earlier candidates are historical.
+Those live proofs predate native Session events. The current guard uses native quiescence and a
+continuity manifest; live upgrade/rollback proofs must be rerun for this boundary. See the
+[native contract](native-session-contract.md#implementation-and-verification).
 
 ## Goal and scope
 
@@ -22,8 +25,8 @@ profile revision and record the package upgrade separately so diagnostics explai
 ```text
 Upgrade requested
         |
-Hold delivery; keep saving incoming messages
-Finish current turn
+Hold native input; clients retain unsent work
+Wait for settled, unambiguous native work
         |
 Checkpoint VM
         |
@@ -31,13 +34,13 @@ Install package upgrade
         |
 Verify existing conversation resumes
         |
-        +-- PASS ----------------------> Resume queued messages
+        +-- PASS ----------------------> Reopen native input
         |
         +-- FAIL --> Restore checkpoint
                             |
-                            +-- PASS --> Resume queued messages
+                            +-- PASS --> Reopen native input
                             |
-                            +-- FAIL --> Keep queue; needs attention
+                            +-- FAIL --> Keep hold; needs attention
 
 Every transition/error --> Logfire, linked by upgrade_id
 ```
@@ -67,7 +70,7 @@ report the failed upgrade attempt. A pause or empty final output is never proof 
 
 E2B's provider sandbox ID changes on replacement. Implement explicit ownership, provider binding,
 route reconnection, and old-resource cleanup; a normal pause/resume does not implement this
-rollback. Keep the old and replacement resources from both processing queued work. Reconcile a
+rollback. Keep the old and replacement resources from both accepting native input. Reconcile a
 lost provider acknowledgement before retrying creation or restore.
 
 The live E2B adapter proof established that the provider refuses to delete a snapshot while a
@@ -92,13 +95,13 @@ Check mounted storage coverage during the provider proof: Incus instance snapsho
 separately attached custom volumes. Local snapshots cannot undo external actions, so upgrade
 verification must not send email or perform other real external mutations.
 
-## Accepted messages and friendly status
+## Native input and maintenance status
 
-Accept and durably save incoming messages while delivery is held. Preserve their IDs and ordering
-and resume normal delivery automatically after successful upgrade or recovery. A queued message
-must not be reported as delivered until the runner actually accepts it.
+Reject native input before dispatch while maintenance holds delivery. Clients retain unsent input
+and may submit it after successful upgrade or recovery releases the hold. Ambiguous earlier native
+work blocks maintenance until its exact outcome is reconciled.
 
-Expose explicit internal upgrade status and a queue wait reason such as `workspace_upgrade`.
+Expose explicit internal upgrade status and a maintenance reason such as `workspace_upgrade`.
 Persist the recovery facts needed to derive that status and gate; avoid a second independent
 workflow state machine. Refreshing the page or restarting the controller must not lose the hold.
 

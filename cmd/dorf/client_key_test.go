@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/controlauth"
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/postgres"
@@ -120,7 +119,7 @@ func TestIssueKeyPostgresLifecycle(t *testing.T) {
 		t.Fatalf("authenticate key: %v", err)
 	}
 	// Ordinary HTTP identity uses the same bearer and exposes a nullable expiry.
-	handler := controlTestHandler(store, nil, gateway.Gateway{}, auth, nil, blob.Store{})
+	handler := controlTestHandler(store, nil, gateway.Gateway{}, auth, nil)
 	response := controlTestRequest(t, handler, http.MethodGet, "/v1/me", credential, "", nil)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"expires_at":null`) {
 		t.Fatalf("identity status=%d", response.Code)

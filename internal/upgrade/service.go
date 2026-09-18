@@ -17,7 +17,6 @@ type Store interface {
 	Sandbox(context.Context, string) (core.Sandbox, error)
 	SandboxResources(context.Context, string) ([]core.SandboxResource, error)
 	SessionDeliveryHolds(context.Context, string) ([]core.SandboxDeliveryHold, error)
-	Deliveries(context.Context, string) ([]core.Delivery, error)
 	SessionUpgrades(context.Context, string) ([]Receipt, error)
 	UpgradeQuiescent(context.Context, string) (bool, error)
 	SandboxResource(context.Context, string, string, string) (core.Sandbox, error)
@@ -118,11 +117,11 @@ func (s Service) step(ctx context.Context, r Receipt) error {
 		return s.prepare(ctx, r, source)
 	case r.QuiescedAt.IsZero():
 		return s.perform(ctx, r, "quiesce", func() error {
-			runs, err := s.boundRuns(ctx, r)
+			session, err := s.Store.Session(ctx, r.SessionID)
 			if err != nil {
 				return err
 			}
-			if err := s.Driver.Quiesce(ctx, source, runs); err != nil {
+			if err := s.Driver.Quiesce(ctx, source, session.ThreadID); err != nil {
 				return err
 			}
 			return s.record(ctx, func() error { return s.Store.RecordUpgradeQuiesced(ctx, r.ID) })
@@ -189,11 +188,11 @@ func (s Service) verify(ctx context.Context, r Receipt, source core.Sandbox) err
 		version = r.PreviousVersion
 	}
 	return s.perform(ctx, r, "verify", func() error {
-		runs, err := s.boundRuns(ctx, r)
+		session, err := s.Store.Session(ctx, r.SessionID)
 		if err != nil {
 			return err
 		}
-		if err := s.Driver.Verify(ctx, destination, version, runs); err != nil {
+		if err := s.Driver.Verify(ctx, destination, version, session.ThreadID); err != nil {
 			if !r.RollbackAt.IsZero() {
 				return err
 			}
@@ -220,20 +219,6 @@ func (s Service) finish(ctx context.Context, r Receipt, source core.Sandbox) err
 	return s.perform(ctx, r, "resume", func() error {
 		return s.record(ctx, func() error { return s.Store.FinishSandboxUpgrade(ctx, s.Queue, r) })
 	})
-}
-
-func (s Service) boundRuns(ctx context.Context, r Receipt) ([]core.AgentRun, error) {
-	deliveries, err := s.Store.Deliveries(ctx, r.SessionID)
-	if err != nil {
-		return nil, err
-	}
-	var runs []core.AgentRun
-	for _, delivery := range deliveries {
-		if delivery.AgentRun.SandboxID == r.SandboxID && delivery.AgentRun.ThreadID != "" {
-			runs = append(runs, delivery.AgentRun)
-		}
-	}
-	return runs, nil
 }
 
 func (s Service) resourceDeleted(ctx context.Context, sessionID, resourceID string) (bool, error) {

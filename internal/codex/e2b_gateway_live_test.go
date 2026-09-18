@@ -87,18 +87,19 @@ func TestLiveE2BScopedGatewayCompletesCodexTurn(t *testing.T) {
 	}
 	routeCreated = true
 
-	binding, err := agent.StartInitialTurn(ctx, owner, sandbox.Workspace(), "e2b-live-agent-run", core.HarnessInput{Text: "Reply with exactly: dorf-e2b-gateway-proof"}, "gpt-5.6-sol", "low", false)
+	binding, err := agent.SubmitNative(ctx, owner, core.Session{ThreadID: "", Model: "gpt-5.6-sol", ReasoningEffort: "low"}, core.NativeEvent{Type: core.InputMessage, ClientID: "e2b-live-agent-run"}, core.HarnessInput{Text: "Reply with exactly: dorf-e2b-gateway-proof"}, fixtureMutation("e2b-live-agent-run", true))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for !terminal(binding.Turn.Status) {
-		binding, err = agent.WaitTurn(ctx, owner, binding.ThreadID, binding.Turn.ID)
+	turn := TurnOutcome{ID: binding.TurnID, Status: "inProgress"}
+	for !terminal(turn.Status) {
+		turn, err = agent.observeFixtureTurn(ctx, owner, binding.ThreadID, binding.TurnID)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	if binding.Turn.Status != "completed" || !strings.Contains(binding.Turn.Output, "dorf-e2b-gateway-proof") {
-		t.Fatalf("Codex turn did not complete through scoped E2B Gateway route: %#v", binding.Turn)
+	if turn.Status != "completed" || !strings.Contains(turn.Output, "dorf-e2b-gateway-proof") {
+		t.Fatalf("Codex turn did not complete through scoped E2B Gateway route: %#v", turn)
 	}
-	t.Logf("proved E2B -> scoped Provider Gateway -> Codex turn %s; credentials and endpoint redacted", binding.Turn.ID)
+	t.Logf("proved E2B -> scoped Provider Gateway -> Codex turn %s; credentials and endpoint redacted", binding.TurnID)
 }

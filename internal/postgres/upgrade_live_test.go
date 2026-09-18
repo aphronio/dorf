@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/codex"
+	"github.com/aphronio/dorf/internal/controlreader"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/direct"
 	"github.com/aphronio/dorf/internal/e2b"
@@ -142,7 +144,7 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 	}}}
 	driver := liveUpgradeDriver{LiveGateway: os.Getenv("DORF_UPGRADE_GATEWAY_HOST") != "", NativeDriver: upgrade.NativeDriver{Sandbox: sandbox, Checkpointer: checkpoints, Agent: agent, Replace: selected == "e2b"}}
 	configure := func(tasks *absurd.Client) {
-		base := core.NewExecutionService(store, external, nil, absurdruntime.RequireClaim).WithAgentExecution(liveUpgradeAgent{external.Externals})
+		base := core.NewExecutionService(store, external, nil, absurdruntime.RequireClaim)
 		execution := upgrade.Execution{ExecutionService: base, Upgrades: upgrade.Service{Store: store, Driver: driver, Queue: tasks.QueueName(), Provider: selected, Claim: absurdruntime.RequireClaim, Emit: emit}}
 		resolver := integrationRuntimeResolver{execution: execution, profile: "incus"}
 		app := core.Application{Store: store, Tasks: tasks, SandboxRuntimes: resolver, CleanupRuntimes: resolver}
@@ -161,21 +163,35 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 		t.Cleanup(finish)
 		return finish
 	}
-	admit := func(key, text string) core.Message {
-		result, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{SessionID: session.ID, SandboxID: owned.ID, FromKind: core.MessageFromHuman, FromID: key, Input: text, Intent: core.MessageAuto})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return result.Message
-	}
-	waitMessage := func(message core.Message) {
+	reader := controlreader.Service{Store: store, Runtimes: liveNativeRuntime{external.Externals, session.ProfileRef()}}
+	admit := func(key, input string) core.NativeAcknowledgement {
+		var ack core.NativeAcknowledgement
 		liveUpgradeWait(t, ctx, func() bool {
-			execution, err := store.AgentMessageExecution(ctx, message.ID)
-			return err == nil && execution.AgentRun.State == core.AgentRunCompleted
+			var err error
+			ack, err = reader.SubmitEvent(ctx, session.ID, core.NativeEvent{Type: core.InputMessage, ClientID: key, Text: input})
+			if err != nil && !errors.Is(err, core.ErrNativeUnavailable) && !errors.Is(err, controlreader.ErrUnavailable) {
+				t.Fatal(err)
+			}
+			return err == nil
+		})
+		return ack
+	}
+	waitMessage := func(ack core.NativeAcknowledgement) {
+		liveUpgradeWait(t, ctx, func() bool {
+			history, err := reader.ReadNativeTurns(ctx, session.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, turn := range history.Turns {
+				if turn.ID == ack.TurnID {
+					return turn.Status == "completed"
+				}
+			}
+			return false
 		})
 	}
-	first := admit("initial", "Remember this synthetic marker: DORF_UPGRADE_WORKER_CONTEXT_732. Reply with only the marker. Do not use tools.")
 	stop := start(client)
+	first := admit("initial", "Remember this synthetic marker: DORF_UPGRADE_WORKER_CONTEXT_732. Reply with only the marker. Do not use tools.")
 	waitMessage(first)
 	stop()
 	t.Log("original native turn completed; request activation with worker stopped")
@@ -188,12 +204,12 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 		if _, err := store.RequestSandboxUpgrade(ctx, client.QueueName(), request); err != nil {
 			t.Fatal(err)
 		}
-		queued := admit(fmt.Sprintf("queued-%d", index), "Reply with only the synthetic marker from my first message. Do not use tools.")
 		restarted, err := absurd.New(absurd.Options{DB: store.DB, QueueName: client.QueueName()})
 		if err != nil {
 			t.Fatal(err)
 		}
 		stop = start(restarted)
+		queued := admit(fmt.Sprintf("queued-%d", index), "Reply with only the synthetic marker from my first message. Do not use tools.")
 		waitMessage(queued)
 		stop()
 		receipts, err := store.SessionUpgrades(ctx, session.ID)
@@ -224,17 +240,13 @@ func TestLiveUpgradeRetainedWorker(t *testing.T) {
 				t.Fatalf("native model requests=%d want %d", count, index+2)
 			}
 		}
-		execution, err := store.AgentMessageExecution(ctx, queued.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		history, err := agent.ReadTurns(ctx, provider.Ownership{SessionID: session.ID, SandboxID: current.ID, OwnershipNonce: current.OwnershipNonce}, execution.AgentRun.ThreadID)
+		history, err := agent.ReadTurns(ctx, provider.Ownership{SessionID: session.ID, SandboxID: current.ID, OwnershipNonce: current.OwnershipNonce}, queued.ThreadID)
 		if err != nil {
 			t.Fatal(err)
 		}
 		substantive := false
 		for _, turn := range history.Turns {
-			if turn.ID == execution.AgentRun.TurnID && strings.TrimSpace(turn.Output) != "" {
+			if turn.ID == queued.TurnID && strings.TrimSpace(turn.Output) != "" {
 				substantive = !driver.LiveGateway || strings.Contains(turn.Output, "DORF_UPGRADE_WORKER_CONTEXT_732")
 			}
 		}
@@ -347,10 +359,13 @@ func (e liveUpgradeExternals) RouteRevoke(ctx context.Context, _ core.Session, s
 	return e.Agent.RemoveRoute(ctx, provider.Ownership{SessionID: s.SessionID, SandboxID: s.ID, OwnershipNonce: s.OwnershipNonce})
 }
 
-type liveUpgradeAgent struct{ terminal.Externals }
+type liveNativeRuntime struct {
+	native  core.NativeSession
+	profile core.SandboxProfileRef
+}
 
-func (e liveUpgradeAgent) ResolveAgentRunOperation(_ context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
-	return terminal.NewAgentRunOperation(e.Externals, execution)
+func (r liveNativeRuntime) ResolveSandbox(context.Context, core.SandboxProfileRef) (core.SandboxRuntime, error) {
+	return core.SandboxRuntime{SandboxProfile: r.profile, Native: r.native}, nil
 }
 
 type liveUpgradeDriver struct {
@@ -358,13 +373,13 @@ type liveUpgradeDriver struct {
 	LiveGateway bool
 }
 
-func (d liveUpgradeDriver) Verify(ctx context.Context, s core.Sandbox, version string, runs []core.AgentRun) error {
+func (d liveUpgradeDriver) Verify(ctx context.Context, s core.Sandbox, version string, threadID string) error {
 	if !d.LiveGateway {
 		if err := liveUpgradeFixture(ctx, d.Sandbox, provider.Ownership{SessionID: s.SessionID, SandboxID: s.ID, OwnershipNonce: s.OwnershipNonce}); err != nil {
 			return err
 		}
 	}
-	if err := d.NativeDriver.Verify(ctx, s, version, runs); err != nil {
+	if err := d.NativeDriver.Verify(ctx, s, version, threadID); err != nil {
 		return err
 	}
 	owner := provider.Ownership{SessionID: s.SessionID, SandboxID: s.ID, OwnershipNonce: s.OwnershipNonce}

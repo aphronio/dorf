@@ -17,7 +17,7 @@ type recoveryDriver struct {
 	afterRestore     func()
 	restoredSnapshot string
 	restoredResource string
-	verifiedRuns     []core.AgentRun
+	verifiedThread   string
 	verifiedPackage  persistence.EffectivePackage
 	deleted          map[string]bool
 }
@@ -31,11 +31,11 @@ func (d *recoveryDriver) Restore(_ context.Context, _ core.Session, destination 
 	return "provider-replacement", nil
 }
 
-func (d *recoveryDriver) VerifyAndRenew(_ context.Context, _ core.Session, destination core.Sandbox, _ persistence.Checkpoint, pkg persistence.EffectivePackage, runs []core.AgentRun) error {
+func (d *recoveryDriver) VerifyAndRenew(_ context.Context, session core.Session, destination core.Sandbox, _ persistence.Checkpoint, pkg persistence.EffectivePackage) error {
 	if destination.ProviderID != "provider-replacement" {
 		return errors.New("replacement was not attested")
 	}
-	d.verifiedRuns = append([]core.AgentRun(nil), runs...)
+	d.verifiedThread = session.ThreadID
 	d.verifiedPackage = pkg
 	return nil
 }
@@ -96,12 +96,8 @@ values($1,$2,'workspace_upgrade',clock_timestamp())`, upgradeID, sandboxID); err
 		t.Fatal("generic release bypassed recovery verification")
 	}
 
-	queued, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{
-		SessionID: session.ID, SandboxID: sandboxID, FromKind: core.MessageFromHuman,
-		FromID: "queued-after-checkpoint", Input: "continue after recovery", Intent: core.MessageAuto,
-	})
-	if err != nil || queued.Message.Intent != core.MessageFollow {
-		t.Fatalf("queued safe input: result=%#v err=%v", queued, err)
+	if _, err := store.BeginNativeMutation(ctx, session.ID, session.ThreadID, "held-input", ""); err == nil {
+		t.Fatal("recovery hold admitted native mutation")
 	}
 	driver := &recoveryDriver{deleted: map[string]bool{}}
 	service := persistence.RecoveryService{
@@ -152,8 +148,8 @@ values($1,$2,'workspace_upgrade',clock_timestamp())`, upgradeID, sandboxID); err
 	if driver.restoredSnapshot != checkpoint.SnapshotID || driver.restoredResource != finished.DestinationResourceID || driver.restoredResource != firstDestination {
 		t.Fatalf("restore did not use exact checkpoint: snapshot=%q resource=%q", driver.restoredSnapshot, driver.restoredResource)
 	}
-	if len(driver.verifiedRuns) != 1 || driver.verifiedRuns[0].ThreadID != "thread-retained" || driver.verifiedRuns[0].TurnID != "turn-initial" {
-		t.Fatalf("native verification prefix=%#v", driver.verifiedRuns)
+	if driver.verifiedThread != "thread-retained" {
+		t.Fatalf("verified thread=%q", driver.verifiedThread)
 	}
 	if driver.verifiedPackage.UpgradeID != upgradeID || driver.verifiedPackage.PackagePath != packagePath || driver.verifiedPackage.Version != "1.2.3" {
 		t.Fatalf("effective package verification=%#v", driver.verifiedPackage)
@@ -167,14 +163,6 @@ values($1,$2,'workspace_upgrade',clock_timestamp())`, upgradeID, sandboxID); err
 	}
 	if held, err := store.SandboxDeliveryHeld(ctx, sandboxID); err != nil || held {
 		t.Fatalf("verified recovery retained hold: held=%v err=%v", held, err)
-	}
-	next, err := store.AgentMessage(ctx, session.ID)
-	if err != nil || next == nil || next.MessageID != queued.Message.ID {
-		t.Fatalf("queued input did not resume: delivery=%#v err=%v", next, err)
-	}
-	execution, err := store.AgentMessageExecution(ctx, queued.Message.ID)
-	if err != nil || execution.Sandbox.ResourceID != finished.DestinationResourceID {
-		t.Fatalf("queued input uses stale resource: execution=%#v err=%v", execution, err)
 	}
 	if _, err := store.RequestCheckpointRecovery(ctx, client.QueueName(), request); err != nil {
 		t.Fatal(err)
@@ -199,16 +187,9 @@ func TestCheckpointRecoveryHoldsForPostBoundaryNativeSubmission(t *testing.T) {
 	if _, err := store.RequestCheckpointRecovery(ctx, client.QueueName(), request); err != nil {
 		t.Fatal(err)
 	}
-	queued, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{
-		SessionID: session.ID, SandboxID: sandboxID, FromKind: core.MessageFromHuman,
-		FromID: "ambiguous-native", Input: "ambiguous native input", Intent: core.MessageFollow,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Model a lost native submission acknowledgement: no Turn ID exists, but
-	// the run has crossed the pristine pending boundary.
-	if err := store.PrepareAgentRun(ctx, core.AgentRunID(queued.Message.ID), "codex", "turn-initial"); err != nil {
+	// A stale external request can become visible after maintenance admission.
+	// Model that late mutation; revision safety must still reject rollback.
+	if _, err := store.DB.ExecContext(ctx, `update dorf.sessions set native_revision=native_revision+1,native_pending_input_id='ambiguous' where id=$1`, session.ID); err != nil {
 		t.Fatal(err)
 	}
 	receipts, err := store.SessionRecoveries(ctx, session.ID)

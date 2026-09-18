@@ -13,7 +13,7 @@ import (
 )
 
 // Observations keeps an already-authenticated subscription after a control
-// operation returns. It never submits work or decides a Message's outcome.
+// operation returns. It never submits work or decides application outcomes.
 type Observations struct {
 	Replies      *ReplyFeed
 	ctx          context.Context
@@ -56,7 +56,7 @@ func (o *Observations) Close() {
 }
 
 type observedTurn struct {
-	run            core.AgentRun
+	run            telemetry.NativeExecution
 	threadID       string
 	turnID         string
 	key            observationKey
@@ -90,6 +90,7 @@ func (p *protocol) bindObservation(threadID, turnID string, subscribed bool) boo
 	}
 	p.observations.mu.Unlock()
 	p.observations.Replies.Begin(p.replyBinding(), subscribed)
+	p.observations.Replies.Status(p.replyBinding(), "inProgress")
 	if p.pendingObservationOverflow {
 		p.observed.replyRefresh = true
 		p.observations.Replies.Gap(p.replyBinding())
@@ -213,6 +214,7 @@ func (p *protocol) observeNotification(message map[string]any) {
 	}
 	p.observeReply(method, params)
 	if method == "turn/completed" {
+		p.observations.Replies.Status(p.replyBinding(), stringValue(turn["status"]))
 		p.observed.complete = true
 		p.signalTerminalWake()
 	}
@@ -267,8 +269,8 @@ func (p *protocol) emitObservation(name string, at time.Time, fields map[string]
 		return
 	}
 	attributes := map[string]any{
-		"dorf.session_id": p.observed.run.SessionID, "dorf.message_id": p.observed.run.MessageID,
-		"dorf.agent_run_id": p.observed.run.ID, "native.thread_id": p.observed.threadID,
+		"dorf.session_id": p.observed.run.SessionID,
+		"dorf.input_id":   p.observed.run.ID, "native.thread_id": p.observed.threadID,
 		"native.turn_id": p.observed.turnID,
 	}
 	for key, value := range fields {
@@ -311,6 +313,7 @@ func (p *protocol) settleReplyFeed() {
 		return
 	}
 	p.observations.Replies.Seed(p.replyBinding(), timeline.CompletedItems, true)
+	p.observations.Replies.Status(p.replyBinding(), timeline.Status)
 }
 
 // Recovered subscriptions reconcile only in response to native completions,
@@ -326,6 +329,7 @@ func (p *protocol) refreshReplyPrefix() bool {
 	}
 	complete := terminal(timeline.Status)
 	p.observations.Replies.Seed(p.replyBinding(), timeline.CompletedItems, complete)
+	p.observations.Replies.Status(p.replyBinding(), timeline.Status)
 	if complete {
 		p.observed.complete = true
 		p.observed.replySettled = true
@@ -341,7 +345,7 @@ func (p *protocol) signalTerminalWake() {
 	p.observed.wakeStarted = true
 	target := core.NativeTerminalWakeTarget{
 		SessionID: p.observed.run.SessionID, SandboxID: p.observed.run.SandboxID,
-		AgentRunID: p.observed.run.ID, ThreadID: p.observed.threadID, TurnID: p.observed.turnID,
+		ThreadID: p.observed.threadID, TurnID: p.observed.turnID,
 	}
 	o := p.observations
 	o.mu.Lock()
@@ -360,7 +364,7 @@ func (p *protocol) signalTerminalWake() {
 			o.emit(telemetry.Event{
 				Name: "codex.native-terminal-wake.failed", At: time.Now(), Failed: true,
 				Attributes: map[string]any{
-					"dorf.session_id": target.SessionID, "dorf.agent_run_id": target.AgentRunID,
+					"dorf.session_id": target.SessionID, "dorf.input_id": p.observed.run.ID,
 					"native.thread_id": target.ThreadID, "native.turn_id": target.TurnID,
 				},
 			})

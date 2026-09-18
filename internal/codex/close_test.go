@@ -72,7 +72,7 @@ func completedControlOperation(agent Agent, operation string) error {
 		}
 		return nil
 	}
-	binding, err := agent.StartTurn(context.Background(), owner, "/workspace/job", "retained-thread", "run", core.HarnessInput{Text: "input"}, "fixture-model", "high", false)
+	binding, err := agent.SubmitNative(context.Background(), owner, core.Session{ThreadID: "retained-thread", Model: "fixture-model", ReasoningEffort: "high"}, core.NativeEvent{Type: core.InputMessage, ClientID: "run"}, core.HarnessInput{Text: "input"}, fixtureMutation("run", false))
 	if operation == "rejected submission" {
 		var rejected *RejectedError
 		if !errors.As(err, &rejected) || !rejected.DefiniteNoSubmit() {
@@ -83,7 +83,7 @@ func completedControlOperation(agent Agent, operation string) error {
 	if err != nil {
 		return err
 	}
-	if binding.Turn.ID != "accepted-turn" {
+	if binding.TurnID != "accepted-turn" {
 		return fmt.Errorf("acknowledged turn identity changed")
 	}
 	return nil

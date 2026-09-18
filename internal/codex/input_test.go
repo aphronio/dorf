@@ -16,7 +16,7 @@ func TestNativeStartAndSteerSendOrderedInlineImages(t *testing.T) {
 		{MediaType: "image/png", Bytes: []byte{137, 'P', 'N', 'G', '\r', '\n', 0, 255}},
 		{MediaType: "image/webp", Bytes: []byte("RIFF\x00\x00\x00\x00WEBP")},
 	}}
-	for _, route := range []string{"initial", "follow", "steer"} {
+	for _, route := range []string{"initial", "follow"} {
 		t.Run(route, func(t *testing.T) {
 			var submissions atomic.Int32
 			server, _ := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
@@ -46,11 +46,9 @@ func TestNativeStartAndSteerSendOrderedInlineImages(t *testing.T) {
 			var err error
 			switch route {
 			case "initial":
-				_, _, err = protocol.reconcileInitialTurn(context.Background(), "/workspace/job", "run", input, "model", "high", "danger-full-access")
+				_, _, err = protocol.initialFixture(context.Background(), "/workspace/job", "run", input, "model", "high", "danger-full-access")
 			case "follow":
-				_, err = protocol.resumeAndStartTurn(context.Background(), "thread", "/workspace/job", "run", input, "model", "high", "danger-full-access")
-			case "steer":
-				_, err = protocol.steerTurn(context.Background(), "thread", "active", "run", input)
+				_, err = protocol.resumeFixture(context.Background(), "thread", "/workspace/job", "run", input, "model", "high", "danger-full-access")
 			}
 			if err != nil || submissions.Load() != 1 {
 				t.Fatalf("native submissions=%d, error=%v", submissions.Load(), err)

@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
 	"github.com/aphronio/dorf/internal/core"
@@ -59,7 +58,7 @@ func TestControlAPIProjectsPersistedSandboxCreationFailure(t *testing.T) {
 			if _, err := auth.IssueKey(ctx, "failure-client", credential); err != nil {
 				t.Fatal(err)
 			}
-			handler := controlTestHandler(store, tasks, controlTestGateway(t), auth, controlTestRuntimes{profile: profile}, blob.Store{Root: t.TempDir()})
+			handler := controlTestHandler(store, tasks, controlTestGateway(t), auth, controlTestRuntimes{profile: profile})
 			var admitted controlapi.Session
 			controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, "/v1/sessions", credential, profile, controlapi.CreateSessionRequest{
 				AgentsMD: "failure integration", AIConnection: "primary", Model: "model-test",

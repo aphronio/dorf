@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/controlauth"
+	"github.com/aphronio/dorf/internal/core"
 )
 
 type ObservationBinding struct {
@@ -19,37 +20,46 @@ type ObservationBinding struct {
 	TurnID   string `json:"turn_id"`
 }
 
-type MessageObservation struct {
-	Attention           *Attention            `json:"attention"`
-	SessionID           string                `json:"session_id"`
-	MessageID           string                `json:"message_id"`
-	Intent              string                `json:"intent"`
-	InterruptRequested  bool                  `json:"interrupt_requested"`
-	Delivery            State                 `json:"delivery"`
-	Outcome             *string               `json:"outcome"`
-	Binding             *ObservationBinding   `json:"binding"`
-	Items               []MessageTimelineItem `json:"items"`
-	Cursor              *string               `json:"cursor"`
-	FromIndex           int                   `json:"from_index"`
-	NextIndex           int                   `json:"next_index"`
-	CompletionWatermark *int                  `json:"completion_watermark"`
-	State               string                `json:"state"`
+type TurnObservation struct {
+	Type                string                         `json:"type"`
+	SessionID           string                         `json:"session_id"`
+	TurnID              string                         `json:"turn_id"`
+	Status              string                         `json:"status"`
+	Binding             *ObservationBinding            `json:"binding"`
+	Items               []core.HarnessConversationItem `json:"items"`
+	Cursor              *string                        `json:"cursor"`
+	FromIndex           int                            `json:"from_index"`
+	NextIndex           int                            `json:"next_index"`
+	CompletionWatermark *int                           `json:"completion_watermark"`
+	State               string                         `json:"state"`
 }
 
-type MessageObservationSessions interface {
-	ReadMessageObservation(context.Context, string, string, string) (MessageObservation, error)
-	StreamMessageObservation(context.Context, string, string, string, func(MessageObservation) error) error
+type TurnObservationSessions interface {
+	ReadTurnObservation(context.Context, string, string, string) (TurnObservation, error)
+	StreamTurnObservation(context.Context, string, string, string, func(TurnObservation) error) error
 }
 
 func observationQuery(r *http.Request, stream bool) (string, bool) {
 	query, err := url.ParseQuery(r.URL.RawQuery)
-	if err != nil || len(query) > 1 || len(query["cursor"]) > 1 {
+	if err != nil || len(query) > 2 || len(query["cursor"]) > 1 || len(query["turn_id"]) > 1 {
+		return "", false
+	}
+	for key := range query {
+		if key != "cursor" && !(stream && key == "turn_id") {
+			return "", false
+		}
+	}
+	if stream && (query.Get("turn_id") == "" || len(query["turn_id"]) != 1) {
 		return "", false
 	}
 	cursor := query.Get("cursor")
-	if len(query) == 1 && cursor == "" {
+	if query.Has("cursor") && cursor == "" {
 		return "", false
 	}
+	return observationCursorHeader(r, stream, cursor)
+}
+
+func observationCursorHeader(r *http.Request, stream bool, cursor string) (string, bool) {
 	ids := r.Header.Values("Last-Event-ID")
 	if len(ids) > 1 || !stream && len(ids) > 0 {
 		return "", false
@@ -63,7 +73,7 @@ func observationQuery(r *http.Request, stream bool) (string, bool) {
 	return cursor, len(cursor) <= 4096 && strings.TrimSpace(cursor) == cursor
 }
 
-func (h *handler) messageObservationRoute(w http.ResponseWriter, r *http.Request, client controlauth.Client) {
+func (h *handler) turnObservationRoute(w http.ResponseWriter, r *http.Request, client controlauth.Client) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		h.fail(w, problem("method_not_allowed"))
@@ -79,13 +89,13 @@ func (h *handler) messageObservationRoute(w http.ResponseWriter, r *http.Request
 		h.fail(w, problem("invalid_cursor"))
 		return
 	}
-	reader, ok := h.sessions.(MessageObservationSessions)
+	reader, ok := h.sessions.(TurnObservationSessions)
 	if !ok {
 		h.fail(w, problem("timeline_unavailable"))
 		return
 	}
 	if !stream {
-		value, err := reader.ReadMessageObservation(r.Context(), r.PathValue("session"), r.PathValue("message"), cursor)
+		value, err := reader.ReadTurnObservation(r.Context(), r.PathValue("session"), observationTurnID(r), cursor)
 		if err != nil {
 			h.serviceError(w, r, err)
 			return
@@ -98,16 +108,16 @@ func (h *handler) messageObservationRoute(w http.ResponseWriter, r *http.Request
 		h.fail(w, problem("not_acceptable"))
 		return
 	}
-	h.streamMessageObservation(w, r, client, reader, cursor)
+	h.streamTurnObservation(w, r, client, reader, cursor)
 }
 
-func (h *handler) streamMessageObservation(w http.ResponseWriter, r *http.Request, client controlauth.Client, reader MessageObservationSessions, cursor string) {
+func (h *handler) streamTurnObservation(w http.ResponseWriter, r *http.Request, client controlauth.Client, reader TurnObservationSessions, cursor string) {
 	deadline := streamAuthenticationDeadline(client)
 	ctx, cancel := context.WithDeadline(r.Context(), deadline)
 	defer cancel()
 	stop := context.AfterFunc(h.shutdown, cancel)
 	defer stop()
-	frames := observationFrames(ctx, reader, r.PathValue("session"), r.PathValue("message"), cursor)
+	frames := observationFrames(ctx, reader, r.PathValue("session"), observationTurnID(r), cursor)
 	controller := http.NewResponseController(w)
 	started := false
 	heartbeat := time.NewTicker(watchKeepaliveInterval)
@@ -149,17 +159,17 @@ func (h *handler) streamMessageObservation(w http.ResponseWriter, r *http.Reques
 }
 
 type observationFrame struct {
-	value MessageObservation
+	value TurnObservation
 	err   error
 }
 
 // One pending frame bounds a slow consumer. Cancellation propagates through
 // the private worker request and ordered closure never drops its last frame.
-func observationFrames(ctx context.Context, reader MessageObservationSessions, sessionID, messageID, cursor string) <-chan observationFrame {
+func observationFrames(ctx context.Context, reader TurnObservationSessions, sessionID, turnID, cursor string) <-chan observationFrame {
 	frames := make(chan observationFrame, 1)
 	go func() {
 		defer close(frames)
-		err := reader.StreamMessageObservation(ctx, sessionID, messageID, cursor, func(value MessageObservation) error {
+		err := reader.StreamTurnObservation(ctx, sessionID, turnID, cursor, func(value TurnObservation) error {
 			select {
 			case frames <- observationFrame{value: value}:
 				return nil
@@ -177,7 +187,7 @@ func observationFrames(ctx context.Context, reader MessageObservationSessions, s
 	return frames
 }
 
-func writeObservationFrame(w io.Writer, controller *http.ResponseController, value MessageObservation) error {
+func writeObservationFrame(w io.Writer, controller *http.ResponseController, value TurnObservation) error {
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return err
@@ -212,4 +222,11 @@ func (h *handler) observationStreamError(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	h.serviceError(w, r, err)
+}
+
+func observationTurnID(r *http.Request) string {
+	if id := r.PathValue("turn"); id != "" {
+		return id
+	}
+	return r.URL.Query().Get("turn_id")
 }

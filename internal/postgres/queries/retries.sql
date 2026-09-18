@@ -1,5 +1,5 @@
 -- name: LockSessionRetryRequest :exec
-select pg_advisory_xact_lock(hashtextextended('dorf-job-retry:' || sqlc.arg(request_key)::text,0));
+select pg_advisory_xact_lock(hashtextextended('dorf-session-retry:' || sqlc.arg(request_key)::text,0));
 
 -- name: GetSessionRetryRequest :one
 select request_key,session_id,task_id,run_id,attempt

@@ -2,28 +2,23 @@ package core
 
 import "context"
 
-type AgentReconciliationProgress uint8
+type SessionReconciliationProgress uint8
 
 const (
-	// AgentReconciliationIdle means no Message was selected.
-	AgentReconciliationIdle AgentReconciliationProgress = iota
-	// AgentReconciliationPending means one Message was selected, so the runtime
+	// SessionReconciliationIdle means no native work is active.
+	SessionReconciliationIdle SessionReconciliationProgress = iota
+	// SessionReconciliationPending means native work is active, so the runtime
 	// should keep its active poll cadence until a later reconciliation is idle.
-	AgentReconciliationPending
-	// AgentReconciliationReady means one Message was selected and the next
+	SessionReconciliationPending
+	// SessionReconciliationReady means maintenance progressed and the next
 	// authoritative selection is immediately eligible for reconciliation.
-	AgentReconciliationReady
+	SessionReconciliationReady
 )
 
-// AgentReconciliation is the runtime-only Core contract for advancing at most
-// one selected Message for a Session.
-type AgentReconciliation interface {
-	ReconcileSessionAgent(context.Context, string) (AgentReconciliationProgress, error)
-}
-
-// AgentObservation exposes a settled Message result through its exact native binding.
-type AgentObservation interface {
-	ObserveSettledAgentMessage(context.Context, string, string) (MessageResult, error)
+// SessionReconciliation is the runtime-only Core contract for advancing at most
+// native execution and lifecycle maintenance for a Session.
+type SessionReconciliation interface {
+	ReconcileSession(context.Context, string) (SessionReconciliationProgress, error)
 }
 
 // SandboxExecution reconciles one stable Sandbox Action through Core custody.
@@ -33,7 +28,6 @@ type SandboxExecution interface {
 
 // Execution is the Core lifecycle and observation contract used by the runtime.
 type Execution interface {
-	AgentObservation
 	SandboxExecution
 }
 

@@ -18,7 +18,7 @@ const (
 func TaskKey(sessionID string) string { return "direct-job:v1:" + sessionID }
 
 type Execution interface {
-	core.AgentReconciliation
+	core.SessionReconciliation
 	core.SandboxExecution
 }
 
@@ -37,7 +37,7 @@ type Store interface {
 
 // Register installs the direct client's durable bootstrap task. Once the
 // exact Sandbox and route exist, Core's generic Agent reconciliation owns all
-// Message delivery and recovery.
+// native observation and recovery.
 func Register(application core.Application, store Store, runtimes RuntimeResolver) {
 	application.Tasks.MustRegister(absurd.Task(TaskName, func(ctx context.Context, params core.SessionTaskParams) (core.TaskResultV1, error) {
 		if err := application.VerifyAttachedTask(ctx, params.SessionID, TaskName, params.PreviousTaskID); err != nil {
@@ -93,7 +93,7 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 				}
 				return core.TaskResultV1{}, err
 			}
-			if progress == core.AgentReconciliationReady {
+			if progress == core.SessionReconciliationReady {
 				continue
 			}
 			core.ReconcileIdle(ctx, runtime.Execution, params.SessionID)
@@ -106,17 +106,17 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
 }
 
-func reconcileAtWakeRevision(ctx context.Context, application core.Application, execution core.AgentReconciliation, sessionID string) (int64, core.AgentReconciliationProgress, error) {
+func reconcileAtWakeRevision(ctx context.Context, application core.Application, execution core.SessionReconciliation, sessionID string) (int64, core.SessionReconciliationProgress, error) {
 	revision, err := application.SessionExecutionWakeRevision(ctx, sessionID)
 	if err != nil {
-		return 0, core.AgentReconciliationIdle, err
+		return 0, core.SessionReconciliationIdle, err
 	}
-	progress, err := execution.ReconcileSessionAgent(ctx, sessionID)
+	progress, err := execution.ReconcileSession(ctx, sessionID)
 	return revision, progress, err
 }
 
-func wakeOptions(progress core.AgentReconciliationProgress, revision int64) (string, time.Duration) {
-	if progress == core.AgentReconciliationPending {
+func wakeOptions(progress core.SessionReconciliationProgress, revision int64) (string, time.Duration) {
+	if progress == core.SessionReconciliationPending {
 		return fmt.Sprintf("dorf/direct-agent-wake/v2/%020d", revision), activeAgentPollInterval
 	}
 	return fmt.Sprintf("dorf/direct-job-wake/v2/%020d", revision), idleMessagePollInterval

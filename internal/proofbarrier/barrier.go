@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
+
 	"strings"
 	"time"
 
@@ -19,7 +19,6 @@ const proofEnablePhrase = "external-sigkill-proof-only"
 
 type Barrier struct {
 	Point     string
-	Sequence  int64
 	SessionID string
 	Dir       string
 	Wait      time.Duration
@@ -31,24 +30,15 @@ func FromEnv() (core.FaultBarrier, error) {
 	if point == "" {
 		return nil, nil
 	}
-	messagePoint := point == core.BarrierBeforeSubmit || point == core.BarrierAfterSubmitBeforeBind || point == core.BarrierHarnessActive
-	cleanupPoint := point == core.BarrierRouteRevoked || point == core.BarrierSandboxDeleted
-	if !messagePoint && !cleanupPoint {
-		return nil, fmt.Errorf("unsupported proof fault barrier %q", point)
+	if point != core.BarrierRouteRevoked && point != core.BarrierSandboxDeleted && point != core.BarrierSandboxCreated {
+		return nil, fmt.Errorf("unsupported proof barrier %q", point)
 	}
 	if os.Getenv("DORF_PROOF_FAULT_BARRIER_ENABLE") != proofEnablePhrase {
-		return nil, fmt.Errorf("DORF_PROOF_FAULT_BARRIER requires the exact proof-only enable phrase %q", proofEnablePhrase)
+		return nil, fmt.Errorf("proof-only enable phrase required")
 	}
-	var sequence int64
 	sessionID := strings.TrimSpace(os.Getenv("DORF_PROOF_FAULT_BARRIER_SESSION"))
-	if messagePoint {
-		var err error
-		sequence, err = strconv.ParseInt(strings.TrimSpace(os.Getenv("DORF_PROOF_FAULT_BARRIER_SEQUENCE")), 10, 64)
-		if err != nil || sequence < 1 {
-			return nil, fmt.Errorf("DORF_PROOF_FAULT_BARRIER_SEQUENCE must be a positive integer")
-		}
-	} else if sessionID == "" {
-		return nil, fmt.Errorf("DORF_PROOF_FAULT_BARRIER_SESSION is required for repository proof boundaries")
+	if sessionID == "" {
+		return nil, fmt.Errorf("proof Session is required")
 	}
 	dir := strings.TrimSpace(os.Getenv("DORF_PROOF_FAULT_BARRIER_DIR"))
 	if dir == "" {
@@ -58,7 +48,7 @@ func FromEnv() (core.FaultBarrier, error) {
 	if err != nil {
 		return nil, err
 	}
-	return Barrier{Point: point, Sequence: sequence, SessionID: sessionID, Dir: dir, Wait: 8 * time.Second, Lease: 10 * time.Second}, nil
+	return Barrier{Point: point, SessionID: sessionID, Dir: dir, Wait: 8 * time.Second, Lease: 10 * time.Second}, nil
 }
 
 func (b Barrier) ReachOperation(ctx context.Context, point, sessionID, identity string) error {
@@ -108,47 +98,6 @@ func (b Barrier) reach(ctx context.Context, sessionID, identity, point, payload 
 		return fmt.Errorf("proof barrier %s timed out before its shortened claim lease; SIGKILL was not observed", point)
 	}
 	return fmt.Errorf("proof barrier %s timed out; SIGKILL was not observed", point)
-}
-
-func (b Barrier) Reach(ctx context.Context, point string, delivery core.Delivery) error {
-	if point != b.Point || delivery.Message.Sequence != b.Sequence {
-		return nil
-	}
-	if b.Wait <= 0 || b.Wait > 30*time.Second || b.Lease <= b.Wait || b.Lease > time.Minute {
-		return fmt.Errorf("unsafe proof barrier timing")
-	}
-	if err := os.MkdirAll(b.Dir, 0o700); err != nil {
-		return err
-	}
-	base := fmt.Sprintf("%s-seq-%d-%s", delivery.Message.SessionID, delivery.Message.Sequence, point)
-	ready := filepath.Join(b.Dir, base+".ready")
-	release := filepath.Join(b.Dir, base+".release")
-	payload := fmt.Sprintf("session=%s\nsequence=%d\nmessage=%s\nagent_run=%s\npoint=%s\n", delivery.Message.SessionID, delivery.Message.Sequence, delivery.Message.ID, delivery.AgentRun.ID, point)
-	if recovered, err := recoverReady(ready, payload); err != nil {
-		return err
-	} else if recovered {
-		return nil
-	}
-	if err := absurd.Heartbeat(ctx, b.Lease); err != nil {
-		return fmt.Errorf("shorten proof claim lease: %w", err)
-	}
-	if err := os.WriteFile(ready, []byte(payload), 0o600); err != nil {
-		return err
-	}
-	deadline := time.Now().Add(b.Wait)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(release); err == nil {
-			return nil
-		} else if !os.IsNotExist(err) {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
-	return fmt.Errorf("proof barrier %s timed out before its shortened claim lease; SIGKILL was not observed", point)
 }
 
 func recoverReady(path, expected string) (bool, error) {

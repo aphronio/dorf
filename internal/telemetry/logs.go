@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/version"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
@@ -15,15 +14,25 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 )
 
+// NativeExecution is transient attribution for a native connection, never a stored run.
+type NativeExecution struct {
+	ID        string
+	SessionID string
+	SandboxID string
+	Harness   string
+	ThreadID  string
+	TurnID    string
+}
+
 type executionKey struct{}
 
-func WithExecution(ctx context.Context, run core.AgentRun) context.Context {
+func WithExecution(ctx context.Context, run NativeExecution) context.Context {
 	return context.WithValue(ctx, executionKey{}, run)
 }
 
-func Execution(ctx context.Context) (core.AgentRun, bool) {
-	run, ok := ctx.Value(executionKey{}).(core.AgentRun)
-	return run, ok && run.SessionID != "" && run.MessageID != "" && run.ID != ""
+func Execution(ctx context.Context) (NativeExecution, bool) {
+	run, ok := ctx.Value(executionKey{}).(NativeExecution)
+	return run, ok && run.SessionID != "" && run.ID != ""
 }
 
 type Event struct {

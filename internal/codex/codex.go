@@ -7,7 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
+
 	"fmt"
 	"net/http"
 	"strings"
@@ -20,7 +20,7 @@ import (
 )
 
 // Native history can include the inline bytes of a full accepted message.
-const maxMessageBytes = 16<<20 + ((core.MaxMessageAttachments*provider.MaxFileWriteBytes+2)/3)*4
+const maxMessageBytes = 16<<20 + ((core.MaxAttachments*provider.MaxFileWriteBytes+2)/3)*4
 
 const (
 	serverPIDPath    = "/tmp/dorf/codex-app-server.pid"
@@ -35,7 +35,6 @@ type Agent struct {
 	Port         int
 	Timeout      time.Duration
 	Observations *Observations
-	operation    *nativeOperation
 }
 
 const Harness = "codex"
@@ -69,57 +68,7 @@ type attentionError struct{ reason string }
 func (e *attentionError) Error() string         { return e.reason }
 func (e *attentionError) AttentionNeeded() bool { return true }
 
-func (a Agent) StartInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID string, input core.HarnessInput, model, effort string, refreshSkills bool) (core.HarnessBinding, error) {
-	threadID, turn, err := a.startInitialTurn(ctx, owner, workspace, agentRunID, input, model, effort, "danger-full-access", refreshSkills)
-	return core.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: turn}, err
-}
-
-func (a Agent) startInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID string, input core.HarnessInput, model, effort, capability string, refreshSkills bool) (string, TurnOutcome, error) {
-	ctx, cancel := a.timeoutContext(ctx)
-	defer cancel()
-	var sessionID string
-	var outcome TurnOutcome
-	err := a.withSandboxAccess(ctx, owner, func(a Agent) error {
-		instructions, err := a.readWorkspaceInstructions(ctx, owner, workspace)
-		if err != nil {
-			return err
-		}
-		return a.withServer(ctx, owner, func(protocol *protocol) error {
-			protocol.instructions = instructions
-			protocol.refreshSkills = refreshSkills
-			var err error
-			sessionID, outcome, err = protocol.reconcileInitialTurn(ctx, workspace, agentRunID, input, model, effort, capability)
-			return err
-		})
-	})
-	return sessionID, outcome, err
-}
-
-func (a Agent) ReadInitialTurns(ctx context.Context, owner provider.Ownership, workspace string) (core.HarnessHistory, error) {
-	ctx, cancel := a.timeoutContext(ctx)
-	defer cancel()
-	var threadID string
-	var turns []TurnOutcome
-	err := a.withServer(ctx, owner, func(protocol *protocol) error {
-		var err error
-		threadID, turns, err = protocol.inspectInitialTurns(ctx, workspace)
-		return err
-	})
-	return core.HarnessHistory{Harness: Harness, ThreadID: threadID, Turns: turns}, err
-}
-
 func (a Agent) ReadTurns(ctx context.Context, owner provider.Ownership, threadID string) (core.HarnessHistory, error) {
-	if a.operation != nil {
-		if err := a.operation.check(ctx, owner); err != nil {
-			return core.HarnessHistory{}, err
-		}
-		if threadID != a.operation.threadID {
-			return core.HarnessHistory{}, fmt.Errorf("native operation requires its exact Thread")
-		}
-		if a.operation.invalid {
-			return a.operation.original.ReadTurns(ctx, owner, threadID)
-		}
-	}
 
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
@@ -132,129 +81,6 @@ func (a Agent) ReadTurns(ctx context.Context, owner provider.Ownership, threadID
 	return core.HarnessHistory{Harness: Harness, ThreadID: threadID, Turns: turns}, err
 }
 
-func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, agentRunID string, input core.HarnessInput, model, effort string, refreshSkills bool) (core.HarnessBinding, error) {
-	if a.operation != nil && threadID != a.operation.threadID {
-		return core.HarnessBinding{}, fmt.Errorf("native operation requires its exact Thread")
-	}
-	ctx, cancel := a.timeoutContext(ctx)
-	defer cancel()
-	var outcome TurnOutcome
-	err := a.withSandboxAccess(ctx, owner, func(a Agent) error {
-		instructions, err := a.readWorkspaceInstructions(ctx, owner, workspace)
-		if err != nil {
-			return err
-		}
-		return a.withServer(ctx, owner, func(protocol *protocol) error {
-			protocol.instructions = instructions
-			protocol.refreshSkills = refreshSkills
-			var err error
-			outcome, err = protocol.resumeAndStartTurn(ctx, threadID, workspace, agentRunID, input, model, effort, "danger-full-access")
-			return err
-		})
-	})
-	return core.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: outcome}, err
-}
-
-func (a Agent) SteerTurn(ctx context.Context, owner provider.Ownership, sessionID, turnID, agentRunID string, input core.HarnessInput) (string, error) {
-	if a.operation != nil && sessionID != a.operation.threadID {
-		return "", fmt.Errorf("native operation requires its exact Thread")
-	}
-	ctx, cancel := a.timeoutContext(ctx)
-	defer cancel()
-	var acceptedTurnID string
-	err := a.withServer(ctx, owner, func(protocol *protocol) error {
-		var err error
-		acceptedTurnID, err = protocol.steerTurn(ctx, sessionID, turnID, agentRunID, input)
-		return err
-	})
-	return acceptedTurnID, err
-}
-
-func (a Agent) InterruptTurn(ctx context.Context, owner provider.Ownership, threadID, turnID string) (core.HarnessBinding, error) {
-	if a.operation != nil && threadID != a.operation.threadID {
-		return core.HarnessBinding{}, fmt.Errorf("native operation requires its exact Thread")
-	}
-	ctx, cancel := a.timeoutContext(ctx)
-	defer cancel()
-	binding := core.HarnessBinding{Harness: Harness, ThreadID: threadID}
-	mutationAttempted := false
-	err := a.withServer(ctx, owner, func(p *protocol) error {
-		var err error
-		binding.Turn, mutationAttempted, err = p.interruptTurn(ctx, threadID, turnID)
-		return err
-	})
-	var rejected *RejectedError
-	var attention *attentionError
-	if err == nil || !mutationAttempted || errors.As(err, &rejected) || errors.As(err, &attention) || ctx.Err() != nil {
-		return binding, err
-	}
-	// The interrupt may have taken effect before its acknowledgement was lost.
-	// Reconcile on a fresh authenticated transport without replaying the mutation.
-	recovery := a
-	if a.operation != nil {
-		recovery = a.operation.original
-	}
-	recovery.operation = nil
-	if recoveryErr := recovery.openServer(ctx, owner, func(p *protocol) error {
-		if err := p.resumeThread(ctx, threadID); err != nil {
-			return err
-		}
-		turn, err := p.exactTurn(ctx, threadID, turnID)
-		if err == nil {
-			binding.Turn = turn
-		}
-		return err
-	}); recoveryErr == nil && binding.Turn.Terminal() {
-		return binding, nil
-	}
-	return binding, err
-}
-
-func (p *protocol) interruptTurn(ctx context.Context, threadID, turnID string) (TurnOutcome, bool, error) {
-	if err := p.resumeThread(ctx, threadID); err != nil {
-		return TurnOutcome{}, false, err
-	}
-	_, interruptErr := p.call(ctx, "turn/interrupt", map[string]any{"threadId": threadID, "turnId": turnID})
-	var rejected *RejectedError
-	if interruptErr != nil && !errors.As(interruptErr, &rejected) {
-		return TurnOutcome{}, true, interruptErr
-	}
-	turn, readErr := p.exactTurn(ctx, threadID, turnID)
-	if readErr != nil {
-		return turn, true, readErr
-	}
-	if turn.Terminal() {
-		return turn, true, nil
-	}
-	if interruptErr != nil {
-		return turn, true, interruptErr
-	}
-	return turn, true, nil
-}
-
-func (p *protocol) exactTurn(ctx context.Context, threadID, turnID string) (TurnOutcome, error) {
-	turns, err := p.readTurns(ctx, threadID)
-	if err != nil {
-		return TurnOutcome{}, err
-	}
-	for _, turn := range turns {
-		if turn.ID == turnID {
-			return turn, nil
-		}
-	}
-	return TurnOutcome{}, &attentionError{reason: "bound Codex turn is missing from its thread"}
-}
-
-func (a Agent) WaitTurn(ctx context.Context, owner provider.Ownership, threadID, turnID string) (core.HarnessBinding, error) {
-	ctx, cancel := a.timeoutContext(ctx)
-	defer cancel()
-	outcome := TurnOutcome{ID: turnID, Status: "running"}
-	err := a.withServer(ctx, owner, func(protocol *protocol) error {
-		return protocol.pollTurn(ctx, threadID, turnID, &outcome)
-	})
-	return core.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: outcome}, err
-}
-
 func (a Agent) timeoutContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if a.Timeout > 0 {
 		return context.WithTimeout(ctx, a.Timeout)
@@ -263,14 +89,6 @@ func (a Agent) timeoutContext(ctx context.Context) (context.Context, context.Can
 }
 
 func (a Agent) withSandboxAccess(ctx context.Context, owner provider.Ownership, fn func(Agent) error) error {
-	if a.operation != nil {
-		if err := a.operation.check(ctx, owner); err != nil {
-			return err
-		}
-		if a.operation.invalid {
-			return fmt.Errorf("native operation transport is invalid")
-		}
-	}
 
 	if scoped, ok := a.Sandbox.(provider.ScopedAccess); ok {
 		return scoped.WithAccess(ctx, owner, func(sandbox provider.Sandbox) error {
@@ -282,9 +100,6 @@ func (a Agent) withSandboxAccess(ctx context.Context, owner provider.Ownership, 
 }
 
 func (a Agent) withServer(ctx context.Context, owner provider.Ownership, fn func(*protocol) error) error {
-	if a.operation != nil {
-		return a.operation.use(ctx, a, owner, fn)
-	}
 	return a.openServer(ctx, owner, fn)
 }
 
@@ -324,7 +139,7 @@ func (a Agent) withServerEndpointController(ctx context.Context, owner provider.
 		protocol, dialErr := dialProtocol(ctx, endpoint.dial, probe.token, endpoint.headers, endpoint.dialContext)
 		if dialErr == nil {
 			protocol.configureObservations(ctx, a.Observations, owner)
-			defer a.finishProtocol(protocol)
+			defer protocol.finish()
 			return fn(protocol)
 		}
 		if probe.running {
@@ -358,7 +173,7 @@ func (a Agent) withServerEndpointController(ctx context.Context, owner provider.
 		protocol, dialErr := dialProtocol(ctx, endpoint.dial, token, endpoint.headers, endpoint.dialContext)
 		if dialErr == nil {
 			protocol.configureObservations(ctx, a.Observations, owner)
-			defer a.finishProtocol(protocol)
+			defer protocol.finish()
 			return fn(protocol)
 		}
 		if time.Now().After(deadline) {
@@ -455,7 +270,7 @@ type protocol struct {
 	nextID                     int
 	observations               *Observations
 	owner                      provider.Ownership
-	execution                  core.AgentRun
+	execution                  telemetry.NativeExecution
 	observed                   *observedTurn
 	pendingObservations        []map[string]any
 	pendingObservationBytes    int
@@ -476,29 +291,6 @@ func (p *protocol) initialize(ctx context.Context) error {
 	return p.send(ctx, map[string]any{"method": "initialized", "params": map[string]any{}})
 }
 
-func (p *protocol) listThreads(ctx context.Context, workspace string) ([]string, error) {
-	result, err := p.call(ctx, "thread/list", map[string]any{"limit": 100, "cwd": workspace})
-	if err != nil {
-		return nil, err
-	}
-	data, ok := result["data"].([]any)
-	if !ok {
-		return nil, fmt.Errorf("thread/list response is missing result.data")
-	}
-	ids := make([]string, 0, len(data))
-	for _, value := range data {
-		thread, ok := value.(map[string]any)
-		if !ok {
-			continue
-		}
-		id, _ := thread["id"].(string)
-		if id != "" {
-			ids = append(ids, id)
-		}
-	}
-	return ids, nil
-}
-
 func (p *protocol) startThread(ctx context.Context, workspace, model, capability string) (string, error) {
 	result, err := p.call(ctx, "thread/start", map[string]any{"cwd": workspace, "model": model, "approvalPolicy": "never", "sandbox": capability, "config": map[string]any{"project_doc_max_bytes": maxInstructionFileBytes}})
 	if err != nil {
@@ -510,48 +302,6 @@ func (p *protocol) startThread(ctx context.Context, workspace, model, capability
 		return "", fmt.Errorf("thread/start response is missing result.thread.id")
 	}
 	return id, nil
-}
-
-func (p *protocol) reconcileInitialTurn(ctx context.Context, workspace, agentRunID string, goal core.HarnessInput, model, effort, capability string) (string, TurnOutcome, error) {
-	sessionID, turns, err := p.inspectInitialTurns(ctx, workspace)
-	if err != nil {
-		return "", TurnOutcome{}, err
-	}
-	if sessionID == "" {
-		sessionID, err = p.startThread(ctx, workspace, model, capability)
-		if err != nil {
-			return "", TurnOutcome{}, err
-		}
-		p.freshThread = true
-		turn, err := p.startTurn(ctx, sessionID, workspace, agentRunID, goal, model, effort, capability)
-		return sessionID, turn, err
-	}
-	if len(turns) == 1 {
-		return sessionID, turns[0], nil
-	}
-	turn, err := p.startTurn(ctx, sessionID, workspace, agentRunID, goal, model, effort, capability)
-	return sessionID, turn, err
-}
-
-func (p *protocol) inspectInitialTurns(ctx context.Context, workspace string) (string, []TurnOutcome, error) {
-	threads, err := p.listThreads(ctx, workspace)
-	if err != nil {
-		return "", nil, err
-	}
-	if len(threads) > 1 {
-		return "", nil, &attentionError{reason: fmt.Sprintf("Codex reconciliation is ambiguous: isolated Sandbox contains %d threads", len(threads))}
-	}
-	if len(threads) == 0 {
-		return "", nil, nil
-	}
-	turns, err := p.readTurns(ctx, threads[0])
-	if err != nil {
-		return "", nil, fmt.Errorf("inspect isolated thread before initial submit: %v", err)
-	}
-	if len(turns) > 1 {
-		return "", nil, &attentionError{reason: fmt.Sprintf("Codex reconciliation is ambiguous: initial thread contains %d turns", len(turns))}
-	}
-	return threads[0], turns, nil
 }
 
 func (p *protocol) readTurns(ctx context.Context, sessionID string) ([]TurnOutcome, error) {
@@ -577,7 +327,10 @@ func (p *protocol) readTurns(ctx context.Context, sessionID string) ([]TurnOutco
 		if parsed.ID != "" {
 			turns = append(turns, parsed)
 			p.seedReadTurn(sessionID, turn)
-			if !parsed.Terminal() && p.execution.TurnID == parsed.ID {
+			if !parsed.Terminal() {
+				if p.execution.ID == "" {
+					p.execution = telemetry.NativeExecution{ID: parsed.ID, SessionID: p.owner.SessionID, SandboxID: p.owner.SandboxID, ThreadID: sessionID, TurnID: parsed.ID, Harness: Harness}
+				}
 				p.bindObservation(sessionID, parsed.ID, false)
 			}
 		}
@@ -597,12 +350,12 @@ func parseTurn(turn map[string]any) TurnOutcome {
 			continue
 		}
 		if deliveryID := observationDeliveryID(item); deliveryID != "" {
-			outcome.AcceptedMessageIDs = append(outcome.AcceptedMessageIDs, deliveryID)
+			outcome.ClientIDs = append(outcome.ClientIDs, deliveryID)
 			continue
 		}
 		if item["type"] == "userMessage" {
 			if clientID := stringValue(item["clientId"]); clientID != "" {
-				outcome.AcceptedMessageIDs = append(outcome.AcceptedMessageIDs, clientID)
+				outcome.ClientIDs = append(outcome.ClientIDs, clientID)
 			}
 			continue
 		}
@@ -644,14 +397,7 @@ func (p *protocol) resumeThread(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-func (p *protocol) resumeAndStartTurn(ctx context.Context, sessionID, workspace, agentRunID string, goal core.HarnessInput, model, effort, capability string) (TurnOutcome, error) {
-	if err := p.resumeThread(ctx, sessionID); err != nil {
-		return TurnOutcome{}, err
-	}
-	return p.startTurn(ctx, sessionID, workspace, agentRunID, goal, model, effort, capability)
-}
-
-func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRunID string, goal core.HarnessInput, model, effort, capability string) (TurnOutcome, error) {
+func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, inputID string, goal core.HarnessInput, model, effort, capability string) (TurnOutcome, error) {
 	policyType := "dangerFullAccess"
 	if capability == "read-only" {
 		policyType = "readOnly"
@@ -670,14 +416,14 @@ func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRun
 	if err := p.injectDeveloperInstructions(ctx, sessionID, goal.DeveloperInstructions); err != nil {
 		return TurnOutcome{}, err
 	}
-	if err := p.injectWorkspaceInstructions(ctx, sessionID, agentRunID); err != nil {
+	if err := p.injectWorkspaceInstructions(ctx, sessionID, inputID); err != nil {
 		return TurnOutcome{}, err
 	}
-	params := map[string]any{"threadId": sessionID, "clientUserMessageId": agentRunID, "input": nativeUserInput(goal), "cwd": workspace, "model": model, "effort": effort, "approvalPolicy": "never", "sandboxPolicy": map[string]string{"type": policyType}}
+	params := map[string]any{"threadId": sessionID, "clientUserMessageId": inputID, "input": nativeUserInput(goal), "cwd": workspace, "model": model, "effort": effort, "approvalPolicy": "never", "sandboxPolicy": map[string]string{"type": policyType}}
 	if goal.Observation {
 		delete(params, "clientUserMessageId")
 		params["input"] = []any{}
-		params["toolOutput"] = nativeObservation(agentRunID, goal.Text)
+		params["toolOutput"] = nativeObservation(inputID, goal.Text)
 	}
 	result, err := p.call(ctx, "turn/start", params)
 	if err != nil {
@@ -689,60 +435,10 @@ func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRun
 		return TurnOutcome{}, fmt.Errorf("turn/start response is missing result.turn.id")
 	}
 	outcome := TurnOutcome{ID: id, Status: "running"}
-	if p.execution.ID == agentRunID {
+	if p.execution.ID == inputID {
 		bound = p.bindObservation(sessionID, id, true)
 	}
 	return outcome, nil
-}
-
-func (p *protocol) steerTurn(ctx context.Context, sessionID, turnID, agentRunID string, input core.HarnessInput) (string, error) {
-	if err := p.resumeThread(ctx, sessionID); err != nil {
-		return "", err
-	}
-	if input.Observation {
-		result, err := p.call(ctx, "turn/start", map[string]any{
-			"threadId": sessionID, "input": []any{}, "toolOutput": nativeObservation(agentRunID, input.Text),
-		})
-		if err != nil {
-			return "", err
-		}
-		turn, _ := result["turn"].(map[string]any)
-		if accepted := stringValue(turn["id"]); accepted == turnID {
-			return accepted, nil
-		}
-		// Native tool output can start a turn when the target finishes during
-		// submission. Core recovers the accepted output from retained history
-		// through Auto's existing fallback, without resubmitting the event.
-		return "", fmt.Errorf("automatic tool output did not join the selected turn")
-	}
-	result, err := p.call(ctx, "turn/steer", map[string]any{"threadId": sessionID, "expectedTurnId": turnID, "clientUserMessageId": agentRunID, "input": nativeUserInput(input)})
-	if err != nil {
-		return "", err
-	}
-	acceptedTurnID := stringValue(result["turnId"])
-	if acceptedTurnID == "" || acceptedTurnID != turnID {
-		return "", fmt.Errorf("turn/steer response did not acknowledge the exact active turn")
-	}
-	return acceptedTurnID, nil
-}
-
-func (p *protocol) pollTurn(ctx context.Context, sessionID, turnID string, outcome *TurnOutcome) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(time.Second):
-	}
-	turns, err := p.readTurns(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-	for _, turn := range turns {
-		if turn.ID == turnID {
-			*outcome = turn
-			return nil
-		}
-	}
-	return fmt.Errorf("bound turn %s is missing from thread history", turnID)
 }
 
 func (p *protocol) call(ctx context.Context, method string, params any) (map[string]any, error) {

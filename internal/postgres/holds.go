@@ -11,7 +11,7 @@ import (
 	"github.com/aphronio/dorf/internal/postgres/dbsql"
 )
 
-// HoldSandboxDelivery serializes against native effects and Message admission.
+// HoldSandboxDelivery serializes against native effects and native mutation.
 // The operation ID is immutable: replaying a released hold never reopens it.
 // Only direct Sessions are supported until workflow mutations also honor this gate.
 func (s Store) HoldSandboxDelivery(ctx context.Context, queue, sessionID, sandboxID, operationID string) (core.SandboxDeliveryHold, error) {

@@ -24,4 +24,4 @@
   protocol change. The existing Job fence, queue claims, and delivery ordering remain in force.
 - **Verification:** PostgreSQL migration/replay and conflict checks, initial-acceptance recovery
   with queued Follows, concurrent binding and receipt atomicity, and native timeline custody.
-- **Authority:** [Architecture](../architecture.md#messages-and-agentruns).
+- **Authority:** [Architecture](../architecture.md#execution-model).

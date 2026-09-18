@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
 	"github.com/aphronio/dorf/internal/core"
@@ -66,11 +65,11 @@ func TestControlTimelineUsesPostgresCustodyAndCleanupFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := &timelineControlRuntime{profile: profile}
-	handler := controlTestHandler(store, tasks, gateway, auth, runtime, blob.Store{Root: t.TempDir()})
+	handler := controlTestHandler(store, tasks, gateway, auth, runtime)
 	key := fmt.Sprintf("timeline-%d", time.Now().UnixNano())
 	var session controlapi.Session
 	controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, "/v1/sessions", credential, key, controlapi.CreateSessionRequest{AIConnection: "primary", Model: "model-test", Reasoning: "high"}), http.StatusCreated, &session)
-	path := "/v1/sessions/" + session.ID + "/timeline"
+	path := "/v1/sessions/" + session.ID + "/history"
 	problemCode := func(path, credential string, status int, code string) {
 		t.Helper()
 		var problem controlapi.Problem
@@ -80,7 +79,7 @@ func TestControlTimelineUsesPostgresCustodyAndCleanupFence(t *testing.T) {
 		}
 	}
 	problemCode(path, "", 401, "unauthenticated")
-	problemCode("/v1/sessions/no-such-session/timeline", credential, 404, "session_not_found")
+	problemCode("/v1/sessions/no-such-session/history", credential, 404, "session_not_found")
 	problemCode(path, credential, 409, "timeline_unavailable")
 	for _, query := range []string{"?turn_id=", "?turn_id=one&turn_id=two", "?thread_id=foreign"} {
 		problemCode(path+query, credential, 400, "invalid_query")
@@ -88,24 +87,7 @@ func TestControlTimelineUsesPostgresCustodyAndCleanupFence(t *testing.T) {
 	if runtime.calls != 0 {
 		t.Fatal("unbound or unauthorized read reached native reader")
 	}
-	var message controlapi.Message
-	controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, "/v1/sessions/"+session.ID+"/messages", credential, key+"-message", controlapi.SendMessageRequest{Text: "Retained work"}), http.StatusCreated, &message)
-	messagePath := "/v1/sessions/" + session.ID + "/messages/" + message.ID + "/timeline"
-	problemCode(messagePath, "", 401, "unauthenticated")
-	problemCode(messagePath, credential, 409, "timeline_unavailable")
-	problemCode("/v1/sessions/"+session.ID+"/messages/not-ours/timeline", credential, 404, "message_not_found")
-	for _, query := range []string{"?turn_id=foreign", "?message_id=other"} {
-		problemCode(messagePath+query, credential, 400, "invalid_query")
-	}
-	var denied controlapi.Problem
-	controlTestJSON(t, controlTestRequest(t, handler, http.MethodPost, messagePath, credential, "", nil), 405, &denied)
-	controlTestJSON(t, controlTestRequest(t, handler, http.MethodGet, messagePath, credential, "", map[string]string{"input": "forbidden"}), 415, &denied)
-	runID := core.AgentRunID(message.ID)
-	runtime.sourceRun = runID
-	if err := store.PrepareAgentRun(ctx, runID, "codex", ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.BindAgentRun(ctx, runID, "codex", "native-thread", "native-turn", "inProgress"); err != nil {
+	if err := store.BindNativeThread(ctx, session.ID, "native-thread"); err != nil {
 		t.Fatal(err)
 	}
 	owned, err := store.Sandbox(ctx, core.MainSandboxName(session.ID))
@@ -113,18 +95,9 @@ func TestControlTimelineUsesPostgresCustodyAndCleanupFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime.expectedSession, runtime.expectedSandbox = session.ID, owned
-	before, err := store.Deliveries(ctx, session.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
 	beforeSession, err := store.Session(ctx, session.ID)
 	if err != nil {
 		t.Fatal(err)
-	}
-	var messageTimeline controlapi.MessageTimeline
-	controlTestJSON(t, controlTestRequest(t, handler, http.MethodGet, messagePath, credential, "", nil), 200, &messageTimeline)
-	if messageTimeline.MessageID != message.ID || messageTimeline.SessionID != session.ID || messageTimeline.TurnID != "native-turn" || messageTimeline.Status != "inProgress" || len(messageTimeline.Items) != 2 || messageTimeline.Items[0].MessageID != message.ID || messageTimeline.Items[0].Text != nil || messageTimeline.Items[1].Text == nil || *messageTimeline.Items[1].Text != "[PDF](sandbox:/report.pdf)" {
-		t.Fatalf("message timeline=%+v", messageTimeline)
 	}
 	var timeline controlapi.Timeline
 	controlTestJSON(t, controlTestRequest(t, handler, http.MethodGet, path, credential, "", nil), 200, &timeline)
@@ -136,21 +109,17 @@ func TestControlTimelineUsesPostgresCustodyAndCleanupFence(t *testing.T) {
 		t.Fatalf("explicit turn=%+v", timeline)
 	}
 	problemCode(path+"?turn_id=missing", credential, 404, "turn_not_found")
-	after, err := store.Deliveries(ctx, session.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
 	afterSession, err := store.Session(ctx, session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(before, after) || !reflect.DeepEqual(beforeSession, afterSession) {
+	if !reflect.DeepEqual(beforeSession, afterSession) {
 		t.Fatal("timeline read changed retained work")
 	}
 	runtime.block, runtime.entered = make(chan struct{}), make(chan struct{})
 	readDone := make(chan int, 1)
 	go func() {
-		readDone <- controlTestRequest(t, handler, http.MethodGet, messagePath, credential, "", nil).Code
+		readDone <- controlTestRequest(t, handler, http.MethodGet, path, credential, "", nil).Code
 	}()
 	<-runtime.entered
 	cleanupDone := make(chan error, 1)
@@ -168,7 +137,7 @@ func TestControlTimelineUsesPostgresCustodyAndCleanupFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := runtime.calls
-	problemCode(messagePath, credential, 409, "timeline_unavailable")
+	problemCode(path, credential, 409, "timeline_unavailable")
 	problemCode(path, credential, 409, "timeline_unavailable")
 	if runtime.calls != calls {
 		t.Fatal("read after cleanup reached native reader")

@@ -2,10 +2,8 @@ package core
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
-	"time"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -74,27 +72,9 @@ func CurrentCleanupAction(sandboxes []Sandbox, actions []Action) (ActionKind, st
 }
 
 func (a Application) runCleanup(ctx context.Context, service CleanupExecution, sessionID string) error {
-	var session Session
-	var sandboxes []Sandbox
-	for {
-		var err error
-		session, sandboxes, err = service.PrepareCleanup(ctx, sessionID)
-		if err == nil {
-			break
-		}
-		var active cleanupStillActive
-		if !errors.As(err, &active) {
-			return err
-		}
-		timer := time.NewTimer(time.Second)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
-			return ctx.Err()
-		case <-timer.C:
-		}
+	session, sandboxes, err := service.PrepareCleanup(ctx, sessionID)
+	if err != nil {
+		return err
 	}
 	if session.CleanupState == CleanupComplete {
 		return nil

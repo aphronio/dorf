@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/controlauth"
+	"github.com/aphronio/dorf/internal/core"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
@@ -54,14 +55,12 @@ func newHandlerContext(discovery Discovery, auth Auth, sessions Sessions, profil
 	h.mux.HandleFunc("/v1/me", h.authenticate(h.meRoute))
 	h.mux.HandleFunc("/v1/profiles", h.authenticate(h.profilesRoute))
 	h.mux.HandleFunc("/v1/sessions", h.authenticate(h.sessionsRoute))
-	h.mux.HandleFunc("/v1/sessions/{session}/timeline", h.authenticate(h.timelineRoute))
+	h.mux.HandleFunc("/v1/sessions/{session}/history", h.authenticate(h.timelineRoute))
+	h.mux.HandleFunc("/v1/sessions/{session}/events", h.authenticate(h.eventsRoute))
+	h.mux.HandleFunc("/v1/sessions/{session}/turns", h.authenticate(h.turnsRoute))
 	h.mux.HandleFunc("/v1/sessions/{session}/watch", h.authenticate(h.watchRoute))
-	h.mux.HandleFunc("/v1/sessions/{session}/messages", h.authenticate(h.sendMessageRoute))
-	h.mux.HandleFunc("/v1/sessions/{session}/messages/{message}/observation", h.authenticate(h.messageObservationRoute))
-	h.mux.HandleFunc("/v1/sessions/{session}/messages/{message}/observation/stream", h.authenticate(h.messageObservationRoute))
-	h.mux.HandleFunc("/v1/sessions/{session}/messages/{message}/timeline", h.authenticate(h.messageTimelineRoute))
-	h.mux.HandleFunc("/v1/sessions/{session}/messages/{message}", h.authenticate(h.messageRoute))
-	h.mux.HandleFunc("/v1/sessions/{session}/messages/{message}/interrupt", h.authenticate(h.interruptMessageRoute))
+	h.mux.HandleFunc("/v1/sessions/{session}/turns/{turn}", h.authenticate(h.turnObservationRoute))
+	h.mux.HandleFunc("/v1/sessions/{session}/events/stream", h.authenticate(h.turnObservationRoute))
 	h.mux.HandleFunc("/v1/sessions/{session}/retries", h.authenticate(h.retryRoute))
 	h.mux.HandleFunc("/v1/sessions/{session}/cleanup", h.authenticate(h.cleanupRoute))
 	h.mux.HandleFunc("/v1/sessions/{session}", h.authenticate(h.sessionRoute))
@@ -220,49 +219,6 @@ func (h *handler) createSessionRoute(w http.ResponseWriter, r *http.Request, cli
 		return
 	}
 	h.sessionResponseStatus(w, r, session, nil, createdStatus(created))
-}
-
-func (h *handler) sendMessageRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
-	if !h.exactMessageRequest(w, r) {
-		return
-	}
-	key, ok := h.idempotencyKey(w, r)
-	if !ok {
-		return
-	}
-	var input SendMessageRequest
-	if !h.decodeMessage(w, r, &input) {
-		return
-	}
-	message, created, err := h.sessions.SendMessage(r.Context(), r.PathValue("session"), key, input)
-	if err != nil {
-		h.serviceError(w, r, err)
-		return
-	}
-	h.reply(w, createdStatus(created), message)
-}
-
-func (h *handler) messageRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
-	if h.exact(w, r, http.MethodGet, false) {
-		message, err := h.sessions.GetMessage(r.Context(), r.PathValue("session"), r.PathValue("message"))
-		if err != nil {
-			h.serviceError(w, r, err)
-			return
-		}
-		h.reply(w, http.StatusOK, message)
-	}
-}
-
-func (h *handler) interruptMessageRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
-	if !h.exact(w, r, http.MethodPut, false) {
-		return
-	}
-	message, err := h.sessions.InterruptMessage(r.Context(), r.PathValue("session"), r.PathValue("message"))
-	if err != nil {
-		h.serviceError(w, r, err)
-		return
-	}
-	h.reply(w, http.StatusOK, message)
 }
 
 func (h *handler) retryRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
@@ -626,11 +582,15 @@ func hasConditionalHeader(r *http.Request) bool {
 }
 
 func (h *handler) decode(w http.ResponseWriter, r *http.Request, output any) bool {
-	if r.ContentLength > maxBodyBytes {
+	limit := maxBodyBytes
+	if strings.HasSuffix(r.URL.Path, "/events") {
+		limit = 46 << 20
+	}
+	if r.ContentLength > int64(limit) {
 		h.fail(w, problem("body_too_large"))
 		return false
 	}
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, int64(limit)))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(output); err != nil {
 		var tooLarge *http.MaxBytesError
@@ -649,7 +609,7 @@ func (h *handler) decode(w http.ResponseWriter, r *http.Request, output any) boo
 }
 
 func (h *handler) serviceError(w http.ResponseWriter, r *http.Request, err error) {
-	if code := messageProblemCode(err); code != "" {
+	if code := attachmentProblemCode(err); code != "" {
 		h.fail(w, problem(code))
 		return
 	}
@@ -679,7 +639,6 @@ var serviceProblems = []struct {
 	{controlauth.ErrClientConflict, "client_conflict"},
 	{ErrInvalidCursor, "invalid_cursor"},
 	{ErrSessionNotFound, "session_not_found"},
-	{ErrMessageNotFound, "message_not_found"},
 	{ErrTurnNotFound, "turn_not_found"},
 	{ErrTimelineUnavailable, "timeline_unavailable"},
 	{ErrSandboxStatusUnavailable, "sandbox_status_unavailable"},
@@ -695,6 +654,12 @@ var serviceProblems = []struct {
 
 func admissionProblemCode(err error) string {
 	switch {
+	case errors.Is(err, core.ErrNativeUnknown):
+		return "native_outcome_unknown"
+	case errors.Is(err, core.ErrNativeUnavailable):
+		return "native_unavailable"
+	case errors.Is(err, core.ErrInvalidEvent):
+		return "invalid_input"
 	case errors.Is(err, ErrProfileNotFound):
 		return "profile_not_found"
 	case errors.Is(err, controlauth.ErrInvalidInput), errors.Is(err, ErrInvalidInput):
@@ -706,22 +671,12 @@ func admissionProblemCode(err error) string {
 	}
 }
 
-func messageProblemCode(err error) string {
+func attachmentProblemCode(err error) string {
 	switch {
 	case errors.Is(err, ErrAttachmentAnimationUnsupported):
 		return "attachment_animation_unsupported"
 	case errors.Is(err, ErrAttachmentImageTooLarge):
 		return "attachment_image_too_large"
-	case errors.Is(err, ErrSteerUnavailable):
-		return "steer_unavailable"
-	case errors.Is(err, ErrSkillRefreshUnavailable):
-		return "skill_refresh_unavailable"
-	case errors.Is(err, ErrInterruptUnavailable):
-		return "interrupt_unavailable"
-	case errors.Is(err, ErrMessageUnavailable):
-		return "message_unavailable"
-	case errors.Is(err, ErrMessageImageUnsupported):
-		return "message_image_unsupported"
 	default:
 		return ""
 	}

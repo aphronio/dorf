@@ -49,7 +49,7 @@ func (s ExecutionService) ReconcileIdleSandboxes(ctx context.Context, sessionID 
 		if session.ID != sessionID {
 			return fmt.Errorf("idle reconciliation changed Session identity")
 		}
-		if session.KeepRunning || !session.AdmissionOpen || session.CleanupState != CleanupPending {
+		if !session.canPause() {
 			return nil
 		}
 		idle, err := s.store.SandboxIdleFor(ctx, sessionID, SandboxIdleGracePeriod)
@@ -63,6 +63,10 @@ func (s ExecutionService) ReconcileIdleSandboxes(ctx context.Context, sessionID 
 		for _, sandbox := range sandboxes {
 			if sandbox.SessionID != sessionID {
 				return fmt.Errorf("idle Sandbox has a different Session owner")
+			}
+			idle, err := s.nativeIdle(ctx, session, sandbox)
+			if err != nil || !idle {
+				return err
 			}
 			if err := pauser.SandboxPause(ctx, session, sandbox); err != nil {
 				return err
@@ -89,4 +93,8 @@ func WithSandboxActivity(ctx context.Context, store SandboxActivityStore, sessio
 		err = errors.Join(err, store.FinishSandboxActivity(finishCtx, sessionID))
 	}()
 	return operation()
+}
+
+func (s Session) canPause() bool {
+	return !s.KeepRunning && s.AdmissionOpen && s.CleanupState == CleanupPending
 }

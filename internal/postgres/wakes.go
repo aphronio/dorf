@@ -52,9 +52,9 @@ func (s Store) SignalNativeTerminalWake(ctx context.Context, queue string, targe
 	}
 	defer tx.Rollback()
 	q := dbsql.New(tx)
-	binding, err := q.GetNativeTerminalWakeBinding(ctx, target.AgentRunID)
+	binding, err := q.GetNativeTerminalWakeBinding(ctx, dbsql.GetNativeTerminalWakeBindingParams{SessionID: target.SessionID, SandboxID: target.SandboxID})
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, fmt.Errorf("native terminal wake AgentRun %s was not found", target.AgentRunID)
+		return false, fmt.Errorf("native terminal wake Thread %s was not found", target.ThreadID)
 	}
 	if err != nil {
 		return false, err
@@ -62,13 +62,13 @@ func (s Store) SignalNativeTerminalWake(ctx context.Context, queue string, targe
 	if binding.SessionID != target.SessionID || binding.SandboxID != target.SandboxID {
 		return false, fmt.Errorf("native terminal wake has a foreign Session or Sandbox binding")
 	}
-	if binding.ThreadID != "" && binding.ThreadID != target.ThreadID || binding.TurnID != "" && binding.TurnID != target.TurnID {
+	if binding.ThreadID != "" && binding.ThreadID != target.ThreadID {
 		return false, fmt.Errorf("native terminal wake conflicts with the durable Thread or Turn binding")
 	}
 	if !binding.AdmissionOpen || core.CleanupState(binding.CleanupState) != core.CleanupPending {
 		return false, nil
 	}
-	causeKey := "native-terminal:" + target.AgentRunID + ":" + target.TurnID
+	causeKey := "native-terminal:" + target.ThreadID + ":" + target.TurnID
 	if _, err := signalSessionExecutionWakeTx(ctx, tx, queue, target.SessionID, causeKey); err != nil {
 		return false, err
 	}
@@ -121,7 +121,7 @@ func validSessionExecutionWakeInput(sessionID, causeKey string) error {
 
 func validNativeTerminalWakeTarget(target core.NativeTerminalWakeTarget) error {
 	for name, value := range map[string]string{
-		"Session": target.SessionID, "Sandbox": target.SandboxID, "AgentRun": target.AgentRunID,
+		"Session": target.SessionID, "Sandbox": target.SandboxID,
 		"Thread": target.ThreadID, "Turn": target.TurnID,
 	} {
 		if value == "" || value != strings.TrimSpace(value) || len(value) > 256 {

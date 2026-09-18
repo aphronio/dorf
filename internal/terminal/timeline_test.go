@@ -23,7 +23,7 @@ func (h *timelineHarness) ReadTimeline(_ context.Context, owner provider.Ownersh
 func TestTimelineUsesOptionalHarnessAndExactSandboxOwnership(t *testing.T) {
 	session := core.Session{ID: "session"}
 	owned := core.Sandbox{ID: "sandbox", SessionID: session.ID, OwnershipNonce: "owned"}
-	e := Externals{Agent: &attachmentHarness{}}
+	e := Externals{Agent: nil}
 	if _, err := e.ReadTimeline(context.Background(), session, owned, "thread", "turn"); !errors.Is(err, core.ErrTimelineUnavailable) {
 		t.Fatalf("unsupported harness error=%v", err)
 	}

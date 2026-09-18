@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
 	"github.com/aphronio/dorf/internal/core"
@@ -36,7 +35,7 @@ func TestControlAPIProfileDiscoveryAndSelection(t *testing.T) {
 	if _, err := auth.IssueKey(ctx, "profile-discovery", credential); err != nil {
 		t.Fatal(err)
 	}
-	handler := controlTestHandler(store, tasks, controlTestGateway(t), auth, nil, blob.Store{Root: t.TempDir()})
+	handler := controlTestHandler(store, tasks, controlTestGateway(t), auth, nil)
 	read := func() map[string]controlapi.ProfileSummary {
 		t.Helper()
 		response := controlTestRequest(t, handler, http.MethodGet, "/v1/profiles", credential, "", nil)
@@ -124,7 +123,7 @@ func TestControlAPIUnknownProfilesHaveASpecificProblem(t *testing.T) {
 	if _, err := auth.IssueKey(ctx, "unknown-profile", credential); err != nil {
 		t.Fatal(err)
 	}
-	handler := controlTestHandler(store, tasks, controlTestGateway(t), auth, nil, blob.Store{Root: t.TempDir()})
+	handler := controlTestHandler(store, tasks, controlTestGateway(t), auth, nil)
 	missing := fmt.Sprintf("missing-profile-%d", time.Now().UnixNano())
 	for _, test := range []struct {
 		path  string

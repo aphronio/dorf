@@ -10,9 +10,9 @@ insert into dorf.sandbox_upgrades(id,sandbox_id,source_resource_id,package_path,
 values(sqlc.arg(id),sqlc.arg(sandbox_id),sqlc.arg(source_resource_id),sqlc.arg(package_path),sqlc.arg(version));
 
 -- name: UpgradeQuiescent :one
-select coalesce(not exists(select 1 from dorf.agent_runs ar join dorf.session_messages m on m.id=ar.message_id
-where ar.sandbox_id=sqlc.arg(sandbox_id) and ar.state not in ('completed','failed','interrupted')
-and (ar.state <> 'pending' or ar.baseline_turn_id is not null or m.delivery_intent='steer')),false)::boolean as quiet;
+select (j.native_pending_input_id is null and j.native_pending_turn_id is null)::boolean as quiet
+from dorf.sessions j join dorf.sandboxes s on s.session_id=j.id
+where s.id=sqlc.arg(sandbox_id);
 
 -- name: RecordUpgradePreparation :execrows
 update dorf.sandbox_upgrades set previous_version=sqlc.arg(previous_version)::text

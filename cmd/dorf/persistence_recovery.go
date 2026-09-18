@@ -68,13 +68,13 @@ func (d checkpointRecovery) Restore(ctx context.Context, session core.Session, d
 	return status.ProviderID, nil
 }
 
-func (d checkpointRecovery) VerifyAndRenew(ctx context.Context, session core.Session, destination core.Sandbox, checkpoint persistence.Checkpoint, pkg persistence.EffectivePackage, runs []core.AgentRun) error {
+func (d checkpointRecovery) VerifyAndRenew(ctx context.Context, session core.Session, destination core.Sandbox, checkpoint persistence.Checkpoint, pkg persistence.EffectivePackage) error {
 	if checkpoint.Repository != d.capture.config.ID || checkpoint.SessionID != session.ID {
 		return fmt.Errorf("checkpoint recovery custody differs")
 	}
 	owner := checkpointOwner(destination)
 	// A lost verification acknowledgement may have left an authenticated server.
-	if err := d.capture.agent.Quiesce(ctx, owner, runs); err != nil {
+	if err := d.capture.agent.Quiesce(ctx, owner, session.ThreadID); err != nil {
 		return err
 	}
 	if err := d.restorePackage(ctx, owner, pkg); err != nil {
@@ -87,7 +87,7 @@ func (d checkpointRecovery) VerifyAndRenew(ctx context.Context, session core.Ses
 	if err := d.externals.RouteCreate(ctx, session, destination, route); err != nil {
 		return err
 	}
-	return d.capture.agent.VerifyRetainedThreads(ctx, owner, runs)
+	return d.capture.agent.VerifyRetainedThread(ctx, owner, session.ThreadID)
 }
 
 func (d checkpointRecovery) restorePackage(ctx context.Context, owner provider.Ownership, pkg persistence.EffectivePackage) error {
@@ -117,21 +117,21 @@ func (d checkpointRecovery) DeleteResource(ctx context.Context, owned core.Sandb
 	return d.capture.sandbox.DeleteOwned(ctx, checkpointOwner(owned))
 }
 
-func (e checkpointExecution) ReconcileSessionAgent(ctx context.Context, sessionID string) (core.AgentReconciliationProgress, error) {
+func (e checkpointExecution) ReconcileSession(ctx context.Context, sessionID string) (core.SessionReconciliationProgress, error) {
 	session, err := e.resolver.store.Session(ctx, sessionID)
 	if err != nil {
-		return core.AgentReconciliationIdle, err
+		return core.SessionReconciliationIdle, err
 	}
 	recovery, err := e.resolver.checkpointRecovery(ctx, session.ProfileRef())
 	if err != nil {
-		return core.AgentReconciliationIdle, err
+		return core.SessionReconciliationIdle, err
 	}
 	progressed, err := absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (bool, error) { return recovery.Reconcile(workCtx, sessionID) })
 	if err != nil {
-		return core.AgentReconciliationIdle, err
+		return core.SessionReconciliationIdle, err
 	}
 	if progressed {
-		return core.AgentReconciliationReady, nil
+		return core.SessionReconciliationReady, nil
 	}
-	return e.Execution.ReconcileSessionAgent(ctx, sessionID)
+	return e.Execution.ReconcileSession(ctx, sessionID)
 }

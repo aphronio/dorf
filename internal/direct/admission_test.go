@@ -190,7 +190,7 @@ func TestAdmissionServiceExplicitModelBypassesConnectionDefault(t *testing.T) {
 
 func verifiedAdmissionProfile(name string) core.SandboxProfile {
 	now := time.Unix(1, 0)
-	profile := core.SandboxProfile{Name: name}
+	profile := core.SandboxProfile{Name: name, Harness: "codex"}
 	profile.DefinitionHash = profile.CurrentDefinitionHash()
 	profile.Verification = &core.ProfileVerification{
 		ContractVersion: core.BaseProfileContract, DefinitionHash: profile.DefinitionHash,

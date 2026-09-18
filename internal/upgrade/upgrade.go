@@ -14,7 +14,7 @@ import (
 
 type Request struct {
 	ID          string `json:"id"`
-	SessionID   string `json:"job_id"`
+	SessionID   string `json:"session_id"`
 	SandboxID   string `json:"sandbox_id"`
 	PackagePath string `json:"package_path"`
 	Version     string `json:"version"`
@@ -69,12 +69,12 @@ func (r Receipt) Outcome() string {
 // the bound native conversation without starting a new agent Turn.
 type Driver interface {
 	InspectPackage(context.Context, core.Sandbox, Request) (string, error)
-	Quiesce(context.Context, core.Sandbox, []core.AgentRun) error
+	Quiesce(context.Context, core.Sandbox, string) error
 	Capture(context.Context, core.Sandbox, string) (provider.Checkpoint, error)
 	Activate(context.Context, core.Sandbox, Request) error
 	ReplacesResource() bool
 	Restore(context.Context, core.Sandbox, core.Sandbox, provider.Checkpoint) (string, error)
-	Verify(context.Context, core.Sandbox, string, []core.AgentRun) error
+	Verify(context.Context, core.Sandbox, string, string) error
 	DeleteResource(context.Context, core.Sandbox) error
 	DeleteCheckpoint(context.Context, core.Sandbox, provider.Checkpoint) error
 }

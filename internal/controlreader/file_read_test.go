@@ -202,9 +202,7 @@ func (s *boundedStore) Sandbox(_ context.Context, id string) (core.Sandbox, erro
 	}
 	return s.sandbox, nil
 }
-func (*boundedStore) AgentMessageExecution(context.Context, string) (core.AgentMessageExecution, error) {
-	return core.AgentMessageExecution{}, postgres.ErrNotFound
-}
+
 func (s *boundedStore) WithSessionFence(_ context.Context, _ string, run func() error) error {
 	s.fence.Lock()
 	defer s.fence.Unlock()

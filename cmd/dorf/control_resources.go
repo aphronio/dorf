@@ -51,22 +51,6 @@ func optionalResourceTime(value time.Time) *time.Time {
 	return &value
 }
 
-func (a controlAPISessions) messageWaitReason(ctx context.Context, delivery core.Delivery) (string, error) {
-	if delivery.AgentRun.State != core.AgentRunPending || delivery.Message.Intent != core.MessageFollow {
-		return "", nil
-	}
-	holds, err := a.store.SessionDeliveryHolds(ctx, delivery.Message.SessionID)
-	if err != nil {
-		return "", err
-	}
-	for _, hold := range holds {
-		if hold.SandboxID == delivery.AgentRun.SandboxID {
-			return hold.Reason, nil
-		}
-	}
-	return "", nil
-}
-
 func (a controlAPISessions) projectUpgrades(ctx context.Context, session core.Session, view *controlapi.Session) error {
 	receipts, err := a.store.SessionUpgrades(ctx, session.ID)
 	if err != nil {

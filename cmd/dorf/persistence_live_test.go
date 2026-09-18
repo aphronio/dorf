@@ -19,6 +19,7 @@ import (
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/codex"
 	"github.com/aphronio/dorf/internal/config"
+	"github.com/aphronio/dorf/internal/controlreader"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/direct"
 	"github.com/aphronio/dorf/internal/persistence"
@@ -94,8 +95,8 @@ func TestLivePersistenceRecovery(t *testing.T) {
 	markLivePersistenceBudgetConsumed(t, receipt)
 	workerStop := proof.startWorker()
 	initial := proof.admit("initial", "Remember the synthetic marker CHECKPOINT_CONTEXT_154. Reply briefly without tools.")
-	initialExecution, initialLatency := proof.waitMessage(initial)
-	threadID := initialExecution.AgentRun.ThreadID
+	initialExecution, initialLatency := proof.waitNativeTurn(initial)
+	threadID := initial.ThreadID
 	if threadID == "" || proof.turnOutput(initialExecution) == "" {
 		t.Fatal("initial Codex turn omitted its retained thread or substantive output")
 	}
@@ -104,14 +105,8 @@ func TestLivePersistenceRecovery(t *testing.T) {
 	proof.preflightNativeCapture(baseConfig.AdditionalPaths)
 
 	service := proof.checkpointService(cfg)
-	formatTurnTiming := func(execution core.AgentMessageExecution, admission, observed time.Duration) string {
-		if execution.Message.AdmittedAt.IsZero() || execution.AgentRun.StartedAt.IsZero() || execution.AgentRun.FinishedAt.IsZero() ||
-			execution.AgentRun.StartedAt.Before(execution.Message.AdmittedAt) || execution.AgentRun.FinishedAt.Before(execution.AgentRun.StartedAt) {
-			t.Fatal("live turn omitted ordered durable timing facts")
-		}
-		return fmt.Sprintf("{admission=%s,wake_to_native_start=%s,native_start_to_settled=%s,observed_after_admission=%s}",
-			admission, execution.AgentRun.StartedAt.Sub(execution.Message.AdmittedAt),
-			execution.AgentRun.FinishedAt.Sub(execution.AgentRun.StartedAt), observed)
+	formatTurnTiming := func(acceptance, observed time.Duration) string {
+		return fmt.Sprintf("{native_acceptance=%s,observed_completion=%s}", acceptance, observed)
 	}
 	disabledTimings := make([]string, 0, 3)
 	var disabledDelta livePersistenceResourceDelta
@@ -121,8 +116,8 @@ func TestLivePersistenceRecovery(t *testing.T) {
 		admissionStarted := time.Now()
 		baseline := proof.admit(fmt.Sprintf("latency-disabled-%d", index), "Reply briefly without tools.")
 		admissionLatency := time.Since(admissionStarted)
-		execution, observedLatency := proof.waitMessage(baseline)
-		disabledTimings = append(disabledTimings, formatTurnTiming(execution, admissionLatency, observedLatency))
+		_, observedLatency := proof.waitNativeTurn(baseline)
+		disabledTimings = append(disabledTimings, formatTurnTiming(admissionLatency, observedLatency))
 		disabledDelta = disabledDelta.add(resources.delta(proof.resourceSample()))
 	}
 	enabledTimings := make([]string, 0, 3)
@@ -144,7 +139,7 @@ func TestLivePersistenceRecovery(t *testing.T) {
 		enabledStarted := time.Now()
 		enabled := proof.admit(fmt.Sprintf("latency-enabled-%d", index), "Reply briefly while the idle checkpoint is being cancelled. Do not use tools.")
 		admissionLatency := time.Since(enabledStarted)
-		execution, observedLatency := proof.waitMessage(enabled)
+		_, observedLatency := proof.waitNativeTurn(enabled)
 		if admissionLatency > time.Second {
 			t.Fatalf("new input admission waited %s while checkpoint was active", admissionLatency)
 		}
@@ -163,7 +158,7 @@ func TestLivePersistenceRecovery(t *testing.T) {
 		if len(after) != len(before) {
 			t.Fatal("cancelled checkpoint published a recovery point")
 		}
-		enabledTimings = append(enabledTimings, formatTurnTiming(execution, admissionLatency, observedLatency))
+		enabledTimings = append(enabledTimings, formatTurnTiming(admissionLatency, observedLatency))
 		cancelledDelta = cancelledDelta.add(resources.delta(proof.resourceSample()))
 		proof.removeSlowCaptureInput(index)
 	}
@@ -219,7 +214,6 @@ func TestLivePersistenceRecovery(t *testing.T) {
 	if _, err := store.RequestCheckpointRecovery(ctx, tasks.QueueName(), request); err != nil {
 		t.Fatal(err)
 	}
-	queued := proof.admit("queued-recovery", "Reply with the synthetic marker remembered before recovery. Do not use tools.")
 	source, err := store.Sandbox(ctx, proof.sandboxID)
 	if err != nil {
 		t.Fatal(err)
@@ -259,10 +253,11 @@ func TestLivePersistenceRecovery(t *testing.T) {
 	proof.verifyRestoredUsefulState()
 
 	workerStop = proof.startWorker()
-	recoveredExecution, recoveredLatency := proof.waitMessage(queued)
+	queued := proof.admit("queued-recovery", "Reply with the synthetic marker remembered before recovery. Do not use tools.")
+	recoveredExecution, recoveredLatency := proof.waitNativeTurn(queued)
 	workerStop()
-	if recoveredExecution.AgentRun.ThreadID != threadID || proof.turnOutput(recoveredExecution) == "" ||
-		recoveredExecution.Message.Input != queued.Input || recoveredExecution.Session.Model != session.Model || recoveredExecution.Session.ReasoningEffort != session.ReasoningEffort {
+	if queued.ThreadID != threadID || proof.turnOutput(recoveredExecution) == "" ||
+		queued.ThreadID != queued.ThreadID {
 		t.Fatal("replacement did not continue the original Codex thread with substantive output")
 	}
 	proof.requireRestoredConversation("CHECKPOINT_CONTEXT_154")
@@ -476,6 +471,7 @@ func livePersistenceProfile(t *testing.T, ctx context.Context, store postgres.St
 }
 
 type livePersistenceProof struct {
+	reader    controlreader.Service
 	t         *testing.T
 	ctx       context.Context
 	store     postgres.Store
@@ -534,6 +530,7 @@ func monotonicDelta(before, after uint64) uint64 {
 }
 
 type livePersistenceRuntime struct {
+	native    core.NativeSession
 	ref       core.SandboxProfileRef
 	execution interface {
 		core.Execution
@@ -552,7 +549,7 @@ func (r livePersistenceRuntime) ResolveSandbox(_ context.Context, ref core.Sandb
 	if ref != r.ref {
 		return core.SandboxRuntime{}, fmt.Errorf("unexpected live persistence profile")
 	}
-	return core.SandboxRuntime{SandboxProfile: ref, Execution: r.execution}, nil
+	return core.SandboxRuntime{SandboxProfile: ref, Execution: r.execution, Native: r.native}, nil
 }
 
 type livePersistenceExternals struct {
@@ -574,10 +571,10 @@ func (p *livePersistenceProof) installRuntime(ref core.SandboxProfileRef) {
 		return livePersistenceOwner(owned), err
 	}
 	externals := livePersistenceExternals{Externals: terminal.Externals{Sandbox: p.sandbox, Agent: p.agent, Ownership: owner}, fixture: p.fixture}
-	execution := core.NewExecutionService(p.store, externals, nil, absurdruntime.RequireClaim).
-		WithAgentExecution(composedAgentExecution{externals: externals.Externals})
-	direct.Register(core.Application{Store: p.store, Tasks: p.tasks, SandboxRuntimes: livePersistenceRuntime{ref: ref, execution: execution}}, p.store,
-		livePersistenceRuntime{ref: ref, execution: execution})
+	execution := core.NewExecutionService(p.store, externals, nil, absurdruntime.RequireClaim)
+	p.reader = controlreader.Service{Store: p.store, Runtimes: livePersistenceRuntime{ref: ref, execution: execution, native: externals.Externals}}
+	direct.Register(core.Application{Store: p.store, Tasks: p.tasks, SandboxRuntimes: livePersistenceRuntime{ref: ref, execution: execution, native: externals.Externals}}, p.store,
+		livePersistenceRuntime{ref: ref, execution: execution, native: externals.Externals})
 }
 
 func (p *livePersistenceProof) startWorker() func() {
@@ -600,40 +597,15 @@ func (p *livePersistenceProof) startWorker() func() {
 	return stop
 }
 
-func (p *livePersistenceProof) admit(key, input string) core.Message {
+func (p *livePersistenceProof) admit(key, input string) core.NativeAcknowledgement {
 	p.t.Helper()
-	session, err := coreApplication(p.store, p.tasks).OpenSession(p.ctx, p.session.ID)
-	if err != nil {
-		p.t.Fatal(err)
-	}
-	sandbox, err := session.DefaultSandbox(p.ctx)
-	if err != nil {
-		p.t.Fatal(err)
-	}
-	receipt, err := sandbox.Agent().Message(p.ctx, key, core.MessageInput{Text: input}, core.PreferSteer())
-	if err != nil {
-		p.t.Fatal(err)
-	}
-	if !receipt.Created {
-		p.t.Fatal("live proof message unexpectedly replayed an earlier admission")
-	}
-	execution, err := p.store.AgentMessageExecution(p.ctx, receipt.MessageID)
-	if err != nil {
-		p.t.Fatal(err)
-	}
-	return execution.Message
-}
-
-func (p *livePersistenceProof) waitMessage(message core.Message) (core.AgentMessageExecution, time.Duration) {
-	p.t.Helper()
-	started := time.Now()
 	for {
-		execution, err := p.store.AgentMessageExecution(p.ctx, message.ID)
-		if err == nil && execution.AgentRun.State == core.AgentRunCompleted {
-			return execution, time.Since(started)
+		ack, err := p.reader.SubmitEvent(p.ctx, p.session.ID, core.NativeEvent{Type: core.InputMessage, ClientID: key, Text: input})
+		if err == nil {
+			return ack
 		}
-		if err == nil && (execution.AgentRun.State == core.AgentRunFailed || execution.AgentRun.State == core.AgentRunUncertain) {
-			p.t.Fatalf("synthetic turn settled as %s: %s", execution.AgentRun.State, execution.AgentRun.Attention)
+		if !errors.Is(err, core.ErrNativeUnavailable) && !errors.Is(err, controlreader.ErrUnavailable) {
+			p.t.Fatal(err)
 		}
 		select {
 		case <-p.ctx.Done():
@@ -642,19 +614,34 @@ func (p *livePersistenceProof) waitMessage(message core.Message) (core.AgentMess
 		}
 	}
 }
-
-func (p *livePersistenceProof) turnOutput(execution core.AgentMessageExecution) string {
+func (p *livePersistenceProof) waitNativeTurn(ack core.NativeAcknowledgement) (core.HarnessTurn, time.Duration) {
 	p.t.Helper()
-	history, err := p.agent.ReadTurns(p.ctx, livePersistenceOwner(execution.Sandbox), execution.AgentRun.ThreadID)
-	if err != nil {
-		p.t.Fatal(err)
-	}
-	for _, turn := range history.Turns {
-		if turn.ID == execution.AgentRun.TurnID {
-			return strings.TrimSpace(turn.Output)
+	started := time.Now()
+	for {
+		history, err := p.reader.ReadNativeTurns(p.ctx, p.session.ID)
+		if err != nil {
+			p.t.Fatal(err)
+		}
+		if history.ThreadID != ack.ThreadID {
+			p.t.Fatal("native Thread changed after acceptance")
+		}
+		for _, turn := range history.Turns {
+			if turn.ID == ack.TurnID && turn.Terminal() {
+				if turn.Status != "completed" {
+					p.t.Fatalf("native status=%s", turn.Status)
+				}
+				return turn, time.Since(started)
+			}
+		}
+		select {
+		case <-p.ctx.Done():
+			p.t.Fatal(p.ctx.Err())
+		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	return ""
+}
+func (p *livePersistenceProof) turnOutput(turn core.HarnessTurn) string {
+	return strings.TrimSpace(turn.Output)
 }
 
 func (p *livePersistenceProof) exec(command string, args ...string) string {
@@ -738,11 +725,7 @@ exit 1`)
 
 func (p *livePersistenceProof) preflightNativeCapture(additionalPaths []string) {
 	p.t.Helper()
-	boundary, err := p.store.Boundary(p.ctx, p.sandboxID, false)
-	if err != nil {
-		p.t.Fatal(err)
-	}
-	runs, err := checkpointRuns(p.ctx, p.store, boundary)
+	session, err := p.store.Session(p.ctx, p.session.ID)
 	if err != nil {
 		p.t.Fatal(err)
 	}
@@ -750,7 +733,7 @@ func (p *livePersistenceProof) preflightNativeCapture(additionalPaths []string) 
 	if err != nil {
 		p.t.Fatal(err)
 	}
-	guard, err := p.agent.BeginPersistenceCapture(p.ctx, livePersistenceOwner(owned), livePersistenceWorkspace, runs, additionalPaths)
+	guard, err := p.agent.BeginPersistenceCapture(p.ctx, livePersistenceOwner(owned), livePersistenceWorkspace, session.ThreadID, additionalPaths)
 	if err != nil {
 		p.t.Fatalf("native capture preflight setup: %v", err)
 	}

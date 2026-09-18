@@ -67,7 +67,7 @@ func Run(ctx context.Context, db *sql.DB, cfg config.Config, profile core.Sandbo
 		queue = queue || name == config.QueueName
 	}
 	if err == nil && !queue {
-		err = fmt.Errorf("queue dorf_jobs is missing")
+		err = fmt.Errorf("queue dorf_sessions is missing")
 	}
 	add("absurd-queue", err, "run dorf migrate")
 	switch profile.Provider {

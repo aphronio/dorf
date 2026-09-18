@@ -11,19 +11,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime/multipart"
+
 	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/aphronio/dorf/internal/clientconfig"
 	"github.com/aphronio/dorf/internal/controlapi"
-	"github.com/aphronio/dorf/internal/core"
+
 	"github.com/aphronio/dorf/internal/hostclientconfig"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
@@ -247,102 +245,6 @@ func (c *Client) WatchSession(ctx context.Context, id string, deliver func(contr
 		case <-time.After(retryAfter):
 		}
 	}
-}
-
-// SendMessage admits or replays one durable follow or steer Message.
-func (c *Client) SendMessage(ctx context.Context, sessionID, key string, input controlapi.SendMessageRequest) (controlapi.Message, error) {
-	if sessionID == "" {
-		return controlapi.Message{}, fmt.Errorf("Session ID is empty")
-	}
-	if strings.TrimSpace(key) == "" {
-		return controlapi.Message{}, fmt.Errorf("Idempotency-Key is empty")
-	}
-	var response controlapi.Message
-	if len(input.Attachments) == 0 {
-		err := c.do(ctx, http.MethodPost, []string{"v1", "sessions", sessionID, "messages"}, input, true, key, &response)
-		return response, err
-	}
-	body, contentType, err := encodeMessageMultipart(input)
-	if err != nil {
-		return controlapi.Message{}, err
-	}
-	err = c.doBody(ctx, http.MethodPost, []string{"v1", "sessions", sessionID, "messages"}, body, contentType, true, key, &response)
-	return response, err
-}
-
-func encodeMessageMultipart(input controlapi.SendMessageRequest) ([]byte, string, error) {
-	if input.Observation || len(input.Attachments) > core.MaxMessageAttachments || len(input.Text) > core.MaxMessageInputBytes {
-		return nil, "", fmt.Errorf("Message exceeds the input limits")
-	}
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	if err := writer.WriteField("text", input.Text); err != nil {
-		return nil, "", fmt.Errorf("encode Message text")
-	}
-	if input.Intent != "" {
-		if err := writer.WriteField("intent", input.Intent); err != nil {
-			return nil, "", fmt.Errorf("encode Message intent")
-		}
-	}
-	if input.DeveloperInstructions != nil {
-		if err := writer.WriteField("developer_instructions", *input.DeveloperInstructions); err != nil {
-			return nil, "", err
-		}
-	}
-	if input.RefreshSkills {
-		if err := writer.WriteField("refresh_skills", "true"); err != nil {
-			return nil, "", fmt.Errorf("encode Message skill refresh")
-		}
-	}
-	for _, attachment := range input.Attachments {
-		if err := writeMessageAttachment(writer, attachment); err != nil {
-			return nil, "", err
-		}
-	}
-	if err := writer.Close(); err != nil {
-		return nil, "", fmt.Errorf("encode Message multipart body")
-	}
-	return body.Bytes(), writer.FormDataContentType(), nil
-}
-
-func writeMessageAttachment(writer *multipart.Writer, attachment controlapi.SendMessageAttachment) error {
-	if !utf8.ValidString(attachment.Filename) || strings.TrimSpace(attachment.Filename) == "" || strings.IndexFunc(attachment.Filename, unicode.IsControl) >= 0 ||
-		utf8.RuneCountInString(attachment.Filename) > core.MaxMessageAttachmentFilenameLength {
-		return fmt.Errorf("Message attachment filename is invalid")
-	}
-	if len(attachment.Contents) > provider.MaxFileWriteBytes {
-		return fmt.Errorf("Message attachment exceeds the byte limit")
-	}
-	part, err := writer.CreateFormFile("attachment", attachment.Filename)
-	if err != nil {
-		return fmt.Errorf("encode Message attachment")
-	}
-	if _, err := part.Write(attachment.Contents); err != nil {
-		return fmt.Errorf("encode Message attachment")
-	}
-	return nil
-}
-
-// Message retrieves one durable Message receipt and its current delivery state.
-func (c *Client) Message(ctx context.Context, sessionID, messageID string) (controlapi.Message, error) {
-	if sessionID == "" {
-		return controlapi.Message{}, fmt.Errorf("Session ID is empty")
-	}
-	if messageID == "" {
-		return controlapi.Message{}, fmt.Errorf("Message ID is empty")
-	}
-	var response controlapi.Message
-	err := c.do(ctx, http.MethodGet, []string{"v1", "sessions", sessionID, "messages", messageID}, nil, true, "", &response)
-	return response, err
-}
-
-func (c *Client) InterruptMessage(ctx context.Context, sessionID, messageID string) (controlapi.Message, error) {
-	if sessionID == "" || messageID == "" {
-		return controlapi.Message{}, fmt.Errorf("interrupt requires exact Session and Message identities")
-	}
-	var response controlapi.Message
-	err := c.do(ctx, http.MethodPut, []string{"v1", "sessions", sessionID, "messages", messageID, "interrupt"}, nil, true, "", &response)
-	return response, err
 }
 
 // Retry admits or replays one explicit retry request using caller-retained

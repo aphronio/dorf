@@ -16,7 +16,7 @@ import (
 
 const (
 	AbsurdVersion = "0.5.0"
-	QueueName     = "dorf_jobs"
+	QueueName     = "dorf_sessions"
 
 	persistenceFileName = "persistence.json"
 )
@@ -31,7 +31,6 @@ type Config struct {
 	Workspace             string
 	AppServerPort         int
 	TurnTimeout           time.Duration
-	BlobRoot              string
 	E2BAPIKey             string
 	Incus                 *deployment.Incus
 }
@@ -107,7 +106,6 @@ func Load() (Config, error) {
 		Workspace:             "/workspace/job",
 		AppServerPort:         4500,
 		TurnTimeout:           45 * time.Minute,
-		BlobRoot:              value("DORF_BLOB_ROOT", filepath.Join(paths.StateDir, "blobs")),
 		E2BAPIKey:             strings.TrimSpace(os.Getenv("E2B_API_KEY")),
 	}
 	stored, found, loadErr := deployment.Load(deploymentPath)
@@ -141,9 +139,6 @@ func Load() (Config, error) {
 		if parseErr != nil || origin.Scheme != "http" || origin.Hostname() == "" || origin.Port() != "8317" || origin.User != nil || origin.Path != "" || origin.RawQuery != "" || origin.ForceQuery || origin.Fragment != "" || origin.Opaque != "" {
 			return Config{}, fmt.Errorf("DORF_PROVIDER_GATEWAY_INTERNAL_ORIGIN must be an exact HTTP origin on port 8317")
 		}
-	}
-	if !filepath.IsAbs(cfg.BlobRoot) {
-		return Config{}, fmt.Errorf("DORF_BLOB_ROOT must be an absolute deployment-owned path")
 	}
 	if raw := strings.TrimSpace(os.Getenv("DORF_TURN_TIMEOUT")); raw != "" {
 		duration, err := time.ParseDuration(raw)

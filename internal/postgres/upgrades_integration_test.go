@@ -30,7 +30,7 @@ type upgradeDriver struct {
 func (d *upgradeDriver) InspectPackage(context.Context, core.Sandbox, upgrade.Request) (string, error) {
 	return "0.154.0", nil
 }
-func (d *upgradeDriver) Quiesce(context.Context, core.Sandbox, []core.AgentRun) error { return nil }
+func (d *upgradeDriver) Quiesce(context.Context, core.Sandbox, string) error { return nil }
 func (d *upgradeDriver) Capture(_ context.Context, s core.Sandbox, key string) (provider.Checkpoint, error) {
 	if d.checkpoint.Reference == "" {
 		d.checkpoint = provider.Checkpoint{Key: key, Reference: "checkpoint-" + key, SourceID: s.ProviderID}
@@ -59,8 +59,8 @@ func (d *upgradeDriver) Restore(_ context.Context, source, destination core.Sand
 	}
 	return id, nil
 }
-func (d *upgradeDriver) Verify(_ context.Context, s core.Sandbox, version string, runs []core.AgentRun) error {
-	if len(runs) != 1 || runs[0].ThreadID != "retained-thread" {
+func (d *upgradeDriver) Verify(_ context.Context, s core.Sandbox, version string, runs string) error {
+	if runs != "retained-thread" {
 		return errors.New("lost conversation")
 	}
 	if version == "0.155.0" && d.failVerify {
@@ -99,16 +99,7 @@ func TestSandboxUpgradeRecoveryKeepsCustodyAndQueuedInput(t *testing.T) {
 			if err := store.BindSandboxResource(ctx, owned, "provider-original"); err != nil {
 				t.Fatal(err)
 			}
-			current, err := nextDelivery(ctx, store, session.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := store.PrepareAgentRun(ctx, current.AgentRun.ID, "codex", ""); err != nil {
-				t.Fatal(err)
-			}
-			if err := store.BindAgentRun(ctx, current.AgentRun.ID, "codex", "retained-thread", "retained-turn", "completed"); err != nil {
-				t.Fatal(err)
-			}
+			advanceNativeFixture(t, store, ctx, session.ID, "retained-thread", "initial")
 			request := upgrade.Request{ID: "upgrade-" + strings.ReplaceAll(session.ID, "_", "-"), SessionID: session.ID, SandboxID: owned.ID, PackagePath: "/nix/store/" + strings.Repeat("a", 32) + "-codex-0.155.0", Version: "0.155.0"}
 			// Keep provider checkpoint keys within the shared 63-character limit.
 			request.ID = "upgrade-" + session.ID[len(session.ID)-24:]
@@ -130,10 +121,6 @@ func TestSandboxUpgradeRecoveryKeepsCustodyAndQueuedInput(t *testing.T) {
 			}
 			if err := store.FinishSandboxUpgrade(ctx, client.QueueName(), receipt); err == nil {
 				t.Fatal("unverified release accepted")
-			}
-			queued, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{SessionID: session.ID, SandboxID: owned.ID, FromKind: core.MessageFromHuman, FromID: "held-input", Input: "continue after upgrade", Intent: core.MessageAuto})
-			if err != nil {
-				t.Fatal(err)
 			}
 			driver := &upgradeDriver{replace: tc.replace, failVerify: tc.rollback, loseRestore: tc.replace, versions: map[string]string{owned.ResourceID: "0.154.0"}, data: map[string]string{owned.ResourceID: "original-state"}, deleted: map[string]bool{}}
 			var events []telemetry.Event
@@ -157,9 +144,8 @@ func TestSandboxUpgradeRecoveryKeepsCustodyAndQueuedInput(t *testing.T) {
 				}
 				// A new executor sees only retained facts, never an in-memory step index.
 				service.Store = postgres.Store{DB: store.DB}
-				selected, err := store.AgentMessage(ctx, session.ID)
-				if err != nil || selected != nil {
-					t.Fatalf("hold leaked delivery: %v", err)
+				if held, err := store.SandboxDeliveryHeld(ctx, owned.ID); err != nil || !held {
+					t.Fatalf("hold leaked: %v", err)
 				}
 			}
 			if receipt.VerifiedAt.IsZero() {
@@ -198,14 +184,6 @@ func TestSandboxUpgradeRecoveryKeepsCustodyAndQueuedInput(t *testing.T) {
 			}
 			if tc.replace && driver.checkpointDeleted {
 				t.Fatal("deleted replacement's backing checkpoint")
-			}
-			next, err := store.AgentMessage(ctx, session.ID)
-			if err != nil || next == nil || next.MessageID != queued.Message.ID {
-				t.Fatalf("queued input was not resumed: %v", err)
-			}
-			execution, err := store.AgentMessageExecution(ctx, queued.Message.ID)
-			if err != nil || execution.Sandbox.ResourceID != after.ResourceID {
-				t.Fatalf("queued input uses stale resource: %v", err)
 			}
 			if len(events) == 0 || events[0].Attributes["dorf.upgrade_id"] != request.ID {
 				t.Fatal("missing correlated diagnostics")

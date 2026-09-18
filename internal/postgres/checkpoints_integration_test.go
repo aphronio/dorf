@@ -62,7 +62,7 @@ func TestCheckpointPublicationIsImmutableIdempotentAndBoundaryChecked(t *testing
 	if err != nil || len(history) != 2 || history[0] != second || history[1] != first {
 		t.Fatalf("immutable checkpoint history=%#v err=%v", history, err)
 	}
-	if _, err := db.ExecContext(ctx, `update dorf.sandbox_checkpoints set message_sequence=message_sequence+1 where repository=$1 and snapshot_id=$2`, firstRef.Repository, firstRef.SnapshotID); err == nil {
+	if _, err := db.ExecContext(ctx, `update dorf.sandbox_checkpoints set native_revision=native_revision+1 where repository=$1 and snapshot_id=$2`, firstRef.Repository, firstRef.SnapshotID); err == nil {
 		t.Fatal("published checkpoint accepted in-place mutation")
 	}
 }
@@ -85,20 +85,7 @@ func TestCheckpointPublicationRejectsSettledConcurrentChanges(t *testing.T) {
 			name: "input",
 			mutate: func(t *testing.T, ctx context.Context, store postgres.Store, sandboxID string, boundary persistence.CaptureBoundary) {
 				t.Helper()
-				admitted, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{
-					SessionID: boundary.SessionID, SandboxID: sandboxID, FromKind: core.MessageFromHuman,
-					FromID: "concurrent-input", Input: "new accepted work", Intent: core.MessageFollow,
-				})
-				if err != nil {
-					t.Fatal(err)
-				}
-				runID := core.AgentRunID(admitted.Message.ID)
-				if err := store.PrepareAgentRun(ctx, runID, "codex", "turn-initial"); err != nil {
-					t.Fatal(err)
-				}
-				if err := store.BindAgentRun(ctx, runID, "codex", "thread-retained", "turn-concurrent", "completed"); err != nil {
-					t.Fatal(err)
-				}
+				advanceNativeFixture(t, store, ctx, boundary.SessionID, "thread-retained", "concurrent-input")
 			},
 		},
 		{
@@ -225,7 +212,7 @@ func TestEmptyNativeCleanupCanCheckpointAfterLostActivityReceipt(t *testing.T) {
 		t.Fatalf("ordinary boundary repaired lost activity receipt: boundary=%#v err=%v", ordinary, err)
 	}
 	cleanup, err := store.Boundary(ctx, sandboxID, true)
-	if err != nil || !cleanup.Eligible || cleanup.LastActivityAt.IsZero() || cleanup.MessageSequence != 0 || cleanup.CompletedTurnSequence != 0 {
+	if err != nil || !cleanup.Eligible || cleanup.LastActivityAt.IsZero() || cleanup.NativeRevision != 0 {
 		t.Fatalf("empty native cleanup boundary=%#v err=%v", cleanup, err)
 	}
 	replayed, err := store.Boundary(ctx, sandboxID, true)
@@ -233,7 +220,7 @@ func TestEmptyNativeCleanupCanCheckpointAfterLostActivityReceipt(t *testing.T) {
 		t.Fatalf("cleanup fallback boundary changed: first=%#v replay=%#v err=%v", cleanup, replayed, err)
 	}
 	checkpoint, err := store.PublishCheckpoint(ctx, cleanup, checkpointReference("empty-native-cleanup-repository", session.ID))
-	if err != nil || !checkpoint.Cleanup || checkpoint.MessageSequence != 0 || checkpoint.CompletedTurnSequence != 0 {
+	if err != nil || !checkpoint.Cleanup || checkpoint.NativeRevision != 0 {
 		t.Fatalf("empty native cleanup checkpoint=%#v err=%v", checkpoint, err)
 	}
 }
@@ -291,16 +278,8 @@ func completedCheckpointFixture(t *testing.T, store postgres.Store, ctx context.
 	if err := store.BindSandboxResource(ctx, owned, "provider-original"); err != nil {
 		t.Fatal(err)
 	}
-	delivery, err := nextDelivery(ctx, store, session.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.PrepareAgentRun(ctx, delivery.AgentRun.ID, "codex", ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.BindAgentRun(ctx, delivery.AgentRun.ID, "codex", "thread-retained", "turn-initial", "completed"); err != nil {
-		t.Fatal(err)
-	}
+	advanceNativeFixture(t, store, ctx, session.ID, "thread-retained", "initial-input")
+	session.ThreadID = "thread-retained"
 	if err := store.FinishSandboxActivity(ctx, session.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +287,7 @@ func completedCheckpointFixture(t *testing.T, store postgres.Store, ctx context.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !boundary.Eligible || boundary.MessageSequence != 1 || boundary.CompletedTurnSequence != 1 || boundary.DeliveryHoldCount != 0 {
+	if !boundary.Eligible || boundary.NativeRevision != 1 || boundary.DeliveryHoldCount != 0 {
 		t.Fatalf("completed fixture boundary=%#v", boundary)
 	}
 	return session, sandboxID, boundary
@@ -333,5 +312,19 @@ func assertCheckpointCandidate(t *testing.T, store postgres.Store, ctx context.C
 	}
 	if found != want {
 		t.Fatalf("candidate %s found=%t want=%t candidates=%#v", sandboxID, found, want, candidates)
+	}
+}
+
+func advanceNativeFixture(t *testing.T, store postgres.Store, ctx context.Context, sessionID, threadID, inputID string) {
+	t.Helper()
+	if err := store.BindNativeThread(ctx, sessionID, threadID); err != nil {
+		t.Fatal(err)
+	}
+	revision, err := store.BeginNativeMutation(ctx, sessionID, threadID, inputID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishNativeMutation(ctx, sessionID, revision); err != nil {
+		t.Fatal(err)
 	}
 }

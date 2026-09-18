@@ -3,6 +3,7 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"github.com/aphronio/dorf/internal/telemetry"
 	"github.com/coder/websocket"
 	"net/http"
 	"net/http/httptest"
@@ -158,7 +159,7 @@ func TestRecoveredReplyEventsReconcileOnSameConnectionAndPreserveInflightNotific
 	defer server.Close()
 	p := dialTestProtocol(t, server)
 	p.observations = NewObservations(context.Background(), nil)
-	p.execution = core.AgentRun{ID: "run"}
+	p.execution = telemetry.NativeExecution{ID: "run"}
 	p.observed = &observedTurn{threadID: "thread", turnID: "turn"}
 	p.observations.Replies.Seed(p.replyBinding(), []core.HarnessConversationItem{{Index: 0, NativeItemID: "live-old", Kind: "reply", Text: "old reply"}}, false)
 	if !p.refreshReplyPrefix() || !p.observed.replyRefresh {

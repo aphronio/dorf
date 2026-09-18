@@ -5,12 +5,17 @@ Codex 0.154.0 E2B profile. Disposable native replacement, cancellation and clean
 pass. Activation is opt-in. The v0.17.0 shared image recipe includes stock restic;
 deployment requires an image built from the clean release source, not a disposable proof image.
 
+The provider proofs above predate native Session events. Slice 9 changes the execution cutoff to
+a native mutation revision and adds a workspace continuity manifest. Local PostgreSQL/filesystem
+checks cover this boundary; live replacement proofs have not yet been rerun. See the
+[native implementation record](native-session-contract.md#implementation-and-verification).
+
 ## Contract
 
 An explicitly configured direct Codex profile can preserve native session files and its workspace
 in an encrypted restic repository independently of its provider VM. PostgreSQL retains exact
-successful snapshot references alongside the existing execution boundary and package-generation
-reference. It does not duplicate the native transcript or accepted Message ledger.
+successful snapshot references alongside the native mutation revision and package-generation
+reference. It does not duplicate native input or transcripts. An unresolved native mutation blocks capture and recovery.
 
 After five seconds of continuous idle time, a backup may capture the latest state. New work takes
 priority: it invalidates publication and requests remote cancellation without waiting for process
@@ -56,7 +61,7 @@ Sessions use the configured backup timeout instead.
   maintenance, or resource replacement invalidate an older boundary.
 - Recovery accepts an exact checkpoint and reserves its replacement with the delivery hold in one
   transaction. It restores, verifies native history, deletes the old resource, and atomically
-  adopts the replacement, releases its hold and wakes queued input. The resource's provider binding
+  adopts the replacement and releases its hold. Clients retain unsent input during maintenance. The resource's provider binding
   records successful restore; resource deletion records supply cleanup state. Only native verification
   needs a separate receipt. Later ambiguous or accepted native work cannot be blindly replayed.
 - The shared Codex quiescing API inspects and authenticates an existing server before reading settled

@@ -139,7 +139,7 @@ func proofEvent(data []byte) (telemetry.Event, error) {
 		return telemetry.Event{}, err
 	}
 	event["dorf.upgrade_id"] = event["upgrade_id"]
-	event["dorf.job_id"] = event["upgrade_id"]
+	event["dorf.session_id"] = event["upgrade_id"]
 	event["dorf.sandbox_id"] = event["upgrade_id"]
 	event["dorf.provider_sandbox_id"] = event["provider_sandbox_id"]
 	event["dorf.synthetic_proof"] = true

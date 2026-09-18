@@ -10,16 +10,15 @@ import (
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
-// Persisted task names and payload keys remain stable across the Session rename.
-const CleanupTaskName = "dorf-job-cleanup-v3"
+const CleanupTaskName = "dorf-session-cleanup-v3"
 
 type SessionTaskParams struct {
-	SessionID      string `json:"job_id"`
+	SessionID      string `json:"session_id"`
 	PreviousTaskID string `json:"previous_task_id,omitempty"`
 }
 
 type TaskResultV1 struct {
-	SessionID string `json:"job_id"`
+	SessionID string `json:"session_id"`
 	Outcome   string `json:"outcome"`
 }
 
@@ -39,6 +38,7 @@ type SandboxStatusReader interface {
 }
 
 type SandboxRuntime struct {
+	Native         NativeSession
 	Status         SandboxStatusReader
 	Timeline       SandboxTimelineReader
 	Execution      Execution
@@ -98,7 +98,6 @@ func (a Application) StopForUnavailableSandboxProfile(ctx context.Context, sessi
 type Application struct {
 	Store           ApplicationStore
 	Tasks           *absurd.Client
-	AgentMessages   AgentMessageAdmission
 	SandboxRuntimes SandboxRuntimeResolver
 	CleanupRuntimes CleanupRuntimeResolver
 }

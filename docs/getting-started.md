@@ -354,15 +354,12 @@ dorf session list --limit 25 --output json
 dorf session inspect SESSION_ID
 dorf session watch SESSION_ID
 dorf session watch --output jsonl SESSION_ID
-dorf session message --input-file follow-up.txt SESSION_ID
-dorf session message --attach screenshot.png SESSION_ID
-dorf session message --intent follow --input-file queued.txt SESSION_ID
-dorf session message --intent steer --input-file correction.txt SESSION_ID
-dorf session message inspect SESSION_ID MESSAGE_ID
-dorf session message inspect SESSION_ID
-dorf session message interrupt SESSION_ID MESSAGE_ID
+dorf session event --input-file follow-up.txt SESSION_ID
+dorf session event --attach screenshot.png SESSION_ID
+dorf session turns SESSION_ID
+dorf session history SESSION_ID
+dorf session cancel SESSION_ID
 dorf session retry SESSION_ID
-dorf session evidence SESSION_ID
 dorf sandbox file get SANDBOX_ID PATH --output DESTINATION
 dorf session abandon SESSION_ID
 dorf session cleanup SESSION_ID
@@ -373,36 +370,16 @@ attach your thread or task reference. `dorf session list` and `dorf session insp
 Client and reference. An older Session shows an unknown creator. Use that information when choosing
 cleanup targets; attribution does not request cleanup or define a retention policy.
 Client configuration may set `client_reference` as the default for new Sessions; an explicit flag
-overrides it. Omitting `MESSAGE_ID` from `dorf session message inspect` reads the latest settled reply
-in the Session's main Sandbox. Pending follow-ups and steer delivery acknowledgements do not replace
-that reply.
+overrides it.
 
-For repository investigation, create a direct Session and use `dorf sandbox exec` for your repository
-setup, then send your instructions through `dorf session message send`. Choose and retrieve any report
-files before cleanup. The former built-in `codebase-investigation` command is retired. Before
-upgrading a deployment that used it, finish cleanup with the previous version and export any
-application source data you need. The migration removes its source table while retaining generic
-Session, Message, and resource receipts; it does not convert investigation Sessions into direct Sessions.
+`run` creates the Session, waits for resource readiness and submits native input once. Its key
+identifies Session creation only; rerunning it can submit new input. An unknown input result requires
+native inspection before another send. The response includes the native Turn ID. The Harness chooses
+whether input joins active work or starts another Turn. No explicit Follow/Steer or offline queue exists.
 
-`run` receipts include the accepted Session and Message. `session inspect` reports the Session ID and exact Sandbox IDs. Follow may queue
-before current work settles. Explicit steer targets only the exact active Turn and never becomes a Follow.
-`session watch` reconnects from the canonical snapshot, and Ctrl-C stops only the view. Retry is
-accepted only for eligible failed execution. Sandbox file retrieval
-returns exact bytes and must happen before cleanup, which closes Message admission and file reads.
-The requested file path can be absolute inside the Sandbox, relative to its workspace root, or
-relative to its execution user's home with `~/`. Traversal, symlinks, and directories are rejected.
-
-Human Session and Message output uses `Queued` for accepted work waiting to start, `Working` for active
-execution, and `Needs attention` for failures or required intervention. Session setup reports `Starting`
-or `Connecting`. A direct Session with no outstanding work reports `Idle`. A successful Message result
-reports `Finished`; a steer delivery acknowledgement without a result reports
-`Delivered; awaiting result`. These labels do not report progress within an agent Turn.
-
-Use `--output json` on Session, Message, and retry operations and `--output jsonl` on watch for
-stable machine output. The ordinary mutation flow creates retry identity internally and retries the
-exact request once after a retryable transport or HTTP server failure; a human does not need to
-configure a key. A direct Session remains open and idle after a successful Turn until the caller
-requests cleanup.
+Use Session watch for resources and native Turns/history for execution. Stopping a watcher leaves
+native work running. Retry applies to eligible failed lifecycle work; it never replays native input.
+Retrieve files before cleanup. Exact file reads reject traversal, symlinks and directories.
 
 The deployment operator can inspect the host-owned Client inventory and revoke exactly one Client at
 any time using the Client ID reported by `dorf connect` or `dorf auth status`:
@@ -456,55 +433,25 @@ dorf session watch SESSION_ID
 The Compose-managed worker claims the Session; do not start a competing foreground worker in the ordinary
 deployment flow.
 
-For a human invocation, `--key` is optional. Dorf generates a key and retries one ambiguous API
-failure with the same request. Automation or deliberate replay should pass a stable `--key`.
-
-The verified deployment-default Sandbox profile and AI connection are used unless explicitly
-selected. After a successful Turn, the Session remains open and idle so the caller can continue the same
-Harness Thread, retrieve an exact workspace file, or request cleanup:
+Session creation uses an idempotency key; native input does not. The CLI never automatically retries
+an ambiguous native mutation. Use the API directly to separate create, workspace setup and input.
+The verified default profile and model connection apply unless selected explicitly.
 
 ```bash
-dorf session message --key follow-1 --input-file follow-up.txt SESSION_ID
-dorf session message --key files-1 --attach screenshot.png --attach notes.txt SESSION_ID
+dorf session event --client-id input-2 --input-file follow-up.txt SESSION_ID
+dorf session event --attach screenshot.png --attach notes.txt SESSION_ID
+dorf session turns SESSION_ID
+dorf session history SESSION_ID
+dorf session cancel SESSION_ID
 dorf sandbox file get SANDBOX_ID PATH --output DESTINATION
 dorf session cleanup SESSION_ID
 ```
 
-Repeat `--attach LOCAL_FILE` to send ordered files with the first Message or a later Message. The
-CLI checks local file names,
-regular-file status, and byte limits before creating a Session or sending a Message. The server
-validates image contents and profile support during Message admission. You may omit `--input-file`
-for a Message that has at least one attachment. Dorf sends each file by value, so later local
-changes do not change an accepted Message. The [Remote Control API](control-api.md#resources) links
-to the accepted formats and limits.
-
-The default `--intent auto` steers an active Turn or admits a Follow when none is active. If that
-Turn terminates without accepting the automatic Message, Dorf changes the same Message to a Follow
-and returns it to FIFO selection. Replay preserves the original request and Message identity while
-returning its current effective intent. Use `--intent follow` to queue a distinct Turn even while
-earlier work is active, or `--intent steer` to require an active target. An explicit Steer has
-priority over queued follows, never falls back to a new Turn, and fails honestly if its target
-becomes terminal before delivery.
-
-After changing installed skills, add `--refresh-skills` to the next Codex Message. The request
-uses the [Message delivery rules](control-api.md#resources) and survives steering until a
-fresh Turn can start.
-
-For a direct Codex Session, `dorf session message interrupt SESSION_ID MESSAGE_ID` requests Stop for that
-Message's exact Turn. It also accepts a Steer Message attached to the Turn. Inspect the Message
-until its result reports the observed outcome; `interrupt_requested` records acceptance, not
-completion. Repeating Stop is safe, including after a successor Turn starts. An already settled
-target is a no-op. A Message without a bound Turn cannot yet be interrupted.
-
-An open direct Session retains its Sandbox and native conversation between messages. A worker restart
-reconnects to the retained runtime. Codex session files remain on the Sandbox disk; losing that
-disk loses the session. There is no backup or Sandbox replacement recovery. Request cleanup only
-when the retained workspace and conversation are no longer needed.
-
-The CLI owns the raw prompt and the meaning of any resulting prose or files;
-Dorf owns durable delivery, recovery, the exact
-Session-owned Sandbox, and execution of explicit cleanup. No workflow identity, Git repository, or
-GitHub integration is required.
+`--client-id` is attribution, not duplicate suppression. Attachments travel by value; an input file is
+optional when attachments exist. Add `--refresh-skills` to request native skill-catalog refresh.
+The [API semantics](control-api.md#resources) describe acknowledgement, uncertainty and observation.
+Cancel targets the current native Turn once; a new call may target newer work. Do not retry a lost
+cancel response. Native history and workspace files follow the supported storage/recovery contract.
 
 ## 5. Continue and release a Session
 
@@ -513,12 +460,8 @@ The Compose-managed worker recovers after process loss; use [Support](support.md
 action is needed. `dorf session retry SESSION_ID` schedules one more attempt for eligible failed execution.
 `dorf session cleanup SESSION_ID` closes admission and reconciles resource release.
 
-Clients own repository setup, reviews, publication credentials, and external outcomes. Dorf no
-longer supplies a coding workflow, GitHub App setup, abandonment policy, or application Evidence API.
-Before upgrading a deployment with old workflow Sessions, complete their cleanup using the previous
-version and export any application records needed. The new migration removes coding inputs,
-revisions, review plans, proposals, outcomes, and application evidence. Generic Session, Message,
-AgentRun, resource ownership, lifecycle, and recovery receipts remain.
+Clients own repository setup, reviews, publication credentials and business outcomes. Dorf retains
+Session/resource/lifecycle facts; input and execution remain native. There is no application archive.
 
 ### Keep a worker running between turns
 
@@ -543,7 +486,7 @@ dorf upgrade show SESSION
 ```
 
 Replace the placeholders with the real Session ID, full staged store path, and exact package version.
-The retained worker saves incoming messages during the hold, checkpoints local state, activates the
+The hold rejects new native input; the client retains unsent work. The worker checkpoints local state, activates the
 package, and verifies the retained conversation. Failed verification restores the checkpoint before
 resuming. A failed recovery retains the hold and exposes attention; retry the existing failed Session
 using its ordinary retry command after addressing the reported cause. Repeating the same upgrade ID
