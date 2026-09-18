@@ -107,21 +107,9 @@ type AdmitCodingJobRequest struct {
 	Reasoning       string `json:"reasoning,omitempty"`
 }
 
-type AdmitInvestigationJobRequest struct {
-	KeepRunning     bool   `json:"keep_running,omitempty"`
-	ClientReference string `json:"client_reference,omitempty"`
-	Repository      string `json:"repository"`
-	Revision        string `json:"revision"`
-	Profile         string `json:"profile,omitempty"`
-	AIConnection    string `json:"ai_connection,omitempty"`
-	Model           string `json:"model,omitempty"`
-	Reasoning       string `json:"reasoning,omitempty"`
-}
-
 const (
-	JobKindDirect        = "direct"
-	JobKindCoding        = "coding"
-	JobKindInvestigation = "codebase-investigation"
+	JobKindDirect = "direct"
+	JobKindCoding = "coding"
 )
 
 type JobCreator struct {
@@ -203,28 +191,6 @@ type CodingOutcome struct {
 	ObservedState  string    `json:"observed_state"`
 	MergeCommitOID string    `json:"merge_commit_oid,omitempty"`
 	ObservedAt     time.Time `json:"observed_at"`
-}
-
-type InvestigationJob struct {
-	Job
-	WorkflowRevision string              `json:"workflow_revision"`
-	Source           InvestigationSource `json:"source"`
-	Report           InvestigationReport `json:"report"`
-}
-
-func (j InvestigationJob) Common() Job   { return j.Job }
-func (InvestigationJob) jobKind() string { return JobKindInvestigation }
-
-type InvestigationSource struct {
-	Repository string `json:"repository"`
-	Revision   string `json:"revision"`
-}
-
-// InvestigationReport identifies the workflow's conventional report location.
-// The common cleanup state is the authority for whether Sandbox reads remain open.
-type InvestigationReport struct {
-	SandboxID string `json:"sandbox_id"`
-	Path      string `json:"path"`
 }
 
 type Admission struct {
@@ -368,7 +334,6 @@ type Jobs interface {
 	List(context.Context, int, string) (JobList, error)
 	AdmitDirect(context.Context, string, string, AdmitJobRequest) (DirectJob, bool, error)
 	AdmitCoding(context.Context, string, string, AdmitCodingJobRequest) (CodingJob, bool, error)
-	AdmitInvestigation(context.Context, string, string, AdmitInvestigationJobRequest) (InvestigationJob, bool, error)
 	Get(context.Context, string) (JobView, error)
 	SendMessage(context.Context, string, string, SendMessageRequest) (Message, bool, error)
 	GetMessage(context.Context, string, string) (Message, error)

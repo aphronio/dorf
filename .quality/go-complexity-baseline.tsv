@@ -1,5 +1,4 @@
 # dorf-go-complexity-v1	maximum=15
-cmd/dorf	(composedAgentExecution).ResolveAgentPrompt	19
 cmd/dorf	(dnsOverHTTPSResolver).LookupIPAddr	16
 cmd/dorf	clientCommand	18
 cmd/dorf	connectCommand	28
@@ -66,7 +65,6 @@ internal/incus	(*imageClient).installUnifiedVMArchive	20
 internal/incus	(Adapter).ProviderRouteURL	16
 internal/incus	(ConnectionConfig).Validate	29
 internal/incus	(Sandbox).ReconcileOwnedCreate	18
-internal/investigation	LoadSnapshot	21
 internal/outcome	(Service).recordFenced	31
 internal/pi	parseSession	26
 internal/postgres	(Store).AgentMessage	30

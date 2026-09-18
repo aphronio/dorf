@@ -192,20 +192,6 @@ func (c *Client) AdmitCodingJob(ctx context.Context, key string, request control
 	return response, err
 }
 
-// AdmitInvestigationJob admits or replays one built-in codebase investigation
-// workflow Job.
-func (c *Client) AdmitInvestigationJob(ctx context.Context, key string, request controlapi.AdmitInvestigationJobRequest) (controlapi.InvestigationJob, error) {
-	if strings.TrimSpace(key) == "" {
-		return controlapi.InvestigationJob{}, fmt.Errorf("Idempotency-Key is empty")
-	}
-	var response controlapi.InvestigationJob
-	err := c.do(ctx, http.MethodPost, []string{"v1", "workflows", "codebase-investigation", "jobs"}, request, true, key, &response)
-	if err == nil && response.Kind != controlapi.JobKindInvestigation {
-		return controlapi.InvestigationJob{}, fmt.Errorf("Dorf API Job response has unexpected kind")
-	}
-	return response, err
-}
-
 // Job retrieves one canonical Job snapshot.
 func (c *Client) Job(ctx context.Context, id string) (controlapi.JobView, error) {
 	if id == "" {
@@ -723,12 +709,6 @@ func decodeJob(contents []byte) (controlapi.JobView, error) {
 		return job, nil
 	case controlapi.JobKindCoding:
 		var job controlapi.CodingJob
-		if err := json.Unmarshal(contents, &job); err != nil {
-			return nil, fmt.Errorf("decode Dorf API Job response")
-		}
-		return job, nil
-	case controlapi.JobKindInvestigation:
-		var job controlapi.InvestigationJob
 		if err := json.Unmarshal(contents, &job); err != nil {
 			return nil, fmt.Errorf("decode Dorf API Job response")
 		}

@@ -8,7 +8,6 @@ import (
 
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/core"
-	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 )
 
@@ -47,16 +46,6 @@ func admitDirectFixture(t *testing.T, store postgres.Store, ctx context.Context,
 		job, created, err := store.AdmitDirect(ctx, input, queue)
 		if err == nil {
 			_, err = store.AdmitDirectMessage(ctx, fixtureMessage(job.ID))
-		}
-		return job, created, err
-	})
-}
-
-func admitInvestigationFixture(t *testing.T, store postgres.Store, ctx context.Context, input investigation.Admission) (core.Job, bool, error) {
-	return legacyAdmissionFixture(t, store, ctx, func(queue string) (core.Job, bool, error) {
-		job, created, err := store.AdmitInvestigation(ctx, input, queue)
-		if err == nil {
-			_, err = store.AdmitInvestigationMessage(ctx, fixtureMessage(job.ID))
 		}
 		return job, created, err
 	})

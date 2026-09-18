@@ -88,7 +88,7 @@ Docker authority
 follows the deployment-host setup procedure, and the socket is never mounted into a Dorf workload
 or Sandbox. Custom Sandbox artifacts may be admitted through an explicitly created and functionally
 verified profile, but carry no Dorf release provenance. An E2B profile that blocks general internet
-access cannot run coding or investigation work that must clone its remote Git source; Dorf rejects
+access cannot run coding work that must clone its remote Git source; Dorf rejects
 that combination before admitting a Job.
 
 The remote control API is a separate authority on a separate hostname from the Provider Gateway.
@@ -97,8 +97,7 @@ Its public boundary is one exact HTTPS Deployment origin. Guided Cloudflare reac
 operator-owned ingress reaches the API's published loopback host port. The Compose-managed worker
 separately owns durable task execution and recovery. After Enrollment, a remote CLI Client needs
 network and TLS access to the Control API origin and only its own Dorf Client credential; it never
-needs PostgreSQL, provider, Harness, Gateway, or Sandbox credentials. Fixed remote coding and
-investigation admission reuse the same boundary. The
+needs PostgreSQL, provider, Harness, Gateway, or Sandbox credentials. Fixed remote coding admission reuses the same boundary. The
 [remote-client setup procedure](getting-started.md#3-connect-one-remote-cli-client) owns the current
 workflow inputs; the [Remote Control API](control-api.md) owns the service and transport contract.
 

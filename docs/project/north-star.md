@@ -107,8 +107,9 @@ Adapters     translate Harnesses, Sandboxes, providers, and external authorities
 | **Outcome** | A typed consumer-defined terminal result, when used, separate from resource cleanup |
 
 Coding adds workflow facts such as Revision, ReviewPlan, Proposal, and GitHub acceptance.
-Investigation adds a scoped source and owns the policy that asks its agent for a workspace report.
 Those facts and policies do not become Core vocabulary merely because one workflow needs them.
+Repository investigation is client policy over direct execution; Dorf has no built-in investigation
+workflow or conventional report-path contract.
 
 `Role` is a field, not an executing object. There is no first-class Worker until personality,
 capability, reputation, ownership, or memory must persist across Jobs. A standing "researcher" or
@@ -150,16 +151,13 @@ GitHub merge, close, or explicit abandonment supplies the workflow outcome; the 
 conditionally requests cleanup under its explicit policy, which remains separate from both the
 Outcome and Core's cleanup execution. Core never infers the request from completion.
 
-### Codebase investigation to a repository-grounded report
+### Client-directed repository investigation
 
-A client delegates an unstructured investigation brief and a credential-free reachable HTTPS
-repository at an exact Revision. The workflow creates an isolated exact checkout, uses a bounded agent for
-inspection and synthesis, and asks it to write the current report to workspace-root `REPORT.md`.
-The workflow accepts follow-up Messages in the same Harness Thread; the agent may update the same
-file. A client reads the exact bytes it needs before cleanup and decides whether to request another
-revision, publish or otherwise consume the report, start another workflow, or ask Core to clean up.
-The file is not retained after cleanup. Investigation owns no accept/reject policy, publication,
-pull request, or cleanup timing.
+A client creates a direct Job, prepares the repository through the existing workspace command
+boundary, and sends its investigation instructions. The client chooses any report path, retrieves
+needed files before cleanup, and decides whether to continue or release resources. Dorf owns
+Message delivery, conversation continuity, workspace access, and requested cleanup. It does not
+choose the repository, validate a research conclusion, or assign report meaning.
 
 ## Deterministic and agentic boundary
 

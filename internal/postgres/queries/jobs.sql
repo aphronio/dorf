@@ -21,12 +21,7 @@ from dorf.jobs j
 left join dorf.control_clients creator on creator.id=j.created_by_client_id
 where (
         (j.workflow_name='' and j.workflow_revision='') or
-        (j.workflow_name=sqlc.arg(coding_workflow)::text and j.workflow_revision=sqlc.arg(coding_revision)::text) or
-        (j.workflow_name=sqlc.arg(investigation_workflow)::text and j.workflow_revision=sqlc.arg(investigation_revision)::text and
-         exists(
-             select 1 from dorf.codebase_investigation_sources source
-             where source.job_id=j.id
-         ))
+        (j.workflow_name=sqlc.arg(coding_workflow)::text and j.workflow_revision=sqlc.arg(coding_revision)::text)
       )
   and (
         not sqlc.arg(has_cursor)::boolean or

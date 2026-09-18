@@ -30,7 +30,6 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D069: Codebase investigation is the second explicit native workflow](decisions/D069-codebase-investigation-is-the-second-explicit-native-workflow.md) (`partial`). Changing the codebase-investigation workflow, its durable facts, or its client-facing execution boundary.
 - [D075: Core mechanisms do not own workflow or interaction policy](decisions/D075-core-mechanisms-do-not-own-workflow-or-interaction-policy.md) (`partial`). Changing ownership between Core mechanisms, workflow policy, and client interaction policy.
 - [D076: Core Jobs and workflow inputs have separate durable types](decisions/D076-core-jobs-and-workflow-inputs-have-separate-durable-types.md) (`partial`). Changing Core Job fields or durable workflow-specific input types.
-- [D079: Investigation owns its repository source policy](decisions/D079-investigation-owns-its-repository-source-policy.md) (`partial`). Changing investigation repository source policy or its boundary with Core execution.
 - [D083: Git and coding behavior are workflow modules, not Core](decisions/D083-git-and-coding-behavior-are-workflow-modules-not-core.md) (`partial`). Changing ownership of Git workspace or coding behavior across Core and workflow modules.
 - [D084: Coding no longer owns an implicit repository setup/check contract](decisions/D084-coding-no-longer-owns-an-implicit-repository-setup-check-contract.md) (`current`). Changing coding repository setup, deterministic evaluation, or Check ownership.
 - [D085: Workflow records live with the workflow that defines them](decisions/D085-workflow-records-live-with-the-workflow-that-defines-them.md) (`partial`). Changing package ownership or persistence of workflow-defined records.
@@ -81,10 +80,8 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D061: One fact-derived coding flow replaces the durable program counter](decisions/D061-one-fact-derived-coding-flow-replaces-the-durable-program-counter.md) (`current`). Changing coding-flow sequencing, workflow projections, or durable progress representation.
 - [D068: Explicit Job retry rearms the current failed Absurd task once](decisions/D068-explicit-job-retry-rearms-the-current-failed-absurd-task-once.md) (`current`). Changing operator retry behavior or how a Job selects and rearms its failed Absurd task.
 - [D069: Codebase investigation is the second explicit native workflow](decisions/D069-codebase-investigation-is-the-second-explicit-native-workflow.md) (`partial`). Changing the codebase-investigation workflow, its durable facts, or its client-facing execution boundary.
-- [D074: Investigation drafts wait for exact human disposition](decisions/D074-investigation-drafts-wait-for-exact-human-disposition.md) (`partial`). Changing investigation draft revision loops, Harness Thread reuse, or disposition policy.
 - [D075: Core mechanisms do not own workflow or interaction policy](decisions/D075-core-mechanisms-do-not-own-workflow-or-interaction-policy.md) (`partial`). Changing ownership between Core mechanisms, workflow policy, and client interaction policy.
 - [D076: Core Jobs and workflow inputs have separate durable types](decisions/D076-core-jobs-and-workflow-inputs-have-separate-durable-types.md) (`partial`). Changing Core Job fields or durable workflow-specific input types.
-- [D079: Investigation owns its repository source policy](decisions/D079-investigation-owns-its-repository-source-policy.md) (`partial`). Changing investigation repository source policy or its boundary with Core execution.
 - [D083: Git and coding behavior are workflow modules, not Core](decisions/D083-git-and-coding-behavior-are-workflow-modules-not-core.md) (`partial`). Changing ownership of Git workspace or coding behavior across Core and workflow modules.
 - [D084: Coding no longer owns an implicit repository setup/check contract](decisions/D084-coding-no-longer-owns-an-implicit-repository-setup-check-contract.md) (`current`). Changing coding repository setup, deterministic evaluation, or Check ownership.
 - [D085: Workflow records live with the workflow that defines them](decisions/D085-workflow-records-live-with-the-workflow-that-defines-them.md) (`partial`). Changing package ownership or persistence of workflow-defined records.
@@ -92,19 +89,18 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D087: Each native workflow owns its complete in-process module](decisions/D087-each-native-workflow-owns-its-complete-in-process-module.md) (`partial`). Changing ownership or composition of a native workflow module.
 - [D088: Core is a small in-process custody contract organized by Job ownership](decisions/D088-core-is-a-small-in-process-custody-contract-organized-by-job-ownership.md) (`partial`). Changing the Core custody contract or its boundary with workflows and clients.
 - [D090: Open Jobs may have no current workflow operation](decisions/D090-open-jobs-may-have-no-current-workflow-operation.md) (`current`). Changing how an open Job waits when no workflow operation is eligible.
-- [D092: Investigation reports remain Sandbox files](decisions/D092-investigation-reports-remain-sandbox-files.md) (`current`). Changing how investigation reports are produced, accessed, or retained.
 - [D093: GitHub authentication is an optional deployment integration](decisions/D093-github-authentication-is-an-optional-deployment-integration.md) (`current`). Changing GitHub App setup, credential custody, or repository token minting.
 - [D096: Follow and steer are invariant custody; cleanup timing remains consumer policy](decisions/D096-follow-and-steer-are-invariant-custody-cleanup-timing-remains-consumer-policy.md) (`partial`). Changing follow, steer, or consumer-controlled cleanup semantics.
-- [D099: Fixed typed workflow admission reuses remote Job control](decisions/D099-fixed-typed-workflow-admission-reuses-remote-job-control.md) (`current`). Changing remote admission or projection for a built-in typed workflow.
+- [D099: Fixed typed workflow admission reuses remote Job control](decisions/D099-fixed-typed-workflow-admission-reuses-remote-job-control.md) (`partial`). Changing remote admission or projection for a built-in typed workflow.
 - [D106: Remove unused workflow capability declarations](decisions/D106-remove-unused-workflow-capability-declarations.md) (`current`). Adding optional provider requirements or workflow runtime metadata.
 - [D142: Review contracts are required only for coding](decisions/D142-review-contracts-are-required-only-for-coding.md) (`current`). Changing ordinary adapter contracts or composing coding review execution.
+- [D143: Retire built-in investigation](decisions/D143-retire-built-in-investigation.md) (`current`). Changing the supported workflow surface or retiring application-owned records.
 
 ## Interaction
 
 - [D021: Situation-first inspection with explicit provenance](decisions/D021-situation-first-inspection-with-explicit-provenance.md) (`current`). Changing Job inspection, pulse composition, provenance, or raw diagnostic lenses.
 - [D033: The human Buzz owner key is client-generated and never server-managed](decisions/D033-the-human-buzz-owner-key-is-client-generated-and-never-server-managed.md) (`current`). Changing Buzz owner enrollment, identity bootstrap, or private-key custody.
 - [D068: Explicit Job retry rearms the current failed Absurd task once](decisions/D068-explicit-job-retry-rearms-the-current-failed-absurd-task-once.md) (`current`). Changing operator retry behavior or how a Job selects and rearms its failed Absurd task.
-- [D074: Investigation drafts wait for exact human disposition](decisions/D074-investigation-drafts-wait-for-exact-human-disposition.md) (`partial`). Changing investigation draft revision loops, Harness Thread reuse, or disposition policy.
 - [D075: Core mechanisms do not own workflow or interaction policy](decisions/D075-core-mechanisms-do-not-own-workflow-or-interaction-policy.md) (`partial`). Changing ownership between Core mechanisms, workflow policy, and client interaction policy.
 - [D095: The CLI is Dorf's first direct trusted client](decisions/D095-the-cli-is-dorf-s-first-direct-trusted-client.md) (`partial`). Changing direct Job semantics or the CLI's role as a Core client.
 - [D096: Follow and steer are invariant custody; cleanup timing remains consumer policy](decisions/D096-follow-and-steer-are-invariant-custody-cleanup-timing-remains-consumer-policy.md) (`partial`). Changing follow, steer, or consumer-controlled cleanup semantics.
@@ -143,7 +139,6 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D083: Git and coding behavior are workflow modules, not Core](decisions/D083-git-and-coding-behavior-are-workflow-modules-not-core.md) (`partial`). Changing ownership of Git workspace or coding behavior across Core and workflow modules.
 - [D089: Core reads exact Sandbox files but does not retain generic deliverables](decisions/D089-core-reads-exact-sandbox-files-but-does-not-retain-generic-deliverables.md) (`partial`). Changing Sandbox file reads, deliverable retention, or cleanup-time file access.
 - [D091: Profile verification gates admission, not admitted runtime](decisions/D091-profile-verification-gates-admission-not-admitted-runtime.md) (`partial`). Changing profile verification, concurrent admission, or admitted runtime resolution.
-- [D092: Investigation reports remain Sandbox files](decisions/D092-investigation-reports-remain-sandbox-files.md) (`current`). Changing how investigation reports are produced, accessed, or retained.
 - [D101: Compose owns deployment lifecycle; bootstrap privilege stays explicit](decisions/D101-compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit.md) (`current`). Changing Compose topology, setup-applied lifecycle, bootstrap, or release images.
 - [D106: Remove unused workflow capability declarations](decisions/D106-remove-unused-workflow-capability-declarations.md) (`current`). Adding optional provider requirements or workflow runtime metadata.
 - [D114: Incus guests include an isolated browser](decisions/D114-incus-guests-include-an-isolated-browser.md) (`partial`). Changing browser tooling, guest browser persistence, or Incus image proof.
@@ -172,7 +167,6 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D066: One credential-free image carries both verified Harnesses](decisions/D066-one-credential-free-image-carries-both-verified-harnesses.md) (`partial`). Changing combined Harness image packaging, promotion proof, or credential-free artifact contents.
 - [D067: E2B is the next Sandbox portability proof target](decisions/D067-e2b-is-the-next-sandbox-portability-proof-target.md) (`current`). Changing the E2B adapter, provider-neutral Sandbox contract, or second-provider deployment proof.
 - [D070: Named Sandbox profiles pin exact artifacts and require Dorf verification](decisions/D070-named-sandbox-profiles-pin-exact-artifacts-and-require-dorf-verification.md) (`partial`). Changing named Sandbox profile definitions, selection, verification, or provider artifact custody.
-- [D074: Investigation drafts wait for exact human disposition](decisions/D074-investigation-drafts-wait-for-exact-human-disposition.md) (`partial`). Changing investigation draft revision loops, Harness Thread reuse, or disposition policy.
 - [D090: Open Jobs may have no current workflow operation](decisions/D090-open-jobs-may-have-no-current-workflow-operation.md) (`current`). Changing how an open Job waits when no workflow operation is eligible.
 - [D091: Profile verification gates admission, not admitted runtime](decisions/D091-profile-verification-gates-admission-not-admitted-runtime.md) (`partial`). Changing profile verification, concurrent admission, or admitted runtime resolution.
 - [D109: Export diagnostics through the existing native Turn binding](decisions/D109-exact-turn-execution-diagnostics.md) (`current`). Changing native execution diagnostics, attribution, or exporter custody.
@@ -209,7 +203,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D095: The CLI is Dorf's first direct trusted client](decisions/D095-the-cli-is-dorf-s-first-direct-trusted-client.md) (`partial`). Changing direct Job semantics or the CLI's role as a Core client.
 - [D097: One authenticated HTTPS Deployment projects direct Job control](decisions/D097-one-authenticated-https-deployment-projects-direct-job-control.md) (`current`). Changing authenticated remote Job control or its deployment trust boundary.
 - [D098: Remote direct Job control exposes the existing interaction loop](decisions/D098-remote-direct-job-control-exposes-the-existing-interaction-loop.md) (`current`). Changing remote Job observation, messaging, retry, files, or Evidence access.
-- [D099: Fixed typed workflow admission reuses remote Job control](decisions/D099-fixed-typed-workflow-admission-reuses-remote-job-control.md) (`current`). Changing remote admission or projection for a built-in typed workflow.
+- [D099: Fixed typed workflow admission reuses remote Job control](decisions/D099-fixed-typed-workflow-admission-reuses-remote-job-control.md) (`partial`). Changing remote admission or projection for a built-in typed workflow.
 - [D100: Automation contract and managed host services stay narrow](decisions/D100-automation-contract-and-managed-host-services-stay-narrow.md) (`partial`). Changing the automation API contract, Client administration, or service lifecycle.
 - [D102: One guided Dorf domain publishes two distinct public origins](decisions/D102-one-guided-dorf-domain-publishes-two-distinct-public-origins.md) (`current`). Changing guided Cloudflare ingress or either public Dorf origin.
 - [D103: Every ordinary CLI Job operation uses the authenticated control API](decisions/D103-every-ordinary-cli-job-operation-uses-the-authenticated-control-api.md) (`partial`). Changing how CLI Job operations reach deployment authority.
@@ -231,6 +225,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D126: Automatic messages preserve eventual delivery](decisions/D126-automatic-messages-preserve-eventual-delivery.md) (`current`). Changing automatic message resolution, steer reconciliation, or message replay.
 - [D127: Message observations deliver completed prefix deltas](decisions/D127-message-observations-deliver-completed-prefix-deltas.md) (`current`). Changing Message observation, native connection reuse, stream replay, or idle behavior.
 - [D131: Application observations reuse automatic delivery](decisions/D131-application-observations-reuse-automatic-delivery.md) (`current`). Delivering application updates into active work or recovering native start-or-steer races.
+- [D143: Retire built-in investigation](decisions/D143-retire-built-in-investigation.md) (`current`). Changing the supported workflow surface or retiring application-owned records.
 
 ## Deployment and setup
 
@@ -278,7 +273,6 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D085: Workflow records live with the workflow that defines them](decisions/D085-workflow-records-live-with-the-workflow-that-defines-them.md) (`partial`). Changing package ownership or persistence of workflow-defined records.
 - [D089: Core reads exact Sandbox files but does not retain generic deliverables](decisions/D089-core-reads-exact-sandbox-files-but-does-not-retain-generic-deliverables.md) (`partial`). Changing Sandbox file reads, deliverable retention, or cleanup-time file access.
 - [D091: Profile verification gates admission, not admitted runtime](decisions/D091-profile-verification-gates-admission-not-admitted-runtime.md) (`partial`). Changing profile verification, concurrent admission, or admitted runtime resolution.
-- [D092: Investigation reports remain Sandbox files](decisions/D092-investigation-reports-remain-sandbox-files.md) (`current`). Changing how investigation reports are produced, accessed, or retained.
 - [D094: Published PostgreSQL migrations are immutable and append-only](decisions/D094-published-postgresql-migrations-are-immutable-and-append-only.md) (`current`). Changing a published PostgreSQL schema or the migration runner.
 - [D107: Commit Job task scheduling and attachment together](decisions/D107-commit-job-task-scheduling-and-attachment-together.md) (`current`). Changing admission, task handoffs, cleanup scheduling, or recovery across Absurd and Dorf.
 - [D108: Reuse direct Jobs for retained sessions and exact message control](decisions/D108-direct-session-message-control.md) (`partial`). Changing automatic message intent, interruption, or direct Job session continuity.
@@ -291,6 +285,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D133: Logical Sandboxes retain provider resource identities](decisions/D133-logical-sandboxes-retain-provider-resource-identities.md) (`current`). Replacing a provider VM, implementing package upgrade rollback, or investigating which infrastructure served a Job.
 - [D134: Delivery holds survive executor restarts](decisions/D134-delivery-holds-survive-executor-restarts.md) (`current`). Coordinating a persistent Sandbox upgrade or explaining accepted input that is waiting during maintenance.
 - [D135: Package recovery releases verified resource custody](decisions/D135-package-recovery-releases-verified-resource-custody.md) (`current`). Executing package upgrades, recovering replacement VMs, or investigating held messages and upgrade failures.
+- [D143: Retire built-in investigation](decisions/D143-retire-built-in-investigation.md) (`current`). Changing the supported workflow surface or retiring application-owned records.
 
 ## GitHub integration
 

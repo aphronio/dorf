@@ -233,10 +233,6 @@ func TestAdmittedJobRuntimeIgnoresLaterVerificationReceiptState(t *testing.T) {
 	if err != nil || direct.SandboxProfile != job.ProfileRef() {
 		t.Fatalf("direct=%#v err=%v", direct, err)
 	}
-	investigation, err := resolver.ResolveInvestigation(ctx, job.ProfileRef())
-	if err != nil || investigation.SandboxProfile != job.ProfileRef() {
-		t.Fatalf("investigation=%#v err=%v", investigation, err)
-	}
 	input.AdmissionKey += "-new"
 	newJob, created, err := store.AdmitCoding(ctx, input, queue)
 	if err != nil || !created || newJob.SandboxProfileRevision != next.DefinitionHash || newJob.ProfileRef() == job.ProfileRef() {

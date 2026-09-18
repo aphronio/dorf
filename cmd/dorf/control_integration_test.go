@@ -28,7 +28,6 @@ import (
 	"github.com/aphronio/dorf/internal/deployment"
 	"github.com/aphronio/dorf/internal/direct"
 	"github.com/aphronio/dorf/internal/gateway"
-	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -590,41 +589,18 @@ func TestControlAPIWorkflowAdmissionsProjectAndReplay(t *testing.T) {
 		t.Fatalf("coding replay conflict=%#v", codingConflict)
 	}
 
-	investigationKey := fmt.Sprintf("control-investigation-%d", time.Now().UnixNano())
-	investigationInput := controlapi.AdmitInvestigationJobRequest{ClientReference: "investigation-task",
-		Repository: "https://github.com/aphronio/dorf.git",
-		Revision:   strings.Repeat("b", 40), Profile: profileName, AIConnection: "primary", Model: "model-test",
-	}
-	investigationResponse := controlTestRequest(t, restarted, http.MethodPost, "/v1/workflows/codebase-investigation/jobs", credential, investigationKey, investigationInput)
-	var investigationJob controlapi.InvestigationJob
-	controlTestJSON(t, investigationResponse, http.StatusCreated, &investigationJob)
-	if investigationJob.CreatedByClient == nil || investigationJob.CreatedByClient.Name != profileName || investigationJob.ClientReference != "investigation-task" || investigationJob.Kind != controlapi.JobKindInvestigation ||
-		investigationJob.Source.Repository != investigationInput.Repository || investigationJob.Source.Revision != investigationInput.Revision ||
-		investigationJob.Report.Path != "REPORT.md" || investigationJob.Report.SandboxID == "" {
-		t.Fatalf("investigation Job=%#v", investigationJob)
-	}
-	replayInvestigation := controlTestRequest(t, restarted, http.MethodPost, "/v1/workflows/codebase-investigation/jobs", credential, investigationKey, investigationInput)
-	var sameInvestigation controlapi.InvestigationJob
-	controlTestJSON(t, replayInvestigation, http.StatusOK, &sameInvestigation)
-	if sameInvestigation.ID != investigationJob.ID {
-		t.Fatalf("investigation replay=%#v", sameInvestigation)
-	}
+	directKey := fmt.Sprintf("control-direct-%d", time.Now().UnixNano())
+	directInput := controlapi.AdmitJobRequest{Profile: profileName, AIConnection: "primary", Model: "model-test"}
+	var directJob controlapi.DirectJob
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs", credential, directKey, directInput), http.StatusCreated, &directJob)
 	foreignKind := codingInput
 	foreignKind.Profile = "missing-profile-must-not-be-resolved"
-	foreignKindConflict := controlTestRequest(t, restarted, http.MethodPost, "/v1/workflows/coding/jobs", credential, investigationKey, foreignKind)
+	foreignKindConflict := controlTestRequest(t, restarted, http.MethodPost, "/v1/workflows/coding/jobs", credential, directKey, foreignKind)
 	var foreignKindProblem controlapi.Problem
 	controlTestJSON(t, foreignKindConflict, http.StatusConflict, &foreignKindProblem)
 	if foreignKindProblem.Code != "idempotency_conflict" || unavailableGitHub.calls != 0 {
 		t.Fatalf("foreign-kind replay conflict=%#v GitHub calls=%d", foreignKindProblem, unavailableGitHub.calls)
 	}
-	changedInvestigation := investigationInput
-	changedInvestigation.Revision = strings.Repeat("c", 40)
-	var investigationConflict controlapi.Problem
-	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodPost, "/v1/workflows/codebase-investigation/jobs", credential, investigationKey, changedInvestigation), http.StatusConflict, &investigationConflict)
-	if investigationConflict.Code != "idempotency_conflict" {
-		t.Fatalf("investigation replay conflict=%#v", investigationConflict)
-	}
-
 	message := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+codingJob.ID+"/messages", credential,
 		"message-"+codingJob.ID, controlapi.SendMessageRequest{Text: "continue", Intent: "follow"})
 	var accepted controlapi.Message
@@ -644,11 +620,11 @@ func TestControlAPIWorkflowAdmissionsProjectAndReplay(t *testing.T) {
 	if replayedAbandon.Outcome == nil || replayedAbandon.Outcome.Kind != string(coding.OutcomeAbandoned) {
 		t.Fatalf("replayed abandon=%#v", replayedAbandon)
 	}
-	cleanupInvestigation := controlTestRequest(t, restarted, http.MethodPut, "/v1/jobs/"+investigationJob.ID+"/cleanup", credential, "", nil)
-	var cleaningInvestigation controlapi.InvestigationJob
-	controlTestJSON(t, cleanupInvestigation, http.StatusOK, &cleaningInvestigation)
-	if cleaningInvestigation.Cleanup.State != "running" || cleaningInvestigation.Execution.State != "stopped" {
-		t.Fatalf("cleanup-fenced investigation Job=%#v", cleaningInvestigation)
+	cleanupDirect := controlTestRequest(t, restarted, http.MethodPut, "/v1/jobs/"+directJob.ID+"/cleanup", credential, "", nil)
+	var cleaningDirect controlapi.DirectJob
+	controlTestJSON(t, cleanupDirect, http.StatusOK, &cleaningDirect)
+	if cleaningDirect.Cleanup.State != "running" || cleaningDirect.Execution.State != "stopped" {
+		t.Fatalf("cleanup-fenced direct Job=%#v", cleaningDirect)
 	}
 }
 
@@ -674,16 +650,15 @@ func TestControlAPIJobListKeepsKeysetContinuity(t *testing.T) {
 		id       string
 		workflow string
 		revision string
-		source   bool
 		at       time.Time
 	}
 	fixtures := []listedFixture{
-		{base + "-z", "", "", false, tiedAt},
-		{base + "-y", string(coding.Workflow), coding.WorkflowRevision, false, tiedAt},
-		{base + "-x", string(investigation.Workflow), investigation.WorkflowRevision, true, tiedAt.Add(-time.Second)},
-		{base + "-w", "", "", false, tiedAt.Add(-2 * time.Second)},
+		{base + "-z", "", "", tiedAt},
+		{base + "-y", string(coding.Workflow), coding.WorkflowRevision, tiedAt},
+		{base + "-x", "", "", tiedAt.Add(-time.Second)},
+		{base + "-w", "", "", tiedAt.Add(-2 * time.Second)},
 		// A retained but unrecognized workflow revision must not consume a page slot.
-		{base + "-unsupported", string(coding.Workflow), "unrecognized", false, tiedAt.Add(time.Second)},
+		{base + "-unsupported", string(coding.Workflow), "unrecognized", tiedAt.Add(time.Second)},
 	}
 	insert := func(fixture listedFixture) {
 		t.Helper()
@@ -696,24 +671,12 @@ insert into dorf.jobs(
 		if err != nil {
 			t.Fatalf("insert Job list fixture %s: %v", fixture.id, err)
 		}
-		if fixture.source {
-			_, err = store.DB.ExecContext(ctx, `
-insert into dorf.codebase_investigation_sources(job_id,workflow_name,repository,revision)
-values($1,$2,'https://github.com/aphronio/dorf.git',$3)
-`, fixture.id, string(investigation.Workflow), strings.Repeat("a", 40))
-		}
-		if err != nil {
-			t.Fatalf("insert Job list source fixture %s: %v", fixture.id, err)
-		}
 	}
 	for _, fixture := range fixtures {
 		insert(fixture)
 	}
 	t.Cleanup(func() {
 		for _, fixture := range fixtures {
-			if _, err := store.DB.ExecContext(context.Background(), `delete from dorf.codebase_investigation_sources where job_id=$1`, fixture.id); err != nil {
-				t.Errorf("delete Job list source fixture %s: %v", fixture.id, err)
-			}
 			if _, err := store.DB.ExecContext(context.Background(), `delete from dorf.jobs where id=$1`, fixture.id); err != nil {
 				t.Errorf("delete Job list fixture %s: %v", fixture.id, err)
 			}
@@ -735,14 +698,14 @@ values($1,$2,'https://github.com/aphronio/dorf.git',$3)
 		t.Fatalf("first Job page=%#v", first)
 	}
 
-	newer := listedFixture{base + "-new", "", "", false, tiedAt.Add(3 * time.Second)}
+	newer := listedFixture{base + "-new", "", "", tiedAt.Add(3 * time.Second)}
 	fixtures = append(fixtures, newer)
 	insert(newer)
 	secondResponse := controlTestRequest(t, handler, http.MethodGet,
 		"/v1/jobs?limit=2&cursor="+url.QueryEscape(*first.NextCursor), credential, "", nil)
 	var second controlapi.JobList
 	controlTestJSON(t, secondResponse, http.StatusOK, &second)
-	if len(second.Jobs) != 2 || second.Jobs[0].ID != fixtures[2].id || second.Jobs[0].Kind != controlapi.JobKindInvestigation ||
+	if len(second.Jobs) != 2 || second.Jobs[0].ID != fixtures[2].id || second.Jobs[0].Kind != controlapi.JobKindDirect ||
 		second.Jobs[1].ID != fixtures[3].id || second.Jobs[1].Kind != controlapi.JobKindDirect {
 		t.Fatalf("second Job page=%#v", second)
 	}
@@ -880,10 +843,9 @@ func controlTestHandlerWithGitHub(store postgres.Store, tasks *absurd.Client, pr
 	return controlapi.NewServer(controlapi.Discovery{Product: "dorf"}, auth,
 		controlAPIJobs{
 			store: store, tasks: tasks,
-			directAdmissions:        direct.NewAdmissionService(store, queueName, reader),
-			codingAdmissions:        coding.NewAdmissionService(store, queueName, reader, reader),
-			investigationAdmissions: investigation.NewAdmissionService(store, queueName, reader),
-			reader:                  reader, blobs: evidence, messageImages: messageImages,
+			directAdmissions: direct.NewAdmissionService(store, queueName, reader),
+			codingAdmissions: coding.NewAdmissionService(store, queueName, reader, reader),
+			reader:           reader, blobs: evidence, messageImages: messageImages,
 		}, controlAPIProfiles{store: store}).Handler
 }
 

@@ -72,23 +72,17 @@ func TestWorkflowCLIInitialMessagesAcceptAttachments(t *testing.T) {
 	if err := os.WriteFile(inputFile, []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, workflow := range []string{"coding", "codebase-investigation"} {
-		t.Run(workflow, func(t *testing.T) {
-			jobs := &attachmentCLIJobs{}
-			client := attachmentCLIClient(t, jobs)
-			args := []string{"run", workflow, "--key", "initial-key", "--input-file", inputFile, "--attach", files[0], "--attach", files[1],
-				"--repo", "https://github.com/aphronio/dorf.git", "--revision", strings.Repeat("a", 40), "--output", "json"}
-			if workflow == "coding" {
-				args = append(args, "--base", "main")
-			}
-			if err := remoteWorkflowCommand(context.Background(), client, clientconfig.Config{}, args, io.Discard, io.Discard); err != nil {
-				t.Fatal(err)
-			}
-			if len(jobs.messages) != 1 || jobs.messages[0].key != "initial-key" || jobs.messages[0].input.Text != text ||
-				jobs.messages[0].input.Intent != "follow" || len(jobs.messages[0].input.Attachments) != 2 {
-				t.Fatalf("workflow initial input=%+v", jobs.messages)
-			}
-		})
+	jobs := &attachmentCLIJobs{}
+	client := attachmentCLIClient(t, jobs)
+	args := []string{"run", "coding", "--key", "initial-key", "--input-file", inputFile, "--attach", files[0], "--attach", files[1],
+		"--repo", "https://github.com/aphronio/dorf.git", "--revision", strings.Repeat("a", 40), "--output", "json"}
+	args = append(args, "--base", "main")
+	if err := remoteWorkflowCommand(context.Background(), client, clientconfig.Config{}, args, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs.messages) != 1 || jobs.messages[0].key != "initial-key" || jobs.messages[0].input.Text != text ||
+		jobs.messages[0].input.Intent != "follow" || len(jobs.messages[0].input.Attachments) != 2 {
+		t.Fatalf("workflow initial input=%+v", jobs.messages)
 	}
 }
 
@@ -131,11 +125,9 @@ func TestAttachmentCLIRejectsInvalidLocalInputBeforeRemoteEffects(t *testing.T) 
 			if err := remoteMessageSend(context.Background(), clientconfig.Config{}, client, append(append([]string{}, args...), "worker"), io.Discard, io.Discard); err == nil {
 				t.Fatal("job message accepted invalid local input")
 			}
-			for _, workflow := range []string{"coding", "codebase-investigation"} {
-				workflowArgs := append([]string{"run", workflow}, args...)
-				if err := remoteWorkflowCommand(context.Background(), client, clientconfig.Config{}, workflowArgs, io.Discard, io.Discard); err == nil {
-					t.Fatalf("%s accepted invalid local input", workflow)
-				}
+			workflowArgs := append([]string{"run", "coding"}, args...)
+			if err := remoteWorkflowCommand(context.Background(), client, clientconfig.Config{}, workflowArgs, io.Discard, io.Discard); err == nil {
+				t.Fatal("coding accepted invalid local input")
 			}
 		})
 	}
@@ -190,9 +182,6 @@ func (*attachmentCLIJobs) AdmitDirect(context.Context, string, string, controlap
 }
 func (*attachmentCLIJobs) AdmitCoding(context.Context, string, string, controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, bool, error) {
 	return controlapi.CodingJob{Job: controlapi.Job{ID: "coding-job", Kind: controlapi.JobKindCoding}}, true, nil
-}
-func (*attachmentCLIJobs) AdmitInvestigation(context.Context, string, string, controlapi.AdmitInvestigationJobRequest) (controlapi.InvestigationJob, bool, error) {
-	return controlapi.InvestigationJob{Job: controlapi.Job{ID: "investigation-job", Kind: controlapi.JobKindInvestigation}}, true, nil
 }
 func (j *attachmentCLIJobs) SendMessage(_ context.Context, jobID, key string, input controlapi.SendMessageRequest) (controlapi.Message, bool, error) {
 	j.messages = append(j.messages, capturedAttachmentMessage{jobID: jobID, key: key, input: input})

@@ -244,49 +244,6 @@
         }
       }
     },
-    "/v1/workflows/codebase-investigation/jobs": {
-      "post": {
-        "operationId": "admitInvestigationJob",
-        "summary": "Admit or exactly replay a codebase-investigation Job",
-        "tags": ["Jobs"],
-        "parameters": [
-          { "$ref": "#/components/parameters/IdempotencyKey" }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": { "$ref": "#/components/schemas/AdmitInvestigationJobRequest" }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Exact replay of the admitted Job",
-            "headers": {
-              "ETag": { "$ref": "#/components/headers/ETag" }
-            },
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/InvestigationJob" }
-              }
-            }
-          },
-          "201": {
-            "description": "Job admitted",
-            "headers": {
-              "ETag": { "$ref": "#/components/headers/ETag" }
-            },
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/InvestigationJob" }
-              }
-            }
-          },
-          "default": { "$ref": "#/components/responses/Problem" }
-        }
-      }
-    },
     "/v1/jobs/{job}": {
       "get": {
         "operationId": "getJob",
@@ -1288,26 +1245,6 @@
           "reasoning": { "$ref": "#/components/schemas/ReasoningEffort" }
         }
       },
-      "AdmitInvestigationJobRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["repository", "revision"],
-        "properties": {
-          "keep_running": { "type": "boolean", "default": false, "description": "Disable pause between turns for this Job. E2B pauses idle Sandboxes by default; other providers retain their existing lifecycle. Does not bypass provider timeouts." },
-          "client_reference": { "type": "string", "maxLength": 255, "description": "Optional opaque caller thread or task reference; retained at admission. Empty means no reference." },
-          "repository": {
-            "type": "string",
-            "format": "uri",
-            "pattern": "^https://",
-            "description": "Credential-free HTTPS Git remote"
-          },
-          "revision": { "$ref": "#/components/schemas/GitCommitOID" },
-          "profile": { "type": "string", "description": "Named verified profile; omitted or empty selects the Deployment default" },
-          "ai_connection": { "type": "string", "description": "Named AI connection; omitted or empty selects the Deployment default" },
-          "model": { "type": "string", "maxLength": 1024, "description": "Harness model override; omitted or empty selects the resolved AI connection's default. The admitted Job always returns the exact resolved model." },
-          "reasoning": { "$ref": "#/components/schemas/ReasoningEffort" }
-        }
-      },
       "JobList": {
         "type": "object",
         "additionalProperties": false,
@@ -1349,21 +1286,19 @@
       "Job": {
         "oneOf": [
           { "$ref": "#/components/schemas/DirectJob" },
-          { "$ref": "#/components/schemas/CodingJob" },
-          { "$ref": "#/components/schemas/InvestigationJob" }
+          { "$ref": "#/components/schemas/CodingJob" }
         ],
         "discriminator": {
           "propertyName": "kind",
           "mapping": {
             "direct": "#/components/schemas/DirectJob",
-            "coding": "#/components/schemas/CodingJob",
-            "codebase-investigation": "#/components/schemas/InvestigationJob"
+            "coding": "#/components/schemas/CodingJob"
           }
         }
       },
       "JobKind": {
         "type": "string",
-        "enum": ["direct", "coding", "codebase-investigation"]
+        "enum": ["direct", "coding"]
       },
       "GitCommitOID": {
         "type": "string",
@@ -1445,22 +1380,6 @@
                   { "type": "null" }
                 ]
               }
-            }
-          }
-        ],
-        "unevaluatedProperties": false
-      },
-      "InvestigationJob": {
-        "allOf": [
-          { "$ref": "#/components/schemas/JobCommon" },
-          {
-            "type": "object",
-            "required": [ "workflow_revision", "source", "report"],
-            "properties": {
-              "kind": { "const": "codebase-investigation" },
-              "workflow_revision": { "type": "string", "minLength": 1 },
-              "source": { "$ref": "#/components/schemas/InvestigationSource" },
-              "report": { "$ref": "#/components/schemas/InvestigationReport" }
             }
           }
         ],
@@ -1578,24 +1497,6 @@
           "observed_state": { "type": "string", "minLength": 1 },
           "merge_commit_oid": { "$ref": "#/components/schemas/GitCommitOID" },
           "observed_at": { "type": "string", "format": "date-time" }
-        }
-      },
-      "InvestigationSource": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["repository", "revision"],
-        "properties": {
-          "repository": { "type": "string", "format": "uri", "pattern": "^https://" },
-          "revision": { "$ref": "#/components/schemas/GitCommitOID" }
-        }
-      },
-      "InvestigationReport": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["sandbox_id", "path"],
-        "properties": {
-          "sandbox_id": { "type": "string", "minLength": 1 },
-          "path": { "type": "string", "minLength": 1 }
         }
       },
       "SendMessageRequest": {

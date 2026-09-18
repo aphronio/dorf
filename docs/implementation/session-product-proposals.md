@@ -1,6 +1,6 @@
 # Session product: proposed slices
 
-Status: iterative tracker. Only slice 1 has an agreed implementation scope; later slices remain
+Status: iterative tracker. Slices 1 and 2 have agreed implementation scopes; later slices remain
 proposals requiring their own discussion and agreement.
 
 This tracker explores a smaller product centered on one durable Session, with application goals,
@@ -33,15 +33,15 @@ decision record. This proposal tracker is not a substitute for either.
 | Slice | Status | Proposed result | Questions and evidence to settle before implementation |
 | --- | --- | --- | --- |
 | 1. Separate review contracts | Verified | Ordinary execution needs no review methods or review controller; existing coding review uses explicit contracts. | Agreed scope and verification are recorded below. |
-| 2. Establish the product boundary | Proposed | Define Session ownership and place application policy outside Dorf. | Agree on one workspace/harness conversation, client responsibilities, terminal release, and the treatment of existing contracts. |
-| 3. Remove application consumers | Proposed | Make direct execution the only new admission and retire application policy incrementally. | Identify retained consumers; prove a bounded external reviewer composition before retiring the internal facilities it needs. |
+| 2. Remove investigation | Verified | Retire the built-in investigation workflow; clients use direct Jobs for repository investigation. | Agreed scope is recorded below. |
+| 3. Remove coding application | Proposed | Retire coding, review, and publication policy while keeping direct execution. | Discuss the smallest concrete removal; add client primitives only for a proven need. Settle further Session vocabulary and ownership changes in their implementing slices. |
 | 4. Dependable setup and activation | Proposed | Hold native delivery until an exact configuration revision is ready; validate provider and harness options in their selected adapters. | Define lifetime-pinned versus changeable settings, profile/package compatibility, field ownership, quiescent updates, and uncertain setup-command outcomes. |
 | 5. Session owns its Thread | Proposed | Store the authoritative native conversation binding directly on the execution owner. | Prove uncertain initial acceptance and queued Follow recovery; define legacy binding conversion and conflict handling. Decide when public and internal Job naming changes. |
 | 6. Separate delivery from Turn execution | Proposed | Several accepted Message receipts reference one Turn outcome; interruption targets that exact Turn. | Prove accepted, rejected, and uncertain Steers, Auto successor adoption, and preserved native submission attribution. |
 | 7. Finish application removal | Proposed | Retire remaining application evidence and obsolete schema. | Settle drain/export/retirement policy, retained generic helpers, and reference-client needs; preserve retained input, ownership, and recovery receipts through append-only migrations. |
 
 ```text
-Separate review contracts -> discuss the next slice
+Separate review contracts -> remove investigation -> discuss the next slice
 
 Remaining candidate slices:
   product boundary, application removal, setup/activation,
@@ -68,12 +68,23 @@ Each arrow is a proposed dependency, not approval to start the next slice.
   with no review methods. Live provider proofs were not rerun; this slice changes interface
   requirements and composition without changing provider lifecycle or native protocol behavior.
 
-### Slice 2: product boundary
+### Slice 2: remove investigation
 
-- Agreed scope: pending discussion.
-- Implementation and verification: pending.
+- Agreed scope: delete the investigation package, admission and Message paths, runtime composition,
+  CLI/API/client types and report projection, and workflow-specific tests. Remove its source table
+  through a new migration and regenerate SQL. Keep direct execution and coding behavior.
+- Repository selection, setup, report instructions, and report consumption belong to the direct
+  client. No replacement workflow, client framework, legacy executor, or Job conversion is added.
+- Generic Job, Message, and resource receipts remain intact. Published migrations remain unchanged.
+- Decision: [D143](../project/decisions/D143-retire-built-in-investigation.md).
+- Verification: `mise run check` and `mise run docs:check` passed. PostgreSQL migration/replay
+  coverage preserves retained Message input and direct resource ownership. Existing direct/coding
+  execution and API tests pass. Workflow-specific tests were removed with their implementation;
+  no tests were added solely to assert that retired entry points are absent.
+- Net physical Go reduction: 1,017 handwritten implementation lines and 845 test lines, excluding
+  generated code. No live provider protocol or deployment change was made.
 
-### Slice 3: application consumers
+### Slice 3: coding application
 
 - Agreed scope: pending discussion.
 - Implementation and verification: pending.

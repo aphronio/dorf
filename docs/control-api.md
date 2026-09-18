@@ -74,8 +74,10 @@ Job listing is newest-first keyset traversal of current facts, not a frozen snap
 defaults to 50 and accepts 1–100. Each item includes `id`, `kind`, `admitted_at`, and creator attribution;
 read the Job for mutable execution and cleanup state. Pass `next_cursor` back unchanged. Cursors are
 opaque, and malformed or altered cursors return the published `invalid_cursor` Problem. The index
-contains only Job kinds understood by this API revision. Investigation admission requires a
-credential-free reachable HTTPS repository and an exact Revision.
+contains only Job kinds understood by this API revision: direct and coding. The retired
+`codebase-investigation` admission route returns not found; retained investigation Jobs are omitted
+from public listing and inspection. Clients use direct Jobs for investigation and own repository
+setup, instructions, and report paths.
 
 Each Sandbox in Job inspection includes its active resource record ID and the provider VM ID when
 that locator has been attested and recorded. A missing provider ID means it has not been recorded;
@@ -93,7 +95,7 @@ and native-history access can return their existing unavailable Problems during 
 Passive Job inspection remains available. The hold primitive does not expose a public upgrade
 request or authorize package mutations.
 
-Job admission defaults `keep_running` to false for direct, coding, and investigation Jobs.
+Job admission defaults `keep_running` to false for direct and coding Jobs.
 E2B Sandboxes become eligible for pause after one minute without native activity, when no AgentRun
 remains pending, active, or uncertain. The existing durable polling loop performs the pause, usually
 within the following 30 seconds. Providers without the memory-pause capability retain their existing lifecycle. Set `keep_running: true` at admission to

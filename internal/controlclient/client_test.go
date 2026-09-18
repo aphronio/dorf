@@ -195,7 +195,6 @@ func TestWatchJobReconnectsWithoutOrdinaryRequestTimeout(t *testing.T) {
 func TestJobDecodesWorkflowUnion(t *testing.T) {
 	const credential = "workflow-credential"
 	codingJSON := `{"id":"job-coding","kind":"coding","workflow_revision":"3"}`
-	investigationJSON := `{"id":"job-investigation","kind":"codebase-investigation","workflow_revision":"2"}`
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.Header.Get("Authorization") != "Bearer "+credential {
 			t.Fatalf("workflow request auth=%q", request.Header.Get("Authorization"))
@@ -203,8 +202,6 @@ func TestJobDecodesWorkflowUnion(t *testing.T) {
 		switch request.Method + " " + request.URL.Path {
 		case "GET /v1/jobs/job-coding":
 			return jsonResponse(http.StatusOK, codingJSON), nil
-		case "GET /v1/jobs/job-investigation":
-			return jsonResponse(http.StatusOK, investigationJSON), nil
 		default:
 			t.Fatalf("unexpected workflow request %s %s", request.Method, request.URL.Path)
 			return nil, nil
@@ -218,11 +215,6 @@ func TestJobDecodesWorkflowUnion(t *testing.T) {
 		t.Fatal(err)
 	} else if typed, ok := got.(controlapi.CodingJob); !ok || typed.WorkflowRevision != "3" {
 		t.Fatalf("coding union=%T %#v", got, got)
-	}
-	if got, err := client.Job(context.Background(), "job-investigation"); err != nil {
-		t.Fatal(err)
-	} else if typed, ok := got.(controlapi.InvestigationJob); !ok || typed.WorkflowRevision != "2" {
-		t.Fatalf("investigation union=%T %#v", got, got)
 	}
 }
 

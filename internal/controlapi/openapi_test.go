@@ -49,8 +49,7 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 		"/v1/profiles":                {"get"},
 		"/v1/jobs":                    {"get", "post"},
 		"/v1/workflows/coding/jobs":   {"post"},
-		"/v1/workflows/codebase-investigation/jobs": {"post"},
-		"/v1/jobs/{job}": {"get"},
+		"/v1/jobs/{job}":              {"get"},
 		"/v1/jobs/{job}/messages/{message}/observation":        {"get"},
 		"/v1/jobs/{job}/messages/{message}/observation/stream": {"get"},
 		"/v1/jobs/{job}/messages/{message}/timeline":           {"get"},
@@ -107,9 +106,8 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 	}
 
 	wantMapping := map[string]any{
-		"direct":                 "#/components/schemas/DirectJob",
-		"coding":                 "#/components/schemas/CodingJob",
-		"codebase-investigation": "#/components/schemas/InvestigationJob",
+		"direct": "#/components/schemas/DirectJob",
+		"coding": "#/components/schemas/CodingJob",
 	}
 	mapping := objectAt(t, objectAt(t, objectAt(t, objectAt(t, document, "components"), "schemas"), "Job"), "discriminator", "mapping")
 	if !reflect.DeepEqual(mapping, wantMapping) {
@@ -134,7 +132,7 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 	if _, ok := objectAt(t, document, "paths", "/v1/sandboxes/{sandbox}/files", "get", "responses", "200", "content")["application/octet-stream"]; !ok {
 		t.Fatal("Sandbox file response does not describe application/octet-stream")
 	}
-	for _, schema := range []string{"AdmitDirectJobRequest", "AdmitCodingJobRequest", "AdmitInvestigationJobRequest"} {
+	for _, schema := range []string{"AdmitDirectJobRequest", "AdmitCodingJobRequest"} {
 		properties := objectAt(t, document, "components", "schemas", schema, "properties")
 		if _, ok := properties["ai_connection"]; !ok {
 			t.Fatalf("%s does not publish ai_connection", schema)

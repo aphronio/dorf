@@ -149,7 +149,7 @@ func TestAdmissionServiceReconcilesFirstAdmissionRaceAndExactReplay(t *testing.T
 	if _, _, err := service.Admit(context.Background(), malformed); !errors.Is(err, ErrAdmissionConflict) {
 		t.Fatalf("malformed replay error=%v", err)
 	}
-	store.job.Workflow = "codebase-investigation"
+	store.job.Workflow = "foreign-workflow"
 	if _, _, err := service.Admit(context.Background(), request); !errors.Is(err, ErrAdmissionConflict) {
 		t.Fatalf("foreign-kind replay error=%v", err)
 	}

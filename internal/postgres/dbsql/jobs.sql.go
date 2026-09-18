@@ -753,31 +753,24 @@ from dorf.jobs j
 left join dorf.control_clients creator on creator.id=j.created_by_client_id
 where (
         (j.workflow_name='' and j.workflow_revision='') or
-        (j.workflow_name=$1::text and j.workflow_revision=$2::text) or
-        (j.workflow_name=$3::text and j.workflow_revision=$4::text and
-         exists(
-             select 1 from dorf.codebase_investigation_sources source
-             where source.job_id=j.id
-         ))
+        (j.workflow_name=$1::text and j.workflow_revision=$2::text)
       )
   and (
-        not $5::boolean or
-        j.admitted_at < $6::timestamptz or
-        (j.admitted_at=$6::timestamptz and j.id < $7::text)
+        not $3::boolean or
+        j.admitted_at < $4::timestamptz or
+        (j.admitted_at=$4::timestamptz and j.id < $5::text)
       )
 order by j.admitted_at desc,j.id desc
-limit $8
+limit $6
 `
 
 type ListSupportedJobsParams struct {
-	CodingWorkflow        string
-	CodingRevision        string
-	InvestigationWorkflow string
-	InvestigationRevision string
-	HasCursor             bool
-	CursorAdmittedAt      time.Time
-	CursorID              string
-	PageSize              int32
+	CodingWorkflow   string
+	CodingRevision   string
+	HasCursor        bool
+	CursorAdmittedAt time.Time
+	CursorID         string
+	PageSize         int32
 }
 
 type ListSupportedJobsRow struct {
@@ -794,8 +787,6 @@ func (q *Queries) ListSupportedJobs(ctx context.Context, arg ListSupportedJobsPa
 	rows, err := q.db.QueryContext(ctx, listSupportedJobs,
 		arg.CodingWorkflow,
 		arg.CodingRevision,
-		arg.InvestigationWorkflow,
-		arg.InvestigationRevision,
 		arg.HasCursor,
 		arg.CursorAdmittedAt,
 		arg.CursorID,

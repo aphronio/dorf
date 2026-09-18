@@ -27,7 +27,6 @@ import (
 	"github.com/aphronio/dorf/internal/controlreader"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/hostclientconfig"
-	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
@@ -333,16 +332,12 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 }
 
 func TestRemoteWorkflowCLIUsesExplicitTypedRoutes(t *testing.T) {
-	goal, brief := "  exact coding goal\n", "  exact investigation brief\n"
-	goalFile, briefFile := filepath.Join(t.TempDir(), "goal"), filepath.Join(t.TempDir(), "brief")
+	goal := "  exact coding goal\n"
+	goalFile := filepath.Join(t.TempDir(), "goal")
 	if err := os.WriteFile(goalFile, []byte(goal), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(briefFile, []byte(brief), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	var codingRequest controlapi.AdmitCodingJobRequest
-	var investigationRequest controlapi.AdmitInvestigationJobRequest
 	var paths, keys []string
 	var messages []string
 	client, err := controlclient.New("https://dorf.example.test", "credential", roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -361,17 +356,7 @@ func TestRemoteWorkflowCLIUsesExplicitTypedRoutes(t *testing.T) {
 				WorkflowRevision: "coding/v1", Repository: codingRequest.Repository, StartingRevision: codingRequest.Revision,
 				Revision: codingRequest.Revision, Branch: "dorf/coding-job", BaseBranch: codingRequest.BaseBranch,
 			})
-		case "/v1/workflows/codebase-investigation/jobs":
-			if err := json.NewDecoder(request.Body).Decode(&investigationRequest); err != nil {
-				return nil, err
-			}
-			_ = json.NewEncoder(response).Encode(controlapi.InvestigationJob{
-				Job:              controlapi.Job{ID: "investigation-job", Kind: controlapi.JobKindInvestigation},
-				WorkflowRevision: "codebase-investigation/v1",
-				Source:           controlapi.InvestigationSource{Repository: investigationRequest.Repository, Revision: investigationRequest.Revision},
-				Report:           controlapi.InvestigationReport{SandboxID: "sandbox-investigation", Path: "REPORT.md"},
-			})
-		case "/v1/jobs/coding-job/messages", "/v1/jobs/investigation-job/messages":
+		case "/v1/jobs/coding-job/messages":
 			var message controlapi.SendMessageRequest
 			if err := json.NewDecoder(request.Body).Decode(&message); err != nil {
 				return nil, err
@@ -387,24 +372,18 @@ func TestRemoteWorkflowCLIUsesExplicitTypedRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	revision := strings.Repeat("a", 40)
-	var codingOutput, investigationOutput strings.Builder
+	var codingOutput strings.Builder
 	if err := remoteWorkflowCommand(context.Background(), client, clientconfig.Config{DeploymentURL: "https://dorf.example.test"},
 		[]string{"run", "coding", "--key", "coding-key", "--input-file", goalFile, "--repo", "https://github.com/aphronio/dorf.git", "--revision", revision, "--base", "main", "--ai-connection", "coding-connection"},
 		&codingOutput, &strings.Builder{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := remoteWorkflowCommand(context.Background(), client, clientconfig.Config{DeploymentURL: "https://dorf.example.test"},
-		[]string{"run", "codebase-investigation", "--key", "investigation-key", "--input-file", briefFile, "--repo", "https://github.com/aphronio/dorf.git", "--revision", revision, "--ai-connection", "investigation-connection", "--output", "json"},
-		&investigationOutput, &strings.Builder{}); err != nil {
-		t.Fatal(err)
+	if !slices.Equal(messages, []string{goal}) || codingRequest.AIConnection != "coding-connection" || !slices.Equal(paths, []string{"/v1/workflows/coding/jobs", "/v1/jobs/coding-job/messages"}) ||
+		codingRequest.Model != "" || !slices.Equal(keys, []string{"coding-key", "coding-key"}) {
+		t.Fatalf("coding=%#v paths=%q keys=%q", codingRequest, paths, keys)
 	}
-	if !slices.Equal(messages, []string{goal, brief}) || codingRequest.AIConnection != "coding-connection" || investigationRequest.AIConnection != "investigation-connection" || !slices.Equal(paths, []string{"/v1/workflows/coding/jobs", "/v1/jobs/coding-job/messages", "/v1/workflows/codebase-investigation/jobs", "/v1/jobs/investigation-job/messages"}) ||
-		codingRequest.Model != "" || investigationRequest.Model != "" || !slices.Equal(keys, []string{"coding-key", "coding-key", "investigation-key", "investigation-key"}) {
-		t.Fatalf("coding=%#v investigation=%#v paths=%q keys=%q", codingRequest, investigationRequest, paths, keys)
-	}
-	if !strings.Contains(codingOutput.String(), "repository: https://github.com/aphronio/dorf.git") ||
-		!strings.Contains(investigationOutput.String(), `"kind": "codebase-investigation"`) {
-		t.Fatalf("coding output=%q investigation output=%q", codingOutput.String(), investigationOutput.String())
+	if !strings.Contains(codingOutput.String(), "repository: https://github.com/aphronio/dorf.git") {
+		t.Fatalf("coding output=%q", codingOutput.String())
 	}
 }
 
@@ -465,7 +444,6 @@ func TestControlJobClassificationIsClosed(t *testing.T) {
 	}{
 		{want: controlDirectJob, ok: true},
 		{workflow: coding.Workflow, revision: coding.WorkflowRevision, want: controlCodingJob, ok: true},
-		{workflow: investigation.Workflow, revision: investigation.WorkflowRevision, want: controlInvestigationJob, ok: true},
 		{workflow: coding.Workflow},
 		{workflow: coding.Workflow, revision: "unrecognized"},
 		{workflow: "unrecognized", revision: "1"},
@@ -475,35 +453,6 @@ func TestControlJobClassificationIsClosed(t *testing.T) {
 		if got != test.want || ok != test.ok {
 			t.Fatalf("workflow %q revision %q classified as %q/%t, want %q/%t", test.workflow, test.revision, got, ok, test.want, test.ok)
 		}
-	}
-}
-
-func TestRemoteInvestigationInspectionGuidesReportRetrievalBeforeCleanup(t *testing.T) {
-	job := controlapi.InvestigationJob{
-		Job: controlapi.Job{
-			ID: "job-investigation", Kind: controlapi.JobKindInvestigation,
-			Cleanup: controlapi.State{State: "not_requested"},
-		},
-		Report: controlapi.InvestigationReport{SandboxID: "sandbox-investigation", Path: investigation.ReportPath},
-	}
-	var output strings.Builder
-	renderRemoteJobInspection(&output, job)
-	for _, want := range []string{
-		"Job job-investigation\n",
-		"report: Sandbox sandbox-investigation · REPORT.md (workspace file; not durably retained)",
-		"retrieve before cleanup: dorf sandbox file get sandbox-investigation REPORT.md --output REPORT.md",
-		"release resources: dorf job cleanup job-investigation",
-	} {
-		if !strings.Contains(output.String(), want) {
-			t.Fatalf("remote investigation inspection missing %q: %q", want, output.String())
-		}
-	}
-
-	job.Cleanup.State = "requested"
-	output.Reset()
-	renderRemoteJobInspection(&output, job)
-	if strings.Contains(output.String(), "dorf sandbox file get") || !strings.Contains(output.String(), "report retrieval: unavailable after cleanup began") {
-		t.Fatalf("cleanup-fenced investigation inspection=%q", output.String())
 	}
 }
 
@@ -677,10 +626,6 @@ func (j *remoteCLIJobs) AdmitDirect(_ context.Context, _ string, key string, inp
 
 func (j *remoteCLIJobs) AdmitCoding(context.Context, string, string, controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, bool, error) {
 	return controlapi.CodingJob{}, false, controlapi.ErrInvalidInput
-}
-
-func (j *remoteCLIJobs) AdmitInvestigation(context.Context, string, string, controlapi.AdmitInvestigationJobRequest) (controlapi.InvestigationJob, bool, error) {
-	return controlapi.InvestigationJob{}, false, controlapi.ErrInvalidInput
 }
 
 func (j *remoteCLIJobs) Get(_ context.Context, id string) (controlapi.JobView, error) {

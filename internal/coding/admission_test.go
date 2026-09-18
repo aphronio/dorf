@@ -19,7 +19,7 @@ func TestNormalizeAdmissionRejectsForeignIdentityAndMutableRevision(t *testing.T
 		t.Fatalf("trimmed exact coding identity was rejected: %v", err)
 	}
 	foreign := valid
-	foreign.Workflow = "codebase-investigation"
+	foreign.Workflow = "foreign-workflow"
 	if _, err := NormalizeAdmission(foreign); err == nil {
 		t.Fatal("coding admission accepted a foreign workflow identity")
 	}

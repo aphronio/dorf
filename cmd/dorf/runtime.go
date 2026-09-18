@@ -18,7 +18,6 @@ import (
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/incus"
-	"github.com/aphronio/dorf/internal/investigation"
 	outcomeapp "github.com/aphronio/dorf/internal/outcome"
 	piagent "github.com/aphronio/dorf/internal/pi"
 	"github.com/aphronio/dorf/internal/postgres"
@@ -140,15 +139,6 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, ref core.Sand
 			},
 		},
 	}, nil
-}
-
-func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, ref core.SandboxProfileRef) (investigation.Runtime, error) {
-	resolved, err := r.resolveBase(ctx, ref)
-	if err != nil {
-		return investigation.Runtime{}, err
-	}
-	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, gitworkspace.Workspace{Transport: resolved.Sandbox, Workspace: resolved.Sandbox.Workspace()}, resolved.Ownership)
-	return investigation.Runtime{SandboxProfile: resolved.SandboxProfile, Agent: resolved.Execution, Investigation: workspaceExecutor}, nil
 }
 
 func (r profileRuntimeResolver) ResolveDirect(ctx context.Context, ref core.SandboxProfileRef) (direct.Runtime, error) {
@@ -276,16 +266,6 @@ func (s composedAgentExecution) ResolveAgentPrompt(ctx context.Context, executio
 			return "", err
 		}
 		return coding.AgentPrompt(job, execution.Message.Input), nil
-	case execution.Job.Workflow == investigation.Workflow && execution.Job.WorkflowRevision == investigation.WorkflowRevision:
-		source, err := s.store.CodebaseInvestigationSource(ctx, execution.Job.ID)
-		if err != nil {
-			return "", err
-		}
-		if execution.AgentRun.Role != investigation.AgentRole || execution.AgentRun.Capability != investigation.AgentCapability ||
-			execution.AgentRun.InputRevision != source.Revision || execution.AgentRun.SandboxID != core.MainSandboxName(execution.Job.ID) {
-			return "", fmt.Errorf("Message %s conflicts with the exact investigation Agent contract", execution.Message.ID)
-		}
-		return investigation.AgentPrompt(source, execution.Message.Input), nil
 	default:
 		return "", fmt.Errorf("Message %s has no statically composed ordinary Agent prompt", execution.Message.ID)
 	}
@@ -313,9 +293,6 @@ func (s composedAgentExecution) ResolveAgentRunOperation(ctx context.Context, ex
 		}
 		return operation, nil
 	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Role == "implement":
-		operation, err := terminal.NewAgentRunOperation(s.externals, execution)
-		return operation, err
-	case execution.Job.Workflow == investigation.Workflow && execution.Job.WorkflowRevision == investigation.WorkflowRevision && execution.AgentRun.Role == investigation.AgentRole:
 		operation, err := terminal.NewAgentRunOperation(s.externals, execution)
 		return operation, err
 	default:

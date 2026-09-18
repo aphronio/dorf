@@ -15,7 +15,6 @@ import (
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
-	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres/dbsql"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
@@ -36,7 +35,7 @@ const (
 	AbsurdSchemaSHA256  = "d34309370c539f3a51f2b36b69b1f77551f8e4a14480a1c8def8bb8f40fd9aab"
 )
 
-var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql", "009_message_attachments.sql", "010_job_idle_policy.sql", "011_message_developer_instructions.sql", "012_sandbox_idle_grace.sql", "013_message_observation.sql", "014_job_execution_wakes.sql", "015_observation_auto.sql", "016_profile_revisions.sql", "017_sandbox_resources.sql", "018_sandbox_delivery_holds.sql", "019_sandbox_upgrades.sql", "020_sandbox_checkpoints.sql", "021_checkpoint_recovery.sql"}
+var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql", "009_message_attachments.sql", "010_job_idle_policy.sql", "011_message_developer_instructions.sql", "012_sandbox_idle_grace.sql", "013_message_observation.sql", "014_job_execution_wakes.sql", "015_observation_auto.sql", "016_profile_revisions.sql", "017_sandbox_resources.sql", "018_sandbox_delivery_holds.sql", "019_sandbox_upgrades.sql", "020_sandbox_checkpoints.sql", "021_checkpoint_recovery.sql", "022_remove_investigation.sql"}
 
 type Store struct{ DB *sql.DB }
 
@@ -177,16 +176,6 @@ func migrateDorf(ctx context.Context, tx *sql.Tx) error {
 
 func ValidRevision(value string) bool { return fullCommitOID.MatchString(value) }
 
-func investigationSourceParams(jobID string, source investigation.Source) dbsql.InsertCodebaseInvestigationSourceParams {
-	return dbsql.InsertCodebaseInvestigationSourceParams{
-		JobID: jobID, Repository: source.Repository, Revision: source.Revision,
-	}
-}
-
-func investigationSourceFromValues(jobID, repository, revision string) investigation.Source {
-	return investigation.Source{JobID: jobID, Repository: repository, Revision: revision}
-}
-
 type admittedAgentRun struct {
 	Role          string
 	Capability    string
@@ -198,10 +187,6 @@ type messageEnvelopeResolver func(context.Context, *dbsql.Queries, dbsql.GetJobA
 
 func (s Store) AdmitCodingMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
 	return s.admitMessage(ctx, input, coding.Workflow, coding.WorkflowRevision, resolveCodingMessageEnvelope)
-}
-
-func (s Store) AdmitInvestigationMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
-	return s.admitMessage(ctx, input, investigation.Workflow, investigation.WorkflowRevision, resolveInvestigationMessageEnvelope)
 }
 
 func (s Store) admitMessage(ctx context.Context, input core.MessageAdmission, workflow core.WorkflowName, revision string, resolveEnvelope messageEnvelopeResolver) (core.MessageAdmissionResult, error) {

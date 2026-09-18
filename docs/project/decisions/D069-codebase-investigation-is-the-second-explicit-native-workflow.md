@@ -5,7 +5,7 @@
 - **Read when:** Changing the codebase-investigation workflow, its durable facts, or its client-facing execution boundary.
 - **Decision history:** Accepted initial implementation slice; interaction boundary refined by D075 and report
   custody replaced by D092 — 2026-08-22; unused optional provider-capability declarations removed
-  by D106 — 2026-09-05.
+  by D106 — 2026-09-05; investigation workflow retired by D143 — 2026-09-18.
 - **Decision:** Add `codebase-investigation` as a clean workflow identity, not a top-level
   `investigate` feature and not a generic researcher. One admitted Job pins the exact workflow
   revision, repository Revision, unstructured brief, execution profile, AI connection, model,

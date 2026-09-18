@@ -108,8 +108,23 @@ insert into dorf.agent_runs(id,job_id,message_id,role,state,sandbox_id) values('
 	if !controlClients || !retries || artifacts || drafts {
 		t.Fatalf("control clients=%t retries=%t artifacts=%t drafts=%t", controlClients, retries, artifacts, drafts)
 	}
+	if _, err := tx.ExecContext(ctx, `
+insert into dorf.jobs(id,admission_key,workflow_name,workflow_revision,goal,sandbox_profile,provider_connection,model,reasoning_effort)
+values('job-retired','retired-admission','codebase-investigation','2','inspect source','current-profile','primary','model-test','high');
+update dorf.jobs set admission_open=false,cleanup_state='complete',cleaned_at=clock_timestamp() where id='job-retired';
+insert into dorf.job_messages(id,job_id,from_kind,from_id,sequence,input)
+values('message-retired','job-retired','human','dorf:initial',1,'inspect source');
+insert into dorf.codebase_investigation_sources(job_id,workflow_name,repository,revision)
+values('job-retired','codebase-investigation','https://example.test/source.git',repeat('a',40))`); err != nil {
+		t.Fatal(err)
+	}
 	if err := migrateDorf(ctx, tx); err != nil {
 		t.Fatalf("baseline replay: %v", err)
+	}
+	var retiredInput string
+	if err := tx.QueryRowContext(ctx, `select m.input
+from dorf.jobs j join dorf.job_messages m on m.job_id=j.id where j.id='job-retired'`).Scan(&retiredInput); err != nil || retiredInput != "inspect source" {
+		t.Fatalf("retirement changed retained input: input=%q err=%v", retiredInput, err)
 	}
 	var resourceID, retainedNonce string
 	var providerID sql.NullString

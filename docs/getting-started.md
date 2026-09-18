@@ -393,7 +393,7 @@ dorf job abandon JOB_ID
 dorf job cleanup JOB_ID
 ```
 
-Use `--client-reference REFERENCE` with `dorf run` or either `dorf workflow run` command to
+Use `--client-reference REFERENCE` with `dorf run` or `dorf workflow run coding` to
 attach your thread or task reference. `dorf job list` and `dorf job inspect` show the creating
 Client and reference. An older Job shows an unknown creator. Use that information when choosing
 cleanup targets; attribution does not request cleanup or define a retention policy.
@@ -402,7 +402,7 @@ overrides it. Omitting `MESSAGE_ID` from `dorf job message inspect` reads the la
 in the Job's main Sandbox. Pending follow-ups and steer delivery acknowledgements do not replace
 that reply.
 
-To delegate a documented built-in workflow instead, save its complete input in a file and use its
+To delegate the built-in coding workflow, save its complete input in a file and use its
 typed admission command:
 
 ```bash
@@ -413,13 +413,6 @@ dorf workflow run coding \
   --base main \
   --ai-connection AI_CONNECTION \
   --reasoning high
-
-dorf workflow run codebase-investigation \
-  --input-file message.txt \
-  --repo https://github.com/OWNER/REPOSITORY.git \
-  --revision FULL_COMMIT_OID \
-  --ai-connection AI_CONNECTION \
-  --reasoning high
 ```
 
 Omit `--model` to use the selected AI connection's default Harness model. Pass `--model MODEL` only
@@ -427,16 +420,20 @@ to override it for this Job. The Deployment resolves either choice before admiss
 accepted Job records the exact model it will use.
 
 Remote coding uses the deployment's GitHub integration; its request carries no integration
-credential. Investigation accepts only a credential-free HTTPS repository URL and exact Revision.
-These workflow Jobs use the same inspect, watch, Message, retry, file, Evidence, and cleanup commands
+credential. Coding Jobs use the same inspect, watch, Message, retry, file, Evidence, and cleanup commands
 shown above.
-Investigation remains open and idle after settled work until the client requests cleanup. Coding
-requests cleanup once it observes a terminal GitHub Outcome, so retrieve any needed Sandbox file
+Coding requests cleanup once it observes a terminal GitHub Outcome, so retrieve any needed Sandbox file
 before that external decision;
 retained Evidence remains readable after cleanup.
 
-`run` receipts include the accepted Job and Message. `job inspect` reports the Job ID and exact Sandbox IDs. For an investigation,
-it also prints the exact report retrieval command followed by the cleanup command. Follow may queue
+For repository investigation, create a direct Job and use `dorf sandbox exec` for your repository
+setup, then send your instructions through `dorf job message send`. Choose and retrieve any report
+files before cleanup. The former built-in `codebase-investigation` command is retired. Before
+upgrading a deployment that used it, finish cleanup with the previous version and export any
+application source data you need. The migration removes its source table while retaining generic
+Job, Message, and resource receipts; it does not convert investigation Jobs into direct Jobs.
+
+`run` receipts include the accepted Job and Message. `job inspect` reports the Job ID and exact Sandbox IDs. Follow may queue
 before current work settles. Explicit steer targets only the exact active Turn and never becomes a Follow.
 `job watch` reconnects from the canonical snapshot, and Ctrl-C stops only the view. Retry is
 accepted only for eligible failed execution. Evidence is verified metadata. Sandbox file retrieval
@@ -618,8 +615,8 @@ inspection reports the resulting facts.
 
 ### Keep a worker running between turns
 
-New E2B-backed Jobs pause their Sandboxes when idle. Add `--keep-running` to `dorf run`,
-`dorf workflow run coding`, or `dorf workflow run codebase-investigation` when background work
+New E2B-backed Jobs pause their Sandboxes when idle. Add `--keep-running` to `dorf run` or
+`dorf workflow run coding` when background work
 must continue between turns. The override is saved with the Job and must match on an explicit
 admission replay. It does not disable provider timeout limits. Other providers keep their
 existing lifecycle until their pause capability is supported.

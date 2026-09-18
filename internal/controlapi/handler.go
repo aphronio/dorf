@@ -55,7 +55,6 @@ func newHandlerContext(discovery Discovery, auth Auth, jobs Jobs, profiles Profi
 	h.mux.HandleFunc("/v1/profiles", h.authenticate(h.profilesRoute))
 	h.mux.HandleFunc("/v1/jobs", h.authenticate(h.jobsRoute))
 	h.mux.HandleFunc("/v1/workflows/coding/jobs", h.authenticate(h.admitCodingRoute))
-	h.mux.HandleFunc("/v1/workflows/codebase-investigation/jobs", h.authenticate(h.admitInvestigationRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/timeline", h.authenticate(h.timelineRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/watch", h.authenticate(h.watchRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/messages", h.authenticate(h.sendMessageRoute))
@@ -239,26 +238,6 @@ func (h *handler) admitCodingRoute(w http.ResponseWriter, r *http.Request, clien
 		return
 	}
 	job, created, err := h.jobs.AdmitCoding(r.Context(), client.ID, key, input)
-	if err != nil {
-		h.serviceError(w, r, err)
-		return
-	}
-	h.jobResponseStatus(w, r, job, nil, createdStatus(created))
-}
-
-func (h *handler) admitInvestigationRoute(w http.ResponseWriter, r *http.Request, client controlauth.Client) {
-	if !h.exact(w, r, http.MethodPost, true) {
-		return
-	}
-	key, ok := h.idempotencyKey(w, r)
-	if !ok {
-		return
-	}
-	var input AdmitInvestigationJobRequest
-	if !h.decode(w, r, &input) {
-		return
-	}
-	job, created, err := h.jobs.AdmitInvestigation(r.Context(), client.ID, key, input)
 	if err != nil {
 		h.serviceError(w, r, err)
 		return

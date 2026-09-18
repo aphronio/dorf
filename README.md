@@ -40,8 +40,8 @@ protected configuration and applies that exact Compose project. Operators use Co
 for advanced lifecycle operations. Generic workflow registration, client SDKs, MCP, and a
 control-plane UI remain later work.
 
-The direct CLI path runs caller-owned prompts without workflow policy. Built-in workflows include
-coding to a verified pull-request Proposal and repository-grounded codebase investigation. See
+The direct CLI path runs caller-owned prompts without workflow policy. The built-in coding workflow
+produces a verified pull-request Proposal. Clients drive repository investigation through direct Jobs. See
 [Getting started](docs/getting-started.md) for supported deployment, profiles, commands, and inputs.
 To hand installation or operation to an agent, point it at the concise
 [Agent guide](docs/agent-guide.md).

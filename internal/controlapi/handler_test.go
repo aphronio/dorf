@@ -70,7 +70,6 @@ func TestHandlerBoundary(t *testing.T) {
 		{http.MethodPut, "/v1/jobs/job-1/cleanup", nil},
 		{http.MethodGet, "/v1/sandboxes/sandbox-1/files?path=REPORT.md", nil},
 		{http.MethodPost, "/v1/workflows/coding/jobs", strings.NewReader(`{}`)},
-		{http.MethodPost, "/v1/workflows/codebase-investigation/jobs", strings.NewReader(`{}`)},
 	} {
 		requireProblem(t, do(route.method, route.path, "", "", route.body), http.StatusUnauthorized, "unauthenticated")
 	}
@@ -143,13 +142,6 @@ func TestAdmissionsAcceptExplicitAIConnectionAndOmittedModel(t *testing.T) {
 			jobs:  &fakeJobs{job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindCoding}, view: controlapi.CodingJob{Job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindCoding}}},
 			got:   func(j *fakeJobs) string { return j.codingInput.AIConnection },
 			model: func(j *fakeJobs) string { return j.codingInput.Model },
-		},
-		{
-			name: "investigation", target: "/v1/workflows/codebase-investigation/jobs",
-			body:  `{"repository":"https://github.com/acme/widget.git","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ai_connection":"work-openai"}`,
-			jobs:  &fakeJobs{job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindInvestigation}, view: controlapi.InvestigationJob{Job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindInvestigation}}},
-			got:   func(j *fakeJobs) string { return j.investigationInput.AIConnection },
-			model: func(j *fakeJobs) string { return j.investigationInput.Model },
 		},
 	}
 	for _, test := range tests {
@@ -653,35 +645,34 @@ func (a *fakeAuth) Redeem(_ context.Context, code, name, credential string) (con
 }
 
 type fakeJobs struct {
-	execCalls          int
-	execCommand        provider.Command
-	execErr            error
-	mu                 sync.Mutex
-	job                controlapi.Job
-	view               controlapi.JobView
-	list               controlapi.JobList
-	listErr            error
-	listLimit          int
-	listCursor         string
-	gotInput           controlapi.AdmitJobRequest
-	codingInput        controlapi.AdmitCodingJobRequest
-	investigationInput controlapi.AdmitInvestigationJobRequest
-	message            controlapi.Message
-	retry              controlapi.Retry
-	file               []byte
-	fileWrites         int
-	fileAbsent         bool
-	filePath           string
-	messageKey         string
-	retryKey           string
-	messageInput       controlapi.SendMessageRequest
-	messageCreated     bool
-	messageErr         error
-	retryCreated       bool
-	abandonCalls       int
-	abandonErr         error
-	cleanupCalls       int
-	waitForGetContext  bool
+	execCalls         int
+	execCommand       provider.Command
+	execErr           error
+	mu                sync.Mutex
+	job               controlapi.Job
+	view              controlapi.JobView
+	list              controlapi.JobList
+	listErr           error
+	listLimit         int
+	listCursor        string
+	gotInput          controlapi.AdmitJobRequest
+	codingInput       controlapi.AdmitCodingJobRequest
+	message           controlapi.Message
+	retry             controlapi.Retry
+	file              []byte
+	fileWrites        int
+	fileAbsent        bool
+	filePath          string
+	messageKey        string
+	retryKey          string
+	messageInput      controlapi.SendMessageRequest
+	messageCreated    bool
+	messageErr        error
+	retryCreated      bool
+	abandonCalls      int
+	abandonErr        error
+	cleanupCalls      int
+	waitForGetContext bool
 }
 
 func (j *fakeJobs) List(_ context.Context, limit int, cursor string) (controlapi.JobList, error) {
@@ -703,14 +694,6 @@ func (j *fakeJobs) AdmitCoding(_ context.Context, _ string, _ string, input cont
 	defer j.mu.Unlock()
 	j.codingInput = input
 	job, _ := j.current().(controlapi.CodingJob)
-	return job, true, nil
-}
-
-func (j *fakeJobs) AdmitInvestigation(_ context.Context, _ string, _ string, input controlapi.AdmitInvestigationJobRequest) (controlapi.InvestigationJob, bool, error) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	j.investigationInput = input
-	job, _ := j.current().(controlapi.InvestigationJob)
 	return job, true, nil
 }
 

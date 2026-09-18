@@ -22,7 +22,6 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/direct"
 	"github.com/aphronio/dorf/internal/gitworkspace"
-	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	policy "github.com/aphronio/dorf/internal/review"
 	provider "github.com/aphronio/dorf/internal/sandbox"
@@ -125,11 +124,10 @@ type integrationExecution interface {
 }
 
 type integrationRuntimeResolver struct {
-	execution            integrationExecution
-	files                core.SandboxFileReader
-	profile              string
-	codingRuntime        coding.Runtime
-	investigationRuntime investigation.Runtime
+	execution     integrationExecution
+	files         core.SandboxFileReader
+	profile       string
+	codingRuntime coding.Runtime
 }
 
 func (r integrationRuntimeResolver) ResolveDirect(_ context.Context, name core.SandboxProfileRef) (direct.Runtime, error) {
@@ -158,15 +156,6 @@ func (r integrationRuntimeResolver) ResolveCoding(_ context.Context, name core.S
 		return coding.Runtime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
 	}
 	result := r.codingRuntime
-	result.SandboxProfile = name
-	return result, nil
-}
-
-func (r integrationRuntimeResolver) ResolveInvestigation(_ context.Context, name core.SandboxProfileRef) (investigation.Runtime, error) {
-	if name.Name != r.investigationRuntime.SandboxProfile.Name {
-		return investigation.Runtime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
-	}
-	result := r.investigationRuntime
 	result.SandboxProfile = name
 	return result, nil
 }
@@ -222,16 +211,14 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 	codingService := coding.NewService(workspaceExecutor, store, externals, blob.Store{}, func(context.Context) error { return nil })
 	runtimeProfile := "incus"
 	resolver := integrationRuntimeResolver{
-		execution:            execution,
-		profile:              runtimeProfile,
-		codingRuntime:        coding.Runtime{SandboxProfile: core.SandboxProfileRef{Name: runtimeProfile}, Agent: execution, Coding: codingService},
-		investigationRuntime: investigation.Runtime{SandboxProfile: core.SandboxProfileRef{Name: runtimeProfile}, Agent: execution, Investigation: workspaceExecutor},
+		execution:     execution,
+		profile:       runtimeProfile,
+		codingRuntime: coding.Runtime{SandboxProfile: core.SandboxProfileRef{Name: runtimeProfile}, Agent: execution, Coding: codingService},
 	}
 	application := core.Application{Store: store, Tasks: client, SandboxRuntimes: resolver, CleanupRuntimes: resolver}
 	application.RegisterCleanup()
 	direct.Register(application, store, resolver)
 	coding.Register(application, store, resolver)
-	investigation.Register(application, store, resolver)
 	t.Cleanup(func() {
 		if err := client.DropQueue(context.Background(), queueName); err != nil {
 			t.Errorf("drop test queue %q: %v", queueName, err)
@@ -638,8 +625,8 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	if err != nil || !first.Created || first.Message.Sequence != 1 || first.Message.FromKind != "human" || first.Message.FromID != "client-retry" || first.Message.ID != core.MessageID(job.ID, "human", "client-retry") {
 		t.Fatalf("first message=%#v err=%v", first, err)
 	}
-	if admitted, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "wrong-workflow", Input: "must not cross workflow authority"}); err == nil || admitted.Created || !strings.Contains(err.Error(), "is not codebase-investigation") {
-		t.Fatalf("investigation admission crossed into coding: admitted=%#v err=%v", admitted, err)
+	if admitted, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "wrong-consumer", Input: "must not cross workflow authority"}); err == nil || admitted.Created {
+		t.Fatalf("direct admission crossed into coding: admitted=%#v err=%v", admitted, err)
 	}
 	repeated, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-retry", Input: "same text"})
 	if err != nil || repeated.Created || !reflect.DeepEqual(repeated.Message, first.Message) {

@@ -31,7 +31,6 @@ import (
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/hostsetup"
 	"github.com/aphronio/dorf/internal/incus"
-	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/proofbarrier"
 	releaseapp "github.com/aphronio/dorf/internal/release"
@@ -184,7 +183,6 @@ func registerWorkerTasks(store postgres.Store, client *absurd.Client, cfg config
 	core.RegisterCleanup()
 	direct.Register(core, store, runtimes)
 	coding.Register(core, store, runtimes)
-	investigation.Register(core, store, runtimes)
 	return nil
 }
 
@@ -219,8 +217,6 @@ func (a composedMessageAdmissions) AdmitAgentMessage(ctx context.Context, input 
 		admitted, err = a.store.AdmitDirectMessage(ctx, input)
 	case job.Workflow == coding.Workflow && job.WorkflowRevision == coding.WorkflowRevision:
 		admitted, err = a.store.AdmitCodingMessage(ctx, input)
-	case job.Workflow == investigation.Workflow && job.WorkflowRevision == investigation.WorkflowRevision:
-		admitted, err = a.store.AdmitInvestigationMessage(ctx, input)
 	default:
 		return core.MessageAdmissionResult{}, fmt.Errorf("Job contract %s revision %s does not accept Messages in this deployment", job.Workflow, job.WorkflowRevision)
 	}
