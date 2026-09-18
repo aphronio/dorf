@@ -347,7 +347,7 @@ func (a Agent) openServer(ctx context.Context, owner provider.Ownership, fn func
 }
 
 func (a Agent) withReviewServer(ctx context.Context, owner provider.Ownership, review provider.ReviewMetadata, fn func(*protocol) error) error {
-	if err := a.Sandbox.AttestReview(ctx, owner, review); err != nil {
+	if err := a.attestReview(ctx, owner, review); err != nil {
 		return err
 	}
 	endpoint, err := a.Sandbox.Endpoint(ctx, owner, a.Port)
@@ -365,11 +365,19 @@ func (a Agent) withReviewServerAccess(ctx context.Context, owner provider.Owners
 	return a.withServerEndpointController(ctx, owner, endpoint, true, func() error {
 		// Re-attest after reconnect or process replacement. The authentication
 		// token can rotate; only this exact host-owned Sandbox identity persists.
-		if err := a.Sandbox.AttestReview(ctx, owner, review); err != nil {
+		if err := a.attestReview(ctx, owner, review); err != nil {
 			return err
 		}
 		return nil
 	}, fn)
+}
+
+func (a Agent) attestReview(ctx context.Context, owner provider.Ownership, review provider.ReviewMetadata) error {
+	attester, ok := a.Sandbox.(provider.ReviewAttester)
+	if !ok {
+		return &provider.UnsupportedError{Capability: "strict review attestation"}
+	}
+	return attester.AttestReview(ctx, owner, review)
 }
 
 func (a Agent) withServerEndpoint(ctx context.Context, owner provider.Ownership, endpoint string, fn func(*protocol) error) error {

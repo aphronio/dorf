@@ -162,7 +162,7 @@ func cliAttachmentFixtures(t *testing.T) []string {
 
 func attachmentCLIClient(t *testing.T, jobs *attachmentCLIJobs) *controlclient.Client {
 	t.Helper()
-	auth := &remoteCLIAuth{credential: "credential", client: controlauth.Client{ID: "cli-client", Name: "Raphael"}}
+	auth := &remoteCLIAuth{credential: "credential", client: controlauth.Client{ID: "cli-client", Name: "example client"}}
 	handler := controlapi.NewServer(controlapi.Discovery{}, auth, jobs, nil).Handler
 	client, err := controlclient.New("https://dorf.example.test", "credential", roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		response := httptest.NewRecorder()

@@ -107,8 +107,12 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, ref core.Sand
 	if err != nil {
 		return coding.Runtime{}, err
 	}
+	review, err := reviewController(resolved.Externals)
+	if err != nil {
+		return coding.Runtime{}, err
+	}
 	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, gitworkspace.Workspace{Transport: resolved.Sandbox, Workspace: resolved.Sandbox.Workspace()}, resolved.Ownership)
-	codingService := coding.NewService(workspaceExecutor, r.store, resolved.Review, blob.Store{Root: r.cfg.BlobRoot}, absurdruntime.RequireClaim)
+	codingService := coding.NewService(workspaceExecutor, r.store, review, blob.Store{Root: r.cfg.BlobRoot}, absurdruntime.RequireClaim)
 	githubClient := githubapi.Client{APIURL: r.cfg.GitHubAPIURL, Credentials: r.cfg.GitHubCredentials}
 	publicationService := publication.Service{
 		Store: r.store, GitHub: githubClient,
@@ -177,7 +181,6 @@ type resolvedBaseRuntime struct {
 	SandboxProfile core.SandboxProfileRef
 	Execution      core.ExecutionService
 	Externals      terminal.Externals
-	Review         coding.ReviewExecution
 	Sandbox        provider.Sandbox
 	Ownership      func(context.Context, string) (provider.Ownership, error)
 }
@@ -224,13 +227,12 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, ref core.Sandbo
 		Blobs: blob.Store{Root: r.cfg.BlobRoot},
 		Agent: agent, Ownership: ownership,
 	}
-	review := coding.ReviewController{Transport: sandbox, Agent: agent, Ownership: ownership}
 	execution := core.NewExecutionService(r.store, externals, r.barrier, absurdruntime.RequireClaim).
-		WithAgentExecution(composedAgentExecution{store: r.store, externals: externals, review: review})
+		WithAgentExecution(composedAgentExecution{store: r.store, externals: externals})
 	return resolvedBaseRuntime{
 		SandboxProfile: profile.Ref(),
 		Execution:      execution,
-		Externals:      externals, Review: review, Sandbox: sandbox, Ownership: ownership,
+		Externals:      externals, Sandbox: sandbox, Ownership: ownership,
 	}, nil
 }
 
@@ -240,7 +242,20 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, ref core.Sandbo
 type composedAgentExecution struct {
 	store     postgres.Store
 	externals terminal.Externals
-	review    coding.ReviewExecution
+}
+
+// reviewController checks coding's contracts only when composing coding work.
+// Cleanup and recovered review AgentRuns use the same explicit boundary.
+func reviewController(externals terminal.Externals) (coding.ReviewController, error) {
+	transport, ok := externals.Sandbox.(coding.ReviewTransport)
+	if !ok {
+		return coding.ReviewController{}, &provider.UnsupportedError{Capability: "strict review transport"}
+	}
+	agent, ok := externals.Agent.(coding.ReviewHarness)
+	if !ok {
+		return coding.ReviewController{}, &provider.UnsupportedError{Capability: "strict review Harness"}
+	}
+	return coding.ReviewController{Transport: transport, Agent: agent, Ownership: externals.Ownership}, nil
 }
 
 func (s composedAgentExecution) ResolveAgentPrompt(ctx context.Context, execution core.AgentMessageExecution) (string, error) {
@@ -288,7 +303,11 @@ func (s composedAgentExecution) ResolveAgentRunOperation(ctx context.Context, ex
 		operation, err := terminal.NewAgentRunOperation(s.externals, execution)
 		return operation, err
 	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Capability == coding.ReviewReadOnlyCapability:
-		operation, err := coding.NewReviewAgentOperation(ctx, s.store, s.review, execution)
+		review, err := reviewController(s.externals)
+		if err != nil {
+			return nil, err
+		}
+		operation, err := coding.NewReviewAgentOperation(ctx, s.store, review, execution)
 		if err != nil {
 			return nil, err
 		}

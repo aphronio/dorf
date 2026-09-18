@@ -19,15 +19,6 @@ type Ownership struct {
 	OwnershipNonce string `json:"ownership_nonce"`
 }
 
-// ReviewMetadata binds an isolated review Sandbox to the exact admitted run
-// and Revision. It is additional attestation, never cleanup identity.
-type ReviewMetadata struct {
-	JobID          string `json:"job_id"`
-	AgentRunID     string `json:"agent_run_id"`
-	Revision       string `json:"revision"`
-	OwnershipNonce string `json:"ownership_nonce"`
-}
-
 // Result preserves the bounded command observation used by common consumers.
 // A nonzero process exit is represented in ExitCode, not as a transport error.
 type Result struct {
@@ -102,10 +93,8 @@ type Sandbox interface {
 	Workspace() string
 	ReconcileOwnedCreate(context.Context, Ownership) error
 	AttestOwnership(context.Context, Ownership) error
-	AttachReviewMetadata(context.Context, Ownership, ReviewMetadata) error
 	OwnedPresent(context.Context, Ownership) (bool, error)
 	DeleteOwned(context.Context, Ownership) error
-	AttestReview(context.Context, Ownership, ReviewMetadata) error
 	PutFile(context.Context, Ownership, string, []byte) error
 	ReadFile(context.Context, Ownership, string) ([]byte, error)
 	Exec(context.Context, Ownership, []byte, ...string) (Result, error)

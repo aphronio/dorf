@@ -3,14 +3,19 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/aphronio/dorf/internal/codex"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/deployment"
 	"github.com/aphronio/dorf/internal/direct"
 	"github.com/aphronio/dorf/internal/incus"
+	piagent "github.com/aphronio/dorf/internal/pi"
+	provider "github.com/aphronio/dorf/internal/sandbox"
+	"github.com/aphronio/dorf/internal/terminal"
 )
 
 func TestConfiguredObservationsSurviveUnavailableExport(t *testing.T) {
@@ -45,7 +50,9 @@ func TestDirectClientPromptIsExactAndFailClosed(t *testing.T) {
 		Job: job, Message: message, Sandbox: sandbox,
 		AgentRun: core.AgentRun{ID: core.AgentRunID(message.ID), JobID: job.ID, MessageID: message.ID, Role: direct.DirectAgentRole, SandboxID: sandbox.ID},
 	}
-	resolved := composedAgentExecution{}
+	resolved := composedAgentExecution{externals: terminal.Externals{
+		Sandbox: ordinarySandbox{}, Agent: ordinaryHarness{Harness: codex.Agent{}},
+	}}
 	prompt, err := resolved.ResolveAgentPrompt(context.Background(), execution)
 	if err != nil || prompt != execution.Message.Input {
 		t.Fatalf("direct prompt=%q err=%v", prompt, err)
@@ -71,6 +78,37 @@ func TestDirectClientPromptIsExactAndFailClosed(t *testing.T) {
 			}
 			if _, err := resolved.ResolveAgentRunOperation(context.Background(), changed); err == nil {
 				t.Fatal("changed direct Agent contract resolved a Harness operation")
+			}
+		})
+	}
+}
+
+// Embedding only the ordinary interfaces deliberately hides review methods.
+type ordinarySandbox struct{ provider.Sandbox }
+type ordinaryHarness struct{ terminal.Harness }
+
+func TestCodingCompositionRequiresReviewContracts(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		externals terminal.Externals
+		missing   string
+	}{
+		{"ordinary provider", terminal.Externals{Sandbox: ordinarySandbox{}, Agent: codex.Agent{}}, "strict review transport"},
+		{"ordinary Harness", terminal.Externals{Sandbox: incus.Adapter{}, Agent: ordinaryHarness{Harness: codex.Agent{}}}, "strict review Harness"},
+		{"Codex review", terminal.Externals{Sandbox: incus.Adapter{}, Agent: codex.Agent{}}, ""},
+		{"Pi review", terminal.Externals{Sandbox: incus.Adapter{}, Agent: piagent.Agent{}}, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			review, err := reviewController(test.externals)
+			if test.missing == "" {
+				if err != nil || review.Harness() != test.externals.Agent.Name() {
+					t.Fatalf("review composition failed: %v", err)
+				}
+				return
+			}
+			var unsupported *provider.UnsupportedError
+			if !errors.As(err, &unsupported) || unsupported.Capability != test.missing {
+				t.Fatalf("missing review contract returned %v", err)
 			}
 		})
 	}

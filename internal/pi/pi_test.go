@@ -2,6 +2,7 @@ package pi
 
 import (
 	"context"
+	"errors"
 	"github.com/aphronio/dorf/internal/core"
 	"strings"
 	"testing"
@@ -18,6 +19,33 @@ func testSandbox(runner incustest.Runner, owner provider.Ownership) incus.Adapte
 
 func testReviewSandbox(runner incustest.Runner) incus.Adapter {
 	return incus.Adapter{Sandbox: incustest.Sandbox(runner, incus.Config{})}
+}
+
+type ordinaryReviewSandbox struct{ provider.Sandbox }
+
+func TestStrictReviewRequiresProviderAttestationBeforeNativeAccess(t *testing.T) {
+	agent := Agent{Sandbox: ordinaryReviewSandbox{}}
+	owner := testOwner("review")
+	review := provider.ReviewMetadata{JobID: owner.JobID, OwnershipNonce: owner.OwnershipNonce}
+	for name, operation := range map[string]func() (core.HarnessBinding, error){
+		"start": func() (core.HarnessBinding, error) {
+			return agent.StartStrictReviewTurn(t.Context(), owner, "/workspace", review, "nonce", "input", "model", "high")
+		},
+		"recover": func() (core.HarnessBinding, error) {
+			return agent.RecoverStrictReviewTurn(t.Context(), owner, "/workspace", review, "nonce", "input", "model", "high")
+		},
+		"read": func() (core.HarnessBinding, error) {
+			return agent.ReadStrictReviewTurn(t.Context(), owner, "/workspace", review, "thread", "turn", "nonce", "input", "model", "high")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := operation()
+			var unsupported *provider.UnsupportedError
+			if !errors.As(err, &unsupported) || unsupported.Capability != "strict review attestation" {
+				t.Fatalf("unattested review returned %v", err)
+			}
+		})
+	}
 }
 
 func testOwner(sandboxID string) provider.Ownership {

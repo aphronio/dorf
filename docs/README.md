@@ -32,6 +32,11 @@ cross-cutting change may alter several distinct promises. Update each owner, but
 changed fact across them. If a fact would need manual edits in several files, keep the exact value
 in its owner and replace the other copies with links or stable summaries.
 
+## Proposed work
+
+- [Session product proposals](implementation/session-product-proposals.md): tentative slices for
+  product simplification; each requires discussion and agreement before implementation.
+
 ## Active implementation
 
 - [Session checkpoints](implementation/session-checkpoints.md): provider-independent native state

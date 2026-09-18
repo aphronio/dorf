@@ -97,6 +97,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D096: Follow and steer are invariant custody; cleanup timing remains consumer policy](decisions/D096-follow-and-steer-are-invariant-custody-cleanup-timing-remains-consumer-policy.md) (`partial`). Changing follow, steer, or consumer-controlled cleanup semantics.
 - [D099: Fixed typed workflow admission reuses remote Job control](decisions/D099-fixed-typed-workflow-admission-reuses-remote-job-control.md) (`current`). Changing remote admission or projection for a built-in typed workflow.
 - [D106: Remove unused workflow capability declarations](decisions/D106-remove-unused-workflow-capability-declarations.md) (`current`). Adding optional provider requirements or workflow runtime metadata.
+- [D142: Review contracts are required only for coding](decisions/D142-review-contracts-are-required-only-for-coding.md) (`current`). Changing ordinary adapter contracts or composing coding review execution.
 
 ## Interaction
 
@@ -156,6 +157,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D136: Shared images install Codex through pinned Nix](decisions/D136-shared-images-install-codex-through-pinned-nix.md) (`partial`). Building guest images or changing how persistent Sandboxes obtain Codex packages.
 - [D137: Provider images share one Nix workstation](decisions/D137-provider-images-share-one-nix-workstation.md) (`current`). Changing shared guest tools, browser installation, or package parity between Incus and E2B.
 - [D138: Session checkpoints use stock restic and scoped object storage](decisions/D138-session-checkpoints-use-stock-restic.md) (`current`). Changing session checkpoint storage, capture, or recovery.
+- [D142: Review contracts are required only for coding](decisions/D142-review-contracts-are-required-only-for-coding.md) (`current`). Changing ordinary adapter contracts or composing coding review execution.
 
 ## Harnesses
 
@@ -186,6 +188,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D137: Provider images share one Nix workstation](decisions/D137-provider-images-share-one-nix-workstation.md) (`current`). Changing shared guest tools, browser installation, or package parity between Incus and E2B.
 - [D138: Session checkpoints use stock restic and scoped object storage](decisions/D138-session-checkpoints-use-stock-restic.md) (`current`). Changing session checkpoint storage, capture, or recovery.
 - [D139: Codex routes use native launch overrides](decisions/D139-codex-routes-use-native-launch-overrides.md) (`current`). Changing Codex route installation, native configuration ownership, or app-server launch.
+- [D142: Review contracts are required only for coding](decisions/D142-review-contracts-are-required-only-for-coding.md) (`current`). Changing ordinary adapter contracts or composing coding review execution.
 
 ## Model access
 

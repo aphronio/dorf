@@ -112,9 +112,6 @@ func (s *verificationSandbox) ReconcileOwnedCreate(context.Context, provider.Own
 	return nil
 }
 func (*verificationSandbox) AttestOwnership(context.Context, provider.Ownership) error { return nil }
-func (*verificationSandbox) AttachReviewMetadata(context.Context, provider.Ownership, provider.ReviewMetadata) error {
-	return nil
-}
 func (s *verificationSandbox) OwnedPresent(context.Context, provider.Ownership) (bool, error) {
 	return s.present, s.presentErr
 }
@@ -124,9 +121,6 @@ func (s *verificationSandbox) DeleteOwned(context.Context, provider.Ownership) e
 		s.present = false
 	}
 	return s.deleteErr
-}
-func (*verificationSandbox) AttestReview(context.Context, provider.Ownership, provider.ReviewMetadata) error {
-	return nil
 }
 func (s *verificationSandbox) PutFile(context.Context, provider.Ownership, string, []byte) error {
 	s.putCall++

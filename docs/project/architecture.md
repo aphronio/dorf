@@ -415,9 +415,12 @@ Lifecycle and strict-review attestation remain fresh. This does not remove nativ
 or permit replay of an ambiguously accepted command. Live instruction files may be read together
 while preserving each file's validation and missing-file semantics.
 
-The shipped workflows use the baseline Sandbox and Harness contracts. There is no separate
-optional provider-capability declaration or matching layer. Add an extension only when a concrete
-workflow requires behavior beyond that baseline and an adapter can prove it.
+Ordinary execution uses the baseline Sandbox and Harness contracts without coding-review methods.
+Coding composes its own review transport and Harness contracts only when needed. Strict review
+requires provider review attestation and rejects providers without it before native access;
+reconnection and process replacement still require fresh attestation. These are explicit Go
+interfaces, not a general capability registry or matching layer. Add an extension only when a
+concrete consumer requires behavior beyond the baseline and an adapter can prove it.
 
 A profile is not usable until Dorf's functional probe and exact proof-resource cleanup complete. A
 provider/profile is not supported until its required route and Harness capabilities are admitted
