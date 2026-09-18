@@ -11,7 +11,6 @@ import (
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlreader"
 	"github.com/aphronio/dorf/internal/core"
-	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/postgres"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -25,7 +24,6 @@ type workerControlReader struct {
 }
 
 func controlReaderService(store postgres.Store, tasks *absurd.Client, cfg config.Config) controlreader.Service {
-	githubClient := githubapi.Client{APIURL: cfg.GitHubAPIURL, Credentials: cfg.GitHubCredentials}
 	return controlreader.Service{
 		ObservationAttention: func(ctx context.Context, job core.Job) (string, error) {
 			task, err := fetchTaskResult(ctx, tasks, job.CurrentTaskID)
@@ -37,11 +35,9 @@ func controlReaderService(store postgres.Store, tasks *absurd.Client, cfg config
 			}
 			return "", nil
 		},
-		Store:         store,
-		Runtimes:      profileRuntimeResolver{cfg: cfg, store: store, client: tasks},
-		Provider:      configuredProviderGateway(cfg),
-		Installations: githubClient,
-		PullRequests:  githubClient,
+		Store:    store,
+		Runtimes: profileRuntimeResolver{cfg: cfg, store: store, client: tasks},
+		Provider: configuredProviderGateway(cfg),
 	}
 }
 

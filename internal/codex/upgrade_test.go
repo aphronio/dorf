@@ -38,7 +38,7 @@ func TestNativePersistenceReadinessDoesNotResumeThread(t *testing.T) {
 			if err := verifyRetainedThread(context.Background(), protocol, "thread", expected, test.resume); err != nil {
 				t.Fatal(err)
 			}
-			if got := reviewProtocolMethods(requests); !reflect.DeepEqual(got, test.want) {
+			if got := protocolMethods(requests); !reflect.DeepEqual(got, test.want) {
 				t.Fatalf("native readiness methods=%v, want %v", got, test.want)
 			}
 		})

@@ -12,19 +12,6 @@ import (
 	"github.com/aphronio/dorf/internal/deployment"
 )
 
-func TestLoadRejectsRelativeGitHubCredentialsAndInexactAPIURL(t *testing.T) {
-	t.Setenv("DORF_DATABASE_URL", "postgres://dorf-test")
-	t.Setenv("DORF_GITHUB_CREDENTIALS", "relative-github/credentials.json")
-	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "must be an absolute") {
-		t.Fatalf("relative credential error=%v", err)
-	}
-	t.Setenv("DORF_GITHUB_CREDENTIALS", filepath.Join(t.TempDir(), "credentials.json"))
-	t.Setenv("DORF_GITHUB_API_URL", "https://example.test/api?")
-	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "exact HTTPS URL") {
-		t.Fatalf("inexact API URL error=%v", err)
-	}
-}
-
 func TestLoadDoesNotLetAmbientStateOverrideXDGProviderGatewayAuthority(t *testing.T) {
 	dataHome := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dataHome)
@@ -160,8 +147,7 @@ func TestResolvePathsIsTheOneXDGHostLayout(t *testing.T) {
 	}
 	if cfg.DeploymentPath != filepath.Join(paths.ConfigDir, "deployment.json") ||
 		cfg.GatewayStatePath != filepath.Join(paths.DataDir, "provider-gateway") ||
-		cfg.BlobRoot != filepath.Join(paths.StateDir, "blobs") ||
-		cfg.GitHubCredentials != filepath.Join(paths.ConfigDir, "integrations", "github", "credentials.json") {
+		cfg.BlobRoot != filepath.Join(paths.StateDir, "blobs") {
 		t.Fatalf("configuration did not use resolved paths: %#v", cfg)
 	}
 }

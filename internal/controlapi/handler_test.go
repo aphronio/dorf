@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	provider "github.com/aphronio/dorf/internal/sandbox"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
 )
@@ -65,11 +65,8 @@ func TestHandlerBoundary(t *testing.T) {
 		{http.MethodGet, "/v1/jobs/job-1/messages/message-1", nil},
 		{http.MethodPut, "/v1/jobs/job-1/messages/message-1/interrupt", nil},
 		{http.MethodPost, "/v1/jobs/job-1/retries", nil},
-		{http.MethodGet, "/v1/jobs/job-1/evidence", nil},
-		{http.MethodPut, "/v1/jobs/job-1/abandon", nil},
 		{http.MethodPut, "/v1/jobs/job-1/cleanup", nil},
 		{http.MethodGet, "/v1/sandboxes/sandbox-1/files?path=REPORT.md", nil},
-		{http.MethodPost, "/v1/workflows/coding/jobs", strings.NewReader(`{}`)},
 	} {
 		requireProblem(t, do(route.method, route.path, "", "", route.body), http.StatusUnauthorized, "unauthenticated")
 	}
@@ -135,13 +132,6 @@ func TestAdmissionsAcceptExplicitAIConnectionAndOmittedModel(t *testing.T) {
 			jobs:  &fakeJobs{job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindDirect}},
 			got:   func(j *fakeJobs) string { return j.gotInput.AIConnection },
 			model: func(j *fakeJobs) string { return j.gotInput.Model },
-		},
-		{
-			name: "coding", target: "/v1/workflows/coding/jobs",
-			body:  `{"repository":"https://github.com/acme/widget.git","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","base_branch":"main","ai_connection":"work-openai"}`,
-			jobs:  &fakeJobs{job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindCoding}, view: controlapi.CodingJob{Job: controlapi.Job{ID: base.ID, Kind: controlapi.JobKindCoding}}},
-			got:   func(j *fakeJobs) string { return j.codingInput.AIConnection },
-			model: func(j *fakeJobs) string { return j.codingInput.Model },
 		},
 	}
 	for _, test := range tests {
@@ -312,76 +302,6 @@ func TestJobConditionalGetAndDirectInteractionRoutes(t *testing.T) {
 	if jobs.cleanupCalls != 0 {
 		t.Fatal("unsupported cleanup precondition reached the mutation")
 	}
-}
-
-func TestAbandonIsAuthenticatedIdempotentAndReturnsCanonicalJob(t *testing.T) {
-	credential := "dcr_abandon"
-	job := controlapi.CodingJob{Job: controlapi.Job{ID: "job-coding", Kind: controlapi.JobKindCoding, Model: "ship"}}
-	jobs := &fakeJobs{job: job.Job, view: job}
-	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs, nil).Handler
-	put := func() *httptest.ResponseRecorder {
-		request := httptest.NewRequest(http.MethodPut, "/v1/jobs/job-coding/abandon", nil)
-		request.Header.Set("Authorization", "Bearer "+credential)
-		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, request)
-		return response
-	}
-	for call := 1; call <= 2; call++ {
-		response := put()
-		requireStatusType(t, response, http.StatusOK, "application/json")
-		var got controlapi.CodingJob
-		decode(t, response, &got)
-		if got.ID != job.ID || got.Kind != controlapi.JobKindCoding || response.Header().Get("ETag") == "" || jobs.abandonCalls != call {
-			t.Fatalf("call %d: job/etag/calls=%#v/%q/%d", call, got, response.Header().Get("ETag"), jobs.abandonCalls)
-		}
-	}
-
-	jobs.abandonErr = controlapi.ErrAbandonUnavailable
-	requireProblem(t, put(), http.StatusConflict, "abandon_unavailable")
-}
-
-func TestConcreteWorkflowJobRepresentationDrivesETag(t *testing.T) {
-	credential := "dcr_control-client"
-	base := controlapi.Job{
-		ID: "job-coding", Kind: controlapi.JobKindCoding, Model: "ship",
-	}
-	coding := controlapi.CodingJob{
-		Job: base, WorkflowRevision: "3", Repository: "https://github.com/acme/widget.git", Revision: strings.Repeat("b", 40),
-	}
-	jobs := &fakeJobs{job: base, view: coding}
-	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs, nil).Handler
-	get := func(etag string) *httptest.ResponseRecorder {
-		t.Helper()
-		request := httptest.NewRequest(http.MethodGet, "/v1/jobs/job-coding", nil)
-		request.Header.Set("Authorization", "Bearer "+credential)
-		if etag != "" {
-			request.Header.Set("If-None-Match", etag)
-		}
-		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, request)
-		return response
-	}
-
-	first := get("")
-	requireStatusType(t, first, http.StatusOK, "application/json")
-	firstETag := first.Header().Get("ETag")
-	coding.Proposal = &controlapi.CodingProposal{Number: 42, URL: "https://github.com/acme/widget/pull/42", Revision: coding.Revision}
-	jobs.mu.Lock()
-	jobs.view = coding
-	jobs.mu.Unlock()
-	changed := get(firstETag)
-	requireStatusType(t, changed, http.StatusOK, "application/json")
-	var gotCoding controlapi.CodingJob
-	decode(t, changed, &gotCoding)
-	if gotCoding.ID != base.ID || gotCoding.Kind != controlapi.JobKindCoding || gotCoding.Proposal == nil || gotCoding.Proposal.Number != 42 || changed.Header().Get("ETag") == firstETag {
-		t.Fatalf("changed coding Job/etag=%#v/%q after %q", gotCoding, changed.Header().Get("ETag"), firstETag)
-	}
-
-	coding.Kind = controlapi.JobKindDirect
-	jobs.mu.Lock()
-	jobs.view = coding
-	jobs.mu.Unlock()
-	requireProblem(t, get(""), http.StatusInternalServerError, "internal_error")
 }
 
 func TestSandboxFileResponseContract(t *testing.T) {
@@ -656,7 +576,6 @@ type fakeJobs struct {
 	listLimit         int
 	listCursor        string
 	gotInput          controlapi.AdmitJobRequest
-	codingInput       controlapi.AdmitCodingJobRequest
 	message           controlapi.Message
 	retry             controlapi.Retry
 	file              []byte
@@ -669,8 +588,6 @@ type fakeJobs struct {
 	messageCreated    bool
 	messageErr        error
 	retryCreated      bool
-	abandonCalls      int
-	abandonErr        error
 	cleanupCalls      int
 	waitForGetContext bool
 }
@@ -687,14 +604,6 @@ func (j *fakeJobs) AdmitDirect(_ context.Context, _ string, _ string, input cont
 	defer j.mu.Unlock()
 	j.gotInput = input
 	return controlapi.DirectJob{Job: j.job}, true, nil
-}
-
-func (j *fakeJobs) AdmitCoding(_ context.Context, _ string, _ string, input controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, bool, error) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	j.codingInput = input
-	job, _ := j.current().(controlapi.CodingJob)
-	return job, true, nil
 }
 
 func (j *fakeJobs) Get(ctx context.Context, id string) (controlapi.JobView, error) {
@@ -749,34 +658,12 @@ func (j *fakeJobs) Retry(_ context.Context, jobID, key string) (controlapi.Retry
 	return j.retry, j.retryCreated, nil
 }
 
-func (j *fakeJobs) Abandon(_ context.Context, id string) (controlapi.JobView, error) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	j.abandonCalls++
-	if id != j.job.ID {
-		return nil, controlapi.ErrJobNotFound
-	}
-	if j.abandonErr != nil {
-		return nil, j.abandonErr
-	}
-	return j.current(), nil
-}
-
 func (j *fakeJobs) ReadSandboxFile(_ context.Context, sandboxID, path string) ([]byte, error) {
 	if len(j.job.Sandboxes) == 0 || sandboxID != j.job.Sandboxes[0].ID {
 		return nil, controlapi.ErrSandboxNotFound
 	}
 	j.filePath = path
 	return append([]byte(nil), j.file...), nil
-}
-
-func (j *fakeJobs) Evidence(_ context.Context, jobID string) ([]controlapi.Evidence, error) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	if jobID != j.job.ID {
-		return nil, controlapi.ErrJobNotFound
-	}
-	return nil, nil
 }
 
 func (j *fakeJobs) RequestCleanup(_ context.Context, id string) (controlapi.JobView, error) {

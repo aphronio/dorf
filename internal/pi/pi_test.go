@@ -2,12 +2,11 @@ package pi
 
 import (
 	"context"
-	"errors"
-	"github.com/aphronio/dorf/internal/core"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/incus"
 	incustest "github.com/aphronio/dorf/internal/incus/testkit"
 	provider "github.com/aphronio/dorf/internal/sandbox"
@@ -23,37 +22,8 @@ func testReviewSandbox(runner incustest.Runner) incus.Adapter {
 
 type ordinaryReviewSandbox struct{ provider.Sandbox }
 
-func TestStrictReviewRequiresProviderAttestationBeforeNativeAccess(t *testing.T) {
-	agent := Agent{Sandbox: ordinaryReviewSandbox{}}
-	owner := testOwner("review")
-	review := provider.ReviewMetadata{JobID: owner.JobID, OwnershipNonce: owner.OwnershipNonce}
-	for name, operation := range map[string]func() (core.HarnessBinding, error){
-		"start": func() (core.HarnessBinding, error) {
-			return agent.StartStrictReviewTurn(t.Context(), owner, "/workspace", review, "nonce", "input", "model", "high")
-		},
-		"recover": func() (core.HarnessBinding, error) {
-			return agent.RecoverStrictReviewTurn(t.Context(), owner, "/workspace", review, "nonce", "input", "model", "high")
-		},
-		"read": func() (core.HarnessBinding, error) {
-			return agent.ReadStrictReviewTurn(t.Context(), owner, "/workspace", review, "thread", "turn", "nonce", "input", "model", "high")
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, err := operation()
-			var unsupported *provider.UnsupportedError
-			if !errors.As(err, &unsupported) || unsupported.Capability != "strict review attestation" {
-				t.Fatalf("unattested review returned %v", err)
-			}
-		})
-	}
-}
-
 func testOwner(sandboxID string) provider.Ownership {
 	return provider.Ownership{JobID: "job-" + sandboxID, SandboxID: sandboxID, OwnershipNonce: strings.Repeat("a", 64)}
-}
-
-func reviewOwner(sandboxID string, review provider.ReviewMetadata) provider.Ownership {
-	return provider.Ownership{JobID: review.JobID, SandboxID: sandboxID, OwnershipNonce: review.OwnershipNonce}
 }
 
 type recordingRunner struct {
@@ -89,21 +59,6 @@ type progressingHistoryRunner struct {
 
 type acceptedRPCSteerRunner struct {
 	request []byte
-}
-
-type emptyStrictReviewRunner struct {
-	owner incus.ReviewMetadata
-}
-
-func (r *emptyStrictReviewRunner) Run(_ context.Context, _ string, _ []byte, args ...string) (incus.Result, error) {
-	command := strings.Join(args, " ")
-	if command == "list --format=json" {
-		return incus.Result{Stdout: `[{"name":"dorf-review-owned","config":{"user.dorf.owner":"sandbox","user.dorf.job":"` + r.owner.JobID + `","user.dorf.sandbox":"dorf-review-owned","user.dorf.agent_run":"` + r.owner.AgentRunID + `","user.dorf.revision":"` + r.owner.Revision + `","user.dorf.ownership_nonce":"` + r.owner.OwnershipNonce + `"}}]`}, nil
-	}
-	if strings.Contains(command, "ambiguous Pi session identity") {
-		return incus.Result{}, nil
-	}
-	return incus.Result{}, nil
 }
 
 func (r *acceptedRPCSteerRunner) Run(_ context.Context, _ string, input []byte, args ...string) (incus.Result, error) {
@@ -259,19 +214,6 @@ func TestActiveTurnSteerAcknowledgesExactTarget(t *testing.T) {
 	}
 	if !strings.Contains(string(runner.request), `"id":"run-steer"`) || !strings.Contains(string(runner.request), `"type":"steer"`) || !strings.Contains(string(runner.request), `"message":"change direction"`) {
 		t.Fatalf("RPC request=%s", runner.request)
-	}
-}
-
-func TestStrictReviewRecoveryWithoutNativeTurnAllowsOriginalSubmission(t *testing.T) {
-	owner := incus.ReviewMetadata{JobID: "job-review", AgentRunID: "run-review", Revision: strings.Repeat("b", 40), OwnershipNonce: strings.Repeat("c", 64)}
-	agent := Agent{Sandbox: testReviewSandbox(&emptyStrictReviewRunner{owner: owner})}
-
-	binding, err := agent.RecoverStrictReviewTurn(context.Background(), reviewOwner("dorf-review-owned", owner), "/workspace/job", owner, strings.Repeat("a", 64), "review", "gpt-test", "low")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if binding.Harness != "" || binding.ThreadID != "" || binding.Turn.ID != "" {
-		t.Fatalf("empty strict review recovery binding=%#v", binding)
 	}
 }
 

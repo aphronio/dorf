@@ -94,7 +94,7 @@ func startOverrideServer(t *testing.T, ctx context.Context, executable, home, na
 			t.Fatal(err)
 		}
 	}
-	script := appServerScript(endpoint, tokenSHA256("synthetic-control-token"), false)
+	script := appServerScript(endpoint, tokenSHA256("synthetic-control-token"))
 	script = strings.ReplaceAll(script, "/root/", home+"/")
 	script = strings.ReplaceAll(script, serverControlDir, home+"/control")
 	command := exec.CommandContext(ctx, "bash", "-c", script)

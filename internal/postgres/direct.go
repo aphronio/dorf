@@ -8,7 +8,6 @@ import (
 
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/direct"
-	"github.com/aphronio/dorf/internal/postgres/dbsql"
 )
 
 func (s Store) AdmitDirect(ctx context.Context, input core.JobAdmission, queueName string) (core.Job, bool, error) {
@@ -21,7 +20,7 @@ func (s Store) AdmitDirect(ctx context.Context, input core.JobAdmission, queueNa
 	if err != nil {
 		return core.Job{}, false, err
 	}
-	job, created, err := admitJob(ctx, s, normalized, queueName, direct.TaskName, direct.TaskKey(core.JobID(normalized.AdmissionKey)), nil)
+	job, created, err := admitJob(ctx, s, normalized, queueName, direct.TaskName, direct.TaskKey(core.JobID(normalized.AdmissionKey)))
 	if errors.Is(err, ErrAdmissionConflict) {
 		err = fmt.Errorf("%w: %w", direct.ErrAdmissionConflict, err)
 	}
@@ -29,12 +28,12 @@ func (s Store) AdmitDirect(ctx context.Context, input core.JobAdmission, queueNa
 }
 
 func (s Store) AdmitDirectMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
-	return s.admitMessage(ctx, input, "", "", resolveDirectMessageEnvelope)
+	return s.admitMessage(ctx, input)
 }
 
 // resolveDirectMessageEnvelope supplies only the direct execution envelope. Generic
 // Message admission owns Follow, Steer, ordering, and Thread binding.
-func resolveDirectMessageEnvelope(_ context.Context, _ *dbsql.Queries, _ dbsql.GetJobAdmissionForUpdateRow, input core.MessageAdmission) (admittedAgentRun, error) {
+func resolveDirectMessageEnvelope(input core.MessageAdmission) (admittedAgentRun, error) {
 	if input.SandboxID != core.MainSandboxName(input.JobID) {
 		return admittedAgentRun{}, fmt.Errorf("direct Message requires the exact default Sandbox")
 	}

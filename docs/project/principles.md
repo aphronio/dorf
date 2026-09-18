@@ -52,31 +52,18 @@ cleanup execution are code-owned rather than agent judgment. Apply the
 not which layer owns its meaning. Actions record code-owned external mutations; an agent invocation
 is instead owned and reconciled by its AgentRun.
 
-In the coding workflow, publication and Git observation are deterministic; implementation AgentRuns
-own code changes, including one or many Git commits. User input and reviewer text return through the
-same Message path. The implementation agent decides whether to act. The coding workflow then asks
-Core to observe either a clean descendant commit as the next Revision or a clean unchanged checkout.
-Another workflow may have no repository or Revision, but it must preserve the same separation
-between observed facts and agent judgment.
-
-Review authority starts with deterministic mandatory policy. Known risks select bounded read-only
-review Roles; an unknown classification selects one general reviewer instead of a triage router.
-ReviewPolicy expresses each selected review prompt as an ordinary workflow Message consumed by its
-review AgentRun; that Message is the run's only durable text input. Reviewer prose is advisory Message
-input to the implementation AgentRun path, not a policy protocol to parse. No agent can waive a
-mandatory Role, capability boundary, or spend limit.
+Application setup, evaluation, review, and publication are client-owned policy. Native agent output
+is input to that policy, not an authority that can waive execution constraints.
 
 ## Facts before workflow status
 
 Persist the product facts that actually happened, not a second durable program counter describing
-where code believes the workflow is. The coding workflow derives one current operation from those
+where code believes the workflow is. The execution controller derives one current operation from those
 facts and executes it through Absurd. Inspection derives the expected dependency chain,
 chronological history, and current work from the same source of truth.
 
-This rule exists for clarity and composition: a new reviewer adds a Message and AgentRun, and a new
-feedback source adds a Message. Neither should require a new phase or a matrix of transitions across
-admission, readiness, publication, and inspection. Each workflow owns one small explicit decision
-over its natural facts; the durable core does not interpret workflow semantics.
+This rule exists for clarity and composition: a new feedback source adds a Message. Neither should require a new phase or a matrix of transitions across
+admission, readiness, publication, and inspection. Each client owns decisions over its application facts; the durable core does not interpret their meaning.
 
 Do not turn this into a generic DAG engine, configurable workflow language, copied event log, giant
 SQL `next_work` query, or persisted derived status. Keep each proven workflow decision visible in
@@ -86,20 +73,19 @@ retries to Absurd.
 
 ## Contracts and evaluation before autonomy
 
-A workflow begins with a bounded contract: typed intent, capability envelope, budget, expected
+An application begins with a bounded contract: typed intent, capability envelope, budget, expected
 outcomes, deterministic validations, and honest failure or no-result terminals. Its evaluation cases are
 part of the workflow, not a platform feature added after authoring. Runtime invariants protect
 recovery, idempotency, authority, and requested cleanup execution; workflow evaluations measure
 whether the result was useful.
 
-Agents may author or revise ordinary versioned workflow code, manifests, tests, and evaluations.
-They may not silently activate a new workflow version, grant themselves credentials or capabilities,
-or replace inspectable policy with an opaque generated graph. Agent-friendly development means
+Clients may author and revise application code and evaluations. Agents may not grant themselves
+credentials or capabilities or replace inspectable policy with an opaque generated graph. Agent-friendly development means
 machine-readable contracts, excellent diagnostics, fixtures, and short feedback loops.
 
 ## Disposable developer workstations
 
-Each coding Job should feel like a fresh developer workstation: isolated checkout, explicit branch,
+A client-directed coding environment should feel like a fresh developer workstation: isolated checkout, explicit branch,
 deterministic setup, checks, smoke tests, evidence, and a clear workflow- or client-owned accept or
 discard path.
 
@@ -138,7 +124,7 @@ version removes code or concepts without losing required behavior. Do not mainta
 for a hypothetical consumer.
 
 During the single-user stage, prototype data may be reset after an explicit preservation decision
-and the user's approval. Preserve useful Job history, Evidence, evaluations, dogfood proof, observed
+and the user's approval. Preserve useful Job history, application evidence, evaluations, dogfood proof, observed
 failures, and usage, cost, or outcome history when they can improve later work. Delete caches,
 rebuildable projections, obsolete schemas, and records that have no remaining product, evaluation,
 or audit value.
@@ -168,10 +154,9 @@ remain targeted terminals for changes that touch those authorities, not default 
 
 ## Evidence over narration
 
-Agent prose is a Message or workflow result, not Evidence. Process state, command results, commits,
-harness observation, external authority, and retained content identity are observed facts. Evidence
-records those observed facts and must use a supported typed relation to identify the fact it proves.
-Do not duplicate reviewer prose as Evidence. A fluent agent must never silently become the authority
+Agent prose is a Message or application result, not proof. Process state, command results, commits,
+harness observation, external authority, and retained content identity are observed facts. Clients retain application evidence; Dorf retains input and execution/resource receipts.
+Do not duplicate reviewer prose as platform evidence. A fluent agent must never silently become the authority
 for its own success.
 
 Evidence also guides product changes. Dogfood workflows early. Prefer measured human attention,

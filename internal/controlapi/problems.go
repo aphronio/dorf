@@ -15,14 +15,12 @@ type ProblemDescriptor struct {
 }
 
 var problemCatalog = []ProblemDescriptor{
-	describeProblem(409, "abandon_unavailable", "Only an unfinished coding Job can be abandoned", false),
 	describeProblem(422, "attachment_animation_unsupported", "Animated WebP attachments are not supported", false),
 	describeProblem(422, "attachment_image_too_large", "Attachment image exceeds the decoded pixel limit", false),
 	describeProblem(415, "body_not_allowed", "This operation does not accept a body or Content-Type", false),
 	describeProblem(413, "body_too_large", "Request body is too large", false),
 	describeProblem(409, "client_conflict", "Client credential is already registered", false),
 	describeProblem(401, "enrollment_unavailable", "Enrollment is invalid, expired, or already used", false),
-	describeProblem(500, "evidence_unverified", "Retained Evidence could not be verified", false),
 	describeProblem(404, "file_not_found", "Sandbox file not found", false),
 	describeProblem(400, "file_path_required", "Exactly one path query parameter is required", false),
 	describeProblem(409, "file_too_large", "Sandbox file exceeds the read limit", false),

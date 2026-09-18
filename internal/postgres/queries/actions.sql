@@ -1,8 +1,3 @@
--- name: InsertActionIfAbsent :exec
-insert into dorf.actions(id,job_id,kind,state)
-values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(kind),'unsettled')
-on conflict do nothing;
-
 -- name: ReserveSandbox :execrows
 with reserved as (
     insert into dorf.sandboxes(id,job_id,name,active_resource_id)
@@ -11,17 +6,6 @@ with reserved as (
 )
 insert into dorf.sandbox_resources(id,sandbox_id,ownership_nonce)
 select active_resource_id,id,sqlc.arg(ownership_nonce) from reserved;
-
--- name: GetActionForUpdate :one
-select id,job_id,kind,state,scope_key,created_at,settled_at
-from dorf.actions
-where id=sqlc.arg(id) and job_id=sqlc.arg(job_id) and kind=sqlc.arg(kind)
-for update;
-
--- name: GetAction :one
-select id,job_id,kind,state,scope_key,created_at,settled_at
-from dorf.actions
-where id=sqlc.arg(id) and job_id=sqlc.arg(job_id) and kind=sqlc.arg(kind);
 
 -- name: GetScopedAction :one
 select id,job_id,kind,state,scope_key,created_at,settled_at

@@ -12,7 +12,7 @@ import (
 
 func TestCommonConsumersDoNotImportSandboxProviders(t *testing.T) {
 	root := filepath.Clean(filepath.Join("..", ".."))
-	for _, directory := range []string{"core", "gitworkspace", "publication", "terminal", "codex", "pi"} {
+	for _, directory := range []string{"core", "terminal", "codex", "pi"} {
 		path := filepath.Join(root, "internal", directory)
 		entries, err := os.ReadDir(path)
 		if err != nil {
@@ -34,39 +34,6 @@ func TestCommonConsumersDoNotImportSandboxProviders(t *testing.T) {
 				}
 				if strings.HasSuffix(name, "/internal/incus") || strings.HasSuffix(name, "/internal/e2b") {
 					t.Errorf("%s imports concrete Sandbox provider %s", filename, name)
-				}
-			}
-		}
-	}
-}
-
-func TestCoreAndSandboxProvidersDoNotImportWorkflowModules(t *testing.T) {
-	root := filepath.Clean(filepath.Join("..", ".."))
-	workflowModules := []string{"/internal/coding", "/internal/gitworkspace", "/internal/outcome", "/internal/publication"}
-	for _, directory := range []string{"core", "sandbox", "incus", "e2b"} {
-		path := filepath.Join(root, "internal", directory)
-		entries, err := os.ReadDir(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
-				continue
-			}
-			filename := filepath.Join(path, entry.Name())
-			file, err := parser.ParseFile(token.NewFileSet(), filename, nil, parser.ImportsOnly)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, imported := range file.Imports {
-				name, err := strconv.Unquote(imported.Path.Value)
-				if err != nil {
-					t.Fatal(err)
-				}
-				for _, module := range workflowModules {
-					if strings.HasSuffix(name, module) {
-						t.Errorf("%s imports workflow module %s", filename, name)
-					}
 				}
 			}
 		}

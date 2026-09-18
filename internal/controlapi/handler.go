@@ -54,7 +54,6 @@ func newHandlerContext(discovery Discovery, auth Auth, jobs Jobs, profiles Profi
 	h.mux.HandleFunc("/v1/me", h.authenticate(h.meRoute))
 	h.mux.HandleFunc("/v1/profiles", h.authenticate(h.profilesRoute))
 	h.mux.HandleFunc("/v1/jobs", h.authenticate(h.jobsRoute))
-	h.mux.HandleFunc("/v1/workflows/coding/jobs", h.authenticate(h.admitCodingRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/timeline", h.authenticate(h.timelineRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/watch", h.authenticate(h.watchRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/messages", h.authenticate(h.sendMessageRoute))
@@ -64,8 +63,6 @@ func newHandlerContext(discovery Discovery, auth Auth, jobs Jobs, profiles Profi
 	h.mux.HandleFunc("/v1/jobs/{job}/messages/{message}", h.authenticate(h.messageRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/messages/{message}/interrupt", h.authenticate(h.interruptMessageRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/retries", h.authenticate(h.retryRoute))
-	h.mux.HandleFunc("/v1/jobs/{job}/evidence", h.authenticate(h.evidenceRoute))
-	h.mux.HandleFunc("/v1/jobs/{job}/abandon", h.authenticate(h.abandonRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}/cleanup", h.authenticate(h.cleanupRoute))
 	h.mux.HandleFunc("/v1/jobs/{job}", h.authenticate(h.jobRoute))
 	h.mux.HandleFunc("/v1/sandboxes/{sandbox}/status", h.authenticate(h.sandboxStatusRoute))
@@ -225,26 +222,6 @@ func (h *handler) admitDirectRoute(w http.ResponseWriter, r *http.Request, clien
 	h.jobResponseStatus(w, r, job, nil, createdStatus(created))
 }
 
-func (h *handler) admitCodingRoute(w http.ResponseWriter, r *http.Request, client controlauth.Client) {
-	if !h.exact(w, r, http.MethodPost, true) {
-		return
-	}
-	key, ok := h.idempotencyKey(w, r)
-	if !ok {
-		return
-	}
-	var input AdmitCodingJobRequest
-	if !h.decode(w, r, &input) {
-		return
-	}
-	job, created, err := h.jobs.AdmitCoding(r.Context(), client.ID, key, input)
-	if err != nil {
-		h.serviceError(w, r, err)
-		return
-	}
-	h.jobResponseStatus(w, r, job, nil, createdStatus(created))
-}
-
 func (h *handler) sendMessageRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
 	if !h.exactMessageRequest(w, r) {
 		return
@@ -302,27 +279,6 @@ func (h *handler) retryRoute(w http.ResponseWriter, r *http.Request, _ controlau
 		return
 	}
 	h.reply(w, createdStatus(created), retry)
-}
-
-func (h *handler) evidenceRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
-	if h.exact(w, r, http.MethodGet, false) {
-		evidence, err := h.jobs.Evidence(r.Context(), r.PathValue("job"))
-		if err != nil {
-			h.serviceError(w, r, err)
-			return
-		}
-		if evidence == nil {
-			evidence = []Evidence{}
-		}
-		h.reply(w, http.StatusOK, EvidenceList{Evidence: evidence})
-	}
-}
-
-func (h *handler) abandonRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
-	if h.exact(w, r, http.MethodPut, false) {
-		job, err := h.jobs.Abandon(r.Context(), r.PathValue("job"))
-		h.jobResponse(w, r, job, err)
-	}
 }
 
 func (h *handler) cleanupRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
@@ -706,9 +662,6 @@ func (h *handler) serviceError(w http.ResponseWriter, r *http.Request, err error
 		h.authError(w)
 		return
 	}
-	if errors.Is(err, ErrEvidenceUnverified) {
-		log.Printf("Dorf control API Evidence verification failure: method=%s path=%q error_type=%T", r.Method, r.URL.Path, err)
-	}
 	for _, entry := range serviceProblems {
 		if errors.Is(err, entry.err) {
 			h.fail(w, problem(entry.code))
@@ -739,8 +692,6 @@ var serviceProblems = []struct {
 	{ErrFileTooLarge, "file_too_large"},
 	{ErrFileUnavailable, "file_unavailable"},
 	{ErrRetryUnavailable, "retry_unavailable"},
-	{ErrAbandonUnavailable, "abandon_unavailable"},
-	{ErrEvidenceUnverified, "evidence_unverified"},
 }
 
 func admissionProblemCode(err error) string {

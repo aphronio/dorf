@@ -23,7 +23,6 @@ type Config struct {
 }
 
 type Result = provider.Result
-type ReviewMetadata = provider.ReviewMetadata
 type OwnershipMetadata = provider.Ownership
 type OwnershipError = provider.OwnershipError
 
@@ -200,29 +199,8 @@ func attestOwnershipIn(instances []Instance, metadata OwnershipMetadata) error {
 	return nil
 }
 
-// AttachReviewMetadata adds harness attestation labels only after the generic
 // Job/Sandbox ownership has been verified. These labels are not consulted by
 // cleanup.
-func (s Sandbox) AttachReviewMetadata(ctx context.Context, ownership OwnershipMetadata, review ReviewMetadata) error {
-	if review.JobID != ownership.JobID || review.OwnershipNonce != ownership.OwnershipNonce || review.AgentRunID == "" || review.Revision == "" {
-		return fmt.Errorf("review Sandbox requires complete host-owned identity metadata")
-	}
-	client, err := s.open(ctx)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-	if err := s.attestOwnership(ctx, client, ownership); err != nil {
-		return err
-	}
-	if err := client.PatchInstanceConfig(ctx, ownership.SandboxID, ownershipConfig(ownership), map[string]string{
-		"user.dorf.agent_run": review.AgentRunID,
-		"user.dorf.revision":  review.Revision,
-	}); err != nil {
-		return err
-	}
-	return s.attestReview(ctx, client, ownership.SandboxID, review)
-}
 
 func (s Sandbox) OwnedPresent(ctx context.Context, metadata OwnershipMetadata) (bool, error) {
 	if err := validateOwnership(metadata); err != nil {
@@ -276,50 +254,6 @@ func (s Sandbox) DeleteOwned(ctx context.Context, metadata OwnershipMetadata) er
 		return err
 	}
 	return client.DeleteInstance(ctx, metadata.SandboxID, ownershipConfig(metadata))
-}
-
-func (s Sandbox) AttestReview(ctx context.Context, name string, metadata ReviewMetadata) error {
-	client, err := s.open(ctx)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-	return s.attestReview(ctx, client, name, metadata)
-}
-
-func (s Sandbox) attestReview(ctx context.Context, client Client, name string, metadata ReviewMetadata) error {
-	instances, err := boundedInstances(ctx, client)
-	if err != nil {
-		return err
-	}
-	matches := make([]Instance, 0, 1)
-	for _, instance := range instances {
-		if instance.Config["user.dorf.agent_run"] == metadata.AgentRunID {
-			matches = append(matches, instance)
-		}
-	}
-	if len(matches) != 1 || matches[0].Name != name {
-		return ownershipErrorf("review Sandbox metadata is missing, foreign, stale, or ambiguous")
-	}
-	want := map[string]string{
-		"user.dorf.job":             metadata.JobID,
-		"user.dorf.agent_run":       metadata.AgentRunID,
-		"user.dorf.revision":        metadata.Revision,
-		"user.dorf.ownership_nonce": metadata.OwnershipNonce,
-	}
-	owner := matches[0].Config["user.dorf.owner"]
-	if owner != "sandbox" && owner != "review" {
-		return ownershipErrorf("review Sandbox metadata user.dorf.owner does not match its durable owner")
-	}
-	if owner == "sandbox" && matches[0].Config["user.dorf.sandbox"] != name {
-		return ownershipErrorf("review Sandbox metadata user.dorf.sandbox does not match its durable owner")
-	}
-	for key, value := range want {
-		if matches[0].Config[key] != value {
-			return ownershipErrorf("review Sandbox metadata %s does not match its durable owner", key)
-		}
-	}
-	return nil
 }
 
 func (s Sandbox) BridgeIPv4(ctx context.Context) (string, error) {

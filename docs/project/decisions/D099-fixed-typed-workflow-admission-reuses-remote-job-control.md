@@ -1,9 +1,9 @@
 # D099: Fixed typed workflow admission reuses remote Job control
 
-- **Applicability:** partial
+- **Applicability:** historical
 - **Areas:** client-api, workflows
 - **Read when:** Changing remote admission or projection for a built-in typed workflow.
-- **Decision history:** Accepted and dogfooded — 2026-08-26; source admission refined by D103 — 2026-08-27; investigation workflow retired by D143 — 2026-09-18.
+- **Decision history:** Accepted and dogfooded — 2026-08-26; source admission refined by D103 — 2026-08-27; investigation workflow retired by D143 — 2026-09-18.; application contracts retired by D144 — 2026-09-18.
 - **Decision:** Add exactly two workflow admission resources to D097's authenticated Deployment:
   `POST /v1/workflows/coding/jobs` and
   `POST /v1/workflows/codebase-investigation/jobs`. Each accepts its complete typed input under the

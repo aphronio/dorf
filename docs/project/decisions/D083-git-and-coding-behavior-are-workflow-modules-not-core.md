@@ -1,9 +1,9 @@
 # D083: Git and coding behavior are workflow modules, not Core
 
-- **Applicability:** partial
+- **Applicability:** historical
 - **Areas:** core, workflows, sandboxes
 - **Read when:** Changing ownership of Git workspace or coding behavior across Core and workflow modules.
-- **Decision history:** Refined by D084, D085, and D086 — 2026-08-20
+- **Decision history:** Refined by D084, D085, and D086 — 2026-08-20; application contracts retired by D144 — 2026-09-18.
 - **Decision:** Keep Core limited to the existing Job, Message, Sandbox, AgentRun, Action,
   Evidence, recovery, exact Sandbox file reads, and requested-cleanup custody described by the North Star. Place
   exact Git checkout and Revision observation in `internal/gitworkspace`. Place review execution and

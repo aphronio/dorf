@@ -5,14 +5,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/aphronio/dorf/internal/absurdruntime"
-	"github.com/aphronio/dorf/internal/direct"
-	"github.com/earendil-works/absurd/sdks/go/absurd"
 	"os"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/aphronio/dorf/internal/absurdruntime"
+	"github.com/aphronio/dorf/internal/direct"
+	"github.com/earendil-works/absurd/sdks/go/absurd"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/postgres"
 )
@@ -25,7 +25,7 @@ func TestDeliveryHoldPreservesAdmissionDrainAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	sandboxID := core.MainSandboxName(job.ID)
-	current, err := codingDelivery(ctx, store, job.ID)
+	current, err := nextDelivery(ctx, store, job.ID)
 	if err != nil || current == nil {
 		t.Fatalf("initial delivery: %v", err)
 	}

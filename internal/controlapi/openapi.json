@@ -201,49 +201,6 @@
         }
       }
     },
-    "/v1/workflows/coding/jobs": {
-      "post": {
-        "operationId": "admitCodingJob",
-        "summary": "Admit or exactly replay a coding Job",
-        "tags": ["Jobs"],
-        "parameters": [
-          { "$ref": "#/components/parameters/IdempotencyKey" }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": { "$ref": "#/components/schemas/AdmitCodingJobRequest" }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Exact replay of the admitted Job",
-            "headers": {
-              "ETag": { "$ref": "#/components/headers/ETag" }
-            },
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/CodingJob" }
-              }
-            }
-          },
-          "201": {
-            "description": "Job admitted",
-            "headers": {
-              "ETag": { "$ref": "#/components/headers/ETag" }
-            },
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/CodingJob" }
-              }
-            }
-          },
-          "default": { "$ref": "#/components/responses/Problem" }
-        }
-      }
-    },
     "/v1/jobs/{job}": {
       "get": {
         "operationId": "getJob",
@@ -516,51 +473,6 @@
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/Retry" }
-              }
-            }
-          },
-          "default": { "$ref": "#/components/responses/Problem" }
-        }
-      }
-    },
-    "/v1/jobs/{job}/evidence": {
-      "get": {
-        "operationId": "listJobEvidence",
-        "summary": "List verified immutable Evidence metadata",
-        "tags": ["Jobs"],
-        "parameters": [
-          { "$ref": "#/components/parameters/JobID" }
-        ],
-        "responses": {
-          "200": {
-            "description": "Verified Evidence metadata; direct Jobs may return an empty array",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/EvidenceList" }
-              }
-            }
-          },
-          "default": { "$ref": "#/components/responses/Problem" }
-        }
-      }
-    },
-    "/v1/jobs/{job}/abandon": {
-      "put": {
-        "operationId": "abandonJob",
-        "summary": "Abandon an unfinished coding Job idempotently",
-        "tags": ["Jobs"],
-        "parameters": [
-          { "$ref": "#/components/parameters/JobID" }
-        ],
-        "responses": {
-          "200": {
-            "description": "Current complete Job representation after accepting the request",
-            "headers": {
-              "ETag": { "$ref": "#/components/headers/ETag" }
-            },
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/Job" }
               }
             }
           },
@@ -1228,23 +1140,6 @@
           "reasoning": { "$ref": "#/components/schemas/ReasoningEffort" }
         }
       },
-      "AdmitCodingJobRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["repository", "revision", "base_branch"],
-        "properties": {
-          "keep_running": { "type": "boolean", "default": false, "description": "Disable pause between turns for this Job. E2B pauses idle Sandboxes by default; other providers retain their existing lifecycle. Does not bypass provider timeouts." },
-          "client_reference": { "type": "string", "maxLength": 255, "description": "Optional opaque caller thread or task reference; retained at admission. Empty means no reference." },
-          "repository": { "type": "string", "minLength": 1 },
-          "revision": { "$ref": "#/components/schemas/GitCommitOID" },
-          "base_branch": { "type": "string", "minLength": 1 },
-          "branch": { "type": "string", "description": "Omitted or empty derives dorf/<Job ID>" },
-          "profile": { "type": "string", "description": "Named verified profile; omitted or empty selects the Deployment default" },
-          "ai_connection": { "type": "string", "description": "Named AI connection; omitted or empty selects the Deployment default" },
-          "model": { "type": "string", "maxLength": 1024, "description": "Harness model override; omitted or empty selects the resolved AI connection's default. The admitted Job always returns the exact resolved model." },
-          "reasoning": { "$ref": "#/components/schemas/ReasoningEffort" }
-        }
-      },
       "JobList": {
         "type": "object",
         "additionalProperties": false,
@@ -1285,20 +1180,18 @@
       },
       "Job": {
         "oneOf": [
-          { "$ref": "#/components/schemas/DirectJob" },
-          { "$ref": "#/components/schemas/CodingJob" }
+          { "$ref": "#/components/schemas/DirectJob" }
         ],
         "discriminator": {
           "propertyName": "kind",
           "mapping": {
-            "direct": "#/components/schemas/DirectJob",
-            "coding": "#/components/schemas/CodingJob"
+            "direct": "#/components/schemas/DirectJob"
           }
         }
       },
       "JobKind": {
         "type": "string",
-        "enum": ["direct", "coding"]
+        "enum": ["direct"]
       },
       "GitCommitOID": {
         "type": "string",
@@ -1349,37 +1242,6 @@
             "type": "object",
             "properties": {
               "kind": { "const": "direct" }
-            }
-          }
-        ],
-        "unevaluatedProperties": false
-      },
-      "CodingJob": {
-        "allOf": [
-          { "$ref": "#/components/schemas/JobCommon" },
-          {
-            "type": "object",
-            "required": [ "workflow_revision", "repository", "starting_revision", "revision", "branch", "base_branch", "proposal", "outcome"],
-            "properties": {
-              "kind": { "const": "coding" },
-              "workflow_revision": { "type": "string", "minLength": 1 },
-              "repository": { "type": "string", "minLength": 1 },
-              "starting_revision": { "$ref": "#/components/schemas/GitCommitOID" },
-              "revision": { "$ref": "#/components/schemas/GitCommitOID" },
-              "branch": { "type": "string", "minLength": 1 },
-              "base_branch": { "type": "string", "minLength": 1 },
-              "proposal": {
-                "oneOf": [
-                  { "$ref": "#/components/schemas/CodingProposal" },
-                  { "type": "null" }
-                ]
-              },
-              "outcome": {
-                "oneOf": [
-                  { "$ref": "#/components/schemas/CodingOutcome" },
-                  { "type": "null" }
-                ]
-              }
             }
           }
         ],
@@ -1478,27 +1340,6 @@
           "deleted_at": { "type": "string", "format": "date-time" }
         }
       },
-      "CodingProposal": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["number", "url", "revision"],
-        "properties": {
-          "number": { "type": "integer", "minimum": 1 },
-          "url": { "type": "string", "format": "uri" },
-          "revision": { "$ref": "#/components/schemas/GitCommitOID" }
-        }
-      },
-      "CodingOutcome": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["kind", "observed_state", "observed_at"],
-        "properties": {
-          "kind": { "type": "string", "enum": ["accepted", "rejected", "abandoned"] },
-          "observed_state": { "type": "string", "minLength": 1 },
-          "merge_commit_oid": { "$ref": "#/components/schemas/GitCommitOID" },
-          "observed_at": { "type": "string", "format": "date-time" }
-        }
-      },
       "SendMessageRequest": {
         "type": "object",
         "additionalProperties": false,
@@ -1563,33 +1404,6 @@
         "properties": {
           "job_id": { "type": "string", "minLength": 1 },
           "state": { "type": "string", "const": "scheduled" }
-        }
-      },
-      "EvidenceList": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["evidence"],
-        "properties": {
-          "evidence": {
-            "type": "array",
-            "items": { "$ref": "#/components/schemas/Evidence" }
-          }
-        }
-      },
-      "Evidence": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "sha256", "byte_size", "media_type", "producer", "kind"],
-        "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-          "byte_size": { "type": "integer", "minimum": 0 },
-          "media_type": { "type": "string", "minLength": 1 },
-          "producer": { "type": "string", "minLength": 1 },
-          "kind": { "type": "string", "minLength": 1 },
-          "revision": { "$ref": "#/components/schemas/GitCommitOID" },
-          "started_at": { "type": "string", "format": "date-time" },
-          "finished_at": { "type": "string", "format": "date-time" }
         }
       },
       "Problem": {

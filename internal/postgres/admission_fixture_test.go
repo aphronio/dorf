@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/postgres"
 )
@@ -29,16 +28,6 @@ func legacyAdmissionFixture(t *testing.T, store postgres.Store, ctx context.Cont
 	}
 	job.CurrentTaskID = ""
 	return job, created, nil
-}
-
-func admitCodingFixture(t *testing.T, store postgres.Store, ctx context.Context, input coding.Admission) (core.Job, bool, error) {
-	return legacyAdmissionFixture(t, store, ctx, func(queue string) (core.Job, bool, error) {
-		job, created, err := store.AdmitCoding(ctx, input, queue)
-		if err == nil {
-			_, err = store.AdmitCodingMessage(ctx, fixtureMessage(job.ID))
-		}
-		return job, created, err
-	})
 }
 
 func admitDirectFixture(t *testing.T, store postgres.Store, ctx context.Context, input core.JobAdmission) (core.Job, bool, error) {

@@ -20,7 +20,6 @@ func TestRemoteProfileListUsesConnectedAPIWithoutHostConfiguration(t *testing.T)
 	root := t.TempDir()
 	t.Setenv("HOME", root)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
-	t.Setenv("DORF_GITHUB_API_URL", "deliberately-invalid-host-configuration")
 	if err := clientconfig.Save(clientconfig.Path(root), clientconfig.Config{
 		DeploymentURL: "https://dorf.example.test", Credential: "test-client",
 	}); err != nil {

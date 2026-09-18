@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/aphronio/dorf/internal/clientconfig"
@@ -65,27 +64,6 @@ func TestMessageCLIForwardsImageAndFileToAnotherJob(t *testing.T) {
 	}
 }
 
-func TestWorkflowCLIInitialMessagesAcceptAttachments(t *testing.T) {
-	files := cliAttachmentFixtures(t)
-	inputFile := filepath.Join(t.TempDir(), "instructions.txt")
-	text := "  Fix the visible problem.\n"
-	if err := os.WriteFile(inputFile, []byte(text), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	jobs := &attachmentCLIJobs{}
-	client := attachmentCLIClient(t, jobs)
-	args := []string{"run", "coding", "--key", "initial-key", "--input-file", inputFile, "--attach", files[0], "--attach", files[1],
-		"--repo", "https://github.com/aphronio/dorf.git", "--revision", strings.Repeat("a", 40), "--output", "json"}
-	args = append(args, "--base", "main")
-	if err := remoteWorkflowCommand(context.Background(), client, clientconfig.Config{}, args, io.Discard, io.Discard); err != nil {
-		t.Fatal(err)
-	}
-	if len(jobs.messages) != 1 || jobs.messages[0].key != "initial-key" || jobs.messages[0].input.Text != text ||
-		jobs.messages[0].input.Intent != "follow" || len(jobs.messages[0].input.Attachments) != 2 {
-		t.Fatalf("workflow initial input=%+v", jobs.messages)
-	}
-}
-
 func TestAttachmentCLIRejectsInvalidLocalInputBeforeRemoteEffects(t *testing.T) {
 	files := cliAttachmentFixtures(t)
 	oversize := filepath.Join(t.TempDir(), "large.bin")
@@ -124,10 +102,6 @@ func TestAttachmentCLIRejectsInvalidLocalInputBeforeRemoteEffects(t *testing.T) 
 			}
 			if err := remoteMessageSend(context.Background(), clientconfig.Config{}, client, append(append([]string{}, args...), "worker"), io.Discard, io.Discard); err == nil {
 				t.Fatal("job message accepted invalid local input")
-			}
-			workflowArgs := append([]string{"run", "coding"}, args...)
-			if err := remoteWorkflowCommand(context.Background(), client, clientconfig.Config{}, workflowArgs, io.Discard, io.Discard); err == nil {
-				t.Fatal("coding accepted invalid local input")
 			}
 		})
 	}
@@ -179,9 +153,6 @@ type attachmentCLIJobs struct {
 
 func (*attachmentCLIJobs) AdmitDirect(context.Context, string, string, controlapi.AdmitJobRequest) (controlapi.DirectJob, bool, error) {
 	return controlapi.DirectJob{Job: controlapi.Job{ID: "direct-job", Kind: controlapi.JobKindDirect}}, true, nil
-}
-func (*attachmentCLIJobs) AdmitCoding(context.Context, string, string, controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, bool, error) {
-	return controlapi.CodingJob{Job: controlapi.Job{ID: "coding-job", Kind: controlapi.JobKindCoding}}, true, nil
 }
 func (j *attachmentCLIJobs) SendMessage(_ context.Context, jobID, key string, input controlapi.SendMessageRequest) (controlapi.Message, bool, error) {
 	j.messages = append(j.messages, capturedAttachmentMessage{jobID: jobID, key: key, input: input})

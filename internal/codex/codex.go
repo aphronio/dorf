@@ -69,57 +69,9 @@ type attentionError struct{ reason string }
 func (e *attentionError) Error() string         { return e.reason }
 func (e *attentionError) AttentionNeeded() bool { return true }
 
-type reviewVisibilityError struct{ reason string }
-
-func (e *reviewVisibilityError) Error() string                   { return e.reason }
-func (e *reviewVisibilityError) RetryableReviewVisibility() bool { return true }
-
 func (a Agent) StartInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID string, input core.HarnessInput, model, effort string, refreshSkills bool) (core.HarnessBinding, error) {
 	threadID, turn, err := a.startInitialTurn(ctx, owner, workspace, agentRunID, input, model, effort, "danger-full-access", refreshSkills)
 	return core.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: turn}, err
-}
-
-func (a Agent) StartStrictReviewTurn(ctx context.Context, owner provider.Ownership, workspace string, review provider.ReviewMetadata, submissionNonce, input, model, effort string) (core.HarnessBinding, error) {
-	ctx, cancel := a.timeoutContext(ctx)
-	defer cancel()
-	binding := core.HarnessBinding{Harness: Harness}
-	err := a.withReviewServer(ctx, owner, review, func(protocol *protocol) error {
-		threadID, turn, err := protocol.reconcileStrictReviewTurn(ctx, workspace, "", submissionNonce, input, model, effort, true)
-		binding.ThreadID, binding.Turn = threadID, turn
-		return err
-	})
-	return binding, err
-}
-
-func (a Agent) RecoverStrictReviewTurn(ctx context.Context, owner provider.Ownership, workspace string, review provider.ReviewMetadata, submissionNonce, input, model, effort string) (core.HarnessBinding, error) {
-	ctx, cancel := a.timeoutContext(ctx)
-	defer cancel()
-	binding := core.HarnessBinding{Harness: Harness}
-	err := a.withReviewServer(ctx, owner, review, func(protocol *protocol) error {
-		threadID, turn, err := protocol.reconcileStrictReviewTurn(ctx, workspace, "", submissionNonce, input, model, effort, false)
-		binding.ThreadID, binding.Turn = threadID, turn
-		return err
-	})
-	return binding, err
-}
-
-func (a Agent) ReadStrictReviewTurn(ctx context.Context, owner provider.Ownership, workspace string, review provider.ReviewMetadata, threadID, turnID, submissionNonce, input, model, effort string) (core.HarnessBinding, error) {
-	ctx, cancel := a.timeoutContext(ctx)
-	defer cancel()
-	binding := core.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: TurnOutcome{ID: turnID, Status: "running"}}
-	err := a.withReviewServer(ctx, owner, review, func(protocol *protocol) error {
-		observedThread, turns, err := protocol.strictReviewHistory(ctx, workspace, threadID, submissionNonce, input, model, effort)
-		if err != nil {
-			return err
-		}
-		binding.ThreadID = observedThread
-		if len(turns) != 1 || turns[0].ID != turnID {
-			return reviewAttention("strict review recovery found the wrong native turn")
-		}
-		binding.Turn = turns[0]
-		return nil
-	})
-	return binding, err
 }
 
 func (a Agent) startInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID string, input core.HarnessInput, model, effort, capability string, refreshSkills bool) (string, TurnOutcome, error) {
@@ -342,46 +294,12 @@ func (a Agent) openServer(ctx context.Context, owner provider.Ownership, fn func
 		if err != nil {
 			return err
 		}
-		return a.withServerEndpointController(ctx, owner, endpointAccess{listen: endpoint.ListenURL, dial: endpoint.DialURL, headers: endpoint.Headers(), dialContext: endpoint.DialContext()}, false, nil, fn)
+		return a.withServerEndpointController(ctx, owner, endpointAccess{listen: endpoint.ListenURL, dial: endpoint.DialURL, headers: endpoint.Headers(), dialContext: endpoint.DialContext()}, fn)
 	})
 }
 
-func (a Agent) withReviewServer(ctx context.Context, owner provider.Ownership, review provider.ReviewMetadata, fn func(*protocol) error) error {
-	if err := a.attestReview(ctx, owner, review); err != nil {
-		return err
-	}
-	endpoint, err := a.Sandbox.Endpoint(ctx, owner, a.Port)
-	if err != nil {
-		return err
-	}
-	return a.withReviewServerAccess(ctx, owner, endpointAccess{listen: endpoint.ListenURL, dial: endpoint.DialURL, headers: endpoint.Headers(), dialContext: endpoint.DialContext()}, review, fn)
-}
-
-func (a Agent) withReviewServerEndpoint(ctx context.Context, owner provider.Ownership, endpoint string, review provider.ReviewMetadata, fn func(*protocol) error) error {
-	return a.withReviewServerAccess(ctx, owner, sameEndpoint(endpoint), review, fn)
-}
-
-func (a Agent) withReviewServerAccess(ctx context.Context, owner provider.Ownership, endpoint endpointAccess, review provider.ReviewMetadata, fn func(*protocol) error) error {
-	return a.withServerEndpointController(ctx, owner, endpoint, true, func() error {
-		// Re-attest after reconnect or process replacement. The authentication
-		// token can rotate; only this exact host-owned Sandbox identity persists.
-		if err := a.attestReview(ctx, owner, review); err != nil {
-			return err
-		}
-		return nil
-	}, fn)
-}
-
-func (a Agent) attestReview(ctx context.Context, owner provider.Ownership, review provider.ReviewMetadata) error {
-	attester, ok := a.Sandbox.(provider.ReviewAttester)
-	if !ok {
-		return &provider.UnsupportedError{Capability: "strict review attestation"}
-	}
-	return attester.AttestReview(ctx, owner, review)
-}
-
 func (a Agent) withServerEndpoint(ctx context.Context, owner provider.Ownership, endpoint string, fn func(*protocol) error) error {
-	return a.withServerEndpointController(ctx, owner, sameEndpoint(endpoint), false, nil, fn)
+	return a.withServerEndpointController(ctx, owner, sameEndpoint(endpoint), fn)
 }
 
 type endpointAccess struct {
@@ -395,7 +313,7 @@ func sameEndpoint(endpoint string) endpointAccess {
 	return endpointAccess{listen: endpoint, dial: endpoint}
 }
 
-func (a Agent) withServerEndpointController(ctx context.Context, owner provider.Ownership, endpoint endpointAccess, reviewReadOnly bool, authorize func() error, fn func(*protocol) error) error {
+func (a Agent) withServerEndpointController(ctx context.Context, owner provider.Ownership, endpoint endpointAccess, fn func(*protocol) error) error {
 	probe, err := a.probeServer(ctx, owner, endpoint.listen)
 	if err != nil {
 		return err
@@ -407,11 +325,6 @@ func (a Agent) withServerEndpointController(ctx context.Context, owner provider.
 		if dialErr == nil {
 			protocol.configureObservations(ctx, a.Observations, owner)
 			defer a.finishProtocol(protocol)
-			if authorize != nil {
-				if err := authorize(); err != nil {
-					return err
-				}
-			}
 			return fn(protocol)
 		}
 		if probe.running {
@@ -432,7 +345,7 @@ func (a Agent) withServerEndpointController(ctx context.Context, owner provider.
 	if write.ExitCode != 0 {
 		return fmt.Errorf("write Codex app-server capability: %s", strings.TrimSpace(write.Stderr))
 	}
-	launch := appServerScript(endpoint.listen, tokenSHA256(token), reviewReadOnly)
+	launch := appServerScript(endpoint.listen, tokenSHA256(token))
 	result, err := a.Sandbox.Exec(ctx, owner, nil, "bash", "-lc", launch)
 	if err != nil {
 		return err
@@ -446,11 +359,6 @@ func (a Agent) withServerEndpointController(ctx context.Context, owner provider.
 		if dialErr == nil {
 			protocol.configureObservations(ctx, a.Observations, owner)
 			defer a.finishProtocol(protocol)
-			if authorize != nil {
-				if err := authorize(); err != nil {
-					return err
-				}
-			}
 			return fn(protocol)
 		}
 		if time.Now().After(deadline) {
@@ -468,11 +376,8 @@ func controlCapabilityScript() string {
 	return "umask 077; install -d -m 700 " + serverControlDir + "; cat > " + controlTokenPath + ".new; chmod 600 " + controlTokenPath + ".new; mv -f " + controlTokenPath + ".new " + controlTokenPath
 }
 
-func appServerScript(endpoint, tokenDigest string, reviewReadOnly bool) string {
+func appServerScript(endpoint, tokenDigest string) string {
 	configuration := ` -c 'approval_policy="never"'`
-	if reviewReadOnly {
-		configuration += ` -c 'sandbox_mode="read-only"'`
-	}
 	return "set -e; umask 077; install -d -m 700 " + serverControlDir + "; rm -f " + serverPIDPath + "; IFS= read -r DORF_PROVIDER_ROUTE_KEY < " + routeKeyPath + "; export DORF_PROVIDER_ROUTE_KEY; " + loadRouteOptions + "nohup codex app-server \"${route_options[@]}\"" + configuration + " --listen " + endpoint + " --ws-auth " + serverAuthMode + " --ws-token-sha256 " + tokenDigest + " </dev/null >" + serverLogPath + " 2>&1 & printf '%s\\n' \"$!\" > " + serverPIDPath
 }
 
@@ -594,32 +499,6 @@ func (p *protocol) listThreads(ctx context.Context, workspace string) ([]string,
 	return ids, nil
 }
 
-func (p *protocol) listStrictReviewThreads(ctx context.Context, workspace string) ([]map[string]any, error) {
-	result, err := p.call(ctx, "thread/list", map[string]any{"limit": 2, "cwd": workspace})
-	if err != nil {
-		return nil, err
-	}
-	if cursor, ok := result["nextCursor"].(string); ok && cursor != "" {
-		return nil, reviewAttention("strict review thread discovery exceeded its bound")
-	}
-	data, ok := result["data"].([]any)
-	if !ok {
-		return nil, reviewAttention("strict review thread discovery omitted result.data")
-	}
-	if len(data) > 1 {
-		return nil, reviewAttention(fmt.Sprintf("strict review recovery found %d competing threads", len(data)))
-	}
-	threads := make([]map[string]any, 0, len(data))
-	for _, value := range data {
-		thread, ok := value.(map[string]any)
-		if !ok || strings.TrimSpace(stringValue(thread["id"])) == "" || stringValue(thread["cwd"]) != workspace {
-			return nil, reviewAttention("strict review thread identity or cwd is missing or mismatched")
-		}
-		threads = append(threads, thread)
-	}
-	return threads, nil
-}
-
 func (p *protocol) startThread(ctx context.Context, workspace, model, capability string) (string, error) {
 	result, err := p.call(ctx, "thread/start", map[string]any{"cwd": workspace, "model": model, "approvalPolicy": "never", "sandbox": capability, "config": map[string]any{"project_doc_max_bytes": maxInstructionFileBytes}})
 	if err != nil {
@@ -631,190 +510,6 @@ func (p *protocol) startThread(ctx context.Context, workspace, model, capability
 		return "", fmt.Errorf("thread/start response is missing result.thread.id")
 	}
 	return id, nil
-}
-
-func (p *protocol) startStrictReviewThread(ctx context.Context, workspace, model, effort string) (string, error) {
-	result, err := p.call(ctx, "thread/start", map[string]any{"cwd": workspace, "model": model, "approvalPolicy": "never", "sandbox": "read-only"})
-	if err != nil {
-		return "", err
-	}
-	// Reasoning effort is a turn/start setting in the native protocol, so an
-	// empty thread cannot attest it yet. The first persisted turn and every
-	// recovery read below must expose the requested value.
-	if err := validateReviewSettings(result, workspace, model, ""); err != nil {
-		return "", err
-	}
-	thread, _ := result["thread"].(map[string]any)
-	id := stringValue(thread["id"])
-	if id == "" || stringValue(thread["cwd"]) != workspace {
-		return "", reviewAttention("strict review thread/start returned a mismatched thread")
-	}
-	return id, nil
-}
-
-func (p *protocol) reconcileStrictReviewTurn(ctx context.Context, workspace, expectedSession, submissionNonce, input, model, effort string, allowStart bool) (string, TurnOutcome, error) {
-	if len(submissionNonce) != 64 || strings.TrimSpace(input) == "" {
-		return "", TurnOutcome{}, reviewAttention("strict review submission nonce or review Message is missing")
-	}
-	threads, err := p.listStrictReviewThreads(ctx, workspace)
-	if err != nil {
-		return "", TurnOutcome{}, err
-	}
-	var sessionID string
-	fresh := false
-	if len(threads) == 0 {
-		if !allowStart || expectedSession != "" {
-			return "", TurnOutcome{}, reviewVisibilityMissing("strict review bound thread is not yet visible")
-		}
-		sessionID, err = p.startStrictReviewThread(ctx, workspace, model, effort)
-		if err != nil {
-			return "", TurnOutcome{}, err
-		}
-		fresh = true
-	} else {
-		sessionID = stringValue(threads[0]["id"])
-		if expectedSession != "" && sessionID != expectedSession {
-			return "", TurnOutcome{}, reviewAttention("strict review recovery found the wrong thread")
-		}
-	}
-	if !fresh {
-		observedSession, turns, err := p.strictReviewSnapshot(ctx, workspace, sessionID, model, effort)
-		if err != nil {
-			return sessionID, TurnOutcome{}, err
-		}
-		if len(turns) > 1 {
-			return sessionID, TurnOutcome{}, reviewAttention("strict review thread contains extra turns")
-		}
-		if len(turns) == 1 {
-			if err := attestReviewTurn(turns[0], submissionNonce, input); err != nil {
-				return sessionID, TurnOutcome{}, err
-			}
-			return observedSession, parseTurn(turns[0]), nil
-		}
-		if !allowStart {
-			return sessionID, TurnOutcome{}, reviewVisibilityMissing("strict review bound native turn is not yet visible")
-		}
-	}
-	turn, err := p.startTurn(ctx, sessionID, workspace, submissionNonce, core.HarnessInput{Text: input}, model, effort, "read-only")
-	if err != nil {
-		return sessionID, TurnOutcome{}, err
-	}
-	return sessionID, turn, nil
-}
-
-func (p *protocol) strictReviewHistory(ctx context.Context, workspace, expectedSession, submissionNonce, input, model, effort string) (string, []TurnOutcome, error) {
-	threads, err := p.listStrictReviewThreads(ctx, workspace)
-	if err != nil {
-		return "", nil, err
-	}
-	if len(threads) == 0 {
-		return "", nil, reviewVisibilityMissing("strict review bound thread is not yet visible")
-	}
-	if len(threads) != 1 || stringValue(threads[0]["id"]) != expectedSession {
-		return "", nil, reviewAttention("strict review recovery found a missing or competing thread")
-	}
-	sessionID, rawTurns, err := p.strictReviewSnapshot(ctx, workspace, expectedSession, model, effort)
-	if err != nil {
-		return "", nil, err
-	}
-	if len(rawTurns) == 0 {
-		return sessionID, nil, reviewVisibilityMissing("strict review bound native turn is not yet visible")
-	}
-	if len(rawTurns) != 1 {
-		return sessionID, nil, reviewAttention(fmt.Sprintf("strict review thread contains %d turns; exactly one is required", len(rawTurns)))
-	}
-	if err := attestReviewTurn(rawTurns[0], submissionNonce, input); err != nil {
-		return sessionID, nil, err
-	}
-	return sessionID, []TurnOutcome{parseTurn(rawTurns[0])}, nil
-}
-
-func (p *protocol) strictReviewSnapshot(ctx context.Context, workspace, sessionID, model, effort string) (string, []map[string]any, error) {
-	result, err := p.call(ctx, "thread/resume", map[string]any{
-		"threadId":       sessionID,
-		"cwd":            workspace,
-		"approvalPolicy": "never",
-		"sandbox":        "read-only",
-	})
-	if err != nil {
-		return "", nil, err
-	}
-	if err := validateReviewSettings(result, workspace, model, ""); err != nil {
-		return "", nil, err
-	}
-	thread, _ := result["thread"].(map[string]any)
-	if stringValue(thread["id"]) != sessionID || stringValue(thread["cwd"]) != workspace {
-		return "", nil, reviewAttention("strict review thread/resume returned a mismatched thread")
-	}
-	values, ok := thread["turns"].([]any)
-	if !ok {
-		return "", nil, reviewAttention("strict review thread omitted persisted turns")
-	}
-	turns := make([]map[string]any, 0, len(values))
-	for _, value := range values {
-		turn, ok := value.(map[string]any)
-		if !ok || stringValue(turn["id"]) == "" {
-			return "", nil, reviewAttention("strict review native turn identity is missing")
-		}
-		turns = append(turns, turn)
-	}
-	if len(turns) > 0 && stringValue(result["reasoningEffort"]) != effort {
-		return "", nil, reviewAttention("strict review model, effort, cwd, approval, or read-only policy is missing or mismatched")
-	}
-	return sessionID, turns, nil
-}
-
-func validateReviewSettings(result map[string]any, workspace, model, effort string) error {
-	sandbox, _ := result["sandbox"].(map[string]any)
-	if stringValue(result["cwd"]) != workspace || stringValue(result["model"]) != model || stringValue(result["approvalPolicy"]) != "never" || effort != "" && stringValue(result["reasoningEffort"]) != effort || stringValue(sandbox["type"]) != "readOnly" {
-		return reviewAttention("strict review model, effort, cwd, approval, or read-only policy is missing or mismatched")
-	}
-	if network, exists := sandbox["networkAccess"]; exists {
-		allowed, ok := network.(bool)
-		if !ok || allowed {
-			return reviewAttention("strict review read-only policy unexpectedly exposes network access")
-		}
-	}
-	return nil
-}
-
-func attestReviewTurn(turn map[string]any, submissionNonce, input string) error {
-	items, ok := turn["items"].([]any)
-	if !ok {
-		return reviewAttention("strict review native turn omitted persisted user input")
-	}
-	matched := 0
-	for _, raw := range items {
-		item, ok := raw.(map[string]any)
-		if !ok || item["type"] != "userMessage" {
-			continue
-		}
-		matched++
-		if stringValue(item["clientId"]) != submissionNonce {
-			return reviewAttention("strict review native turn has a missing or wrong client message identity")
-		}
-		content, ok := item["content"].([]any)
-		if !ok || len(content) != 1 {
-			return reviewAttention("strict review native turn has ambiguous persisted input")
-		}
-		text, ok := content[0].(map[string]any)
-		if !ok || text["type"] != "text" || stringValue(text["text"]) != input {
-			return reviewAttention("strict review turn prompt differs from the exact review Message")
-		}
-	}
-	if matched != 1 {
-		return reviewAttention("strict review native turn does not contain one exact persisted user message")
-	}
-	return nil
-}
-
-func reviewAttention(reason string) error { return &attentionError{reason: reason} }
-
-func reviewVisibilityMissing(reason string) error { return &reviewVisibilityError{reason: reason} }
-
-func stringValue(value any) string {
-	text, _ := value.(string)
-	return text
 }
 
 func (p *protocol) reconcileInitialTurn(ctx context.Context, workspace, agentRunID string, goal core.HarnessInput, model, effort, capability string) (string, TurnOutcome, error) {
@@ -1128,3 +823,5 @@ func randomToken() (string, error) {
 	}
 	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
+
+func stringValue(value any) string { text, _ := value.(string); return text }

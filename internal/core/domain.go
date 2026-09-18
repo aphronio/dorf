@@ -286,8 +286,7 @@ type AgentRun struct {
 	InterruptRequested bool          `json:"interrupt_requested"`
 	Attention          string        `json:"attention,omitempty"`
 	Role               string        `json:"role"`
-	// InputRevision is the accepted checkout when this delivery begins. A
-	// later git-revision Evidence records what the AgentRun left behind.
+	// InputRevision retains legacy delivery attribution; direct input leaves it empty.
 	InputRevision   string    `json:"input_revision,omitempty"`
 	Capability      string    `json:"capability,omitempty"`
 	SandboxID       string    `json:"sandbox_id,omitempty"`
@@ -367,20 +366,6 @@ type SandboxActionAuthorization struct {
 	TaskName string
 }
 
-type Evidence struct {
-	ID         string    `json:"id"`
-	Digest     string    `json:"digest"`
-	ByteSize   int64     `json:"byte_size"`
-	MediaType  string    `json:"media_type"`
-	Producer   string    `json:"producer"`
-	Kind       string    `json:"kind"`
-	ActionID   string    `json:"action_id,omitempty"`
-	AgentRunID string    `json:"agent_run_id,omitempty"`
-	Revision   string    `json:"revision,omitempty"`
-	StartedAt  time.Time `json:"started_at,omitempty"`
-	FinishedAt time.Time `json:"finished_at,omitempty"`
-}
-
 type HarnessTurn struct {
 	ID                 string   `json:"id"`
 	Status             string   `json:"status"`
@@ -457,10 +442,6 @@ func ActionID(jobID string, kind ActionKind) string {
 
 func ScopedActionID(jobID string, kind ActionKind, scope string) string {
 	return "action-" + digest(jobID+"\x00"+string(kind)+"\x00"+scope, 24)
-}
-
-func EvidenceID(ownerID, kind string) string {
-	return "evidence-" + digest(ownerID+"\x00"+kind, 24)
 }
 
 func digest(value string, length int) string {

@@ -19,9 +19,7 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/codex"
-	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/core"
-	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/postgres"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
@@ -40,8 +38,6 @@ const (
 	DefaultConnectionPath  = "/v1/admission/default-connection"
 	DefaultModelPath       = "/v1/admission/default-model"
 	ConnectionCheckPath    = "/v1/admission/check-connection"
-	GitHubInstallationPath = "/v1/admission/github-installation"
-	PullRequestPath        = "/v1/github/pull-request/observe"
 )
 
 var (
@@ -61,8 +57,6 @@ type Store interface {
 	SandboxDeliveryHeld(context.Context, string) (bool, error)
 	core.SandboxActivityStore
 	Job(context.Context, string) (core.Job, error)
-	CodingJob(context.Context, string) (coding.Job, error)
-	Proposal(context.Context, string) (*coding.Proposal, error)
 	Sandbox(context.Context, string) (core.Sandbox, error)
 	AgentMessageExecution(context.Context, string) (core.AgentMessageExecution, error)
 	WithJobFence(context.Context, string, func() error) error
@@ -74,14 +68,6 @@ type AdmissionProvider interface {
 	Check(context.Context, string) error
 }
 
-type InstallationDiscovery interface {
-	DiscoverInstallation(context.Context, string) (string, error)
-}
-
-type PullRequestObservation interface {
-	PullRequest(context.Context, githubapi.Authority, int64) (githubapi.PullRequest, error)
-}
-
 // Service owns provider-facing reads. It accepts only durable Dorf identities
 // and one already-validated Sandbox file path.
 type Service struct {
@@ -90,8 +76,6 @@ type Service struct {
 	Store                Store
 	Runtimes             core.SandboxRuntimeResolver
 	Provider             AdmissionProvider
-	Installations        InstallationDiscovery
-	PullRequests         PullRequestObservation
 }
 
 func (s Service) ReadFile(ctx context.Context, sandboxID, relativePath string) ([]byte, error) {
@@ -313,73 +297,12 @@ func (s Service) Check(ctx context.Context, connection string) error {
 	return s.Provider.Check(ctx, connection)
 }
 
-func (s Service) DiscoverInstallation(ctx context.Context, repository string) (string, error) {
-	if !validRepository(repository) {
-		return "", ErrInvalidRequest
-	}
-	if s.Installations == nil {
-		return "", fmt.Errorf("GitHub installation observation authority is not configured")
-	}
-	installation, err := s.Installations.DiscoverInstallation(ctx, repository)
-	if err != nil {
-		return "", err
-	}
-	if !validIdentity(installation) {
-		return "", fmt.Errorf("GitHub installation observation returned invalid identity")
-	}
-	return installation, nil
-}
-
-func (s Service) ObservePullRequest(ctx context.Context, jobID string) (githubapi.PullRequest, error) {
-	if !validIdentity(jobID) {
-		return githubapi.PullRequest{}, ErrUnavailable
-	}
-	if s.Store == nil || s.PullRequests == nil {
-		return githubapi.PullRequest{}, fmt.Errorf("GitHub pull-request observation authority is not configured")
-	}
-	job, err := s.Store.CodingJob(ctx, jobID)
-	if errors.Is(err, postgres.ErrNotFound) {
-		return githubapi.PullRequest{}, ErrUnavailable
-	}
-	if err != nil {
-		return githubapi.PullRequest{}, err
-	}
-	proposal, err := s.Store.Proposal(ctx, jobID)
-	if err != nil {
-		return githubapi.PullRequest{}, err
-	}
-	if job.ID != jobID || !validRepository(job.GitHubRepository) || !validIdentity(job.GitHubInstallation) ||
-		!validIdentity(job.Branch) || !validIdentity(job.BaseBranch) || !validIdentity(job.Revision) ||
-		proposal == nil || proposal.JobID != job.ID || proposal.Number < 1 || !validIdentity(proposal.URL) ||
-		proposal.ProposedRevision != job.Revision {
-		return githubapi.PullRequest{}, ErrUnavailable
-	}
-	authority := githubapi.Authority{Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation}
-	pull, err := s.PullRequests.PullRequest(ctx, authority, proposal.Number)
-	if err != nil {
-		return githubapi.PullRequest{}, fmt.Errorf("observe exact GitHub pull request #%d: %w", proposal.Number, err)
-	}
-	if pull.Number != proposal.Number || pull.URL != proposal.URL || pull.Repository != job.GitHubRepository ||
-		pull.Head != job.Branch || pull.Base != job.BaseBranch || pull.HeadSHA != proposal.ProposedRevision {
-		return githubapi.PullRequest{}, ErrUnavailable
-	}
-	return pull, nil
-}
-
 func validIdentity(value string) bool {
 	return value != "" && value == strings.TrimSpace(value) && len(value) <= 255 && !strings.ContainsRune(value, 0)
 }
 
 func validModel(value string) bool {
 	return value != "" && value == strings.TrimSpace(value) && len(value) <= 1024 && !strings.ContainsRune(value, 0)
-}
-
-func validRepository(value string) bool {
-	if value == "" || value != strings.TrimSpace(value) || len(value) > 255 || strings.ContainsAny(value, "\x00\\?#") {
-		return false
-	}
-	owner, name, found := strings.Cut(value, "/")
-	return found && owner != "" && name != "" && !strings.Contains(name, "/") && owner != "." && owner != ".." && name != "." && name != ".."
 }
 
 type fileReadRequest struct {
@@ -396,24 +319,12 @@ type connectionRequest struct {
 	Connection string `json:"connection"`
 }
 
-type installationRequest struct {
-	Repository string `json:"repository"`
-}
-
-type pullRequestObservationRequest struct {
-	JobID string `json:"job_id"`
-}
-
 type connectionResponse struct {
 	Connection string `json:"connection"`
 }
 
 type modelResponse struct {
 	Model string `json:"model"`
-}
-
-type installationResponse struct {
-	Installation string `json:"installation"`
 }
 
 type problem struct {
@@ -465,13 +376,6 @@ func NewHandler(token string, service Service) (http.Handler, error) {
 		}),
 		ConnectionCheckPath: jsonEndpoint(0, func(ctx context.Context, input connectionRequest) (struct{}, error) {
 			return struct{}{}, service.Check(ctx, input.Connection)
-		}),
-		GitHubInstallationPath: jsonEndpoint(0, func(ctx context.Context, input installationRequest) (installationResponse, error) {
-			installation, err := service.DiscoverInstallation(ctx, input.Repository)
-			return installationResponse{Installation: installation}, err
-		}),
-		PullRequestPath: jsonEndpoint(MaxObservationBytes, func(ctx context.Context, input pullRequestObservationRequest) (githubapi.PullRequest, error) {
-			return service.ObservePullRequest(ctx, input.JobID)
 		}),
 	}
 
@@ -821,45 +725,6 @@ func (c Client) Check(ctx context.Context, connection string) error {
 	}
 	var result struct{}
 	return decodeJSONResponse(response, &result, maxProblemBytes, "JSON")
-}
-
-func (c Client) DiscoverInstallation(ctx context.Context, repository string) (string, error) {
-	response, err := c.request(ctx, GitHubInstallationPath, installationRequest{Repository: repository})
-	if err != nil {
-		return "", err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return "", decodeProblem(response)
-	}
-	var result installationResponse
-	if err := decodeJSONResponse(response, &result, maxProblemBytes, "JSON"); err != nil {
-		return "", err
-	}
-	if !validIdentity(result.Installation) {
-		return "", ErrUnavailable
-	}
-	return result.Installation, nil
-}
-
-func (c Client) ObservePullRequest(ctx context.Context, jobID string) (githubapi.PullRequest, error) {
-	response, err := c.request(ctx, PullRequestPath, pullRequestObservationRequest{JobID: jobID})
-	if err != nil {
-		return githubapi.PullRequest{}, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return githubapi.PullRequest{}, decodeProblem(response)
-	}
-	var pull githubapi.PullRequest
-	if err := decodeJSONResponse(response, &pull, MaxObservationBytes, "pull-request observation"); err != nil {
-		return githubapi.PullRequest{}, err
-	}
-	if pull.Number < 1 || !validRepository(pull.Repository) || !validIdentity(pull.URL) ||
-		!validIdentity(pull.Head) || !validIdentity(pull.Base) || !validIdentity(pull.HeadSHA) {
-		return githubapi.PullRequest{}, ErrUnavailable
-	}
-	return pull, nil
 }
 
 func decodeJSONResponse(response *http.Response, target any, maxBytes int, name string) error {

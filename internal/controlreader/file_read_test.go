@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/postgres"
 	provider "github.com/aphronio/dorf/internal/sandbox"
@@ -197,10 +196,6 @@ func (s *boundedStore) Job(_ context.Context, id string) (core.Job, error) {
 	}
 	return s.job, nil
 }
-func (*boundedStore) CodingJob(context.Context, string) (coding.Job, error) {
-	return coding.Job{}, postgres.ErrNotFound
-}
-func (*boundedStore) Proposal(context.Context, string) (*coding.Proposal, error) { return nil, nil }
 func (s *boundedStore) Sandbox(_ context.Context, id string) (core.Sandbox, error) {
 	if id != s.sandbox.ID {
 		return core.Sandbox{}, postgres.ErrNotFound

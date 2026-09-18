@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
@@ -13,7 +12,6 @@ import (
 	"github.com/aphronio/dorf/internal/deployment"
 	"github.com/aphronio/dorf/internal/direct"
 	"github.com/aphronio/dorf/internal/incus"
-	piagent "github.com/aphronio/dorf/internal/pi"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/terminal"
 )
@@ -86,33 +84,6 @@ func TestDirectClientPromptIsExactAndFailClosed(t *testing.T) {
 // Embedding only the ordinary interfaces deliberately hides review methods.
 type ordinarySandbox struct{ provider.Sandbox }
 type ordinaryHarness struct{ terminal.Harness }
-
-func TestCodingCompositionRequiresReviewContracts(t *testing.T) {
-	for _, test := range []struct {
-		name      string
-		externals terminal.Externals
-		missing   string
-	}{
-		{"ordinary provider", terminal.Externals{Sandbox: ordinarySandbox{}, Agent: codex.Agent{}}, "strict review transport"},
-		{"ordinary Harness", terminal.Externals{Sandbox: incus.Adapter{}, Agent: ordinaryHarness{Harness: codex.Agent{}}}, "strict review Harness"},
-		{"Codex review", terminal.Externals{Sandbox: incus.Adapter{}, Agent: codex.Agent{}}, ""},
-		{"Pi review", terminal.Externals{Sandbox: incus.Adapter{}, Agent: piagent.Agent{}}, ""},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			review, err := reviewController(test.externals)
-			if test.missing == "" {
-				if err != nil || review.Harness() != test.externals.Agent.Name() {
-					t.Fatalf("review composition failed: %v", err)
-				}
-				return
-			}
-			var unsupported *provider.UnsupportedError
-			if !errors.As(err, &unsupported) || unsupported.Capability != test.missing {
-				t.Fatalf("missing review contract returned %v", err)
-			}
-		})
-	}
-}
 
 func TestSandboxForIncusProfileRequiresAndUsesExactDeploymentAuthority(t *testing.T) {
 	authority := deployment.Incus{Endpoint: "unix:///var/lib/incus/unix.socket"}

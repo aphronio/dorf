@@ -14,20 +14,16 @@ flowchart LR
     Ingress --> API["Control API · fixed Job projections"]
     Host["Deployment-host Client"] -->|fixed loopback| API
     API -->|direct| Core["In-process Core application boundary"]
-    Workflow["Native Dorf workflow"] --> Core
-    API -->|typed workflow| Workflow
     Core --> Custody["Durable execution custody"]
     Custody --> PG[("PostgreSQL facts")]
     Custody --> Absurd["Absurd durable execution"]
     Absurd --> Worker["Durable worker"]
     Worker --> Edge["Actions · observations · AgentRuns"]
     Edge --> Sandbox["Sandbox provider"]
-    Edge --> External["Workflow external authorities"]
     Sandbox --> Harness["Agent Harness"]
 ```
 
-Dorf runs as a stateful control-plane deployment. Native workflows compose one small application
-boundary in-process. CLI clients use the authenticated control projection. The
+Dorf runs as a stateful control-plane deployment. Clients drive direct execution through one application boundary. CLI clients use the authenticated control projection. The
 [Remote Control API](../control-api.md) owns the current external contract and managed deployment
 boundary. [Getting started](../getting-started.md) owns installation and operation. The checked-in
 [`deploy/compose.yaml`](../../deploy/compose.yaml) owns the exact service and network inventory.
@@ -45,17 +41,15 @@ of fact.
 | Fact | Authority |
 | --- | --- |
 | Job identity, accepted execution contract, durable lifecycle, and cleanup request/execution | Dorf-owned PostgreSQL facts |
-| Workflow-specific facts and outcome | Workflow-owned PostgreSQL tables or typed records |
 | Task claims, checkpoints, retry schedule, sleeps, waits, and cancellation | Absurd schema in the same PostgreSQL deployment |
 | Agent transcript, tool items, Thread, Turn, and native history | The selected Harness |
 | Mutable files, running processes, and local tool output | A Job-owned Sandbox |
 | External objects and their mutable state | Their external authority, such as GitHub or another service |
 | Accepted Message attachment manifest and bytes | Ordered PostgreSQL Message data and the content-addressed blob store |
-| Retained observed proof | Evidence linked to the fact it proves; bytes use the same content-addressed blob store |
+| Native execution and lifecycle receipts | Dorf records exact bindings and observed facts; the native or provider authority proves acceptance |
 
 The same mutable fact must not be mirrored into multiple authorities. Read models may project facts
-for inspection, but they are disposable and rebuildable. Agent prose and workflow reports are claims
-or results; Evidence proves only what Dorf or an adapter actually observed.
+for inspection, but they are disposable and rebuildable. Agent prose and application reports are client inputs; they do not prove platform execution or business success.
 
 Resource ownership follows lifetime. A Job is the aggregate owner of every Sandbox allocated for
 it. A Sandbox owns or deterministically identifies its
@@ -63,7 +57,7 @@ scoped provider route and injected authority. AgentRuns use a Sandbox but never 
 internal durable recovery facts rather than caller-coordinated resources. Cleanup begins at the Job
 and reconciles resources against their external authorities before declaring them removed, but only
 after a workflow, composed module, or client has requested resource release. Core never infers that
-request from success, failure, an Outcome, inactivity, or a need for human input.
+request from success, failure, inactivity, or a need for human input.
 
 A logical Sandbox has one active resource binding. Each provider VM has a separate retained
 resource record containing its ownership token and, after attestation, its opaque provider locator.
@@ -100,11 +94,10 @@ semantics are described in the [Remote Control API](../control-api.md).
 ## Execution model
 
 One admission creates one durable execution owner with its configuration and a stable
-idempotency identity. A workflow-driven Job also pins its workflow version. Admission records the
-Job, consumer-owned configuration, Sandbox reservation, Absurd task, and task attachment in one
+idempotency identity. Admission records the
+Job, admitted configuration, Sandbox reservation, Absurd task, and task attachment in one
 PostgreSQL transaction. Ordinary task handoffs also commit scheduling and attachment together.
-The consuming adapter supplies task identity; the shared transaction does not interpret workflow
-policy. Absurd's public SQL functions provide this transaction boundary. Message text, ordered
+The direct runtime supplies task identity. Absurd's public SQL functions provide this transaction boundary. Message text, ordered
 attachment manifests, and AgentRuns are admitted separately through the same Message operation
 regardless of sequence position.
 Workspace instructions supplied at creation are installed within Sandbox preparation, before any
@@ -144,10 +137,9 @@ recovery still reconcile incomplete admission and cleanup records from older wri
 during a rolling upgrade.
 
 A Job records an append-only ordered chain of Absurd task attachments. The latest attachment is its
-current execution task; task names are observations, not hard-coded Job phases. A workflow may hand
-off to another task without adding another task-ID column or changing retry semantics.
+current execution task; task names are observations, not hard-coded Job phases. Cleanup may replace the current task without changing retry semantics.
 
-Each workflow has one readable coordinator over its natural facts. It asks what work is currently
+Direct execution has one readable coordinator over its natural facts. It asks what work is currently
 missing, performs one bounded operation, records the resulting fact, reloads, and continues, stops
 for attention or completion, or returns no current operation. An open Job with no eligible operation
 keeps its current attached task in an Absurd wait; idleness is not a workflow operation or persisted
@@ -249,9 +241,7 @@ fresh authenticated history without replaying the mutation in the operation.
 
 Consumers and workflows choose a typed execution envelope, including Role, capability, and any input
 Revision, but do not authorize message intent, reorder accepted input, or choose Thread semantics.
-Follow and steer retain the invariant behavior above. A workflow may still choose separate Sandboxes
-and Agent handles for responsibilities such as implementation and review; each handle then has its
-own authoritative retained Thread.
+Follow and steer retain the invariant behavior above. Clients compose independent responsibilities through separate Jobs.
 
 ### Deterministic operations
 
@@ -260,12 +250,12 @@ and a reconciliation path.
 Before repeating an unsettled Action, Dorf inspects the actual authority. Immutable success makes an
 identical retry a no-op.
 
-Agent tool calls and agent-authored files are AgentRun work, not automatically Actions or Evidence.
+Agent tool calls and agent-authored files are AgentRun work, not automatically Actions.
 Core exposes settled agent work through the Agent application handle; a workflow observes its
 relevant domain results and records natural typed facts. Generic result strings, arbitrary metadata
 bags, and copied external state are not substitutes for domain records.
 
-### Message attachments, workspace files, Evidence, and inspection
+### Message attachments, workspace files, and inspection
 
 Message attachments are accepted user input. Their explicit filenames and bounded bytes earn
 durable Message custody before execution. They do not authorize generic output discovery or
@@ -287,13 +277,10 @@ bytes. HTTP clients independently bound response materialization and verify exac
 Direct Go callers own the lifetime of returned bytes. Durable typed results remain owned by the
 workflow that understands them.
 
-Evidence is immutable observed proof linked to the supported fact it proves, currently an AgentRun,
-Action, or Revision. Its validity follows the claim it supports: a coding Revision change may
-invalidate Revision-bound evidence, while a captured source or lifecycle observation may remain
-valid.
+Application evidence belongs to clients. The shared blob store retains Message attachments.
 
-Inspection projects one situation-first view from Dorf and workflow facts: accepted messages, observed
-history, current work or attention, outcome, evidence, and cleanup. Raw Absurd attempts, leases,
+Inspection projects one situation-first view from execution facts: accepted messages, observed
+history, current work or attention, native outcome and cleanup. Raw Absurd attempts, leases,
 checkpoints, and waits remain operator diagnostics through Absurd's tools rather than being copied
 into Dorf's product history.
 
@@ -301,7 +288,7 @@ into Dorf's product history.
 
 Core retains only execution facts whose authority and recovery meaning survive removal of client or
 workflow policy: durable identity, accepted Message text and attachment custody, accepted input
-order, internal AgentRuns, Sandbox ownership, stable external effects, Evidence custody, recovery,
+order, internal AgentRuns, Sandbox ownership, stable external effects, recovery,
 caller-requested attention, and caller-requested cleanup.
 
 Client- and workflow-specific inputs, results, external authorities, and terminal meaning remain in
@@ -312,11 +299,9 @@ composition boundary.
 
 ## Client boundary
 
-Trusted client adapters may drive bounded execution directly or delegate policy to a predefined
-workflow. Direct clients decide what agent work to request, what results mean, whether more work is
-needed, and when to request cleanup. Workflow clients delegate those decisions to the selected
-workflow. Native workflows compose the in-process Core contract. CLI clients, including the
-deployment-host CLI, use the authenticated control projection.
+Clients drive direct execution and decide what agent work to request, what results mean, whether
+more work is needed, and when to request cleanup. CLI clients, including the deployment-host CLI,
+use the authenticated control projection.
 
 The external projection is not a network exposure of Core. The
 [Remote Control API](../control-api.md) owns its supported Job kinds, operations, authentication,
@@ -324,22 +309,11 @@ transport behavior, and managed service boundary. Its published OpenAPI document
 response, and Problem shapes. The [Provider Gateway](provider-gateway.md) owns model-route authority,
 and [`deploy/compose.yaml`](../../deploy/compose.yaml) owns exact process supervision.
 
-## Native workflow composition
+## Application composition
 
-Native workflows consume the same application boundary without a privileged execution path. They
-own typed input and execution envelopes, deterministic infrastructure-readiness policy, evaluation,
-external authorities, result meaning, and conditional cleanup requests; Core owns invariant message
-intent and ordering, Thread and Turn custody, and the reusable lifecycle mechanisms beneath those
-decisions. Their product and authoring direction lives
-in the [North Star](north-star.md), while concrete behavior lives in code and its tests.
-
-Git, coding, GitHub, publication, and human-in-the-loop behavior are workflow/module/client policy.
-They may use the Sandbox and Agent handles but are not Core capabilities or provider behavior.
-
-Reusable external-authority integrations are deployment modules composed beside Core. Each module
-owns its authentication, readiness, observations, and least-authority credentials. Core does not
-gain knowledge of the external product. [Getting started](../getting-started.md) owns current setup
-procedures, while code and tests own the exact integration behavior.
+Coding, review, publication, GitHub access, and business outcomes belong to external clients.
+The worker composes direct execution with selected provider and Harness adapters. Core exposes
+fixed lifecycle operations and does not offer an arbitrary workflow Action callback.
 
 ## Failure and code evolution
 
@@ -411,16 +385,12 @@ profile rather than branching on provider or Harness identity.
 Within one bounded native operation under the existing Job fence, an adapter may resolve exact
 Sandbox ownership and provider connection capabilities once for adjacent access. That access ends
 with the callback, honors cancellation, and cannot be reused for another owner or durable attempt.
-Lifecycle and strict-review attestation remain fresh. This does not remove native-history recovery
+Lifecycle attestation remains fresh. This does not remove native-history recovery
 or permit replay of an ambiguously accepted command. Live instruction files may be read together
 while preserving each file's validation and missing-file semantics.
 
-Ordinary execution uses the baseline Sandbox and Harness contracts without coding-review methods.
-Coding composes its own review transport and Harness contracts only when needed. Strict review
-requires provider review attestation and rejects providers without it before native access;
-reconnection and process replacement still require fresh attestation. These are explicit Go
-interfaces, not a general capability registry or matching layer. Add an extension only when a
-concrete consumer requires behavior beyond the baseline and an adapter can prove it.
+Execution uses the Sandbox and Harness contracts. Add an extension only when a concrete retained
+requirement and an adapter proof justify it.
 
 A profile is not usable until Dorf's functional probe and exact proof-resource cleanup complete. A
 provider/profile is not supported until its required route and Harness capabilities are admitted

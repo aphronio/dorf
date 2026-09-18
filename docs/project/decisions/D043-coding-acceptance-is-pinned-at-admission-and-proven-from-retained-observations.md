@@ -1,10 +1,10 @@
 # D043: Coding acceptance is pinned at admission and proven from retained observations
 
-- **Applicability:** partial
+- **Applicability:** historical
 - **Areas:** workflows, persistence, github
 - **Read when:** Changing how coding acceptance is pinned or proven from retained observations.
 - **Decision history:** Evidence authority retained by D047; Python AFK checklist/dossier mechanics
-  superseded — 2026-08-08
+  superseded — 2026-08-08; application contracts retired by D144 — 2026-09-18.
 - **Decision:** Compile the pinned issue acceptance criteria plus configured repository check and
   smoke obligations into a small workflow-owned checklist when a
   coding Job is reserved. The checklist remains explicitly human-correctable as a draft until the

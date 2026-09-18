@@ -12,9 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/core"
-	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/postgres"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
@@ -222,8 +220,7 @@ func TestMessageObservationRequiresDurableCompletedOwnershipBeforeProvider(t *te
 
 func TestAuthenticatedClientUsesFixedAdmissionObservations(t *testing.T) {
 	provider := &readerTestProvider{defaultConnection: "primary", defaultModel: "gpt-5.6-sol"}
-	installations := &readerTestInstallations{installation: "42"}
-	handler, err := NewHandler(strings.Repeat("f", 64), Service{Provider: provider, Installations: installations})
+	handler, err := NewHandler(strings.Repeat("f", 64), Service{Provider: provider})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,57 +239,6 @@ func TestAuthenticatedClientUsesFixedAdmissionObservations(t *testing.T) {
 	}
 	if err := client.Check(context.Background(), connection); err != nil || provider.checked != connection {
 		t.Fatalf("Check() error=%v checked=%q", err, provider.checked)
-	}
-	installation, err := client.DiscoverInstallation(context.Background(), "aphronio/dorf")
-	if err != nil || installation != "42" || installations.repository != "aphronio/dorf" {
-		t.Fatalf("DiscoverInstallation()=%q err=%v repository=%q", installation, err, installations.repository)
-	}
-}
-
-func TestAuthenticatedClientObservesOnlyExactStoredPullRequest(t *testing.T) {
-	job := coding.Job{
-		Job:                core.Job{ID: "job-1"},
-		Revision:           strings.Repeat("a", 40),
-		Branch:             "dorf/job-1",
-		GitHubRepository:   "aphronio/dorf",
-		GitHubInstallation: "42",
-		BaseBranch:         "main",
-	}
-	proposal := &coding.Proposal{JobID: job.ID, Number: 17, URL: "https://github.com/aphronio/dorf/pull/17", ProposedRevision: job.Revision}
-	want := githubapi.PullRequest{
-		Number: 17, URL: proposal.URL, State: "open", Repository: job.GitHubRepository,
-		Head: job.Branch, HeadSHA: job.Revision, Base: job.BaseBranch,
-	}
-	pulls := &readerTestPullRequests{pull: want}
-	handler, err := NewHandler(strings.Repeat("f", 64), Service{
-		Store: &readerTestStore{codingJob: job, proposal: proposal}, PullRequests: pulls,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	client, err := NewClient("http://control-reader.test:8756", strings.Repeat("f", 64), &http.Client{Transport: readerHandlerTransport{handler: handler}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := client.ObservePullRequest(context.Background(), job.ID)
-	if err != nil || got != want {
-		t.Fatalf("ObservePullRequest()=%+v err=%v", got, err)
-	}
-	if pulls.authority != (githubapi.Authority{Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation}) || pulls.number != proposal.Number {
-		t.Fatalf("GitHub call authority=%+v number=%d", pulls.authority, pulls.number)
-	}
-
-	pulls.pull.HeadSHA = strings.Repeat("b", 40)
-	if _, err := client.ObservePullRequest(context.Background(), job.ID); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("conflicting ObservePullRequest() error=%v", err)
-	}
-	pulls.calls = 0
-	proposal.ProposedRevision = strings.Repeat("c", 40)
-	if _, err := client.ObservePullRequest(context.Background(), job.ID); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("stale proposal ObservePullRequest() error=%v", err)
-	}
-	if pulls.calls != 0 {
-		t.Fatal("stale durable proposal reached GitHub authority")
 	}
 }
 
@@ -512,8 +458,6 @@ type readerTestStore struct {
 	activityStarts     int
 	activityFinishes   int
 	job                core.Job
-	codingJob          coding.Job
-	proposal           *coding.Proposal
 	sandbox            core.Sandbox
 	sandboxInsideFence *core.Sandbox
 	inFence            bool
@@ -528,21 +472,6 @@ func (s *readerTestStore) Job(_ context.Context, id string) (core.Job, error) {
 		return core.Job{}, postgres.ErrNotFound
 	}
 	return s.job, nil
-}
-
-func (s *readerTestStore) CodingJob(_ context.Context, id string) (coding.Job, error) {
-	if s.codingJob.ID == "" || s.codingJob.ID != id {
-		return coding.Job{}, postgres.ErrNotFound
-	}
-	return s.codingJob, nil
-}
-
-func (s *readerTestStore) Proposal(_ context.Context, id string) (*coding.Proposal, error) {
-	if s.proposal == nil || s.proposal.JobID != id {
-		return nil, nil
-	}
-	copy := *s.proposal
-	return &copy, nil
 }
 
 func (s *readerTestStore) Sandbox(_ context.Context, id string) (core.Sandbox, error) {
@@ -618,10 +547,6 @@ func (*readerTestObservation) ExecuteSandboxAction(context.Context, string, stri
 	return nil
 }
 
-func (*readerTestObservation) ExecuteSandboxActionEffect(context.Context, string, string, core.ActionKind, core.SandboxActionEffect) error {
-	return nil
-}
-
 type readerHandlerTransport struct{ handler http.Handler }
 
 func (t readerHandlerTransport) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -655,29 +580,6 @@ func (p *readerTestProvider) Check(ctx context.Context, connection string) error
 	p.checked = connection
 	p.deadline, _ = ctx.Deadline()
 	return nil
-}
-
-type readerTestInstallations struct {
-	installation string
-	repository   string
-}
-
-func (i *readerTestInstallations) DiscoverInstallation(_ context.Context, repository string) (string, error) {
-	i.repository = repository
-	return i.installation, nil
-}
-
-type readerTestPullRequests struct {
-	pull      githubapi.PullRequest
-	authority githubapi.Authority
-	number    int64
-	calls     int
-}
-
-func (p *readerTestPullRequests) PullRequest(_ context.Context, authority githubapi.Authority, number int64) (githubapi.PullRequest, error) {
-	p.authority, p.number = authority, number
-	p.calls++
-	return p.pull, nil
 }
 
 func (r *readerTestFiles) WriteSandboxFile(_ context.Context, job core.Job, sandbox core.Sandbox, path string, contents []byte, ifAbsent bool) error {

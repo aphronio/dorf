@@ -13,7 +13,7 @@ func TestObservationAdmissionRetainsKindAndSupportsAuto(t *testing.T) {
 	ctx := context.Background()
 	job, _ := prepareTransportIntegrationJob(t, store, "observation")
 	input := core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromWorkflow, FromID: "event-1", Input: "Task updated", Intent: core.MessageFollow, Observation: true}
-	accepted, err := store.AdmitCodingMessage(ctx, input)
+	accepted, err := store.AdmitDirectMessage(ctx, input)
 	if err != nil || !accepted.Created {
 		t.Fatalf("admit: %+v %v", accepted, err)
 	}
@@ -22,23 +22,23 @@ func TestObservationAdmissionRetainsKindAndSupportsAuto(t *testing.T) {
 	if err != nil || !execution.Message.Observation {
 		t.Fatalf("restart: %+v %v", execution, err)
 	}
-	replay, err := restarted.AdmitCodingMessage(ctx, input)
+	replay, err := restarted.AdmitDirectMessage(ctx, input)
 	if err != nil || replay.Created || !replay.Message.Observation {
 		t.Fatalf("replay: %+v %v", replay, err)
 	}
 	input.Observation = false
-	if _, err := restarted.AdmitCodingMessage(ctx, input); err == nil {
+	if _, err := restarted.AdmitDirectMessage(ctx, input); err == nil {
 		t.Fatal("changed input kind replay accepted")
 	}
 	input.Observation = true
 	input.Intent, input.FromID = core.MessageAuto, "auto"
-	if receipt, err := restarted.AdmitCodingMessage(ctx, input); err != nil || !receipt.Message.Observation {
+	if receipt, err := restarted.AdmitDirectMessage(ctx, input); err != nil || !receipt.Message.Observation {
 		t.Fatalf("automatic observation: %+v %v", receipt, err)
 	}
 	for _, intent := range []core.MessageDeliveryIntent{core.MessageSteer} {
 		input.Intent = intent
 		input.FromID = string(intent)
-		if _, err := restarted.AdmitCodingMessage(ctx, input); err == nil {
+		if _, err := restarted.AdmitDirectMessage(ctx, input); err == nil {
 			t.Fatal("observation accepted without explicit follow")
 		}
 	}

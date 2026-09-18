@@ -3,7 +3,7 @@
 - **Applicability:** historical
 - **Areas:** workflows, sandboxes, persistence
 - **Read when:** Changing how investigation reports are produced, accessed, or retained.
-- **Decision history:** Accepted workflow simplification; follow admission refined by D096 — 2026-08-25; investigation workflow retired by D143 — 2026-09-18.
+- **Decision history:** Accepted workflow simplification; follow admission refined by D096 — 2026-08-25; investigation workflow retired by D143 — 2026-09-18.; application contracts retired by D144 — 2026-09-18.
 - **Decision:** `codebase-investigation` asks its agent, as workflow-owned prompt policy, to maintain
   workspace-root `REPORT.md`. A completed internal AgentRun is the durable completion fact. The
   workflow does not interpret Harness prose as the report, copy report bytes into PostgreSQL or the

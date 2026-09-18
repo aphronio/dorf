@@ -87,9 +87,7 @@ listeners, Tailscale Funnel or Serve, subnet routers, and inferred guest routes 
 Docker authority
 follows the deployment-host setup procedure, and the socket is never mounted into a Dorf workload
 or Sandbox. Custom Sandbox artifacts may be admitted through an explicitly created and functionally
-verified profile, but carry no Dorf release provenance. An E2B profile that blocks general internet
-access cannot run coding work that must clone its remote Git source; Dorf rejects
-that combination before admitting a Job.
+verified profile, but carry no Dorf release provenance. Clients must choose a profile with the network access required by their tools and repository setup.
 
 The remote control API is a separate authority on a separate hostname from the Provider Gateway.
 Its public boundary is one exact HTTPS Deployment origin. Guided Cloudflare reaches container port
@@ -97,9 +95,9 @@ Its public boundary is one exact HTTPS Deployment origin. Guided Cloudflare reac
 operator-owned ingress reaches the API's published loopback host port. The Compose-managed worker
 separately owns durable task execution and recovery. After Enrollment, a remote CLI Client needs
 network and TLS access to the Control API origin and only its own Dorf Client credential; it never
-needs PostgreSQL, provider, Harness, Gateway, or Sandbox credentials. Fixed remote coding admission reuses the same boundary. The
+needs PostgreSQL, provider, Harness, Gateway, or Sandbox credentials. The
 [remote-client setup procedure](getting-started.md#3-connect-one-remote-cli-client) owns the current
-workflow inputs; the [Remote Control API](control-api.md) owns the service and transport contract.
+client procedure; the [Remote Control API](control-api.md) owns the service and transport contract.
 
 Run the Go CLI's direct diagnostic boundary:
 
@@ -113,12 +111,6 @@ Absurd, queue, selected Sandbox profile and its base verification,
 Provider Gateway, and selected AI connection separately. Incus checks its configured endpoint,
 profile-owned project, pool, network, exact image, guest route, and credential-free image; E2B
 checks its exact profile configuration and host-only API key.
-
-Optional external integrations have their own readiness boundary. For GitHub, rerun
-`dorf integration github setup` to prove the deployment-default App identity and that it has at least
-one installation; a missing installation resumes the operator handoff at its reusable URL. Exact
-repository access and least permission scope are verified by the runtime operation that needs them.
-[Getting started](getting-started.md) contains the setup procedure.
 
 For any Client, start with `dorf auth status`. If `dorf connect` fails during discovery, the
 failure belongs to DNS, TLS, ingress, or the control API on host port `8745`. An `unauthenticated`

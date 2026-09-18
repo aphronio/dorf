@@ -17,7 +17,6 @@ import (
 	incustest "github.com/aphronio/dorf/internal/incus/testkit"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/coder/websocket"
-
 	"github.com/aphronio/dorf/internal/core"
 )
 
@@ -25,82 +24,14 @@ func testSandbox(runner incustest.Runner, owner provider.Ownership) incus.Adapte
 	return incus.Adapter{Sandbox: incustest.OwnedSandbox(runner, incus.Config{}, owner)}
 }
 
-func testReviewSandbox(runner incustest.Runner) incus.Adapter {
-	return incus.Adapter{Sandbox: incustest.Sandbox(runner, incus.Config{})}
-}
-
-type ordinaryReviewSandbox struct{ provider.Sandbox }
-
-func TestStrictReviewRequiresProviderAttestationBeforeNativeAccess(t *testing.T) {
-	agent := Agent{Sandbox: ordinaryReviewSandbox{}}
-	owner := testOwner("review")
-	review := provider.ReviewMetadata{JobID: owner.JobID, OwnershipNonce: owner.OwnershipNonce}
-	for name, operation := range map[string]func() (core.HarnessBinding, error){
-		"start": func() (core.HarnessBinding, error) {
-			return agent.StartStrictReviewTurn(t.Context(), owner, "/workspace", review, "nonce", "input", "model", "high")
-		},
-		"recover": func() (core.HarnessBinding, error) {
-			return agent.RecoverStrictReviewTurn(t.Context(), owner, "/workspace", review, "nonce", "input", "model", "high")
-		},
-		"read": func() (core.HarnessBinding, error) {
-			return agent.ReadStrictReviewTurn(t.Context(), owner, "/workspace", review, "thread", "turn", "nonce", "input", "model", "high")
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, err := operation()
-			var unsupported *provider.UnsupportedError
-			if !errors.As(err, &unsupported) || unsupported.Capability != "strict review attestation" {
-				t.Fatalf("unattested review returned %v", err)
-			}
-		})
-	}
-}
-
 func testOwner(sandboxID string) provider.Ownership {
 	return provider.Ownership{JobID: "job-" + sandboxID, SandboxID: sandboxID, OwnershipNonce: strings.Repeat("a", 64)}
-}
-
-func reviewOwner(sandboxID string, review provider.ReviewMetadata) provider.Ownership {
-	return provider.Ownership{JobID: review.JobID, SandboxID: sandboxID, OwnershipNonce: review.OwnershipNonce}
 }
 
 type probeRunner struct {
 	result incus.Result
 	calls  [][]string
 	inputs [][]byte
-}
-
-type reviewBoundaryRunner struct {
-	name    string
-	review  provider.ReviewMetadata
-	token   string
-	stopped bool
-	attests int
-	calls   [][]string
-	inputs  [][]byte
-}
-
-func (r *reviewBoundaryRunner) Run(_ context.Context, command string, input []byte, args ...string) (incus.Result, error) {
-	r.calls = append(r.calls, append([]string{command}, args...))
-	r.inputs = append(r.inputs, append([]byte(nil), input...))
-	joined := strings.Join(args, " ")
-	if strings.HasPrefix(joined, "list --format=json") {
-		r.attests++
-		config := map[string]string{
-			"user.dorf.owner": "sandbox", "user.dorf.job": r.review.JobID, "user.dorf.sandbox": r.name,
-			"user.dorf.agent_run": r.review.AgentRunID, "user.dorf.revision": r.review.Revision,
-			"user.dorf.ownership_nonce": r.review.OwnershipNonce,
-		}
-		payload, _ := json.Marshal([]map[string]any{{"name": r.name, "config": config}})
-		return incus.Result{Stdout: string(payload)}, nil
-	}
-	if strings.Contains(joined, "running=0; tracked=0") {
-		if r.stopped {
-			return incus.Result{Stdout: "0\n0\n"}, nil
-		}
-		return incus.Result{Stdout: "1\n1\n" + r.token + "\n"}, nil
-	}
-	return incus.Result{}, nil
 }
 
 func (r *probeRunner) Run(_ context.Context, command string, input []byte, args ...string) (incus.Result, error) {
@@ -112,15 +43,12 @@ func (r *probeRunner) Run(_ context.Context, command string, input []byte, args 
 func TestCodexCommandBoundaryKeepsFixedPolicyAndScopedCapability(t *testing.T) {
 	const token = "private-control-capability"
 	digest := tokenSHA256(token)
-	implementation := appServerScript("ws://10.0.0.2:4500", digest, false)
-	review := appServerScript("ws://10.0.0.3:4500", digest, true)
+	implementation := appServerScript("ws://10.0.0.2:4500", digest)
+
 	if !strings.Contains(implementation, `-c 'approval_policy="never"'`) || strings.Contains(implementation, `sandbox_mode=`) {
 		t.Fatalf("implementation launch policy = %s", implementation)
 	}
-	if !strings.Contains(review, `-c 'approval_policy="never"' -c 'sandbox_mode="read-only"'`) {
-		t.Fatalf("review launch policy = %s", review)
-	}
-	for _, launch := range []string{implementation, review} {
+	for _, launch := range []string{implementation} {
 		if !strings.Contains(launch, "--ws-auth capability-token --ws-token-sha256 "+digest) || strings.Contains(launch, token) {
 			t.Fatalf("launch did not use digest-only websocket authentication: %s", launch)
 		}
@@ -202,7 +130,7 @@ func TestRemoteEndpointSeparatesGuestBindFromAuthenticatedDial(t *testing.T) {
 		dial:    "ws" + strings.TrimPrefix(server.URL, "http"),
 		headers: headers,
 	}
-	if err := agent.withServerEndpointController(context.Background(), testOwner("sandbox-1"), endpoint, false, nil, func(_ *protocol) error { return nil }); err != nil {
+	if err := agent.withServerEndpointController(context.Background(), testOwner("sandbox-1"), endpoint, func(_ *protocol) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	probeCommand := strings.Join(runner.calls[0], " ")
@@ -275,55 +203,6 @@ func TestLiveServerMissingOrRejectedCapabilityStopsWithoutReplacement(t *testing
 		}
 		assertNoServerReplacement(t, runner)
 	})
-}
-
-func TestStrictReviewRejectsForeignOwnerAndReattestsAfterCapabilityRotation(t *testing.T) {
-	const token = "retained-review-capability"
-	review := provider.ReviewMetadata{
-		JobID: "job-review", AgentRunID: "run-review", Revision: strings.Repeat("b", 40),
-		OwnershipNonce: strings.Repeat("c", 64),
-	}
-	runner := &reviewBoundaryRunner{name: "dorf-review-owned", review: review, token: token}
-	agent := Agent{Sandbox: testReviewSandbox(runner)}
-	foreign := reviewOwner(runner.name, review)
-	foreign.OwnershipNonce = strings.Repeat("d", 64)
-	if _, err := agent.StartStrictReviewTurn(context.Background(), foreign, "/workspace/job", review, strings.Repeat("a", 64), "input", "gpt-5.6-sol", "high"); err == nil {
-		t.Fatal("foreign owner reached the strict-review controller")
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("foreign owner reached Incus: %v", runner.calls)
-	}
-
-	server, _ := testProtocolServer(t, func(method string, _ map[string]any) (map[string]any, bool) {
-		return map[string]any{}, method != "initialize"
-	})
-	defer server.Close()
-	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
-	owner := reviewOwner(runner.name, review)
-	connect := func() {
-		if err := agent.withReviewServerEndpoint(context.Background(), owner, endpoint, review, func(*protocol) error { return nil }); err != nil {
-			t.Fatal(err)
-		}
-	}
-	connect()
-	runner.stopped = true
-	connect()
-	if runner.attests != 6 {
-		t.Fatalf("review ownership attestations=%d, want one before every Incus execution", runner.attests)
-	}
-	rotated := false
-	for index, call := range runner.calls {
-		joined := strings.Join(call, " ")
-		if strings.Contains(joined, " exec ") && !strings.Contains(joined, "exec "+runner.name+" --") {
-			t.Fatalf("strict review escaped its review Sandbox: %v", call)
-		}
-		if len(runner.inputs[index]) > 0 && strings.TrimSpace(string(runner.inputs[index])) != token {
-			rotated = true
-		}
-	}
-	if !rotated {
-		t.Fatal("replacement process did not receive a rotated capability")
-	}
 }
 
 func assertNoServerReplacement(t *testing.T, runner *probeRunner) {
@@ -619,282 +498,7 @@ func TestInitialRecoveryDropsLostEmptyThreadAndAdoptsAcceptedTurn(t *testing.T) 
 	}
 }
 
-func TestStrictReviewRecoveryRejectsUnattestedNativeState(t *testing.T) {
-	nonce := strings.Repeat("a", 64)
-	input := "bounded exact review contract"
-	validTurn := strictReviewTestTurn("turn-review", nonce, input)
-	for _, test := range []struct {
-		name    string
-		threads []any
-		turns   []any
-		mutate  func(map[string]any)
-		cursor  any
-		want    string
-	}{
-		{name: "missing client identity", threads: strictReviewTestThreads("session-review"), turns: []any{strictReviewTestTurn("turn-review", "", input)}, want: "missing or wrong client message identity"},
-		{name: "wrong client identity", threads: strictReviewTestThreads("session-review"), turns: []any{strictReviewTestTurn("turn-review", strings.Repeat("b", 64), input)}, want: "missing or wrong client message identity"},
-		{name: "wrong prompt", threads: strictReviewTestThreads("session-review"), turns: []any{strictReviewTestTurn("turn-review", nonce, "forged prompt")}, want: "prompt differs"},
-		{name: "extra turn", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn, strictReviewTestTurn("turn-extra", nonce, input)}, want: "contains 2 turns"},
-		{name: "competing thread", threads: append(strictReviewTestThreads("session-review"), strictReviewTestThreads("session-forged")...), turns: []any{validTurn}, want: "competing threads"},
-		{name: "unbounded discovery", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, cursor: "more", want: "exceeded its bound"},
-		{name: "wrong model", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, mutate: func(result map[string]any) { result["model"] = "forged-model" }, want: "model, effort, cwd, approval, or read-only policy"},
-		{name: "null effort", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, mutate: func(result map[string]any) { result["reasoningEffort"] = nil }, want: "model, effort, cwd, approval, or read-only policy"},
-		{name: "different effort", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, mutate: func(result map[string]any) { result["reasoningEffort"] = "medium" }, want: "model, effort, cwd, approval, or read-only policy"},
-		{name: "wrong approval", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, mutate: func(result map[string]any) { result["approvalPolicy"] = "on-request" }, want: "model, effort, cwd, approval, or read-only policy"},
-		{name: "wrong sandbox", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, mutate: func(result map[string]any) { result["sandbox"] = map[string]any{"type": "dangerFullAccess"} }, want: "model, effort, cwd, approval, or read-only policy"},
-		{name: "network enabled", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, mutate: func(result map[string]any) {
-			result["sandbox"] = map[string]any{"type": "readOnly", "networkAccess": true}
-		}, want: "unexpectedly exposes network access"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			server, _ := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
-				switch method {
-				case "initialize":
-					return map[string]any{}, false
-				case "thread/list":
-					return map[string]any{"data": test.threads, "nextCursor": test.cursor}, false
-				case "thread/resume":
-					requireStrictResumeParams(t, params, "session-review")
-					result := strictReviewTestSettings(map[string]any{"id": "session-review", "cwd": "/workspace/job", "turns": test.turns})
-					if test.mutate != nil {
-						test.mutate(result)
-					}
-					return result, false
-				default:
-					return nil, true
-				}
-			})
-			defer server.Close()
-			p := dialTestProtocol(t, server)
-			_, _, err := p.strictReviewHistory(context.Background(), "/workspace/job", "session-review", nonce, input, "gpt-5.6-sol", "high")
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("strict review error=%v want %q", err, test.want)
-			}
-			if attention, ok := err.(interface{ AttentionNeeded() bool }); !ok || !attention.AttentionNeeded() {
-				t.Fatalf("strict review mismatch was not attention: %T %v", err, err)
-			}
-		})
-	}
-}
-
-func TestStrictReviewTrustedSubmissionConvergesOnOneSessionAndTurn(t *testing.T) {
-	nonce := strings.Repeat("c", 64)
-	input := "exact trusted review input"
-	sessionID, turnID := "session-review", "turn-review"
-	var sessionCreated, turnCreated bool
-	var turnStarts atomic.Int32
-	server, requests := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
-		switch method {
-		case "initialize", "skills/list":
-			return map[string]any{}, false
-		case "thread/list":
-			if !sessionCreated {
-				return map[string]any{"data": []any{}, "nextCursor": nil}, false
-			}
-			return map[string]any{"data": strictReviewTestThreads(sessionID), "nextCursor": nil}, false
-		case "thread/start":
-			sessionCreated = true
-			requireProtocolParams(t, method, params, map[string]any{
-				"cwd": "/workspace/job", "model": "gpt-5.6-sol",
-				"approvalPolicy": "never", "sandbox": "read-only",
-			})
-			if _, sent := params["effort"]; sent {
-				t.Errorf("thread/start sent unsupported turn effort: %v", params["effort"])
-			}
-			result := strictReviewTestSettings(map[string]any{"id": sessionID, "cwd": "/workspace/job", "turns": []any{}})
-			result["reasoningEffort"] = nil
-			return result, false
-		case "thread/resume":
-			if !turnCreated {
-				t.Error("thread/resume attempted before the fresh review turn was submitted")
-				return nil, true
-			}
-			requireStrictResumeParams(t, params, sessionID)
-			return strictReviewTestSettings(map[string]any{"id": sessionID, "cwd": "/workspace/job", "turns": []any{strictReviewTestTurn(turnID, nonce, input)}}), false
-		case "turn/start":
-			requireProtocolParams(t, method, params, map[string]any{
-				"threadId": sessionID, "clientUserMessageId": nonce, "cwd": "/workspace/job",
-				"model": "gpt-5.6-sol", "effort": "high", "approvalPolicy": "never",
-				"sandboxPolicy": map[string]any{"type": "readOnly"},
-			})
-			turnStarts.Add(1)
-			turnCreated = true
-			return map[string]any{"turn": map[string]any{"id": turnID}}, false
-		default:
-			return nil, true
-		}
-	})
-	defer server.Close()
-
-	first := dialTestProtocol(t, server)
-	gotSession, gotTurn, err := first.reconcileStrictReviewTurn(context.Background(), "/workspace/job", "", nonce, input, "gpt-5.6-sol", "high", true)
-	if err != nil || gotSession != sessionID || gotTurn.ID != turnID {
-		t.Fatalf("first strict binding thread=%s turn=%#v err=%v", gotSession, gotTurn, err)
-	}
-	if methods := reviewProtocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/list", "thread/start", "turn/start"}) {
-		t.Fatalf("fresh strict review methods=%v", methods)
-	}
-	_ = first.connection.CloseNow()
-	second := dialTestProtocol(t, server)
-	gotSession, gotTurn, err = second.reconcileStrictReviewTurn(context.Background(), "/workspace/job", "", nonce, input, "gpt-5.6-sol", "high", true)
-	if err != nil || gotSession != sessionID || gotTurn.ID != turnID || gotTurn.Output != `{"material":false}` || turnStarts.Load() != 1 {
-		t.Fatalf("recovered strict binding thread=%s turn=%#v starts=%d err=%v", gotSession, gotTurn, turnStarts.Load(), err)
-	}
-	if methods := reviewProtocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/list", "thread/resume"}) {
-		t.Fatalf("persisted strict review methods=%v", methods)
-	}
-}
-
-func TestStrictReviewLostAfterTrustedSubmissionAdoptsPersistedTurnWithoutDuplicate(t *testing.T) {
-	nonce := strings.Repeat("d", 64)
-	input := "exact retry input"
-	sessionID, turnID := "session-lost-response", "turn-lost-response"
-	var sessionCreated, turnCreated bool
-	var turnStarts atomic.Int32
-	server, requests := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
-		switch method {
-		case "initialize", "skills/list":
-			return map[string]any{}, false
-		case "thread/list":
-			if !turnCreated {
-				return map[string]any{"data": []any{}, "nextCursor": nil}, false
-			}
-			return map[string]any{"data": strictReviewTestThreads(sessionID), "nextCursor": nil}, false
-		case "thread/start":
-			sessionCreated = true
-			result := strictReviewTestSettings(map[string]any{"id": sessionID, "cwd": "/workspace/job", "turns": []any{}})
-			result["reasoningEffort"] = nil
-			return result, false
-		case "turn/start":
-			if !sessionCreated || params["clientUserMessageId"] != nonce || params["threadId"] != sessionID {
-				return nil, true
-			}
-			turnStarts.Add(1)
-			turnCreated = true
-			return map[string]any{"turn": map[string]any{"id": turnID}}, false
-		case "thread/resume":
-			if !turnCreated {
-				t.Error("retry resumed an empty strict review thread")
-				return nil, true
-			}
-			return strictReviewTestSettings(map[string]any{"id": sessionID, "cwd": "/workspace/job", "turns": []any{strictReviewTestTurn(turnID, nonce, input)}}), false
-		default:
-			return nil, true
-		}
-	})
-	defer server.Close()
-
-	first := dialTestProtocol(t, server)
-	threads, err := first.listStrictReviewThreads(context.Background(), "/workspace/job")
-	if err != nil || len(threads) != 0 {
-		t.Fatalf("initial discovery=%v err=%v", threads, err)
-	}
-	startedSession, err := first.startStrictReviewThread(context.Background(), "/workspace/job", "gpt-5.6-sol", "high")
-	if err != nil || startedSession != sessionID {
-		t.Fatalf("fresh thread=%s err=%v", startedSession, err)
-	}
-	if _, err := first.startTurn(context.Background(), sessionID, "/workspace/job", nonce, core.HarnessInput{Text: input}, "gpt-5.6-sol", "high", "read-only"); err != nil {
-		t.Fatal(err)
-	}
-	_ = first.connection.CloseNow() // controller response is lost before strict readback/binding
-	if methods := reviewProtocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/list", "thread/start", "turn/start"}) {
-		t.Fatalf("pre-loss methods=%v", methods)
-	}
-
-	retry := dialTestProtocol(t, server)
-	gotSession, gotTurn, err := retry.reconcileStrictReviewTurn(context.Background(), "/workspace/job", "", nonce, input, "gpt-5.6-sol", "high", false)
-	if err != nil || gotSession != sessionID || gotTurn.ID != turnID || turnStarts.Load() != 1 {
-		t.Fatalf("retry binding thread=%s turn=%#v starts=%d err=%v", gotSession, gotTurn, turnStarts.Load(), err)
-	}
-	if methods := reviewProtocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/list", "thread/resume"}) {
-		t.Fatalf("retry methods=%v", methods)
-	}
-}
-
-func TestStrictReviewDirectBindingToleratesDelayedNativeVisibility(t *testing.T) {
-	nonce := strings.Repeat("e", 64)
-	input := "exact delayed visibility input"
-	sessionID, turnID := "session-delayed", "turn-delayed"
-	var sessionCreated, turnCreated bool
-	var postSubmitLists atomic.Int32
-	var threadStarts, turnStarts atomic.Int32
-	server, requests := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
-		switch method {
-		case "initialize", "skills/list":
-			return map[string]any{}, false
-		case "thread/list":
-			if !sessionCreated {
-				return map[string]any{"data": []any{}, "nextCursor": nil}, false
-			}
-			if turnCreated && postSubmitLists.Add(1) == 1 {
-				return map[string]any{"data": []any{}, "nextCursor": nil}, false
-			}
-			return map[string]any{"data": strictReviewTestThreads(sessionID), "nextCursor": nil}, false
-		case "thread/start":
-			threadStarts.Add(1)
-			sessionCreated = true
-			result := strictReviewTestSettings(map[string]any{"id": sessionID, "cwd": "/workspace/job", "turns": []any{}})
-			result["reasoningEffort"] = nil
-			return result, false
-		case "turn/start":
-			turnStarts.Add(1)
-			turnCreated = true
-			return map[string]any{"turn": map[string]any{"id": turnID, "status": "running"}}, false
-		case "thread/resume":
-			return strictReviewTestSettings(map[string]any{"id": sessionID, "cwd": "/workspace/job", "turns": []any{strictReviewTestTurn(turnID, nonce, input)}}), false
-		default:
-			return nil, true
-		}
-	})
-	defer server.Close()
-
-	p := dialTestProtocol(t, server)
-	gotSession, gotTurn, err := p.reconcileStrictReviewTurn(context.Background(), "/workspace/job", "", nonce, input, "gpt-5.6-sol", "high", true)
-	if err != nil || gotSession != sessionID || gotTurn.ID != turnID {
-		t.Fatalf("direct binding thread=%s turn=%#v err=%v", gotSession, gotTurn, err)
-	}
-	if methods := reviewProtocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/list", "thread/start", "turn/start"}) {
-		t.Fatalf("direct binding waited for readback: %v", methods)
-	}
-	if _, _, err := p.strictReviewHistory(context.Background(), "/workspace/job", sessionID, nonce, input, "gpt-5.6-sol", "high"); err == nil || !isRetryableReviewVisibility(err) {
-		t.Fatalf("first delayed discovery error=%T %v", err, err)
-	}
-	observedSession, turns, err := p.strictReviewHistory(context.Background(), "/workspace/job", sessionID, nonce, input, "gpt-5.6-sol", "high")
-	if err != nil || observedSession != sessionID || len(turns) != 1 || turns[0].ID != turnID || threadStarts.Load() != 1 || turnStarts.Load() != 1 {
-		t.Fatalf("converged thread=%s turns=%#v starts=%d/%d err=%v", observedSession, turns, threadStarts.Load(), turnStarts.Load(), err)
-	}
-}
-
-func TestStrictReviewReconciliationOnlyEmptyDiscoveryNeverSubmits(t *testing.T) {
-	nonce := strings.Repeat("f", 64)
-	server, requests := testProtocolServer(t, func(method string, _ map[string]any) (map[string]any, bool) {
-		switch method {
-		case "initialize":
-			return map[string]any{}, false
-		case "thread/list":
-			return map[string]any{"data": []any{}, "nextCursor": nil}, false
-		default:
-			return nil, true
-		}
-	})
-	defer server.Close()
-
-	p := dialTestProtocol(t, server)
-	_, _, err := p.reconcileStrictReviewTurn(context.Background(), "/workspace/job", "", nonce, "exact input", "gpt-5.6-sol", "high", false)
-	if err == nil || !isRetryableReviewVisibility(err) {
-		t.Fatalf("empty reconciliation error=%T %v", err, err)
-	}
-	if methods := reviewProtocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/list"}) {
-		t.Fatalf("reconciliation-only methods=%v", methods)
-	}
-}
-
-func isRetryableReviewVisibility(err error) bool {
-	var missing interface{ RetryableReviewVisibility() bool }
-	return errors.As(err, &missing) && missing.RetryableReviewVisibility()
-}
-
-func reviewProtocolMethods(requests <-chan map[string]any) []string {
+func protocolMethods(requests <-chan map[string]any) []string {
 	var methods []string
 	for {
 		select {
@@ -907,24 +511,4 @@ func reviewProtocolMethods(requests <-chan map[string]any) []string {
 			return methods
 		}
 	}
-}
-
-func strictReviewTestThreads(ids ...string) []any {
-	threads := make([]any, 0, len(ids))
-	for _, id := range ids {
-		threads = append(threads, map[string]any{"id": id, "cwd": "/workspace/job"})
-	}
-	return threads
-}
-
-func strictReviewTestSettings(thread map[string]any) map[string]any {
-	return map[string]any{
-		"thread": thread, "cwd": "/workspace/job", "model": "gpt-5.6-sol", "reasoningEffort": "high",
-		"approvalPolicy": "never", "sandbox": map[string]any{"type": "readOnly", "networkAccess": false},
-	}
-}
-
-func strictReviewTestTurn(id, nonce, input string) map[string]any {
-	item := map[string]any{"type": "userMessage", "clientId": nonce, "content": []any{map[string]any{"type": "text", "text": input}}}
-	return map[string]any{"id": id, "status": "completed", "items": []any{item, map[string]any{"type": "agentMessage", "text": `{"material":false}`}}}
 }

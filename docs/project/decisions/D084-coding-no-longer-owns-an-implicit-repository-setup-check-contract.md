@@ -1,9 +1,9 @@
 # D084: Coding no longer owns an implicit repository setup/check contract
 
-- **Applicability:** current
+- **Applicability:** historical
 - **Areas:** workflows, core
 - **Read when:** Changing coding repository setup, deterministic evaluation, or Check ownership.
-- **Decision history:** Accepted deletion after Core/workflow boundary review — 2026-08-20
+- **Decision history:** Accepted deletion after Core/workflow boundary review — 2026-08-20; application contracts retired by D144 — 2026-09-18.
 - **Decision:** Remove `.dorf.toml`, repository setup commands, coding Check records, Check Evidence,
   setup retry, and the associated coordinator stages. The coding workflow retains exact Git
   Revision observation, deterministic ReviewPolicy over observed changed paths, selected review,

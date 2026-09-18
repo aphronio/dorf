@@ -99,7 +99,7 @@ func TestLivePersistenceCleanup(t *testing.T) {
 		publishedBeforeRoute: publishedBeforeRoute, publishedBeforeDelete: publishedBeforeDelete,
 	}
 	baseExecution := core.NewExecutionService(store, cleanupExternals, nil, absurdruntime.RequireClaim).
-		WithAgentExecution(composedAgentExecution{store: store, externals: cleanupExternals.Externals})
+		WithAgentExecution(composedAgentExecution{externals: cleanupExternals.Externals})
 	resolver := profileRuntimeResolver{cfg: cfg, store: store, client: tasks, emit: proof.emit}
 	cleanupExecution := checkpointExecution{
 		Execution: upgrade.Execution{ExecutionService: baseExecution, Upgrades: upgrade.Service{

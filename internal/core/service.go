@@ -89,8 +89,6 @@ const (
 	BarrierBeforeSubmit          = "before-submit"
 	BarrierAfterSubmitBeforeBind = "after-submit-before-bind"
 	BarrierHarnessActive         = "harness-active"
-	BarrierPushAccepted          = "push-accepted-before-record"
-	BarrierPullRequestAccepted   = "pull-request-accepted-before-record"
 	BarrierSandboxCreated        = "sandbox-created-before-record"
 	BarrierRouteRevoked          = "route-revoked-before-record"
 	BarrierSandboxDeleted        = "sandbox-deleted-before-record"
@@ -763,19 +761,6 @@ func (s ExecutionService) ExecuteSandboxAction(ctx context.Context, jobID, sandb
 		default:
 			return fmt.Errorf("unsupported Sandbox Action kind %q", authorized.Action.Kind)
 		}
-	})
-}
-
-// ExecuteSandboxActionEffect is the private adapter seam that gives a
-// module-owned Sandbox mutation the same generic custody without moving the
-// mutation's meaning into Core.
-func (s ExecutionService) ExecuteSandboxActionEffect(ctx context.Context, jobID, sandboxID string, kind ActionKind, effect SandboxActionEffect) error {
-	actionID := ScopedActionID(jobID, kind, sandboxID)
-	if effect == nil {
-		return fmt.Errorf("Sandbox Action %s has no workflow-owned effect", actionID)
-	}
-	return s.runSandboxAction(ctx, jobID, sandboxID, kind, func(ctx context.Context, authorized SandboxActionAuthorization) error {
-		return effect(ctx, authorized.Job, authorized.Sandbox)
 	})
 }
 

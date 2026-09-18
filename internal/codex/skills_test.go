@@ -48,7 +48,7 @@ func TestRequestedNewTurnsReloadSkillsInRetainedThread(t *testing.T) {
 	if err != nil || thread != threadID || turn.ID != "turn-initial" {
 		t.Fatalf("initial thread=%q turn=%#v err=%v", thread, turn, err)
 	}
-	if methods := reviewProtocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/list", "thread/start", "skills/list", "turn/start"}) {
+	if methods := protocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/list", "thread/start", "skills/list", "turn/start"}) {
 		t.Fatalf("initial methods=%v", methods)
 	}
 	_ = first.connection.CloseNow()
@@ -62,7 +62,7 @@ func TestRequestedNewTurnsReloadSkillsInRetainedThread(t *testing.T) {
 		if err != nil || turn.ID != "turn-"+runID {
 			t.Fatalf("follow turn=%#v err=%v", turn, err)
 		}
-		if methods := reviewProtocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/resume", "skills/list", "turn/start"}) {
+		if methods := protocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/resume", "skills/list", "turn/start"}) {
 			t.Fatalf("follow methods=%v", methods)
 		}
 		_ = follow.connection.CloseNow()
@@ -101,7 +101,7 @@ func TestSkillReloadFailurePreventsSubmission(t *testing.T) {
 					t.Fatalf("lost native rejection cause: %v", err)
 				}
 			}
-			for _, method := range reviewProtocolMethods(requests) {
+			for _, method := range protocolMethods(requests) {
 				if method != "skills/list" {
 					t.Errorf("reload failure sent %s", method)
 				}
@@ -129,7 +129,7 @@ func TestOrdinaryTurnDoesNotReloadSkills(t *testing.T) {
 	if err != nil || turn.ID != "turn" {
 		t.Fatalf("turn=%+v err=%v", turn, err)
 	}
-	if got := reviewProtocolMethods(requests); !reflect.DeepEqual(got, []string{"thread/resume", "turn/start"}) {
+	if got := protocolMethods(requests); !reflect.DeepEqual(got, []string{"thread/resume", "turn/start"}) {
 		t.Fatalf("methods=%v", got)
 	}
 }

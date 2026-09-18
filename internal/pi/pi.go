@@ -81,7 +81,7 @@ func (a Agent) StartInitialTurn(ctx context.Context, owner provider.Ownership, w
 		return core.HarnessBinding{}, &submissionRejectedError{reason: "Pi does not support skill refresh"}
 	}
 	threadID := owner.SandboxID
-	if err := a.runTurn(ctx, owner, workspace, threadID, agentRunID, input.Text, model, effort, false); err != nil {
+	if err := a.runTurn(ctx, owner, workspace, threadID, agentRunID, input.Text, model, effort); err != nil {
 		return core.HarnessBinding{}, err
 	}
 	return a.latestBinding(ctx, owner, threadID)
@@ -112,7 +112,7 @@ func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspac
 	if err != nil {
 		return core.HarnessBinding{}, err
 	}
-	if err := a.runTurn(ctx, owner, workspace, threadID, agentRunID, input.Text, model, effort, false); err != nil {
+	if err := a.runTurn(ctx, owner, workspace, threadID, agentRunID, input.Text, model, effort); err != nil {
 		return core.HarnessBinding{}, err
 	}
 	after, err := a.readHistory(ctx, owner, threadID, false)
@@ -173,57 +173,6 @@ func (a Agent) WaitTurn(ctx context.Context, owner provider.Ownership, threadID,
 	}
 }
 
-func (a Agent) StartStrictReviewTurn(ctx context.Context, owner provider.Ownership, workspace string, review provider.ReviewMetadata, submissionNonce string, input, model, effort string) (core.HarnessBinding, error) {
-	if err := a.attestReview(ctx, owner, review); err != nil {
-		return core.HarnessBinding{}, err
-	}
-	if err := a.runTurn(ctx, owner, workspace, owner.SandboxID, submissionNonce, input, model, effort, true); err != nil {
-		return core.HarnessBinding{}, err
-	}
-	if err := a.attestReview(ctx, owner, review); err != nil {
-		return core.HarnessBinding{}, err
-	}
-	return a.latestBinding(ctx, owner, owner.SandboxID)
-}
-
-func (a Agent) RecoverStrictReviewTurn(ctx context.Context, owner provider.Ownership, _ string, review provider.ReviewMetadata, _ string, _, _, _ string) (core.HarnessBinding, error) {
-	if err := a.attestReview(ctx, owner, review); err != nil {
-		return core.HarnessBinding{}, err
-	}
-	history, err := a.readHistory(ctx, owner, owner.SandboxID, true)
-	if err != nil {
-		return core.HarnessBinding{}, err
-	}
-	if len(history.Turns) == 0 {
-		return core.HarnessBinding{}, nil
-	}
-	return core.HarnessBinding{Harness: Harness, ThreadID: owner.SandboxID, Turn: history.Turns[len(history.Turns)-1]}, nil
-}
-
-func (a Agent) ReadStrictReviewTurn(ctx context.Context, owner provider.Ownership, _ string, review provider.ReviewMetadata, threadID, turnID, _ string, _, _, _ string) (core.HarnessBinding, error) {
-	if err := a.attestReview(ctx, owner, review); err != nil {
-		return core.HarnessBinding{}, err
-	}
-	history, err := a.readHistory(ctx, owner, threadID, true)
-	if err != nil {
-		return core.HarnessBinding{}, err
-	}
-	for _, turn := range history.Turns {
-		if turn.ID == turnID {
-			return core.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: turn}, nil
-		}
-	}
-	return core.HarnessBinding{}, fmt.Errorf("Pi Thread %s has no Turn %s", threadID, turnID)
-}
-
-func (a Agent) attestReview(ctx context.Context, owner provider.Ownership, review provider.ReviewMetadata) error {
-	attester, ok := a.Sandbox.(provider.ReviewAttester)
-	if !ok {
-		return &provider.UnsupportedError{Capability: "strict review attestation"}
-	}
-	return attester.AttestReview(ctx, owner, review)
-}
-
 func (a Agent) latestBinding(ctx context.Context, owner provider.Ownership, threadID string) (core.HarnessBinding, error) {
 	history, err := a.readHistory(ctx, owner, threadID, false)
 	if err != nil {
@@ -235,13 +184,10 @@ func (a Agent) latestBinding(ctx context.Context, owner provider.Ownership, thre
 	return core.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: history.Turns[len(history.Turns)-1]}, nil
 }
 
-func (a Agent) runTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, requestID, input, model, effort string, readOnly bool) error {
+func (a Agent) runTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, requestID, input, model, effort string) error {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	tools := "read,bash,edit,write,grep,find,ls"
-	if readOnly {
-		tools = "read,grep,find,ls"
-	}
 	before, err := a.readHistory(ctx, owner, threadID, true)
 	if err != nil {
 		return err

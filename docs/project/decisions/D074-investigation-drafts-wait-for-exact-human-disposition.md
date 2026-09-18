@@ -3,7 +3,7 @@
 - **Applicability:** historical
 - **Areas:** workflows, interaction, harnesses
 - **Read when:** Changing investigation draft revision loops, Harness Thread reuse, or disposition policy.
-- **Decision history:** Superseded before release by D075 — 2026-08-20; investigation workflow retired by D143 — 2026-09-18.
+- **Decision history:** Superseded before release by D075 — 2026-08-20; investigation workflow retired by D143 — 2026-09-18.; application contracts retired by D144 — 2026-09-18.
 - **Retained finding:** Numbered typed Markdown drafts, follow-up AgentRuns, and the exact Harness Thread
   are useful workflow mechanisms. Immediate cleanup after the first draft destroys valuable revision
   context.

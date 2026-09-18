@@ -12,8 +12,8 @@ not infer a procedure from `docs/research/` or `docs/history/`.
 
 | Role | Granted authority | Boundary |
 | --- | --- | --- |
-| Deployment-host agent | Install Dorf, run setup, use documented Compose, Job, and workflow operations, manage Profiles and optional integrations, and run diagnostics. | Pause for each secret, browser authorization, paid service, administrator helper, DNS replacement, or consequential infrastructure choice. |
-| Remote-client agent | Install and use the Dorf CLI, connect one Client, and use documented Job and workflow operations. | Do not run deployment-host commands, access PostgreSQL, operate the host Compose project, or use SSH or local commands to bypass a missing remote capability. |
+| Deployment-host agent | Install Dorf, run setup, use documented Compose and Job operations, manage Profiles, and run diagnostics. | Pause for each secret, browser authorization, paid service, administrator helper, DNS replacement, or consequential infrastructure choice. |
+| Remote-client agent | Install and use the Dorf CLI, connect one Client, and use documented Job operations. | Do not run deployment-host commands, access PostgreSQL, operate the host Compose project, or use SSH or local commands to bypass a missing remote capability. |
 
 Do not combine the roles unless the human explicitly grants both. The deployment host retains its
 own credentials and infrastructure authority when a remote-client agent operates Jobs.
@@ -24,10 +24,8 @@ own credentials and infrastructure authority when a remote-client agent operates
 | --- | --- |
 | Install Dorf or initialize and operate a deployment host | [Initialize a deployment host](getting-started.md#1-install-the-application-initialize-a-deployment-host) |
 | Prepare a separate Incus workstation | [Prepare a remote Incus workstation](getting-started.md#prepare-a-remote-incus-workstation) |
-| Configure the optional GitHub integration | [Set up the GitHub integration](getting-started.md#2-set-up-the-optional-github-integration) |
 | Connect or use a remote CLI Client | [Connect a remote CLI Client](getting-started.md#3-connect-one-remote-cli-client) |
 | Run a direct Job on the deployment host | [Run a direct Job](getting-started.md#4-run-a-direct-job-on-the-deployment-host) |
-| Run a coding Job on the deployment host | [Run a coding Job](getting-started.md#5-run-a-coding-job-on-the-deployment-host) |
 | Diagnose installation, readiness, authentication, Job, or cleanup failure | [Support and diagnostics](support.md) |
 | Call the service directly from code | [Remote Control API](control-api.md) and its deployment-published OpenAPI document |
 

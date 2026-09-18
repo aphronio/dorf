@@ -318,7 +318,7 @@ func (s Store) SetDefaultSandboxProfile(ctx context.Context, name string) (core.
 }
 
 func (s Store) BeginSandboxProfileVerification(ctx context.Context, name string) (core.SandboxProfile, core.ProfileVerification, error) {
-	nonce, err := reviewNonce()
+	nonce, err := ownershipNonce()
 	if err != nil {
 		return core.SandboxProfile{}, core.ProfileVerification{}, err
 	}

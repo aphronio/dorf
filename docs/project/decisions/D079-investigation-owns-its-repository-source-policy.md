@@ -4,7 +4,7 @@
 - **Areas:** workflows, core
 - **Read when:** Changing investigation repository source policy or its boundary with Core execution.
 - **Decision history:** Accepted Core/domain separation slice; source transport refined by D103 and Draft
-  storage removed by D092 — 2026-08-27; investigation workflow retired by D143 — 2026-09-18.
+  storage removed by D092 — 2026-08-27; investigation workflow retired by D143 — 2026-09-18.; application contracts retired by D144 — 2026-09-18.
 - **Decision:** Keep the investigation `Source` in `internal/investigation`. Its typed runtime
   composes credential-free HTTPS cloning over shared Git workspace execution. The base runtime
   grants only execution. Coding and investigation each add their own Git-backed authority.

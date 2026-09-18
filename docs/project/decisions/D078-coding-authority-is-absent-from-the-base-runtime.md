@@ -3,7 +3,7 @@
 - **Applicability:** historical
 - **Areas:** core, workflows, github
 - **Read when:** Reviewing the former split between base and coding runtime authority.
-- **Decision history:** Superseded by D083 — 2026-08-20
+- **Decision history:** Superseded by D083 — 2026-08-20; application contracts retired by D144 — 2026-09-18.
 - **Decision:** Resolve a base workflow runtime containing only the selected profile,
   `ExecutionService`, and `RepositoryService`. Resolve a separate `CodingRuntime` for
   `coding-to-proposal`; only that path constructs `CodingService`, the GitHub client, publication,

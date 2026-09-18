@@ -10,18 +10,13 @@ import (
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/codex"
-	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/direct"
 	"github.com/aphronio/dorf/internal/e2b"
-	githubapi "github.com/aphronio/dorf/internal/github"
-	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/incus"
-	outcomeapp "github.com/aphronio/dorf/internal/outcome"
 	piagent "github.com/aphronio/dorf/internal/pi"
 	"github.com/aphronio/dorf/internal/postgres"
-	"github.com/aphronio/dorf/internal/publication"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/telemetry"
 	"github.com/aphronio/dorf/internal/terminal"
@@ -29,8 +24,8 @@ import (
 )
 
 type profileRuntimeResolver struct {
-	cfg          config.Config
 	store        postgres.Store
+	cfg          config.Config
 	client       *absurd.Client
 	barrier      core.FaultBarrier
 	observations *codex.Observations
@@ -98,46 +93,6 @@ func (r profileRuntimeResolver) ResolveSandbox(ctx context.Context, ref core.San
 		Status:         resolved.Externals,
 		Timeline:       resolved.Externals,
 		SandboxProfile: resolved.SandboxProfile,
-	}, nil
-}
-
-func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, ref core.SandboxProfileRef) (coding.Runtime, error) {
-	resolved, err := r.resolveBase(ctx, ref)
-	if err != nil {
-		return coding.Runtime{}, err
-	}
-	review, err := reviewController(resolved.Externals)
-	if err != nil {
-		return coding.Runtime{}, err
-	}
-	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, gitworkspace.Workspace{Transport: resolved.Sandbox, Workspace: resolved.Sandbox.Workspace()}, resolved.Ownership)
-	codingService := coding.NewService(workspaceExecutor, r.store, review, blob.Store{Root: r.cfg.BlobRoot}, absurdruntime.RequireClaim)
-	githubClient := githubapi.Client{APIURL: r.cfg.GitHubAPIURL, Credentials: r.cfg.GitHubCredentials}
-	publicationService := publication.Service{
-		Store: r.store, GitHub: githubClient,
-		Repository: publication.GitRepository{Sandbox: resolved.Sandbox, Workspace: r.cfg.Workspace, Ownership: resolved.Ownership},
-		Evidence:   blob.Store{Root: r.cfg.BlobRoot}, Barrier: r.barrier,
-	}.WithClaimCheck(absurdruntime.RequireClaim)
-	outcomeService := (outcomeapp.Service{Store: r.store, GitHub: githubClient}).WithClaimCheck(absurdruntime.RequireClaim)
-	return coding.Runtime{
-		SandboxProfile: resolved.SandboxProfile,
-		Agent:          resolved.Execution,
-		Coding:         codingService,
-		Proposal: coding.ProposalRuntime{
-			Publication: publicationService, GitHub: githubClient,
-			Outcome: outcomeService, Store: r.store,
-			AdmitMessage: func(ctx context.Context, jobID, fromID, input string) (core.MessageReceipt, error) {
-				job, err := coreApplication(r.store, r.client).OpenJob(ctx, jobID)
-				if err != nil {
-					return core.MessageReceipt{}, err
-				}
-				sandbox, err := job.DefaultSandbox(ctx)
-				if err != nil {
-					return core.MessageReceipt{}, err
-				}
-				return sandbox.Agent().Message(ctx, fromID, core.MessageInput{Text: input})
-			},
-		},
 	}, nil
 }
 
@@ -218,7 +173,7 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, ref core.Sandbo
 		Agent: agent, Ownership: ownership,
 	}
 	execution := core.NewExecutionService(r.store, externals, r.barrier, absurdruntime.RequireClaim).
-		WithAgentExecution(composedAgentExecution{store: r.store, externals: externals})
+		WithAgentExecution(composedAgentExecution{externals: externals})
 	return resolvedBaseRuntime{
 		SandboxProfile: profile.Ref(),
 		Execution:      execution,
@@ -226,80 +181,23 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, ref core.Sandbo
 	}, nil
 }
 
-// composedAgentExecution is static deployment composition. It resolves the
-// prompt and one cohesive Harness operation from the pinned consumer
-// contract; Core never switches on workflow, Role, or review policy.
+// composedAgentExecution binds direct input to its selected Harness operation.
 type composedAgentExecution struct {
-	store     postgres.Store
 	externals terminal.Externals
 }
 
-// reviewController checks coding's contracts only when composing coding work.
-// Cleanup and recovered review AgentRuns use the same explicit boundary.
-func reviewController(externals terminal.Externals) (coding.ReviewController, error) {
-	transport, ok := externals.Sandbox.(coding.ReviewTransport)
-	if !ok {
-		return coding.ReviewController{}, &provider.UnsupportedError{Capability: "strict review transport"}
+func (s composedAgentExecution) ResolveAgentPrompt(_ context.Context, execution core.AgentMessageExecution) (string, error) {
+	if err := validateDirectAgentExecution(execution); err != nil {
+		return "", err
 	}
-	agent, ok := externals.Agent.(coding.ReviewHarness)
-	if !ok {
-		return coding.ReviewController{}, &provider.UnsupportedError{Capability: "strict review Harness"}
-	}
-	return coding.ReviewController{Transport: transport, Agent: agent, Ownership: externals.Ownership}, nil
+	return execution.Message.Input, nil
 }
-
-func (s composedAgentExecution) ResolveAgentPrompt(ctx context.Context, execution core.AgentMessageExecution) (string, error) {
-	switch {
-	case execution.Job.Workflow == "" && execution.Job.WorkflowRevision == "":
-		if err := validateDirectAgentExecution(execution); err != nil {
-			return "", err
-		}
-		return execution.Message.Input, nil
-	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Capability == coding.ReviewReadOnlyCapability:
-		return execution.Message.Input, nil
-	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Role == "implement":
-		if err := s.store.ValidateCodingAgentMessage(ctx, execution); err != nil {
-			return "", err
-		}
-		job, err := s.store.CodingJob(ctx, execution.Job.ID)
-		if err != nil {
-			return "", err
-		}
-		return coding.AgentPrompt(job, execution.Message.Input), nil
-	default:
-		return "", fmt.Errorf("Message %s has no statically composed ordinary Agent prompt", execution.Message.ID)
+func (s composedAgentExecution) ResolveAgentRunOperation(_ context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
+	if err := validateDirectAgentExecution(execution); err != nil {
+		return nil, err
 	}
+	return terminal.NewAgentRunOperation(s.externals, execution)
 }
-
-// ResolveAgentRunOperation is shared by reconciliation, settled observation,
-// and cleanup. Cleanup never asks for a prompt and the operation cannot choose
-// whether Core submits, recovers, or only observes.
-func (s composedAgentExecution) ResolveAgentRunOperation(ctx context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
-	switch {
-	case execution.Job.Workflow == "" && execution.Job.WorkflowRevision == "":
-		if err := validateDirectAgentExecution(execution); err != nil {
-			return nil, err
-		}
-		operation, err := terminal.NewAgentRunOperation(s.externals, execution)
-		return operation, err
-	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Capability == coding.ReviewReadOnlyCapability:
-		review, err := reviewController(s.externals)
-		if err != nil {
-			return nil, err
-		}
-		operation, err := coding.NewReviewAgentOperation(ctx, s.store, review, execution)
-		if err != nil {
-			return nil, err
-		}
-		return operation, nil
-	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Role == "implement":
-		operation, err := terminal.NewAgentRunOperation(s.externals, execution)
-		return operation, err
-	default:
-		return nil, fmt.Errorf("Message %s has no statically composed Agent Harness operation", execution.Message.ID)
-	}
-}
-
 func validateDirectAgentExecution(execution core.AgentMessageExecution) error {
 	job, run := execution.Job, execution.AgentRun
 	if job.Workflow != "" || job.WorkflowRevision != "" || run.Role != direct.DirectAgentRole ||

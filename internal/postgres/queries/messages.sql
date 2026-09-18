@@ -24,15 +24,6 @@ where ar.job_id=sqlc.arg(job_id) and ar.state='active' and ar.turn_id is not nul
       and active.role=sqlc.arg(role) and active.sandbox_id=sqlc.arg(sandbox_id)
   )=1;
 
--- name: GetLatestAgentRun :one
-select state,coalesce(turn_outcome,'') as turn_outcome,
-       coalesce(harness,'') as harness,coalesce(thread_id,'') as thread_id
-from dorf.agent_runs ar
-join dorf.job_messages m on m.id=ar.message_id
-where ar.job_id=sqlc.arg(job_id) and ar.role=sqlc.arg(role)
-order by m.sequence desc
-limit 1;
-
 -- name: NextMessageSequence :one
 select (coalesce(max(sequence),0)+1)::bigint
 from dorf.job_messages
@@ -47,35 +38,6 @@ values(
     sqlc.arg(sequence),sqlc.arg(input),sqlc.arg(attachments)::jsonb,sqlc.arg(delivery_intent),
     nullif(sqlc.arg(steer_target_turn_id)::text,''),sqlc.arg(requested_intent),sqlc.arg(refresh_skills),sqlc.narg(developer_instructions),sqlc.arg(observation)
 );
-
--- name: GetFirstUnsettledInput :one
-select m.sequence,coalesce(ar.state,'') as state,coalesce(ar.attention,'') as attention
-from dorf.job_messages m
-left join dorf.agent_runs ar on ar.message_id=m.id
-where m.job_id=sqlc.arg(job_id)
-  and ar.state not in ('completed','failed','interrupted')
-order by m.sequence
-limit 1;
-
--- name: CountUnsettledInputs :one
-select count(*)
-from dorf.job_messages m
-left join dorf.agent_runs ar on ar.message_id=m.id
-where m.job_id=sqlc.arg(job_id)
-  and ar.state not in ('completed','failed','interrupted');
-
--- name: GetLatestTurnStartRun :one
-select ar.id,ar.job_id,ar.state,ar.role,coalesce(ar.input_revision,'') as input_revision,
-       exists (
-           select 1 from dorf.evidence e
-           where e.agent_run_id=ar.id and e.kind='git-revision'
-       ) as observed
-from dorf.job_messages m
-join dorf.agent_runs ar on ar.message_id=m.id
-where m.job_id=sqlc.arg(job_id) and ar.role='implement'
-  and m.delivery_intent='follow'
-order by m.sequence desc
-limit 1;
 
 -- name: ListDeliveries :many
 select m.id as message_id,m.job_id as message_job_id,m.from_kind,m.from_id,m.sequence,m.input,m.attachments,m.delivery_intent,

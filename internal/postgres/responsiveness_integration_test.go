@@ -181,7 +181,7 @@ func TestUncertainSteerBlocksLaterPendingSteerDrain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := codingDelivery(ctx, store, job.ID)
+	target, err := nextDelivery(ctx, store, job.ID)
 	if err != nil || target == nil {
 		t.Fatalf("target delivery=%+v err=%v", target, err)
 	}
@@ -199,7 +199,7 @@ func TestUncertainSteerBlocksLaterPendingSteerDrain(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	first, err := codingDelivery(ctx, store, job.ID)
+	first, err := nextDelivery(ctx, store, job.ID)
 	if err != nil || first == nil {
 		t.Fatalf("first Steer=%+v err=%v", first, err)
 	}

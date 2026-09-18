@@ -27,23 +27,12 @@ func (a Adapter) AttestOwnership(ctx context.Context, owner provider.Ownership) 
 	return a.Sandbox.AttestOwnership(ctx, owner)
 }
 
-func (a Adapter) AttachReviewMetadata(ctx context.Context, owner provider.Ownership, review provider.ReviewMetadata) error {
-	return a.Sandbox.AttachReviewMetadata(ctx, owner, review)
-}
-
 func (a Adapter) OwnedPresent(ctx context.Context, owner provider.Ownership) (bool, error) {
 	return a.Sandbox.OwnedPresent(ctx, owner)
 }
 
 func (a Adapter) DeleteOwned(ctx context.Context, owner provider.Ownership) error {
 	return a.Sandbox.DeleteOwned(ctx, owner)
-}
-
-func (a Adapter) AttestReview(ctx context.Context, owner provider.Ownership, review provider.ReviewMetadata) error {
-	if owner.JobID != review.JobID || owner.OwnershipNonce != review.OwnershipNonce {
-		return fmt.Errorf("review Sandbox identity conflicts with its durable owner")
-	}
-	return a.Sandbox.AttestReview(ctx, owner.SandboxID, review)
 }
 
 func (a Adapter) PutFile(ctx context.Context, owner provider.Ownership, destination string, contents []byte) error {

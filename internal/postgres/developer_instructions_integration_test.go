@@ -18,7 +18,7 @@ func TestDeveloperInstructionsRetainExactNullableAdmissionAcrossRestart(t *testi
 		value *string
 	}{{"absent", nil}, {"set", &value}, {"clear", &empty}} {
 		input := core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: item.key, Input: "continue", Intent: core.MessageFollow, DeveloperInstructions: item.value}
-		accepted, err := store.AdmitCodingMessage(ctx, input)
+		accepted, err := store.AdmitDirectMessage(ctx, input)
 		if err != nil || !accepted.Created {
 			t.Fatalf("admit: %+v %v", accepted, err)
 		}
@@ -27,13 +27,13 @@ func TestDeveloperInstructionsRetainExactNullableAdmissionAcrossRestart(t *testi
 		if err != nil || !core.SameDeveloperInstructions(execution.Message.DeveloperInstructions, item.value) {
 			t.Fatalf("restored snapshot: %+v %v", execution.Message, err)
 		}
-		replay, err := restarted.AdmitCodingMessage(ctx, input)
+		replay, err := restarted.AdmitDirectMessage(ctx, input)
 		if err != nil || replay.Created || !core.SameDeveloperInstructions(replay.Message.DeveloperInstructions, item.value) {
 			t.Fatalf("replay: %+v %v", replay, err)
 		}
 		changed := "different generation"
 		input.DeveloperInstructions = &changed
-		if _, err := restarted.AdmitCodingMessage(ctx, input); err == nil {
+		if _, err := restarted.AdmitDirectMessage(ctx, input); err == nil {
 			t.Fatal("changed snapshot replay accepted")
 		}
 	}

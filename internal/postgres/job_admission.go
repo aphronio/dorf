@@ -34,7 +34,7 @@ func normalizeCoreAdmission(input core.JobAdmission) (core.JobAdmission, error) 
 	return input, nil
 }
 
-func admitJob(ctx context.Context, store Store, coreInput core.JobAdmission, queueName, taskName, taskKey string, recordTypedFacts func(context.Context, *dbsql.Queries, string) error) (core.Job, bool, error) {
+func admitJob(ctx context.Context, store Store, coreInput core.JobAdmission, queueName, taskName, taskKey string) (core.Job, bool, error) {
 	id := core.JobID(coreInput.AdmissionKey)
 	tx, err := store.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -80,11 +80,6 @@ func admitJob(ctx context.Context, store Store, coreInput core.JobAdmission, que
 	if err := reserveAdmittedSandbox(ctx, queries, id, sandboxID); err != nil {
 		return core.Job{}, false, err
 	}
-	if recordTypedFacts != nil {
-		if err := recordTypedFacts(ctx, queries, id); err != nil {
-			return core.Job{}, false, err
-		}
-	}
 	if err := scheduleJobTaskTx(ctx, tx, queueName, id, taskName, taskKey, true); err != nil {
 		return core.Job{}, false, err
 	}
@@ -96,7 +91,7 @@ func admitJob(ctx context.Context, store Store, coreInput core.JobAdmission, que
 }
 
 func reserveAdmittedSandbox(ctx context.Context, queries *dbsql.Queries, id, sandboxID string) error {
-	ownerNonce, err := reviewNonce()
+	ownerNonce, err := ownershipNonce()
 	if err != nil {
 		return err
 	}

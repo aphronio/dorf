@@ -2,8 +2,6 @@ package core
 
 import "context"
 
-type SandboxActionEffect func(context.Context, Job, Sandbox) error
-
 type AgentReconciliationProgress uint8
 
 const (
@@ -33,7 +31,6 @@ type AgentObservation interface {
 // SandboxExecution reconciles one stable Sandbox Action through Core custody.
 type SandboxExecution interface {
 	ExecuteSandboxAction(context.Context, string, string, ActionKind) error
-	ExecuteSandboxActionEffect(context.Context, string, string, ActionKind, SandboxActionEffect) error
 }
 
 // Execution is the shared in-process Core application contract consumed by

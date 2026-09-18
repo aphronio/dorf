@@ -32,8 +32,6 @@ type Config struct {
 	AppServerPort         int
 	TurnTimeout           time.Duration
 	BlobRoot              string
-	GitHubCredentials     string
-	GitHubAPIURL          string
 	E2BAPIKey             string
 	Incus                 *deployment.Incus
 }
@@ -110,8 +108,6 @@ func Load() (Config, error) {
 		AppServerPort:         4500,
 		TurnTimeout:           45 * time.Minute,
 		BlobRoot:              value("DORF_BLOB_ROOT", filepath.Join(paths.StateDir, "blobs")),
-		GitHubCredentials:     value("DORF_GITHUB_CREDENTIALS", filepath.Join(paths.ConfigDir, "integrations", "github", "credentials.json")),
-		GitHubAPIURL:          value("DORF_GITHUB_API_URL", "https://api.github.com"),
 		E2BAPIKey:             strings.TrimSpace(os.Getenv("E2B_API_KEY")),
 	}
 	stored, found, loadErr := deployment.Load(deploymentPath)
@@ -145,14 +141,6 @@ func Load() (Config, error) {
 		if parseErr != nil || origin.Scheme != "http" || origin.Hostname() == "" || origin.Port() != "8317" || origin.User != nil || origin.Path != "" || origin.RawQuery != "" || origin.ForceQuery || origin.Fragment != "" || origin.Opaque != "" {
 			return Config{}, fmt.Errorf("DORF_PROVIDER_GATEWAY_INTERNAL_ORIGIN must be an exact HTTP origin on port 8317")
 		}
-	}
-	if !filepath.IsAbs(cfg.GitHubCredentials) {
-		return Config{}, fmt.Errorf("DORF_GITHUB_CREDENTIALS must be an absolute deployment-owned path")
-	}
-	cfg.GitHubCredentials = filepath.Clean(cfg.GitHubCredentials)
-	githubAPI, parseErr := url.Parse(cfg.GitHubAPIURL)
-	if parseErr != nil || githubAPI.Scheme != "https" || githubAPI.Host == "" || githubAPI.User != nil || githubAPI.RawQuery != "" || githubAPI.ForceQuery || githubAPI.Fragment != "" || githubAPI.Opaque != "" {
-		return Config{}, fmt.Errorf("DORF_GITHUB_API_URL must be an exact HTTPS URL without user info, query, or fragment")
 	}
 	if !filepath.IsAbs(cfg.BlobRoot) {
 		return Config{}, fmt.Errorf("DORF_BLOB_ROOT must be an absolute deployment-owned path")

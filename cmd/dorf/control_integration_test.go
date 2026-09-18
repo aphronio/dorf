@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/blob"
-	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
@@ -408,12 +407,6 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	if problem.Code != "sandbox_not_found" {
 		t.Fatalf("missing Sandbox problem=%#v", problem)
 	}
-	evidence := controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID+"/evidence", credential, "", nil)
-	var retained controlapi.EvidenceList
-	controlTestJSON(t, evidence, http.StatusOK, &retained)
-	if retained.Evidence == nil || len(retained.Evidence) != 0 {
-		t.Fatalf("direct Job Evidence=%#v, want an explicit empty collection", retained)
-	}
 
 	retryKey := fmt.Sprintf("control-retry-%d", time.Now().UnixNano())
 	notEligible := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/retries", credential, retryKey, nil)
@@ -524,110 +517,6 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	}
 }
 
-func TestControlAPIWorkflowAdmissionsProjectAndReplay(t *testing.T) {
-	ctx := context.Background()
-	store, tasks, profileName := controlTestStore(t)
-	provider := controlTestGateway(t)
-	auth := controlauth.Service{Store: store}
-	enrollment, err := auth.CreateEnrollment(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	credential, err := controlauth.GenerateCredential()
-	if err != nil {
-		t.Fatal(err)
-	}
-	installations := &controlTestGitHub{installation: "42"}
-	handler := controlTestHandlerWithGitHub(store, tasks, provider, auth,
-		controlTestRuntimes{profile: profileName}, blob.Store{Root: t.TempDir()}, installations)
-	redeem := controlTestRequest(t, handler, http.MethodPost, "/v1/auth/enrollments/redeem", "", "", controlapi.RedeemRequest{
-		EnrollmentCode: enrollment.Token, ClientName: profileName, Credential: credential,
-	})
-	if redeem.Code != http.StatusCreated {
-		t.Fatalf("redeem status=%d body=%s", redeem.Code, redeem.Body.String())
-	}
-
-	codingKey := fmt.Sprintf("control-coding-%d", time.Now().UnixNano())
-	codingInput := controlapi.AdmitCodingJobRequest{KeepRunning: true, ClientReference: "coding-task",
-		Repository: "https://github.com/aphronio/dorf.git",
-		Revision:   strings.Repeat("a", 40), BaseBranch: "main", Profile: profileName, AIConnection: "primary", Model: "model-test",
-	}
-	codingResponse := controlTestRequest(t, handler, http.MethodPost, "/v1/workflows/coding/jobs", credential, codingKey, codingInput)
-	var codingJob controlapi.CodingJob
-	controlTestJSON(t, codingResponse, http.StatusCreated, &codingJob)
-	if !codingJob.KeepRunning || codingJob.CreatedByClient == nil || codingJob.CreatedByClient.Name != profileName || codingJob.ClientReference != "coding-task" || codingJob.Kind != controlapi.JobKindCoding ||
-		codingJob.Branch != "dorf/"+core.JobID(codingKey) || codingJob.StartingRevision != codingInput.Revision ||
-		codingJob.Revision != codingInput.Revision || codingJob.WorkflowRevision == "" || codingJob.Outcome != nil {
-		t.Fatalf("coding Job=%#v", codingJob)
-	}
-	if installations.calls != 1 {
-		t.Fatalf("coding installation discoveries=%d, want 1", installations.calls)
-	}
-	codingFact, err := store.Job(ctx, codingJob.ID)
-	if err != nil || codingFact.CurrentTaskID == "" || codingFact.ProviderConnection != codingInput.AIConnection {
-		t.Fatalf("coding durable Job=%#v err=%v", codingFact, err)
-	}
-
-	// A restarted API must replay the retained GitHub installation without
-	// consulting current external discovery.
-	restartedTasks := controlTestTasks(t, store.DB, tasks.QueueName(), false)
-	unavailableGitHub := &controlTestGitHub{err: fmt.Errorf("GitHub must not be consulted during replay")}
-	restarted := controlTestHandlerWithGitHub(store, restartedTasks, provider, controlauth.Service{Store: store},
-		controlTestRuntimes{profile: profileName}, blob.Store{Root: t.TempDir()}, unavailableGitHub)
-	replayCoding := controlTestRequest(t, restarted, http.MethodPost, "/v1/workflows/coding/jobs", credential, codingKey, codingInput)
-	var sameCoding controlapi.CodingJob
-	controlTestJSON(t, replayCoding, http.StatusOK, &sameCoding)
-	replayedCodingFact, replayedCodingErr := store.Job(ctx, codingJob.ID)
-	if sameCoding.ID != codingJob.ID || unavailableGitHub.calls != 0 || replayedCodingErr != nil || replayedCodingFact.CurrentTaskID != codingFact.CurrentTaskID {
-		t.Fatalf("coding replay=%#v GitHub calls=%d durable=%#v err=%v", sameCoding, unavailableGitHub.calls, replayedCodingFact, replayedCodingErr)
-	}
-	changedCoding := codingInput
-	changedCoding.BaseBranch = "develop"
-	var codingConflict controlapi.Problem
-	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodPost, "/v1/workflows/coding/jobs", credential, codingKey, changedCoding), http.StatusConflict, &codingConflict)
-	if codingConflict.Code != "idempotency_conflict" {
-		t.Fatalf("coding replay conflict=%#v", codingConflict)
-	}
-
-	directKey := fmt.Sprintf("control-direct-%d", time.Now().UnixNano())
-	directInput := controlapi.AdmitJobRequest{Profile: profileName, AIConnection: "primary", Model: "model-test"}
-	var directJob controlapi.DirectJob
-	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs", credential, directKey, directInput), http.StatusCreated, &directJob)
-	foreignKind := codingInput
-	foreignKind.Profile = "missing-profile-must-not-be-resolved"
-	foreignKindConflict := controlTestRequest(t, restarted, http.MethodPost, "/v1/workflows/coding/jobs", credential, directKey, foreignKind)
-	var foreignKindProblem controlapi.Problem
-	controlTestJSON(t, foreignKindConflict, http.StatusConflict, &foreignKindProblem)
-	if foreignKindProblem.Code != "idempotency_conflict" || unavailableGitHub.calls != 0 {
-		t.Fatalf("foreign-kind replay conflict=%#v GitHub calls=%d", foreignKindProblem, unavailableGitHub.calls)
-	}
-	message := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+codingJob.ID+"/messages", credential,
-		"message-"+codingJob.ID, controlapi.SendMessageRequest{Text: "continue", Intent: "follow"})
-	var accepted controlapi.Message
-	controlTestJSON(t, message, http.StatusCreated, &accepted)
-	if accepted.JobID != codingJob.ID || accepted.Sequence != 1 {
-		t.Fatalf("workflow Message=%#v", accepted)
-	}
-
-	completedCodingResponse := controlTestRequest(t, restarted, http.MethodPut, "/v1/jobs/"+codingJob.ID+"/abandon", credential, "", nil)
-	var completedCoding controlapi.CodingJob
-	controlTestJSON(t, completedCodingResponse, http.StatusOK, &completedCoding)
-	if completedCoding.Execution.State != "complete" || completedCoding.Cleanup.State != "running" || completedCoding.Outcome == nil || completedCoding.Outcome.Kind != string(coding.OutcomeAbandoned) {
-		t.Fatalf("completed coding Job=%#v", completedCoding)
-	}
-	var replayedAbandon controlapi.CodingJob
-	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodPut, "/v1/jobs/"+codingJob.ID+"/abandon", credential, "", nil), http.StatusOK, &replayedAbandon)
-	if replayedAbandon.Outcome == nil || replayedAbandon.Outcome.Kind != string(coding.OutcomeAbandoned) {
-		t.Fatalf("replayed abandon=%#v", replayedAbandon)
-	}
-	cleanupDirect := controlTestRequest(t, restarted, http.MethodPut, "/v1/jobs/"+directJob.ID+"/cleanup", credential, "", nil)
-	var cleaningDirect controlapi.DirectJob
-	controlTestJSON(t, cleanupDirect, http.StatusOK, &cleaningDirect)
-	if cleaningDirect.Cleanup.State != "running" || cleaningDirect.Execution.State != "stopped" {
-		t.Fatalf("cleanup-fenced direct Job=%#v", cleaningDirect)
-	}
-}
-
 func TestControlAPIJobListKeepsKeysetContinuity(t *testing.T) {
 	ctx := context.Background()
 	store, _, profileName := controlTestStore(t)
@@ -654,11 +543,10 @@ func TestControlAPIJobListKeepsKeysetContinuity(t *testing.T) {
 	}
 	fixtures := []listedFixture{
 		{base + "-z", "", "", tiedAt},
-		{base + "-y", string(coding.Workflow), coding.WorkflowRevision, tiedAt},
+		{base + "-y", "", "", tiedAt},
 		{base + "-x", "", "", tiedAt.Add(-time.Second)},
 		{base + "-w", "", "", tiedAt.Add(-2 * time.Second)},
 		// A retained but unrecognized workflow revision must not consume a page slot.
-		{base + "-unsupported", string(coding.Workflow), "unrecognized", tiedAt.Add(time.Second)},
 	}
 	insert := func(fixture listedFixture) {
 		t.Helper()
@@ -684,17 +572,11 @@ insert into dorf.jobs(
 	})
 
 	handler := controlapi.NewServer(controlapi.Discovery{Product: "dorf"}, auth, controlAPIJobs{store: store}, controlAPIProfiles{store: store}).Handler
-	unsupported := controlTestRequest(t, handler, http.MethodGet, "/v1/jobs/"+fixtures[4].id, credential, "", nil)
-	var unsupportedProblem controlapi.Problem
-	controlTestJSON(t, unsupported, http.StatusNotFound, &unsupportedProblem)
-	if unsupportedProblem.Code != "job_not_found" {
-		t.Fatalf("unsupported-revision Job Problem=%#v", unsupportedProblem)
-	}
 	firstResponse := controlTestRequest(t, handler, http.MethodGet, "/v1/jobs?limit=2", credential, "", nil)
 	var first controlapi.JobList
 	controlTestJSON(t, firstResponse, http.StatusOK, &first)
 	if len(first.Jobs) != 2 || first.Jobs[0].ID != fixtures[0].id || first.Jobs[0].Kind != controlapi.JobKindDirect ||
-		first.Jobs[1].ID != fixtures[1].id || first.Jobs[1].Kind != controlapi.JobKindCoding || first.NextCursor == nil {
+		first.Jobs[1].ID != fixtures[1].id || first.Jobs[1].Kind != controlapi.JobKindDirect || first.NextCursor == nil {
 		t.Fatalf("first Job page=%#v", first)
 	}
 
@@ -829,35 +711,18 @@ func controlTestGateway(t *testing.T) gateway.Gateway {
 }
 
 func controlTestHandler(store postgres.Store, tasks *absurd.Client, provider gateway.Gateway, auth controlauth.Service, runtimes core.SandboxRuntimeResolver, evidence blob.Store) http.Handler {
-	return controlTestHandlerWithGitHub(store, tasks, provider, auth, runtimes, evidence,
-		&controlTestGitHub{installation: "42"})
-}
-
-func controlTestHandlerWithGitHub(store postgres.Store, tasks *absurd.Client, provider gateway.Gateway, auth controlauth.Service, runtimes core.SandboxRuntimeResolver, evidence blob.Store, github coding.InstallationDiscovery) http.Handler {
 	queueName := config.QueueName
 	if tasks != nil {
 		queueName = tasks.QueueName()
 	}
-	reader := controlreader.Service{Store: store, Runtimes: runtimes, Provider: provider, Installations: github}
+	reader := controlreader.Service{Store: store, Runtimes: runtimes, Provider: provider}
 	messageImages, _ := runtimes.(messageImageCapability)
 	return controlapi.NewServer(controlapi.Discovery{Product: "dorf"}, auth,
 		controlAPIJobs{
 			store: store, tasks: tasks,
 			directAdmissions: direct.NewAdmissionService(store, queueName, reader),
-			codingAdmissions: coding.NewAdmissionService(store, queueName, reader, reader),
 			reader:           reader, blobs: evidence, messageImages: messageImages,
 		}, controlAPIProfiles{store: store}).Handler
-}
-
-type controlTestGitHub struct {
-	installation string
-	err          error
-	calls        int
-}
-
-func (g *controlTestGitHub) DiscoverInstallation(context.Context, string) (string, error) {
-	g.calls++
-	return g.installation, g.err
 }
 
 type controlTestRuntimes struct {

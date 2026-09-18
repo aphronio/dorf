@@ -99,7 +99,7 @@ func TestSandboxUpgradeRecoveryKeepsCustodyAndQueuedInput(t *testing.T) {
 			if err := store.BindSandboxResource(ctx, owned, "provider-original"); err != nil {
 				t.Fatal(err)
 			}
-			current, err := codingDelivery(ctx, store, job.ID)
+			current, err := nextDelivery(ctx, store, job.ID)
 			if err != nil {
 				t.Fatal(err)
 			}

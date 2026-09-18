@@ -192,32 +192,6 @@ func TestWatchJobReconnectsWithoutOrdinaryRequestTimeout(t *testing.T) {
 	}
 }
 
-func TestJobDecodesWorkflowUnion(t *testing.T) {
-	const credential = "workflow-credential"
-	codingJSON := `{"id":"job-coding","kind":"coding","workflow_revision":"3"}`
-	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		if request.Header.Get("Authorization") != "Bearer "+credential {
-			t.Fatalf("workflow request auth=%q", request.Header.Get("Authorization"))
-		}
-		switch request.Method + " " + request.URL.Path {
-		case "GET /v1/jobs/job-coding":
-			return jsonResponse(http.StatusOK, codingJSON), nil
-		default:
-			t.Fatalf("unexpected workflow request %s %s", request.Method, request.URL.Path)
-			return nil, nil
-		}
-	})
-	client, err := New("https://dorf.example.test", credential, transport)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, err := client.Job(context.Background(), "job-coding"); err != nil {
-		t.Fatal(err)
-	} else if typed, ok := got.(controlapi.CodingJob); !ok || typed.WorkflowRevision != "3" {
-		t.Fatalf("coding union=%T %#v", got, got)
-	}
-}
-
 func TestListJobsEncodesOneOpaquePageRequest(t *testing.T) {
 	const credential = "list-credential"
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {

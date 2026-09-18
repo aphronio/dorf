@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/postgres/dbsql"
 )
@@ -32,8 +31,6 @@ func (s Store) ListSupportedJobs(ctx context.Context, limit int, cursorAt time.T
 		return nil, fmt.Errorf("Job list cursor requires both admitted time and Job ID")
 	}
 	rows, err := dbsql.New(s.DB).ListSupportedJobs(ctx, dbsql.ListSupportedJobsParams{
-		CodingWorkflow:   string(coding.Workflow),
-		CodingRevision:   coding.WorkflowRevision,
 		HasCursor:        cursorID != "",
 		CursorAdmittedAt: cursorAt,
 		CursorID:         cursorID,

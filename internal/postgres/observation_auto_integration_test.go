@@ -17,7 +17,7 @@ func TestAutoObservationAdoptsNativeFollowAfterLostAcknowledgement(t *testing.T)
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	job, threadID := prepareTransportIntegrationJob(t, store, "auto-steer-error-terminal-follow")
-	target, err := codingDelivery(ctx, store, job.ID)
+	target, err := nextDelivery(ctx, store, job.ID)
 	if err != nil || target == nil {
 		t.Fatalf("target delivery=%#v err=%v", target, err)
 	}
@@ -28,7 +28,7 @@ func TestAutoObservationAdoptsNativeFollowAfterLostAcknowledgement(t *testing.T)
 	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "running"); err != nil {
 		t.Fatal(err)
 	}
-	automatic, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{
+	automatic, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{
 		JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman,
 		FromID: "steer-error-terminal-auto", Input: "preserve after uncertain acknowledgement", Intent: core.MessageAuto, Observation: true,
 	})

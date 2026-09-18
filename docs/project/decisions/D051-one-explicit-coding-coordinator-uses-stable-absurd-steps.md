@@ -1,9 +1,9 @@
 # D051: One explicit coding coordinator uses stable Absurd Steps
 
-- **Applicability:** current
+- **Applicability:** historical
 - **Areas:** workflows, persistence
 - **Read when:** Changing coding workflow coordination, stable Step identities, or recovery guards.
-- **Decision history:** Accepted workflow boundary — 2026-08-10; refined by D061 and D087
+- **Decision history:** Accepted workflow boundary — 2026-08-10; refined by D061 and D087; application contracts retired by D144 — 2026-09-18.
 - **Decision:** The coding path is ordered by one readable `coding.RunJob` coordinator. It invokes
   bounded operations in product order. `CurrentWork` selects the exact owning fact. Each external
   Action runs in its own `dorf/action/v1/<ActionID>` Step and returns

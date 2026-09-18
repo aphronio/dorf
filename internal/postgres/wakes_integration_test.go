@@ -152,7 +152,7 @@ func TestNativeTerminalWakeAcceptsFastBindRaceAndRejectsForeignOrClosedTargets(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	delivery, err := codingDelivery(ctx, store, job.ID)
+	delivery, err := nextDelivery(ctx, store, job.ID)
 	if err != nil || delivery == nil {
 		t.Fatalf("delivery=%+v err=%v", delivery, err)
 	}
@@ -198,7 +198,7 @@ func TestStopWakeReturnsAndReemitsOriginalTurnTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	delivery, err := codingDelivery(ctx, store, job.ID)
+	delivery, err := nextDelivery(ctx, store, job.ID)
 	if err != nil || delivery == nil {
 		t.Fatalf("delivery=%+v err=%v", delivery, err)
 	}

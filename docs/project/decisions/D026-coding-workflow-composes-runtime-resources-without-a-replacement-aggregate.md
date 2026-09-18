@@ -3,7 +3,7 @@
 - **Applicability:** historical
 - **Areas:** workflows, core, github
 - **Read when:** Changing coding workflow ownership or considering a second orchestration aggregate beside core resources.
-- **Decision history:** Superseded by D047 — 2026-08-06
+- **Decision history:** Superseded by D047 — 2026-08-06; application contracts retired by D144 — 2026-09-18.
 - **Decision:** A coding slice creates deterministic Worker `coder-JOB` with explicit
   `coding-workflow` provenance and `dedicated` lifecycle policy, then creates one exact-goal Job and
   Assignment. Workflow-owned SQLite tables are keyed by Job and contain only repository, branch, PR,

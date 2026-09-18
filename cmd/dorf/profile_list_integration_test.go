@@ -131,9 +131,6 @@ func TestControlAPIUnknownProfilesHaveASpecificProblem(t *testing.T) {
 		input any
 	}{
 		{"/v1/jobs", controlapi.AdmitJobRequest{Profile: missing}},
-		{"/v1/workflows/coding/jobs", controlapi.AdmitCodingJobRequest{
-			Profile: missing, Repository: "https://github.com/acme/widget.git", Revision: strings.Repeat("a", 40), BaseBranch: "main",
-		}},
 	} {
 		t.Run(test.path, func(t *testing.T) {
 			response := controlTestRequest(t, handler, http.MethodPost, test.path, credential,

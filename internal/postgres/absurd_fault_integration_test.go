@@ -10,9 +10,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/core"
-	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/postgres"
-	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 	"github.com/jackc/pgx/v5"
 )
@@ -219,24 +217,23 @@ func (e *reconcilingFaultEffect) claims() (passed, failed []string) {
 	return append([]string(nil), e.claimPassed...), append([]string(nil), e.claimFailed...)
 }
 
-// faultActionExternals controls only the repository-clone effect exercised by
+// faultActionExternals controls only the Sandbox-create effect exercised by
 // this fault story. The nil embedded interface makes any unexpected external
 // call fail the test instead of teaching this focused fake unrelated behavior.
 type faultActionExternals struct {
 	core.Externals
-	gitworkspace.Operations
 	effect *reconcilingFaultEffect
 	runID  string
 }
 
-func (e faultActionExternals) ReconcileClone(context.Context, provider.Ownership, string, string, string) error {
+func (e faultActionExternals) SandboxCreate(context.Context, core.Job, core.Sandbox) (string, error) {
 	e.effect.reconcile(e.runID)
-	return nil
+	return "provider-fault-resource", nil
 }
 
-func repositoryCloneAction(actions []core.Action) (core.Action, bool) {
+func sandboxCreateAction(actions []core.Action) (core.Action, bool) {
 	for _, action := range actions {
-		if action.Kind == gitworkspace.ActionRepositoryClone {
+		if action.Kind == core.ActionSandboxCreate {
 			return action, true
 		}
 	}
@@ -254,7 +251,7 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 			return faultActionResultV1{}, absurd.ErrNoTaskContext
 		}
 		result, err := absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (faultActionResultV1, error) {
-			job, err := store.CodingJob(workCtx, params.JobID)
+			job, err := store.Job(workCtx, params.JobID)
 			if err != nil {
 				return faultActionResultV1{}, err
 			}
@@ -273,11 +270,10 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 					return err
 				},
 			)
-			service := gitworkspace.NewExecutor(execution, faultActionExternals{effect: effect, runID: runID}, nil)
-			if err := service.ExecuteRepositoryClone(workCtx, job.Job, sandbox, job.Repository, job.Revision, job.Branch); err != nil {
+			if err := execution.ExecuteSandboxAction(workCtx, job.ID, sandbox.ID, core.ActionSandboxCreate); err != nil {
 				return faultActionResultV1{}, err
 			}
-			return faultActionResultV1{ActionID: core.ScopedActionID(job.ID, gitworkspace.ActionRepositoryClone, sandbox.ID)}, nil
+			return faultActionResultV1{ActionID: core.ScopedActionID(job.ID, core.ActionSandboxCreate, sandbox.ID)}, nil
 		})
 		if err != nil {
 			return faultActionResultV1{}, err
@@ -288,11 +284,8 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 
 func admitFaultJob(t *testing.T, store postgres.Store, suffix string) core.Job {
 	t.Helper()
-	job, created, err := admitCodingFixture(t, store, context.Background(), codingJobInput(
+	job, created, err := admitDirectFixture(t, store, context.Background(), directJobInput(
 		"absurd-fault-"+suffix,
-
-		"2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c",
-		"dorf/absurd-fault-"+suffix,
 	))
 	if err != nil || !created {
 		t.Fatalf("admit fault Job=%#v created=%v err=%v", job, created, err)
@@ -350,7 +343,7 @@ func TestAbsurdCancellationCannotRecordLateActionSuccess(t *testing.T) {
 
 	snapshot, err := client.FetchTaskResult(context.Background(), queueName, spawned.TaskID)
 	actions, actionsErr := store.Actions(context.Background(), job.ID)
-	action, found := repositoryCloneAction(actions)
+	action, found := sandboxCreateAction(actions)
 	passed, failed := effect.claims()
 	if err != nil || actionsErr != nil || snapshot == nil || snapshot.State != absurd.TaskCancelled || !found || action.State != core.ActionUnsettled || effect.mutationCount() != 1 || len(passed) != 1 || passed[0] != firstRunID || len(failed) != 1 || failed[0] != firstRunID {
 		t.Fatalf("cancelled snapshot=%#v actions=%#v mutations=%d claims passed=%v failed=%v errors=%v/%v", snapshot, actions, effect.mutationCount(), passed, failed, err, actionsErr)
@@ -446,7 +439,7 @@ func TestAbsurdClaimExpirySandboxEffectFenceSerializesCleanupWithoutLateReceipt(
 		t.Fatal(err)
 	}
 	actions, err := store.Actions(context.Background(), job.ID)
-	action, found := repositoryCloneAction(actions)
+	action, found := sandboxCreateAction(actions)
 	passed, failed := effect.claims()
 	closed, jobErr := store.Job(context.Background(), job.ID)
 	if err != nil || jobErr != nil || !found || action.State != core.ActionUnsettled || effect.mutationCount() != 1 || len(passed) != 1 || passed[0] != firstRunID || len(failed) != 1 || failed[0] != firstRunID || closed.AdmissionOpen || closed.CleanupState != core.CleanupScheduled {

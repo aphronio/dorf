@@ -74,10 +74,8 @@ Job listing is newest-first keyset traversal of current facts, not a frozen snap
 defaults to 50 and accepts 1–100. Each item includes `id`, `kind`, `admitted_at`, and creator attribution;
 read the Job for mutable execution and cleanup state. Pass `next_cursor` back unchanged. Cursors are
 opaque, and malformed or altered cursors return the published `invalid_cursor` Problem. The index
-contains only Job kinds understood by this API revision: direct and coding. The retired
-`codebase-investigation` admission route returns not found; retained investigation Jobs are omitted
-from public listing and inspection. Clients use direct Jobs for investigation and own repository
-setup, instructions, and report paths.
+contains direct Jobs. Clients own repository setup, instructions, review, publication, and result
+meaning. Retired workflow Jobs are excluded from public listing and inspection.
 
 Each Sandbox in Job inspection includes its active resource record ID and the provider VM ID when
 that locator has been attested and recorded. A missing provider ID means it has not been recorded;
@@ -95,7 +93,7 @@ and native-history access can return their existing unavailable Problems during 
 Passive Job inspection remains available. The hold primitive does not expose a public upgrade
 request or authorize package mutations.
 
-Job admission defaults `keep_running` to false for direct and coding Jobs.
+Job admission defaults `keep_running` to false for direct Jobs.
 E2B Sandboxes become eligible for pause after one minute without native activity, when no AgentRun
 remains pending, active, or uncertain. The existing durable polling loop performs the pause, usually
 within the following 30 seconds. Providers without the memory-pause capability retain their existing lifecycle. Set `keep_running: true` at admission to
@@ -147,7 +145,7 @@ selected target finishes, exact delivery attribution atomically adopts that acce
 not submitted twice. Raw timeline views omit observation payloads. Dorf does not decide
 which application events to produce, how to interpret them, or whether to notify the user.
 
-Direct and workflow admission may select a named AI connection. Omission uses the deployment
+Direct admission may select a named AI connection. Omission uses the deployment
 default, and the admitted Job retains the resolved connection. Model is also optional. Omission
 uses that resolved connection's default, while an explicit model overrides it for this Job. The
 admitted Job always returns and retains the exact resolved model. Job and Message admission and
@@ -163,8 +161,7 @@ by reading current truth rather than replaying a second event log. Follow is dur
 explicit steer remains bound to the exact active Turn and never degrades into Follow. An automatic
 Message may become follow only when reconciliation proves its selected Turn became terminal without
 accepting that exact Message. Retry accepts only an
-eligible failed execution. Abandon records an idempotent `abandoned` Outcome only for a coding Job,
-then requests cleanup. Cleanup remains separate from execution and Outcome. A settled Message whose
+eligible failed execution. Cleanup remains separate from execution and application success. A settled Message whose
 internal encoded JSON observation exceeds 16 MiB returns
 the published `message_unavailable` Problem rather than a partial result.
 
@@ -312,8 +309,7 @@ not consume capacity reserved for other control operations. A bounded write can 
 one regular file, creating missing parent directories.
 Files use mode 0600 and new directories use mode 0700. Create-only
 writes preserve an existing file, including an intentionally empty file. The same custody and
-cleanup fence apply. There is no listing, glob, archive, or directory API. Evidence responses
-contain verified immutable metadata, not arbitrary result blobs or internal recovery identities.
+cleanup fence apply. There is no listing, glob, archive, or directory API.
 
 Sandbox exec runs caller-supplied argv and optional stdin inside the same attested Job-owned
 Sandbox, under the existing authentication and cleanup fence. It supports bounded setup commands
@@ -361,10 +357,8 @@ The API receives its database URL, read-only API state, and an independently der
 through the protected Compose environment. The shared `state/blobs` subdirectory has a separate
 writable bind mount so Message admission can retain attachments. Setup creates and attests that
 directory before Compose starts; the rest of API state remains read-only. It receives no Incus
-socket or identity, E2B key,
-GitHub credential, Gateway state, or provider configuration. The worker's narrow reader answers
-only default and named AI-connection observation, GitHub installation discovery, one exact stored
-Job Proposal observation, exact Job-owned Sandbox file reads and bounded Sandbox file writes, and one
+socket or identity, E2B key, Gateway state, or provider configuration. The worker's narrow reader answers
+only default and named AI-connection observation, exact Job-owned Sandbox file reads and bounded Sandbox file writes, and one
 settled Message result or native conversation turn. It has no generic proxy, provider selector,
 or credential response.
 

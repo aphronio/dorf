@@ -111,6 +111,13 @@ insert into dorf.agent_runs(id,job_id,message_id,role,state,sandbox_id) values('
 	if _, err := tx.ExecContext(ctx, `
 insert into dorf.jobs(id,admission_key,workflow_name,workflow_revision,goal,sandbox_profile,provider_connection,model,reasoning_effort)
 values('job-retired','retired-admission','codebase-investigation','2','inspect source','current-profile','primary','model-test','high');
+insert into dorf.jobs(id,admission_key,workflow_name,workflow_revision,goal,sandbox_profile,provider_connection,model,reasoning_effort)
+values('job-coding-retired','coding-retired-admission','coding-to-proposal','1','edit source','current-profile','primary','model-test','high');
+update dorf.jobs set admission_open=false,cleanup_state='complete',cleaned_at=clock_timestamp() where id='job-coding-retired';
+insert into dorf.coding_to_proposal_inputs(job_id,workflow_name,repository,starting_revision,revision,branch,github_repository,github_installation_id,base_branch)
+values('job-coding-retired','coding-to-proposal','https://example.test/source.git',repeat('a',40),repeat('a',40),'task/retired','example/source','42','main');
+insert into dorf.job_messages(id,job_id,from_kind,from_id,sequence,input)
+values('message-coding-retired','job-coding-retired','human','dorf:initial',1,'edit source');
 update dorf.jobs set admission_open=false,cleanup_state='complete',cleaned_at=clock_timestamp() where id='job-retired';
 insert into dorf.job_messages(id,job_id,from_kind,from_id,sequence,input)
 values('message-retired','job-retired','human','dorf:initial',1,'inspect source');
@@ -125,6 +132,9 @@ values('job-retired','codebase-investigation','https://example.test/source.git',
 	if err := tx.QueryRowContext(ctx, `select m.input
 from dorf.jobs j join dorf.job_messages m on m.job_id=j.id where j.id='job-retired'`).Scan(&retiredInput); err != nil || retiredInput != "inspect source" {
 		t.Fatalf("retirement changed retained input: input=%q err=%v", retiredInput, err)
+	}
+	if err := tx.QueryRowContext(ctx, `select input from dorf.job_messages where job_id='job-coding-retired'`).Scan(&retiredInput); err != nil || retiredInput != "edit source" {
+		t.Fatalf("coding retirement changed retained input: input=%q err=%v", retiredInput, err)
 	}
 	var resourceID, retainedNonce string
 	var providerID sql.NullString

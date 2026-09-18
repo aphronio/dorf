@@ -68,7 +68,7 @@ func TestTimelineReadsWholeNativeTurnWithoutObservingOrResuming(t *testing.T) {
 			if p.observed != nil || p.observations != nil {
 				t.Fatal("passive read registered observation")
 			}
-			methods := reviewProtocolMethods(requests)
+			methods := protocolMethods(requests)
 			want := []string{"thread/turns/list"}
 			if explicit {
 				want = append(want, "thread/turns/list")

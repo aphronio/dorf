@@ -73,7 +73,7 @@ func TestRouteLaunchCompatibilityAndMissingCredential(t *testing.T) {
 		t.Fatalf("legacy launch options = %q, %v", output, err)
 	}
 	// A removed credential must stop launch even if legacy provider settings remain.
-	script = appServerScript("ws://127.0.0.1:1", tokenSHA256("synthetic-token"), false)
+	script = appServerScript("ws://127.0.0.1:1", tokenSHA256("synthetic-token"))
 	script = strings.ReplaceAll(script, "/root/", home+"/")
 	script = strings.ReplaceAll(script, serverControlDir, home+"/control")
 	if err := exec.Command("bash", "-c", script).Run(); err == nil {

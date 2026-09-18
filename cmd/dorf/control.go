@@ -23,7 +23,6 @@ import (
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/clientconfig"
 	"github.com/aphronio/dorf/internal/codex"
-	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
@@ -31,9 +30,7 @@ import (
 	"github.com/aphronio/dorf/internal/controlreader"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/direct"
-	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/hostclientconfig"
-	outcomeapp "github.com/aphronio/dorf/internal/outcome"
 	"github.com/aphronio/dorf/internal/postgres"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/version"
@@ -60,7 +57,7 @@ func remoteCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 		return false, nil
 	case "job":
 		return true, remoteJobCommand(ctx, args[1:], stdout, stderr)
-	case "sandbox", "run", "workflow":
+	case "sandbox", "run":
 		cfg, _, client, err := loadConnectedClient()
 		if err != nil {
 			return true, err
@@ -70,8 +67,6 @@ func remoteCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 			err = remoteSandboxCommand(ctx, client, args[1:], stdout)
 		case "run":
 			err = remoteRun(ctx, client, cfg, args[1:], stdout, stderr)
-		default:
-			err = remoteWorkflowCommand(ctx, client, cfg, args[1:], stdout, stderr)
 		}
 		return true, jobControlError(cfg.DeploymentURL, err)
 	default:
@@ -285,82 +280,6 @@ type remoteRunReceipt struct {
 	Message    controlapi.Message `json:"message"`
 }
 
-func remoteWorkflowCommand(ctx context.Context, client *controlclient.Client, cfg clientconfig.Config, args []string, stdout, stderr io.Writer) error {
-	if len(args) < 2 || args[0] != "run" {
-		return fmt.Errorf("workflow requires: run coding")
-	}
-	switch args[1] {
-	case "coding":
-		return remoteCodingWorkflow(ctx, client, cfg, args[2:], stdout, stderr)
-	default:
-		return fmt.Errorf("unsupported workflow %q", args[1])
-	}
-}
-
-func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, cfg clientconfig.Config, args []string, stdout, stderr io.Writer) error {
-	set := flag.NewFlagSet("workflow run coding", flag.ContinueOnError)
-	keepRunning := set.Bool("keep-running", false, "keep the Sandbox running between turns")
-	set.SetOutput(stderr)
-	var attachmentPaths attachmentFlags
-	clientReference := set.String("client-reference", cfg.ClientReference, "optional caller thread or task reference")
-	key := set.String("key", "", "stable request identity for explicit replay")
-	inputFile := set.String("input-file", "", "path containing the first Message")
-	repository := set.String("repo", "", "credential-free GitHub clone URL")
-	revision := set.String("revision", "", "exact starting commit OID")
-	base := set.String("base", "", "immutable GitHub base branch")
-	branch := set.String("branch", "", "Job branch (default: dorf/<Job ID>)")
-	profile := set.String("profile", "", "named Sandbox profile (default: deployment default)")
-	connection := set.String("ai-connection", "", "named AI connection (default: deployment default)")
-	model := set.String("model", "", "Harness model (default: selected AI connection)")
-	reasoning := set.String("reasoning", "high", "Harness reasoning effort")
-	output := set.String("output", "human", "output format: human or json")
-	set.Var(&attachmentPaths, "attach", "local file to attach to the first Message (repeatable)")
-	if err := set.Parse(args); err != nil {
-		return err
-	}
-	if set.NArg() != 0 {
-		return fmt.Errorf("workflow run coding does not accept positional arguments")
-	}
-	if err := validateOutput(*output); err != nil {
-		return err
-	}
-	input, err := readMessageInput(*inputFile, "workflow run coding", attachmentPaths)
-	if err != nil {
-		return err
-	}
-	requestKey, generated, err := operationKey("coding", *key, rand.Reader)
-	if err != nil {
-		return err
-	}
-	request := controlapi.AdmitCodingJobRequest{
-		KeepRunning:     *keepRunning,
-		ClientReference: *clientReference,
-		Repository:      *repository, Revision: *revision, BaseBranch: *base, Branch: *branch,
-		Profile: *profile, AIConnection: *connection, Model: *model, Reasoning: *reasoning,
-	}
-	job, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Admission may have succeeded.", func() (controlapi.CodingJob, error) {
-		return client.AdmitCodingJob(ctx, requestKey, request)
-	})
-	if err != nil {
-		return err
-	}
-	input.Intent = "follow"
-	message, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Message may have been accepted.", func() (controlapi.Message, error) {
-		return client.SendMessage(ctx, job.ID, requestKey, input)
-	})
-	if err != nil {
-		return err
-	}
-	if *output == "json" {
-		return writeJSON(stdout, remoteRunReceipt{Deployment: cfg.DeploymentURL, RequestID: requestKey, Job: job, Message: message})
-	}
-	fmt.Fprintf(stdout, "Job %s accepted by %s\n", job.ID, cfg.DeploymentURL)
-	renderRemoteJob(stdout, job)
-	renderRemoteMessage(stdout, message)
-	fmt.Fprintf(stdout, "Next: dorf job inspect %s\n", job.ID)
-	return nil
-}
-
 func remoteJobCommand(ctx context.Context, args []string, stdout, stderr io.Writer) (err error) {
 	cfg, _, client, err := loadConnectedClient()
 	if err != nil {
@@ -368,7 +287,7 @@ func remoteJobCommand(ctx context.Context, args []string, stdout, stderr io.Writ
 	}
 	defer func() { err = jobControlError(cfg.DeploymentURL, err) }()
 	if len(args) == 0 {
-		return fmt.Errorf("job requires: list, inspect, watch, message, retry, evidence, abandon, or cleanup")
+		return fmt.Errorf("job requires: list, inspect, watch, message, retry, or cleanup")
 	}
 	switch args[0] {
 	case "list":
@@ -387,38 +306,9 @@ func remoteJobCommand(ctx context.Context, args []string, stdout, stderr io.Writ
 		return remoteMessageSend(ctx, cfg, client, args[1:], stdout, stderr)
 	case "retry":
 		return remoteJobRetry(ctx, cfg, client, args[1:], stdout, stderr)
-	case "evidence":
-		return remoteJobEvidence(ctx, client, args[1:], stdout, stderr)
-	case "abandon":
-		return remoteJobAbandon(ctx, cfg, client, args[1:], stdout, stderr)
 	default:
-		return fmt.Errorf("job requires: list, inspect, watch, message, retry, evidence, abandon, or cleanup")
+		return fmt.Errorf("job requires: list, inspect, watch, message, retry, or cleanup")
 	}
-}
-
-func remoteJobAbandon(ctx context.Context, cfg clientconfig.Config, client *controlclient.Client, args []string, stdout, stderr io.Writer) error {
-	set := flag.NewFlagSet("job abandon", flag.ContinueOnError)
-	set.SetOutput(stderr)
-	output := set.String("output", "human", "output format: human or json")
-	if err := set.Parse(args); err != nil {
-		return err
-	}
-	if set.NArg() != 1 {
-		return fmt.Errorf("job abandon requires one Job ID")
-	}
-	if err := validateOutput(*output); err != nil {
-		return err
-	}
-	job, err := client.Abandon(ctx, set.Arg(0))
-	if err != nil {
-		return err
-	}
-	if *output == "json" {
-		return writeJSON(stdout, remoteJobReceipt{Deployment: cfg.DeploymentURL, Job: job})
-	}
-	fmt.Fprintf(stdout, "Job %s abandoned on %s\n", job.Common().ID, cfg.DeploymentURL)
-	renderRemoteJob(stdout, job)
-	return nil
 }
 
 func remoteJobSnapshot(ctx context.Context, cfg clientconfig.Config, client *controlclient.Client, args []string, stdout, stderr io.Writer) error {
@@ -596,38 +486,6 @@ func remoteJobRetry(ctx context.Context, cfg clientconfig.Config, client *contro
 	return nil
 }
 
-func remoteJobEvidence(ctx context.Context, client *controlclient.Client, args []string, stdout, stderr io.Writer) error {
-	set := flag.NewFlagSet("job evidence", flag.ContinueOnError)
-	set.SetOutput(stderr)
-	output := set.String("output", "human", "output format: human or json")
-	if err := set.Parse(args); err != nil {
-		return err
-	}
-	if set.NArg() != 1 {
-		return fmt.Errorf("job evidence requires one Job ID")
-	}
-	if err := validateOutput(*output); err != nil {
-		return err
-	}
-	list, err := client.Evidence(ctx, set.Arg(0))
-	if err != nil {
-		return err
-	}
-	if *output == "json" {
-		return writeJSON(stdout, list)
-	}
-	records := list.Evidence
-	if len(records) == 0 {
-		fmt.Fprintf(stdout, "Job %s has no retained Evidence\n", set.Arg(0))
-		return nil
-	}
-	fmt.Fprintf(stdout, "Evidence for Job %s\n", set.Arg(0))
-	for _, record := range records {
-		fmt.Fprintf(stdout, "  %s: %s sha256=%s bytes=%d producer=%s\n", record.ID, record.Kind, record.SHA256, record.ByteSize, record.Producer)
-	}
-	return nil
-}
-
 func remoteSandboxCommand(ctx context.Context, client *controlclient.Client, args []string, stdout io.Writer) error {
 	if len(args) < 2 || args[0] != "file" || args[1] != "get" {
 		return fmt.Errorf("sandbox requires: file get SANDBOX_ID PATH --output DESTINATION")
@@ -736,23 +594,6 @@ func renderRemoteJob(output io.Writer, view controlapi.JobView) {
 	}
 	for _, sandbox := range job.Sandboxes {
 		fmt.Fprintf(output, "  Sandbox: %s (%s)\n", sandbox.ID, sandbox.Name)
-	}
-	switch typed := view.(type) {
-	case controlapi.DirectJob:
-	case controlapi.CodingJob:
-		fmt.Fprintf(output, "  workflow revision: %s\n  repository: %s\n  starting Revision: %s\n  current Revision: %s\n  branch: %s (base %s)\n",
-			typed.WorkflowRevision, typed.Repository, typed.StartingRevision, typed.Revision, typed.Branch, typed.BaseBranch)
-		if typed.Proposal == nil {
-			fmt.Fprintln(output, "  proposal: none")
-		} else {
-			fmt.Fprintf(output, "  proposal: #%d %s Revision=%s\n", typed.Proposal.Number, typed.Proposal.URL, typed.Proposal.Revision)
-		}
-		if typed.Outcome == nil {
-			fmt.Fprintln(output, "  outcome: none")
-		} else {
-			fmt.Fprintf(output, "  outcome: %s (GitHub %s) observed-at=%s\n",
-				typed.Outcome.Kind, typed.Outcome.ObservedState, typed.Outcome.ObservedAt.Format(time.RFC3339))
-		}
 	}
 }
 
@@ -912,7 +753,6 @@ type controlAPIJobs struct {
 	store            postgres.Store
 	tasks            *absurd.Client
 	directAdmissions direct.AdmissionService
-	codingAdmissions coding.AdmissionService
 	reader           controlReader
 	blobs            blob.Store
 	messageImages    messageImageCapability
@@ -924,11 +764,9 @@ type controlReader interface {
 	ReadFile(context.Context, string, string) ([]byte, error)
 	WriteFile(context.Context, string, string, []byte, bool) error
 	ObserveMessage(context.Context, string, string) (core.MessageResult, error)
-	ObservePullRequest(context.Context, string) (githubapi.PullRequest, error)
 	DefaultConnection() (string, error)
 	DefaultModel(string) (string, error)
 	Check(context.Context, string) error
-	DiscoverInstallation(context.Context, string) (string, error)
 }
 
 func (a controlAPIJobs) application() core.Application {
@@ -939,7 +777,6 @@ type controlJobKind string
 
 const (
 	controlDirectJob controlJobKind = controlapi.JobKindDirect
-	controlCodingJob controlJobKind = controlapi.JobKindCoding
 )
 
 type supportedControlJob struct {
@@ -951,8 +788,6 @@ func classifyControlJob(workflow core.WorkflowName, revision string) (controlJob
 	switch {
 	case workflow == "" && revision == "":
 		return controlDirectJob, true
-	case workflow == coding.Workflow && revision == coding.WorkflowRevision:
-		return controlCodingJob, true
 	default:
 		return "", false
 	}
@@ -980,29 +815,6 @@ func (a controlAPIJobs) AdmitDirect(ctx context.Context, clientID, key string, i
 		return controlapi.DirectJob{}, false, err
 	}
 	view, err := a.projectDirect(ctx, job)
-	return view, created, err
-}
-
-func (a controlAPIJobs) AdmitCoding(ctx context.Context, clientID, key string, input controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, bool, error) {
-	job, created, err := a.codingAdmissions.Admit(ctx, coding.AdmissionRequest{
-		KeepRunning: input.KeepRunning, CreatedByClientID: clientID, ClientReference: input.ClientReference,
-		AdmissionKey: key, SandboxProfile: input.Profile, Model: input.Model,
-		ProviderConnection: input.AIConnection, ReasoningEffort: input.Reasoning, Repository: input.Repository, Revision: input.Revision,
-		Branch: input.Branch, BaseBranch: input.BaseBranch,
-	})
-	if errors.Is(err, coding.ErrAdmissionConflict) {
-		return controlapi.CodingJob{}, false, controlapi.ErrIdempotencyConflict
-	}
-	if errors.Is(err, postgres.ErrProfileNotFound) {
-		return controlapi.CodingJob{}, false, controlapi.ErrProfileNotFound
-	}
-	if errors.Is(err, coding.ErrInvalidAdmission) {
-		return controlapi.CodingJob{}, false, fmt.Errorf("%w: %v", controlapi.ErrInvalidInput, err)
-	}
-	if err != nil {
-		return controlapi.CodingJob{}, false, err
-	}
-	view, err := a.projectCoding(ctx, job)
 	return view, created, err
 }
 
@@ -1061,9 +873,6 @@ func (a controlAPIJobs) Get(ctx context.Context, jobID string) (controlapi.JobVi
 	}
 	switch value := view.(type) {
 	case controlapi.DirectJob:
-		value.LatestReplyID = latestReplyID(jobID, deliveries)
-		return value, nil
-	case controlapi.CodingJob:
 		value.LatestReplyID = latestReplyID(jobID, deliveries)
 		return value, nil
 	default:
@@ -1348,69 +1157,6 @@ func (a controlAPIJobs) WriteSandboxFile(ctx context.Context, sandboxID, relativ
 	}
 }
 
-func (a controlAPIJobs) Evidence(ctx context.Context, jobID string) ([]controlapi.Evidence, error) {
-	job, err := a.supportedJob(ctx, jobID)
-	if err != nil {
-		return nil, err
-	}
-	records, err := a.store.Evidence(ctx, job.ID)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]controlapi.Evidence, 0, len(records))
-	for _, record := range records {
-		if err := a.blobs.Verify(record.Digest, record.ByteSize); err != nil {
-			return nil, controlapi.ErrEvidenceUnverified
-		}
-		result = append(result, controlapi.Evidence{
-			ID: record.ID, SHA256: record.Digest, ByteSize: record.ByteSize, MediaType: record.MediaType,
-			Producer: record.Producer, Kind: record.Kind, Revision: record.Revision,
-			StartedAt: record.StartedAt, FinishedAt: record.FinishedAt,
-		})
-	}
-	return result, nil
-}
-
-type controlOutcomeGitHub struct {
-	reader controlReader
-	jobID  string
-}
-
-func (g controlOutcomeGitHub) PullRequest(ctx context.Context, _ githubapi.Authority, _ int64) (githubapi.PullRequest, error) {
-	if g.reader == nil {
-		return githubapi.PullRequest{}, fmt.Errorf("control reader is not configured")
-	}
-	return g.reader.ObservePullRequest(ctx, g.jobID)
-}
-
-func (a controlAPIJobs) Abandon(ctx context.Context, jobID string) (controlapi.JobView, error) {
-	job, err := a.supportedJob(ctx, jobID)
-	if err != nil {
-		return nil, err
-	}
-	if job.kind != controlCodingJob {
-		return nil, controlapi.ErrAbandonUnavailable
-	}
-	service := (outcomeapp.Service{
-		Store:  a.store,
-		GitHub: controlOutcomeGitHub{reader: a.reader, jobID: job.ID},
-	}).WithClaimCheck(func(context.Context) error { return nil })
-	if _, _, err := service.Record(ctx, job.ID, coding.OutcomeAbandoned); err != nil {
-		if errors.Is(err, outcomeapp.ErrUnavailable) {
-			return nil, controlapi.ErrAbandonUnavailable
-		}
-		return nil, err
-	}
-	handle, err := a.application().OpenJob(ctx, job.ID)
-	if err != nil {
-		return nil, err
-	}
-	if err := handle.RequestCleanup(ctx); err != nil {
-		return nil, err
-	}
-	return a.Get(ctx, job.ID)
-}
-
 func controlMessageError(err error) error {
 	switch {
 	case errors.Is(err, core.ErrMessageAdmissionClosed):
@@ -1469,8 +1215,6 @@ func (a controlAPIJobs) project(ctx context.Context, job supportedControlJob) (c
 	switch job.kind {
 	case controlDirectJob:
 		return a.projectDirect(ctx, job.Job)
-	case controlCodingJob:
-		return a.projectCoding(ctx, job.Job)
 	default:
 		return nil, controlapi.ErrJobNotFound
 	}
@@ -1510,56 +1254,6 @@ func (a controlAPIJobs) projectDirect(ctx context.Context, job core.Job) (contro
 	}
 	common, err := a.projectCommonJob(ctx, job, controlapi.JobKindDirect, executionState, attention, task, snapshot.Sandboxes)
 	return controlapi.DirectJob{Job: common}, err
-}
-
-func (a controlAPIJobs) projectCoding(ctx context.Context, job core.Job) (controlapi.CodingJob, error) {
-	snapshot, err := coding.LoadSnapshot(ctx, a.store, job.ID)
-	if err != nil {
-		if errors.Is(err, postgres.ErrNotFound) {
-			return controlapi.CodingJob{}, controlapi.ErrJobNotFound
-		}
-		return controlapi.CodingJob{}, err
-	}
-	projection, err := snapshot.Project(a.blobs)
-	if err != nil {
-		return controlapi.CodingJob{}, err
-	}
-	job = snapshot.Job.Job
-	task, err := fetchTaskResult(ctx, a.tasks, job.CurrentTaskID)
-	if err != nil {
-		return controlapi.CodingJob{}, err
-	}
-	executionState := "running"
-	var attention *controlapi.Attention
-	if snapshot.Outcome != nil {
-		executionState = "complete"
-	} else if projection.CurrentWork.Kind == "" {
-		executionState = "idle"
-	} else if projection.CurrentWork.Kind == coding.WorkAttention {
-		executionState = "stopped"
-		attention = &controlapi.Attention{Code: "job_attention", Detail: "Job execution needs operator attention; inspect the deployment service logs."}
-	}
-	common, err := a.projectCommonJob(ctx, job, controlapi.JobKindCoding, executionState, attention, task, snapshot.Sandboxes)
-	if err != nil {
-		return controlapi.CodingJob{}, err
-	}
-	view := controlapi.CodingJob{
-		Job: common, WorkflowRevision: job.WorkflowRevision,
-		Repository: snapshot.Job.Repository, StartingRevision: snapshot.Job.StartingRevision,
-		Revision: snapshot.Job.Revision, Branch: snapshot.Job.Branch, BaseBranch: snapshot.Job.BaseBranch,
-	}
-	if snapshot.Proposal != nil {
-		view.Proposal = &controlapi.CodingProposal{
-			Number: snapshot.Proposal.Number, URL: snapshot.Proposal.URL, Revision: snapshot.Proposal.ProposedRevision,
-		}
-	}
-	if snapshot.Outcome != nil {
-		view.Outcome = &controlapi.CodingOutcome{
-			Kind: string(snapshot.Outcome.Kind), ObservedState: snapshot.Outcome.ObservedState,
-			MergeCommitOID: snapshot.Outcome.MergeCommitOID, ObservedAt: snapshot.Outcome.ObservedAt,
-		}
-	}
-	return view, nil
 }
 
 func publicJobCreator(id, name string) *controlapi.JobCreator {
@@ -1662,12 +1356,11 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 	jobs := controlAPIJobs{
 		store: store, tasks: tasks,
 		directAdmissions: direct.NewAdmissionService(store, config.QueueName, reader),
-		codingAdmissions: coding.NewAdmissionService(store, config.QueueName, reader, reader),
 		reader:           reader, blobs: blob.Store{Root: cfg.BlobRoot}, messageImages: runtimes,
 	}
 	server := controlapi.NewServer(controlapi.Discovery{
 		Product: "dorf", Version: version.Version,
-		Capabilities: []string{"direct_jobs", "coding_jobs", "job_list", "profile_list", "job_watch", "job_timeline", "messages", "message_interrupt", "job_retry", "job_abandon", "sandbox_files", "sandbox_exec", "sandbox_status", "latest_reply", "evidence"},
+		Capabilities: []string{"direct_jobs", "job_list", "profile_list", "job_watch", "job_timeline", "messages", "message_interrupt", "job_retry", "sandbox_files", "sandbox_exec", "sandbox_status", "latest_reply"},
 	}, auth, jobs, controlAPIProfiles{store: store})
 	serverCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -1698,12 +1391,9 @@ func configuredControlReader(cfg config.Config, store postgres.Store, runtimes c
 	if origin == "" && token == "" {
 		// Explicitly manually supervised local `dorf serve` remains useful in
 		// development. Compose always supplies the isolated HTTP capability.
-		githubClient := githubapi.Client{APIURL: cfg.GitHubAPIURL, Credentials: cfg.GitHubCredentials}
 		return controlreader.Service{
 			Store: store, Runtimes: runtimes,
-			Provider:      configuredProviderGateway(cfg),
-			Installations: githubClient,
-			PullRequests:  githubClient,
+			Provider: configuredProviderGateway(cfg),
 		}, nil
 	}
 	if origin == "" || token == "" {

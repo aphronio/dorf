@@ -14,34 +14,29 @@ without rebuilding it in a new agent framework. Dorf keeps custody of controlled
 including recovery, external effects, retained results, and requested cleanup.
 
 ```text
-  Deployment-host CLI         Remote clients          Native workflows
-           |                        |                        |
-     loopback HTTP        operator HTTPS ingress   in-process composition
-           |                        |                        |
-           +------------------------+------------------------+
-                                    |
-                                    v
-                             Dorf deployment
-                      durable execution and recovery
-                                    |
-                                    v
-                   Sandbox providers x agent Harnesses
+Deployment-host CLI      Remote clients
+       |                       |
+  loopback HTTP          HTTPS ingress
+       +-----------+-----------+
+                   |
+             Dorf deployment
+       durable execution and recovery
+                   |
+       Sandbox providers x Harnesses
 ```
 
 Dorf is a stateful, self-hosted control plane, not an agent framework or an embeddable runtime SDK.
-Native workflows compose Core in-process. The client boundary is intentionally narrow: an enrolled
-CLI can admit a direct Job or a documented built-in workflow and operate their common interaction
-loop—Messages, observation, eligible recovery, exact Sandbox files, verified Evidence metadata,
+An enrolled CLI admits a direct Job and operates its interaction
+loop—Messages, observation, eligible recovery, exact Sandbox files,
 cleanup, and bounded Job listing—through one configured Dorf deployment. The deployment-host CLI
 uses fixed authenticated loopback HTTP; remote clients use operator-owned HTTPS ingress. Each
 deployment publishes its OpenAPI and typed Problem catalog. Static release manifests define
 separately supervised API and worker services; one resumable `dorf setup` flow prepares their
 protected configuration and applies that exact Compose project. Operators use Compose directly only
-for advanced lifecycle operations. Generic workflow registration, client SDKs, MCP, and a
-control-plane UI remain later work.
+for advanced lifecycle operations. Client SDKs, MCP, and a control-plane UI remain later work.
 
-The direct CLI path runs caller-owned prompts without workflow policy. The built-in coding workflow
-produces a verified pull-request Proposal. Clients drive repository investigation through direct Jobs. See
+Clients supply instructions, prepare their workspace, and decide what the results mean and when to
+release resources. Coding, review, and publication policy belong to those clients. See
 [Getting started](docs/getting-started.md) for supported deployment, profiles, commands, and inputs.
 To hand installation or operation to an agent, point it at the concise
 [Agent guide](docs/agent-guide.md).

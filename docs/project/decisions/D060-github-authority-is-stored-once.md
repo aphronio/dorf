@@ -1,9 +1,9 @@
 # D060: GitHub authority is stored once
 
-- **Applicability:** current
+- **Applicability:** historical
 - **Areas:** github, persistence, workflows
 - **Read when:** Changing where GitHub repository, Proposal, or terminal Outcome authority is stored.
-- **Decision history:** Accepted Proposal/Outcome simplification — 2026-08-10
+- **Decision history:** Accepted Proposal/Outcome simplification — 2026-08-10; application contracts retired by D144 — 2026-09-18.
 - **Decision:** The Job owns immutable GitHub repository, installation, base branch, and head branch
   authority. Proposal retains only pull-request number, URL, exact proposed Revision, and body digest.
   Outcome retains disposition and observation time. Accepted and rejected Outcomes additionally retain

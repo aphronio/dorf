@@ -2,7 +2,6 @@ package e2b
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -11,8 +10,6 @@ import (
 
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
-
-const reviewAttestationPath = "/tmp/dorf/review-attestation.json"
 
 type AdapterConfig struct {
 	Template           string
@@ -90,24 +87,6 @@ func (a Adapter) AttestOwnership(ctx context.Context, owner provider.Ownership) 
 	return err
 }
 
-func (a Adapter) AttachReviewMetadata(ctx context.Context, owner provider.Ownership, review provider.ReviewMetadata) error {
-	if review.JobID != owner.JobID || review.OwnershipNonce != owner.OwnershipNonce || review.AgentRunID == "" || review.Revision == "" {
-		return fmt.Errorf("review Sandbox requires complete host-owned identity metadata")
-	}
-	if err := a.AttestOwnership(ctx, owner); err != nil {
-		return err
-	}
-	payload, err := json.Marshal(review)
-	if err != nil {
-		return err
-	}
-	payload = append(payload, '\n')
-	if err := a.PutFile(ctx, owner, reviewAttestationPath, payload); err != nil {
-		return fmt.Errorf("attach review Sandbox metadata: %w", err)
-	}
-	return a.AttestReview(ctx, owner, review)
-}
-
 func (a Adapter) OwnedPresent(ctx context.Context, owner provider.Ownership) (bool, error) {
 	owned, err := a.Client.FindOwned(ctx, e2bOwnership(owner))
 	return owned != nil, err
@@ -120,24 +99,6 @@ func (a Adapter) DeleteOwned(ctx context.Context, owner provider.Ownership) erro
 		return err
 	}
 	return a.Client.DeleteOwned(ctx, owned.ProviderID, identity)
-}
-
-func (a Adapter) AttestReview(ctx context.Context, owner provider.Ownership, review provider.ReviewMetadata) error {
-	if review.JobID != owner.JobID || review.OwnershipNonce != owner.OwnershipNonce || review.AgentRunID == "" || review.Revision == "" {
-		return provider.OwnershipErrorf("review Sandbox metadata does not match its durable owner")
-	}
-	if err := a.AttestOwnership(ctx, owner); err != nil {
-		return err
-	}
-	result, err := a.Exec(ctx, owner, nil, "cat", reviewAttestationPath)
-	if err != nil {
-		return err
-	}
-	var observed provider.ReviewMetadata
-	if result.ExitCode != 0 || json.Unmarshal([]byte(result.Stdout), &observed) != nil || observed != review {
-		return provider.OwnershipErrorf("review Sandbox metadata is missing, foreign, stale, or ambiguous")
-	}
-	return nil
 }
 
 func (a Adapter) PutFile(ctx context.Context, owner provider.Ownership, destination string, contents []byte) error {

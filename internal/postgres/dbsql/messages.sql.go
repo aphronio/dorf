@@ -51,21 +51,6 @@ func (q *Queries) AgentMessageNeedsSkillRefresh(ctx context.Context, messageID s
 	return refresh_skills, err
 }
 
-const countUnsettledInputs = `-- name: CountUnsettledInputs :one
-select count(*)
-from dorf.job_messages m
-left join dorf.agent_runs ar on ar.message_id=m.id
-where m.job_id=$1
-  and ar.state not in ('completed','failed','interrupted')
-`
-
-func (q *Queries) CountUnsettledInputs(ctx context.Context, jobID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countUnsettledInputs, jobID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const getActiveAgentTurn = `-- name: GetActiveAgentTurn :one
 select coalesce(turn_id,'') as turn_id,coalesce(harness,'') as harness,
        coalesce(thread_id,'') as thread_id
@@ -96,100 +81,6 @@ func (q *Queries) GetActiveAgentTurn(ctx context.Context, arg GetActiveAgentTurn
 	row := q.db.QueryRowContext(ctx, getActiveAgentTurn, arg.JobID, arg.Role, arg.SandboxID)
 	var i GetActiveAgentTurnRow
 	err := row.Scan(&i.TurnID, &i.Harness, &i.ThreadID)
-	return i, err
-}
-
-const getFirstUnsettledInput = `-- name: GetFirstUnsettledInput :one
-select m.sequence,coalesce(ar.state,'') as state,coalesce(ar.attention,'') as attention
-from dorf.job_messages m
-left join dorf.agent_runs ar on ar.message_id=m.id
-where m.job_id=$1
-  and ar.state not in ('completed','failed','interrupted')
-order by m.sequence
-limit 1
-`
-
-type GetFirstUnsettledInputRow struct {
-	Sequence  int64
-	State     core.AgentRunState
-	Attention string
-}
-
-func (q *Queries) GetFirstUnsettledInput(ctx context.Context, jobID string) (GetFirstUnsettledInputRow, error) {
-	row := q.db.QueryRowContext(ctx, getFirstUnsettledInput, jobID)
-	var i GetFirstUnsettledInputRow
-	err := row.Scan(&i.Sequence, &i.State, &i.Attention)
-	return i, err
-}
-
-const getLatestAgentRun = `-- name: GetLatestAgentRun :one
-select state,coalesce(turn_outcome,'') as turn_outcome,
-       coalesce(harness,'') as harness,coalesce(thread_id,'') as thread_id
-from dorf.agent_runs ar
-join dorf.job_messages m on m.id=ar.message_id
-where ar.job_id=$1 and ar.role=$2
-order by m.sequence desc
-limit 1
-`
-
-type GetLatestAgentRunParams struct {
-	JobID string
-	Role  string
-}
-
-type GetLatestAgentRunRow struct {
-	State       core.AgentRunState
-	TurnOutcome string
-	Harness     string
-	ThreadID    string
-}
-
-func (q *Queries) GetLatestAgentRun(ctx context.Context, arg GetLatestAgentRunParams) (GetLatestAgentRunRow, error) {
-	row := q.db.QueryRowContext(ctx, getLatestAgentRun, arg.JobID, arg.Role)
-	var i GetLatestAgentRunRow
-	err := row.Scan(
-		&i.State,
-		&i.TurnOutcome,
-		&i.Harness,
-		&i.ThreadID,
-	)
-	return i, err
-}
-
-const getLatestTurnStartRun = `-- name: GetLatestTurnStartRun :one
-select ar.id,ar.job_id,ar.state,ar.role,coalesce(ar.input_revision,'') as input_revision,
-       exists (
-           select 1 from dorf.evidence e
-           where e.agent_run_id=ar.id and e.kind='git-revision'
-       ) as observed
-from dorf.job_messages m
-join dorf.agent_runs ar on ar.message_id=m.id
-where m.job_id=$1 and ar.role='implement'
-  and m.delivery_intent='follow'
-order by m.sequence desc
-limit 1
-`
-
-type GetLatestTurnStartRunRow struct {
-	ID            string
-	JobID         string
-	State         core.AgentRunState
-	Role          string
-	InputRevision string
-	Observed      bool
-}
-
-func (q *Queries) GetLatestTurnStartRun(ctx context.Context, jobID string) (GetLatestTurnStartRunRow, error) {
-	row := q.db.QueryRowContext(ctx, getLatestTurnStartRun, jobID)
-	var i GetLatestTurnStartRunRow
-	err := row.Scan(
-		&i.ID,
-		&i.JobID,
-		&i.State,
-		&i.Role,
-		&i.InputRevision,
-		&i.Observed,
-	)
 	return i, err
 }
 

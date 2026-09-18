@@ -25,13 +25,10 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D047: Replace the Python runtime with a greenfield Go and Absurd system](decisions/D047-replace-the-python-runtime-with-a-greenfield-go-and-absurd-system.md) (`partial`). Changing the Go, PostgreSQL, or Absurd foundation and its ownership boundaries.
 - [D048: Simplify the post-cutover core around Absurd and explicit workflow semantics](decisions/D048-simplify-the-post-cutover-core-around-absurd-and-explicit-workflow-semantics.md) (`partial`). Changing durable workflow sequencing, message ordering, or Dorf's persisted execution facts.
 - [D059: Actions retain settlement, not generic result strings](decisions/D059-actions-retain-settlement-not-generic-result-strings.md) (`current`). Changing Action result storage, settlement state, or ownership of external facts.
-- [D061: One fact-derived coding flow replaces the durable program counter](decisions/D061-one-fact-derived-coding-flow-replaces-the-durable-program-counter.md) (`current`). Changing coding-flow sequencing, workflow projections, or durable progress representation.
 - [D063: Dorf Core portability precedes general workflow authoring](decisions/D063-dorf-core-portability-precedes-general-workflow-authoring.md) (`current`). Changing Core portability priorities, profile admission, or the boundary for workflow and client composition.
 - [D069: Codebase investigation is the second explicit native workflow](decisions/D069-codebase-investigation-is-the-second-explicit-native-workflow.md) (`partial`). Changing the codebase-investigation workflow, its durable facts, or its client-facing execution boundary.
 - [D075: Core mechanisms do not own workflow or interaction policy](decisions/D075-core-mechanisms-do-not-own-workflow-or-interaction-policy.md) (`partial`). Changing ownership between Core mechanisms, workflow policy, and client interaction policy.
 - [D076: Core Jobs and workflow inputs have separate durable types](decisions/D076-core-jobs-and-workflow-inputs-have-separate-durable-types.md) (`partial`). Changing Core Job fields or durable workflow-specific input types.
-- [D083: Git and coding behavior are workflow modules, not Core](decisions/D083-git-and-coding-behavior-are-workflow-modules-not-core.md) (`partial`). Changing ownership of Git workspace or coding behavior across Core and workflow modules.
-- [D084: Coding no longer owns an implicit repository setup/check contract](decisions/D084-coding-no-longer-owns-an-implicit-repository-setup-check-contract.md) (`current`). Changing coding repository setup, deterministic evaluation, or Check ownership.
 - [D085: Workflow records live with the workflow that defines them](decisions/D085-workflow-records-live-with-the-workflow-that-defines-them.md) (`partial`). Changing package ownership or persistence of workflow-defined records.
 - [D086: One package owns the in-process Core boundary](decisions/D086-one-package-owns-the-in-process-core-boundary.md) (`partial`). Changing the in-process Core package boundary or its workflow-facing capabilities.
 - [D087: Each native workflow owns its complete in-process module](decisions/D087-each-native-workflow-owns-its-complete-in-process-module.md) (`partial`). Changing ownership or composition of a native workflow module.
@@ -62,39 +59,29 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 
 - [D007: Cleanup has an explicit, retryable outcome](decisions/D007-cleanup-has-an-explicit-retryable-outcome.md) (`current`). Changing resource cleanup outcomes, retries, or failure visibility.
 - [D011: One coding task slice per Job, Assignment, isolated clone, branch, and PR proposal](decisions/D011-one-coding-task-slice-per-job-assignment-isolated-clone-branch-and-pr-proposal.md) (`partial`). Changing the cardinality between a coding Job, clone, branch, and proposal.
-- [D013: GitHub PR is the acceptance primitive](decisions/D013-github-pr-is-the-acceptance-primitive.md) (`current`). Changing how a coding workflow records acceptance, rejection, or review.
-- [D016: The Room-native `/workspace/jobs/JOB` clone is authoritative for a coding Job](decisions/D016-the-room-native-workspace-jobs-job-clone-is-authoritative-for-a-coding-job.md) (`current`). Changing where a coding Job's authoritative checkout lives.
 - [D021: Situation-first inspection with explicit provenance](decisions/D021-situation-first-inspection-with-explicit-provenance.md) (`current`). Changing Job inspection, pulse composition, provenance, or raw diagnostic lenses.
-- [D043: Coding acceptance is pinned at admission and proven from retained observations](decisions/D043-coding-acceptance-is-pinned-at-admission-and-proven-from-retained-observations.md) (`partial`). Changing how coding acceptance is pinned or proven from retained observations.
 - [D047: Replace the Python runtime with a greenfield Go and Absurd system](decisions/D047-replace-the-python-runtime-with-a-greenfield-go-and-absurd-system.md) (`partial`). Changing the Go, PostgreSQL, or Absurd foundation and its ownership boundaries.
 - [D048: Simplify the post-cutover core around Absurd and explicit workflow semantics](decisions/D048-simplify-the-post-cutover-core-around-absurd-and-explicit-workflow-semantics.md) (`partial`). Changing durable workflow sequencing, message ordering, or Dorf's persisted execution facts.
 - [D049: Repositories own their development-tool setup](decisions/D049-repositories-own-their-development-tool-setup.md) (`partial`). Changing how repositories prepare development tools and services inside Sandboxes.
 - [D050: Implementation AgentRuns own commits](decisions/D050-implementation-agentruns-own-commits.md) (`current`). Changing commit ownership or Revision handoff for implementation AgentRuns.
-- [D051: One explicit coding coordinator uses stable Absurd Steps](decisions/D051-one-explicit-coding-coordinator-uses-stable-absurd-steps.md) (`current`). Changing coding workflow coordination, stable Step identities, or recovery guards.
 - [D052: Feedback is a Message to the implementation AgentRun path](decisions/D052-feedback-is-a-message-to-the-implementation-agentrun-path.md) (`current`). Changing how human, check, workflow, or reviewer feedback reaches AgentRuns.
 - [D054: The main Job task publishes and observes the exact proposal](decisions/D054-the-main-job-task-publishes-and-observes-the-exact-proposal.md) (`current`). Changing proposal publication, pull-request observation, or acceptance handling in the main Job task.
 - [D055: AgentRun owns its harness execution binding](decisions/D055-agentrun-owns-its-harness-execution-binding.md) (`partial`). Changing AgentRun ownership of Message delivery, Harness threads, turns, or execution recovery.
 - [D056: Jobs own Sandbox lifetimes and Sandboxes identify Provider Routes](decisions/D056-jobs-own-sandbox-lifetimes-and-sandboxes-identify-provider-routes.md) (`current`). Changing Sandbox ownership, Provider Route identity, or Job cleanup custody.
 - [D057: Ordinary external Actions target one exact Sandbox](decisions/D057-ordinary-external-actions-target-one-exact-sandbox.md) (`current`). Changing the scope or reconciliation of ordinary Sandbox-related external Actions.
-- [D060: GitHub authority is stored once](decisions/D060-github-authority-is-stored-once.md) (`current`). Changing where GitHub repository, Proposal, or terminal Outcome authority is stored.
-- [D061: One fact-derived coding flow replaces the durable program counter](decisions/D061-one-fact-derived-coding-flow-replaces-the-durable-program-counter.md) (`current`). Changing coding-flow sequencing, workflow projections, or durable progress representation.
 - [D068: Explicit Job retry rearms the current failed Absurd task once](decisions/D068-explicit-job-retry-rearms-the-current-failed-absurd-task-once.md) (`current`). Changing operator retry behavior or how a Job selects and rearms its failed Absurd task.
 - [D069: Codebase investigation is the second explicit native workflow](decisions/D069-codebase-investigation-is-the-second-explicit-native-workflow.md) (`partial`). Changing the codebase-investigation workflow, its durable facts, or its client-facing execution boundary.
 - [D075: Core mechanisms do not own workflow or interaction policy](decisions/D075-core-mechanisms-do-not-own-workflow-or-interaction-policy.md) (`partial`). Changing ownership between Core mechanisms, workflow policy, and client interaction policy.
 - [D076: Core Jobs and workflow inputs have separate durable types](decisions/D076-core-jobs-and-workflow-inputs-have-separate-durable-types.md) (`partial`). Changing Core Job fields or durable workflow-specific input types.
-- [D083: Git and coding behavior are workflow modules, not Core](decisions/D083-git-and-coding-behavior-are-workflow-modules-not-core.md) (`partial`). Changing ownership of Git workspace or coding behavior across Core and workflow modules.
-- [D084: Coding no longer owns an implicit repository setup/check contract](decisions/D084-coding-no-longer-owns-an-implicit-repository-setup-check-contract.md) (`current`). Changing coding repository setup, deterministic evaluation, or Check ownership.
 - [D085: Workflow records live with the workflow that defines them](decisions/D085-workflow-records-live-with-the-workflow-that-defines-them.md) (`partial`). Changing package ownership or persistence of workflow-defined records.
 - [D086: One package owns the in-process Core boundary](decisions/D086-one-package-owns-the-in-process-core-boundary.md) (`partial`). Changing the in-process Core package boundary or its workflow-facing capabilities.
 - [D087: Each native workflow owns its complete in-process module](decisions/D087-each-native-workflow-owns-its-complete-in-process-module.md) (`partial`). Changing ownership or composition of a native workflow module.
 - [D088: Core is a small in-process custody contract organized by Job ownership](decisions/D088-core-is-a-small-in-process-custody-contract-organized-by-job-ownership.md) (`partial`). Changing the Core custody contract or its boundary with workflows and clients.
 - [D090: Open Jobs may have no current workflow operation](decisions/D090-open-jobs-may-have-no-current-workflow-operation.md) (`current`). Changing how an open Job waits when no workflow operation is eligible.
-- [D093: GitHub authentication is an optional deployment integration](decisions/D093-github-authentication-is-an-optional-deployment-integration.md) (`current`). Changing GitHub App setup, credential custody, or repository token minting.
 - [D096: Follow and steer are invariant custody; cleanup timing remains consumer policy](decisions/D096-follow-and-steer-are-invariant-custody-cleanup-timing-remains-consumer-policy.md) (`partial`). Changing follow, steer, or consumer-controlled cleanup semantics.
-- [D099: Fixed typed workflow admission reuses remote Job control](decisions/D099-fixed-typed-workflow-admission-reuses-remote-job-control.md) (`partial`). Changing remote admission or projection for a built-in typed workflow.
 - [D106: Remove unused workflow capability declarations](decisions/D106-remove-unused-workflow-capability-declarations.md) (`current`). Adding optional provider requirements or workflow runtime metadata.
-- [D142: Review contracts are required only for coding](decisions/D142-review-contracts-are-required-only-for-coding.md) (`current`). Changing ordinary adapter contracts or composing coding review execution.
 - [D143: Retire built-in investigation](decisions/D143-retire-built-in-investigation.md) (`current`). Changing the supported workflow surface or retiring application-owned records.
+- [D144: Retire built-in coding](decisions/D144-retire-built-in-coding.md) (`current`). Changing application policy ownership or the direct-only public boundary.
 
 ## Interaction
 
@@ -122,8 +109,6 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D008: Local authenticated Incus image for ChatGPT subscription](decisions/D008-local-authenticated-incus-image-for-chatgpt-subscription.md) (`partial`). Changing Sandbox image credentials for Droid or reviewing the retired Codex image flow.
 - [D011: One coding task slice per Job, Assignment, isolated clone, branch, and PR proposal](decisions/D011-one-coding-task-slice-per-job-assignment-isolated-clone-branch-and-pr-proposal.md) (`partial`). Changing the cardinality between a coding Job, clone, branch, and proposal.
 - [D012: Incus VM was the first environment adapter](decisions/D012-incus-vm-was-the-first-environment-adapter.md) (`partial`). Changing Sandbox isolation or reviewing why Incus was the first provider.
-- [D015: The Dorf control plane owns coding-branch authentication through the GitHub App](decisions/D015-the-dorf-control-plane-owns-coding-branch-authentication-through-the-github-app.md) (`partial`). Changing GitHub credential ownership, token minting, or delivery into a Sandbox.
-- [D016: The Room-native `/workspace/jobs/JOB` clone is authoritative for a coding Job](decisions/D016-the-room-native-workspace-jobs-job-clone-is-authoritative-for-a-coding-job.md) (`current`). Changing where a coding Job's authoritative checkout lives.
 - [D035: Brokered model-plane authentication; credential-free sandbox images](decisions/D035-brokered-model-plane-authentication-credential-free-sandbox-images.md) (`current`). Changing how Sandboxes authenticate to model providers without storing provider credentials.
 - [D036: Shared Provider Gateway for trusted clients and Dorf Sandboxes](decisions/D036-shared-provider-gateway-for-trusted-clients-and-dorf-sandboxes.md) (`current`). Changing Provider Gateway connections, consumer routes, or deployment ownership.
 - [D038: Official Sandbox images are immutable GitHub Release assets](decisions/D038-official-sandbox-images-are-immutable-github-release-assets.md) (`partial`). Changing how official Sandbox images are built, promoted, verified, or distributed.
@@ -136,7 +121,6 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D066: One credential-free image carries both verified Harnesses](decisions/D066-one-credential-free-image-carries-both-verified-harnesses.md) (`partial`). Changing combined Harness image packaging, promotion proof, or credential-free artifact contents.
 - [D067: E2B is the next Sandbox portability proof target](decisions/D067-e2b-is-the-next-sandbox-portability-proof-target.md) (`current`). Changing the E2B adapter, provider-neutral Sandbox contract, or second-provider deployment proof.
 - [D070: Named Sandbox profiles pin exact artifacts and require Dorf verification](decisions/D070-named-sandbox-profiles-pin-exact-artifacts-and-require-dorf-verification.md) (`partial`). Changing named Sandbox profile definitions, selection, verification, or provider artifact custody.
-- [D083: Git and coding behavior are workflow modules, not Core](decisions/D083-git-and-coding-behavior-are-workflow-modules-not-core.md) (`partial`). Changing ownership of Git workspace or coding behavior across Core and workflow modules.
 - [D089: Core reads exact Sandbox files but does not retain generic deliverables](decisions/D089-core-reads-exact-sandbox-files-but-does-not-retain-generic-deliverables.md) (`partial`). Changing Sandbox file reads, deliverable retention, or cleanup-time file access.
 - [D091: Profile verification gates admission, not admitted runtime](decisions/D091-profile-verification-gates-admission-not-admitted-runtime.md) (`partial`). Changing profile verification, concurrent admission, or admitted runtime resolution.
 - [D101: Compose owns deployment lifecycle; bootstrap privilege stays explicit](decisions/D101-compose-owns-deployment-lifecycle-bootstrap-privilege-stays-explicit.md) (`current`). Changing Compose topology, setup-applied lifecycle, bootstrap, or release images.
@@ -152,7 +136,6 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D136: Shared images install Codex through pinned Nix](decisions/D136-shared-images-install-codex-through-pinned-nix.md) (`partial`). Building guest images or changing how persistent Sandboxes obtain Codex packages.
 - [D137: Provider images share one Nix workstation](decisions/D137-provider-images-share-one-nix-workstation.md) (`current`). Changing shared guest tools, browser installation, or package parity between Incus and E2B.
 - [D138: Session checkpoints use stock restic and scoped object storage](decisions/D138-session-checkpoints-use-stock-restic.md) (`current`). Changing session checkpoint storage, capture, or recovery.
-- [D142: Review contracts are required only for coding](decisions/D142-review-contracts-are-required-only-for-coding.md) (`current`). Changing ordinary adapter contracts or composing coding review execution.
 
 ## Harnesses
 
@@ -182,7 +165,6 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D137: Provider images share one Nix workstation](decisions/D137-provider-images-share-one-nix-workstation.md) (`current`). Changing shared guest tools, browser installation, or package parity between Incus and E2B.
 - [D138: Session checkpoints use stock restic and scoped object storage](decisions/D138-session-checkpoints-use-stock-restic.md) (`current`). Changing session checkpoint storage, capture, or recovery.
 - [D139: Codex routes use native launch overrides](decisions/D139-codex-routes-use-native-launch-overrides.md) (`current`). Changing Codex route installation, native configuration ownership, or app-server launch.
-- [D142: Review contracts are required only for coding](decisions/D142-review-contracts-are-required-only-for-coding.md) (`current`). Changing ordinary adapter contracts or composing coding review execution.
 
 ## Model access
 
@@ -203,7 +185,6 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D095: The CLI is Dorf's first direct trusted client](decisions/D095-the-cli-is-dorf-s-first-direct-trusted-client.md) (`partial`). Changing direct Job semantics or the CLI's role as a Core client.
 - [D097: One authenticated HTTPS Deployment projects direct Job control](decisions/D097-one-authenticated-https-deployment-projects-direct-job-control.md) (`current`). Changing authenticated remote Job control or its deployment trust boundary.
 - [D098: Remote direct Job control exposes the existing interaction loop](decisions/D098-remote-direct-job-control-exposes-the-existing-interaction-loop.md) (`current`). Changing remote Job observation, messaging, retry, files, or Evidence access.
-- [D099: Fixed typed workflow admission reuses remote Job control](decisions/D099-fixed-typed-workflow-admission-reuses-remote-job-control.md) (`partial`). Changing remote admission or projection for a built-in typed workflow.
 - [D100: Automation contract and managed host services stay narrow](decisions/D100-automation-contract-and-managed-host-services-stay-narrow.md) (`partial`). Changing the automation API contract, Client administration, or service lifecycle.
 - [D102: One guided Dorf domain publishes two distinct public origins](decisions/D102-one-guided-dorf-domain-publishes-two-distinct-public-origins.md) (`current`). Changing guided Cloudflare ingress or either public Dorf origin.
 - [D103: Every ordinary CLI Job operation uses the authenticated control API](decisions/D103-every-ordinary-cli-job-operation-uses-the-authenticated-control-api.md) (`partial`). Changing how CLI Job operations reach deployment authority.
@@ -226,12 +207,12 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D127: Message observations deliver completed prefix deltas](decisions/D127-message-observations-deliver-completed-prefix-deltas.md) (`current`). Changing Message observation, native connection reuse, stream replay, or idle behavior.
 - [D131: Application observations reuse automatic delivery](decisions/D131-application-observations-reuse-automatic-delivery.md) (`current`). Delivering application updates into active work or recovering native start-or-steer races.
 - [D143: Retire built-in investigation](decisions/D143-retire-built-in-investigation.md) (`current`). Changing the supported workflow surface or retiring application-owned records.
+- [D144: Retire built-in coding](decisions/D144-retire-built-in-coding.md) (`current`). Changing application policy ownership or the direct-only public boundary.
 
 ## Deployment and setup
 
 - [D004: Tmux and SSH remain break-glass tools](decisions/D004-tmux-and-ssh-remain-break-glass-tools.md) (`current`). Changing operational access, inspection, or takeover for a Sandbox.
 - [D008: Local authenticated Incus image for ChatGPT subscription](decisions/D008-local-authenticated-incus-image-for-chatgpt-subscription.md) (`partial`). Changing Sandbox image credentials for Droid or reviewing the retired Codex image flow.
-- [D015: The Dorf control plane owns coding-branch authentication through the GitHub App](decisions/D015-the-dorf-control-plane-owns-coding-branch-authentication-through-the-github-app.md) (`partial`). Changing GitHub credential ownership, token minting, or delivery into a Sandbox.
 - [D032: One durable Buzz instance is the main personal deployment](decisions/D032-one-durable-buzz-instance-is-the-main-personal-deployment.md) (`current`). Changing the durable Buzz deployment, upgrade process, backup posture, or environment strategy.
 - [D033: The human Buzz owner key is client-generated and never server-managed](decisions/D033-the-human-buzz-owner-key-is-client-generated-and-never-server-managed.md) (`current`). Changing Buzz owner enrollment, identity bootstrap, or private-key custody.
 - [D036: Shared Provider Gateway for trusted clients and Dorf Sandboxes](decisions/D036-shared-provider-gateway-for-trusted-clients-and-dorf-sandboxes.md) (`current`). Changing Provider Gateway connections, consumer routes, or deployment ownership.
@@ -240,7 +221,6 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D049: Repositories own their development-tool setup](decisions/D049-repositories-own-their-development-tool-setup.md) (`partial`). Changing how repositories prepare development tools and services inside Sandboxes.
 - [D067: E2B is the next Sandbox portability proof target](decisions/D067-e2b-is-the-next-sandbox-portability-proof-target.md) (`current`). Changing the E2B adapter, provider-neutral Sandbox contract, or second-provider deployment proof.
 - [D070: Named Sandbox profiles pin exact artifacts and require Dorf verification](decisions/D070-named-sandbox-profiles-pin-exact-artifacts-and-require-dorf-verification.md) (`partial`). Changing named Sandbox profile definitions, selection, verification, or provider artifact custody.
-- [D093: GitHub authentication is an optional deployment integration](decisions/D093-github-authentication-is-an-optional-deployment-integration.md) (`current`). Changing GitHub App setup, credential custody, or repository token minting.
 - [D094: Published PostgreSQL migrations are immutable and append-only](decisions/D094-published-postgresql-migrations-are-immutable-and-append-only.md) (`current`). Changing a published PostgreSQL schema or the migration runner.
 - [D097: One authenticated HTTPS Deployment projects direct Job control](decisions/D097-one-authenticated-https-deployment-projects-direct-job-control.md) (`current`). Changing authenticated remote Job control or its deployment trust boundary.
 - [D100: Automation contract and managed host services stay narrow](decisions/D100-automation-contract-and-managed-host-services-stay-narrow.md) (`partial`). Changing the automation API contract, Client administration, or service lifecycle.
@@ -255,20 +235,15 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 ## Persistence
 
 - [D005: The agent owns conversation history](decisions/D005-the-agent-owns-conversation-history.md) (`current`). Changing transcript storage, replay, or ownership of queued conversation input.
-- [D016: The Room-native `/workspace/jobs/JOB` clone is authoritative for a coding Job](decisions/D016-the-room-native-workspace-jobs-job-clone-is-authoritative-for-a-coding-job.md) (`current`). Changing where a coding Job's authoritative checkout lives.
 - [D022: Controller-owned message FIFO with internal action identity](decisions/D022-controller-owned-message-fifo-with-internal-action-identity.md) (`partial`). Changing durable message admission, action identity, ordering, dispatch, or wait semantics.
-- [D043: Coding acceptance is pinned at admission and proven from retained observations](decisions/D043-coding-acceptance-is-pinned-at-admission-and-proven-from-retained-observations.md) (`partial`). Changing how coding acceptance is pinned or proven from retained observations.
 - [D047: Replace the Python runtime with a greenfield Go and Absurd system](decisions/D047-replace-the-python-runtime-with-a-greenfield-go-and-absurd-system.md) (`partial`). Changing the Go, PostgreSQL, or Absurd foundation and its ownership boundaries.
 - [D048: Simplify the post-cutover core around Absurd and explicit workflow semantics](decisions/D048-simplify-the-post-cutover-core-around-absurd-and-explicit-workflow-semantics.md) (`partial`). Changing durable workflow sequencing, message ordering, or Dorf's persisted execution facts.
-- [D051: One explicit coding coordinator uses stable Absurd Steps](decisions/D051-one-explicit-coding-coordinator-uses-stable-absurd-steps.md) (`current`). Changing coding workflow coordination, stable Step identities, or recovery guards.
 - [D052: Feedback is a Message to the implementation AgentRun path](decisions/D052-feedback-is-a-message-to-the-implementation-agentrun-path.md) (`current`). Changing how human, check, workflow, or reviewer feedback reaches AgentRuns.
 - [D053: Compile stable PostgreSQL queries with sqlc](decisions/D053-compile-stable-postgresql-queries-with-sqlc.md) (`current`). Changing how stable PostgreSQL queries are authored, generated, or mapped into core types.
 - [D055: AgentRun owns its harness execution binding](decisions/D055-agentrun-owns-its-harness-execution-binding.md) (`partial`). Changing AgentRun ownership of Message delivery, Harness threads, turns, or execution recovery.
 - [D056: Jobs own Sandbox lifetimes and Sandboxes identify Provider Routes](decisions/D056-jobs-own-sandbox-lifetimes-and-sandboxes-identify-provider-routes.md) (`current`). Changing Sandbox ownership, Provider Route identity, or Job cleanup custody.
 - [D058: Action success is the external lifecycle authority](decisions/D058-action-success-is-the-external-lifecycle-authority.md) (`current`). Changing how Sandbox or Provider Route lifecycle state is represented and recovered.
 - [D059: Actions retain settlement, not generic result strings](decisions/D059-actions-retain-settlement-not-generic-result-strings.md) (`current`). Changing Action result storage, settlement state, or ownership of external facts.
-- [D060: GitHub authority is stored once](decisions/D060-github-authority-is-stored-once.md) (`current`). Changing where GitHub repository, Proposal, or terminal Outcome authority is stored.
-- [D061: One fact-derived coding flow replaces the durable program counter](decisions/D061-one-fact-derived-coding-flow-replaces-the-durable-program-counter.md) (`current`). Changing coding-flow sequencing, workflow projections, or durable progress representation.
 - [D076: Core Jobs and workflow inputs have separate durable types](decisions/D076-core-jobs-and-workflow-inputs-have-separate-durable-types.md) (`partial`). Changing Core Job fields or durable workflow-specific input types.
 - [D085: Workflow records live with the workflow that defines them](decisions/D085-workflow-records-live-with-the-workflow-that-defines-them.md) (`partial`). Changing package ownership or persistence of workflow-defined records.
 - [D089: Core reads exact Sandbox files but does not retain generic deliverables](decisions/D089-core-reads-exact-sandbox-files-but-does-not-retain-generic-deliverables.md) (`partial`). Changing Sandbox file reads, deliverable retention, or cleanup-time file access.
@@ -286,16 +261,12 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D134: Delivery holds survive executor restarts](decisions/D134-delivery-holds-survive-executor-restarts.md) (`current`). Coordinating a persistent Sandbox upgrade or explaining accepted input that is waiting during maintenance.
 - [D135: Package recovery releases verified resource custody](decisions/D135-package-recovery-releases-verified-resource-custody.md) (`current`). Executing package upgrades, recovering replacement VMs, or investigating held messages and upgrade failures.
 - [D143: Retire built-in investigation](decisions/D143-retire-built-in-investigation.md) (`current`). Changing the supported workflow surface or retiring application-owned records.
+- [D144: Retire built-in coding](decisions/D144-retire-built-in-coding.md) (`current`). Changing application policy ownership or the direct-only public boundary.
 
 ## GitHub integration
 
 - [D011: One coding task slice per Job, Assignment, isolated clone, branch, and PR proposal](decisions/D011-one-coding-task-slice-per-job-assignment-isolated-clone-branch-and-pr-proposal.md) (`partial`). Changing the cardinality between a coding Job, clone, branch, and proposal.
-- [D013: GitHub PR is the acceptance primitive](decisions/D013-github-pr-is-the-acceptance-primitive.md) (`current`). Changing how a coding workflow records acceptance, rejection, or review.
-- [D015: The Dorf control plane owns coding-branch authentication through the GitHub App](decisions/D015-the-dorf-control-plane-owns-coding-branch-authentication-through-the-github-app.md) (`partial`). Changing GitHub credential ownership, token minting, or delivery into a Sandbox.
-- [D043: Coding acceptance is pinned at admission and proven from retained observations](decisions/D043-coding-acceptance-is-pinned-at-admission-and-proven-from-retained-observations.md) (`partial`). Changing how coding acceptance is pinned or proven from retained observations.
 - [D054: The main Job task publishes and observes the exact proposal](decisions/D054-the-main-job-task-publishes-and-observes-the-exact-proposal.md) (`current`). Changing proposal publication, pull-request observation, or acceptance handling in the main Job task.
-- [D060: GitHub authority is stored once](decisions/D060-github-authority-is-stored-once.md) (`current`). Changing where GitHub repository, Proposal, or terminal Outcome authority is stored.
-- [D093: GitHub authentication is an optional deployment integration](decisions/D093-github-authentication-is-an-optional-deployment-integration.md) (`current`). Changing GitHub App setup, credential custody, or repository token minting.
 
 ## Release and distribution
 

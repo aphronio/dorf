@@ -12,9 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/core"
-	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/postgres/dbsql"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
@@ -24,8 +22,6 @@ var migrationFiles embed.FS
 
 var ErrNotFound = errors.New("Dorf Job not found")
 var ErrAdmissionConflict = errors.New("admission key is bound to different complete Job input")
-var ErrRevisionObservationSuperseded = errors.New("Revision observation is no longer current; retry derived workflow")
-var fullCommitOID = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 var sha256Digest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var sandboxName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,126}$`)
 
@@ -35,7 +31,7 @@ const (
 	AbsurdSchemaSHA256  = "d34309370c539f3a51f2b36b69b1f77551f8e4a14480a1c8def8bb8f40fd9aab"
 )
 
-var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql", "009_message_attachments.sql", "010_job_idle_policy.sql", "011_message_developer_instructions.sql", "012_sandbox_idle_grace.sql", "013_message_observation.sql", "014_job_execution_wakes.sql", "015_observation_auto.sql", "016_profile_revisions.sql", "017_sandbox_resources.sql", "018_sandbox_delivery_holds.sql", "019_sandbox_upgrades.sql", "020_sandbox_checkpoints.sql", "021_checkpoint_recovery.sql", "022_remove_investigation.sql"}
+var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql", "009_message_attachments.sql", "010_job_idle_policy.sql", "011_message_developer_instructions.sql", "012_sandbox_idle_grace.sql", "013_message_observation.sql", "014_job_execution_wakes.sql", "015_observation_auto.sql", "016_profile_revisions.sql", "017_sandbox_resources.sql", "018_sandbox_delivery_holds.sql", "019_sandbox_upgrades.sql", "020_sandbox_checkpoints.sql", "021_checkpoint_recovery.sql", "022_remove_investigation.sql", "023_remove_coding.sql"}
 
 type Store struct{ DB *sql.DB }
 
@@ -174,8 +170,6 @@ func migrateDorf(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-func ValidRevision(value string) bool { return fullCommitOID.MatchString(value) }
-
 type admittedAgentRun struct {
 	Role          string
 	Capability    string
@@ -183,13 +177,7 @@ type admittedAgentRun struct {
 	SandboxID     string
 }
 
-type messageEnvelopeResolver func(context.Context, *dbsql.Queries, dbsql.GetJobAdmissionForUpdateRow, core.MessageAdmission) (admittedAgentRun, error)
-
-func (s Store) AdmitCodingMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
-	return s.admitMessage(ctx, input, coding.Workflow, coding.WorkflowRevision, resolveCodingMessageEnvelope)
-}
-
-func (s Store) admitMessage(ctx context.Context, input core.MessageAdmission, workflow core.WorkflowName, revision string, resolveEnvelope messageEnvelopeResolver) (core.MessageAdmissionResult, error) {
+func (s Store) admitMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
 	input, err := normalizeMessage(input)
 	if err != nil {
 		return core.MessageAdmissionResult{}, err
@@ -199,7 +187,7 @@ func (s Store) admitMessage(ctx context.Context, input core.MessageAdmission, wo
 		return core.MessageAdmissionResult{}, err
 	}
 	defer tx.Rollback()
-	message, created, err := admitMessageTx(ctx, tx, input, workflow, revision, resolveEnvelope)
+	message, created, err := admitMessageTx(ctx, tx, input)
 	if err != nil {
 		return core.MessageAdmissionResult{}, err
 	}
@@ -242,7 +230,7 @@ func normalizeMessage(input core.MessageAdmission) (core.MessageAdmission, error
 	return input, nil
 }
 
-func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission, workflow core.WorkflowName, revision string, resolveEnvelope messageEnvelopeResolver) (core.Message, bool, error) {
+func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission) (core.Message, bool, error) {
 	queries := dbsql.New(tx)
 	job, err := queries.GetJobAdmissionForUpdate(ctx, input.JobID)
 	if err != nil {
@@ -251,12 +239,8 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 		}
 		return core.Message{}, false, err
 	}
-	if job.WorkflowName != workflow || job.WorkflowRevision != revision {
-		consumer := "client-directed"
-		if workflow != "" {
-			consumer = fmt.Sprintf("%s revision %s", workflow, revision)
-		}
-		return core.Message{}, false, fmt.Errorf("Job %s is not %s", input.JobID, consumer)
+	if job.WorkflowName != "" || job.WorkflowRevision != "" {
+		return core.Message{}, false, fmt.Errorf("Job %s is not client-directed", input.JobID)
 	}
 	row, err := queries.GetMessageBySender(ctx, dbsql.GetMessageBySenderParams{JobID: input.JobID, FromKind: input.FromKind, FromID: input.FromID})
 	if err == nil {
@@ -268,10 +252,7 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 	if !job.AdmissionOpen {
 		return core.Message{}, false, fmt.Errorf("%w for Job %s", core.ErrMessageAdmissionClosed, input.JobID)
 	}
-	if resolveEnvelope == nil {
-		return core.Message{}, false, fmt.Errorf("Message execution-envelope resolution is not configured")
-	}
-	run, err := resolveEnvelope(ctx, queries, job, input)
+	run, err := resolveDirectMessageEnvelope(input)
 	if err != nil {
 		return core.Message{}, false, err
 	}
@@ -379,21 +360,6 @@ func allocateMessageSequenceTx(ctx context.Context, tx *sql.Tx, jobID string) (i
 	return dbsql.New(tx).NextMessageSequence(ctx, jobID)
 }
 
-func ensureInputsTerminalForWorkflowTx(ctx context.Context, tx *sql.Tx, jobID string) error {
-	row, err := dbsql.New(tx).GetFirstUnsettledInput(ctx, jobID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	state := string(row.State)
-	if row.Attention != "" {
-		state += ": " + row.Attention
-	}
-	return fmt.Errorf("FIFO sequence %d has not reached a terminal harness delivery (%s)", row.Sequence, state)
-}
-
 func (s Store) Job(ctx context.Context, id string) (core.Job, error) {
 	row, err := dbsql.New(s.DB).GetJob(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -423,29 +389,6 @@ func (s Store) JobExists(ctx context.Context, id string) (bool, error) {
 	return err == nil, err
 }
 
-func (s Store) CodingJob(ctx context.Context, id string) (coding.Job, error) {
-	row, err := dbsql.New(s.DB).GetCodingJob(ctx, id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return coding.Job{}, ErrNotFound
-	}
-	if err != nil {
-		return coding.Job{}, err
-	}
-	return coding.Job{
-		Job: core.Job{
-			CreatedByClientID: row.CreatedByClientID, CreatedByClientName: row.CreatedByClientName, ClientReference: row.ClientReference,
-			ID: row.ID, AdmissionKey: row.AdmissionKey, Workflow: core.WorkflowName(row.WorkflowName), WorkflowRevision: row.WorkflowRevision,
-			AgentsMD: row.AgentsMd, SandboxProfile: row.SandboxProfile, SandboxProfileRevision: row.SandboxProfileRevision, ProviderConnection: row.ProviderConnection,
-			KeepRunning: row.KeepRunning, Model: row.Model, ReasoningEffort: row.ReasoningEffort, AdmissionOpen: row.AdmissionOpen, CleanupState: core.CleanupState(row.CleanupState),
-			CurrentTaskID: row.CurrentTaskID, WorkflowAttention: row.WorkflowAttention, WorkflowAttentionSource: row.WorkflowAttentionSource,
-			WorkflowAttentionAt: timeValue(row.WorkflowAttentionAt), CleanupAttention: row.CleanupAttention,
-			AdmittedAt: row.AdmittedAt, CleanedAt: timeValue(row.CleanedAt),
-		},
-		Repository: row.Repository, StartingRevision: row.StartingRevision, Revision: row.Revision, Branch: row.Branch,
-		GitHubRepository: row.GithubRepository, GitHubInstallation: row.GithubInstallationID, BaseBranch: row.BaseBranch,
-	}, nil
-}
-
 func (s Store) JobTasks(ctx context.Context, jobID string) ([]core.JobTask, error) {
 	rows, err := dbsql.New(s.DB).ListJobTasks(ctx, jobID)
 	if err != nil {
@@ -459,22 +402,6 @@ func (s Store) JobTasks(ctx context.Context, jobID string) ([]core.JobTask, erro
 		})
 	}
 	return tasks, nil
-}
-
-func (s Store) Revisions(ctx context.Context, jobID string) ([]coding.Revision, error) {
-	rows, err := dbsql.New(s.DB).ListRevisions(ctx, jobID)
-	if err != nil {
-		return nil, err
-	}
-	revisions := make([]coding.Revision, 0, len(rows))
-	for _, row := range rows {
-		revisions = append(revisions, coding.Revision{
-			JobID: row.JobID, OID: row.OID, ComparisonBase: row.ComparisonBaseOID,
-			Tree: row.TreeOID, Branch: row.Branch, Generation: int(row.Generation),
-			EvidenceID: row.EvidenceID, ObservedAt: row.ObservedAt,
-		})
-	}
-	return revisions, nil
 }
 
 // WithJobFence serializes harness and other external mutation for one Job
@@ -798,7 +725,7 @@ func (s Store) EnsureSandbox(ctx context.Context, jobID, name string) (core.Sand
 		if !errors.Is(foreignErr, sql.ErrNoRows) {
 			return core.Sandbox{}, foreignErr
 		}
-		nonce, nonceErr := reviewNonce()
+		nonce, nonceErr := ownershipNonce()
 		if nonceErr != nil {
 			return core.Sandbox{}, nonceErr
 		}
@@ -855,55 +782,6 @@ func (s Store) Deliveries(ctx context.Context, jobID string) ([]core.Delivery, e
 		out = append(out, core.Delivery{Message: message, AgentRun: run})
 	}
 	return out, nil
-}
-
-// CodingMessages converts Core's internal delivery facts into the
-// coding-owned read projection. Ordinary workflow coordination never receives
-// raw AgentRun lifecycle state, Thread, or Turn identities.
-func (s Store) CodingMessages(ctx context.Context, jobID string) ([]coding.MessageRecord, []coding.ReviewRunView, error) {
-	deliveries, err := s.Deliveries(ctx, jobID)
-	if err != nil {
-		return nil, nil, err
-	}
-	messages := make([]coding.MessageRecord, 0, len(deliveries))
-	reviews := make([]coding.ReviewRunView, 0)
-	// Only review projections expose full Sandbox custody. Load it from durable
-	// state when first needed so implementation-only history avoids the query.
-	var owned map[string]core.Sandbox
-	for _, delivery := range deliveries {
-		run, message := delivery.AgentRun, delivery.Message
-		outcome := agentRunOutcome(run.State, run.TurnOutcome)
-		if run.Role == "implement" {
-			messages = append(messages, coding.MessageRecord{
-				Message: message, SandboxID: run.SandboxID, InputRevision: run.InputRevision,
-				ProducerID: run.ID, Outcome: outcome, Attention: run.Attention,
-				StartsTurn: message.Intent == core.MessageFollow,
-			})
-			continue
-		}
-		if owned == nil {
-			sandboxes, err := s.Sandboxes(ctx, jobID)
-			if err != nil {
-				return nil, nil, err
-			}
-			owned = make(map[string]core.Sandbox, len(sandboxes))
-			for _, sandbox := range sandboxes {
-				owned[sandbox.ID] = sandbox
-			}
-		}
-		sandbox, ok := owned[run.SandboxID]
-		if !ok || sandbox.JobID != run.JobID {
-			return nil, nil, fmt.Errorf("review producer %s has no exact Job-owned Sandbox %s", run.ID, run.SandboxID)
-		}
-		reviews = append(reviews, coding.ReviewRunView{
-			ID: run.ID, JobID: run.JobID, MessageID: run.MessageID, Harness: run.Harness,
-			ThreadID: run.ThreadID, TurnID: run.TurnID, Outcome: outcome, Attention: run.Attention,
-			Role: run.Role, InputRevision: run.InputRevision, Capability: run.Capability,
-			SandboxID: run.SandboxID, SubmissionNonce: run.SubmissionNonce,
-			StartedAt: run.StartedAt, FinishedAt: run.FinishedAt, Request: message, Sandbox: sandbox,
-		})
-	}
-	return messages, reviews, nil
 }
 
 // AgentMessageExecution reloads the exact durable execution aggregate by the
@@ -965,70 +843,6 @@ func (s Store) InterruptAgentRun(ctx context.Context, runID, reason string) erro
 	return expectOneRows(q.InterruptAgentRun(ctx, dbsql.InterruptAgentRunParams{Reason: reason, RunID: runID}))
 }
 
-func revisionCandidateTx(ctx context.Context, tx *sql.Tx, jobID string) (core.AgentRun, bool, error) {
-	queries := dbsql.New(tx)
-	unsettled, err := queries.CountUnsettledInputs(ctx, jobID)
-	if err != nil {
-		return core.AgentRun{}, false, err
-	}
-	if unsettled != 0 {
-		return core.AgentRun{}, false, nil
-	}
-	latestInput, err := queries.GetLatestAgentRun(ctx, dbsql.GetLatestAgentRunParams{JobID: jobID, Role: coding.AgentRole})
-	if errors.Is(err, sql.ErrNoRows) {
-		return core.AgentRun{}, false, nil
-	}
-	if err != nil {
-		return core.AgentRun{}, false, err
-	}
-	if latestInput.State != core.AgentRunCompleted {
-		return core.AgentRun{}, false, nil
-	}
-	row, err := queries.GetLatestTurnStartRun(ctx, jobID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return core.AgentRun{}, false, nil
-	}
-	if err != nil {
-		return core.AgentRun{}, false, err
-	}
-	run := core.AgentRun{ID: row.ID, JobID: row.JobID, State: row.State, Role: row.Role, InputRevision: row.InputRevision}
-	if row.Observed {
-		return core.AgentRun{}, false, nil
-	}
-	if run.State != core.AgentRunCompleted || run.Role != "implement" {
-		return core.AgentRun{}, false, nil
-	}
-	return run, true, nil
-}
-
-func insertEvidence(ctx context.Context, tx *sql.Tx, jobID string, evidence core.Evidence) error {
-	queries := dbsql.New(tx)
-	err := queries.InsertEvidence(ctx, dbsql.InsertEvidenceParams{
-		ID: evidence.ID, JobID: jobID, Digest: evidence.Digest, ByteSize: evidence.ByteSize,
-		MediaType: evidence.MediaType, Producer: evidence.Producer,
-		Kind: evidence.Kind, ActionID: evidence.ActionID, AgentRunID: evidence.AgentRunID, Revision: evidence.Revision,
-		StartedAt: nullableTime(evidence.StartedAt), FinishedAt: nullableTime(evidence.FinishedAt),
-	})
-	if err != nil {
-		return err
-	}
-	stored, err := queries.GetEvidenceIdentity(ctx, evidence.ID)
-	if err != nil {
-		return err
-	}
-	if stored.JobID != jobID || stored.Digest != evidence.Digest || stored.ByteSize != evidence.ByteSize || stored.MediaType != evidence.MediaType || stored.Producer != evidence.Producer || stored.Kind != evidence.Kind || stored.ActionID != evidence.ActionID || stored.AgentRunID != evidence.AgentRunID || stored.Revision != evidence.Revision || !stored.StartedAt.Equal(evidence.StartedAt) || !stored.FinishedAt.Equal(evidence.FinishedAt) {
-		return fmt.Errorf("Evidence identity %s conflicts with immutable retained metadata or content", evidence.ID)
-	}
-	return nil
-}
-
-func nullableTime(value time.Time) sql.NullTime {
-	if value.IsZero() {
-		return sql.NullTime{}
-	}
-	return sql.NullTime{Time: value, Valid: true}
-}
-
 func nullableString(value string) sql.NullString {
 	return sql.NullString{String: value, Valid: value != ""}
 }
@@ -1057,79 +871,6 @@ func (s Store) ClearWorkflowAttention(ctx context.Context, jobID, source string)
 	}
 	if rows > 1 {
 		return fmt.Errorf("workflow attention source %s changed %d Jobs", source, rows)
-	}
-	return nil
-}
-
-func (s Store) RecordRevisionObservation(ctx context.Context, jobID, runID string, observation gitworkspace.Observation, evidence core.Evidence) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	queries := dbsql.New(s.DB).WithTx(tx)
-	locked, err := queries.GetRevisionJobForUpdate(ctx, jobID)
-	if err != nil {
-		return err
-	}
-	if evidence.ID != core.EvidenceID(runID, "git-revision") || evidence.ActionID != "" || evidence.AgentRunID != runID || evidence.Kind != "git-revision" || evidence.Revision != observation.Revision ||
-		!ValidRevision(observation.ComparisonBase) || !ValidRevision(observation.Revision) || !ValidRevision(observation.Tree) {
-		return fmt.Errorf("Git Revision observation conflicts with durable comparison base, branch, AgentRun, or Evidence")
-	}
-	if _, err := queries.GetEvidenceIdentity(ctx, evidence.ID); err == nil {
-		if err := insertEvidence(ctx, tx, jobID, evidence); err != nil {
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-		return nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
-	if !locked.AdmissionOpen || locked.OutcomeExists {
-		return fmt.Errorf("%w: admission is closed or the Job has an Outcome", ErrRevisionObservationSuperseded)
-	}
-	if locked.Revision != observation.ComparisonBase {
-		return fmt.Errorf("%w: comparison base %s is not current Revision %s", ErrRevisionObservationSuperseded, observation.ComparisonBase, locked.Revision)
-	}
-	if locked.Branch != observation.Branch {
-		return fmt.Errorf("Git Revision observation branch %s conflicts with Job branch %s", observation.Branch, locked.Branch)
-	}
-	candidate, ready, err := revisionCandidateTx(ctx, tx, jobID)
-	if err != nil {
-		return err
-	}
-	if !ready || candidate.ID != runID || candidate.InputRevision != observation.ComparisonBase {
-		return fmt.Errorf("%w: AgentRun %s no longer owns the latest completed implementation turn", ErrRevisionObservationSuperseded, runID)
-	}
-	if err := insertEvidence(ctx, tx, jobID, evidence); err != nil {
-		return err
-	}
-	if observation.Revision != observation.ComparisonBase {
-		generation, err := queries.NextRevisionGeneration(ctx, jobID)
-		if err != nil {
-			return err
-		}
-		if err := queries.InsertRevision(ctx, dbsql.InsertRevisionParams{
-			JobID: jobID, OID: observation.Revision, ComparisonBaseOID: observation.ComparisonBase,
-			TreeOID: observation.Tree, Branch: observation.Branch, Generation: generation, EvidenceID: evidence.ID,
-		}); err != nil {
-			return err
-		}
-		updated, err := queries.AdvanceJobRevision(ctx, dbsql.AdvanceJobRevisionParams{JobID: jobID, Revision: observation.Revision, ComparisonBaseOID: observation.ComparisonBase})
-		if err != nil {
-			return err
-		}
-		if updated != 1 {
-			return ErrNotFound
-		}
-	}
-	if _, err := queries.ClearWorkflowAttention(ctx, dbsql.ClearWorkflowAttentionParams{JobID: jobID, Source: sql.NullString{String: runID, Valid: true}}); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return err
 	}
 	return nil
 }
@@ -1329,26 +1070,6 @@ func (s Store) HasImmediatelyEligibleAgentMessage(ctx context.Context, jobID str
 		return false, err
 	}
 	return run.State == core.AgentRunPending, nil
-}
-
-// ValidateCodingAgentMessage validates only the static coding execution
-// envelope used for prompt composition. Generic selection owns delivery order.
-func (s Store) ValidateCodingAgentMessage(ctx context.Context, execution core.AgentMessageExecution) error {
-	if execution.Job.Workflow != coding.Workflow || execution.Job.WorkflowRevision != coding.WorkflowRevision ||
-		execution.Message.JobID != execution.Job.ID || execution.AgentRun.JobID != execution.Job.ID ||
-		execution.AgentRun.MessageID != execution.Message.ID || execution.Sandbox.JobID != execution.Job.ID ||
-		execution.AgentRun.SandboxID != execution.Sandbox.ID || execution.Sandbox.ID != core.MainSandboxName(execution.Job.ID) ||
-		execution.AgentRun.Role != coding.AgentRole || execution.AgentRun.Capability != "" {
-		return fmt.Errorf("Message %s conflicts with the coding execution envelope", execution.Message.ID)
-	}
-	job, err := s.CodingJob(ctx, execution.Job.ID)
-	if err != nil {
-		return err
-	}
-	if execution.AgentRun.InputRevision != job.Revision {
-		return fmt.Errorf("Message %s conflicts with the current coding input Revision", execution.Message.ID)
-	}
-	return nil
 }
 
 func (s Store) PrepareAgentRun(ctx context.Context, runID, harness, baselineTurnID string) error {
@@ -1569,18 +1290,6 @@ func (s Store) Actions(ctx context.Context, jobID string) ([]core.Action, error)
 		actions = append(actions, actionFromValues(row.ID, row.JobID, row.Kind, row.State, row.ScopeKey, row.CreatedAt, row.SettledAt))
 	}
 	return actions, nil
-}
-
-func (s Store) Evidence(ctx context.Context, jobID string) ([]core.Evidence, error) {
-	rows, err := dbsql.New(s.DB).ListEvidence(ctx, jobID)
-	if err != nil {
-		return nil, err
-	}
-	var records []core.Evidence
-	for _, row := range rows {
-		records = append(records, core.Evidence{ID: row.ID, Digest: row.Digest, ByteSize: row.ByteSize, MediaType: row.MediaType, Producer: row.Producer, Kind: row.Kind, ActionID: row.ActionID, AgentRunID: row.AgentRunID, Revision: row.Revision, StartedAt: row.StartedAt, FinishedAt: row.FinishedAt})
-	}
-	return records, nil
 }
 
 func (s Store) NextWakeSequence(ctx context.Context, jobID string) (int64, error) {

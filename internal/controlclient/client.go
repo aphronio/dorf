@@ -179,19 +179,6 @@ func (c *Client) AdmitJob(ctx context.Context, key string, request controlapi.Ad
 	return response, err
 }
 
-// AdmitCodingJob admits or replays one built-in coding workflow Job.
-func (c *Client) AdmitCodingJob(ctx context.Context, key string, request controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, error) {
-	if strings.TrimSpace(key) == "" {
-		return controlapi.CodingJob{}, fmt.Errorf("Idempotency-Key is empty")
-	}
-	var response controlapi.CodingJob
-	err := c.do(ctx, http.MethodPost, []string{"v1", "workflows", "coding", "jobs"}, request, true, key, &response)
-	if err == nil && response.Kind != controlapi.JobKindCoding {
-		return controlapi.CodingJob{}, fmt.Errorf("Dorf API Job response has unexpected kind")
-	}
-	return response, err
-}
-
 // Job retrieves one canonical Job snapshot.
 func (c *Client) Job(ctx context.Context, id string) (controlapi.JobView, error) {
 	if id == "" {
@@ -433,25 +420,6 @@ func readSandboxFileResponse(response *http.Response) ([]byte, error) {
 		return nil, err
 	}
 	return contents, nil
-}
-
-// Evidence returns verified immutable Evidence metadata retained for one Job.
-func (c *Client) Evidence(ctx context.Context, jobID string) (controlapi.EvidenceList, error) {
-	if jobID == "" {
-		return controlapi.EvidenceList{}, fmt.Errorf("Job ID is empty")
-	}
-	var response controlapi.EvidenceList
-	err := c.do(ctx, http.MethodGet, []string{"v1", "jobs", jobID, "evidence"}, nil, true, "", &response)
-	return response, err
-}
-
-func (c *Client) Abandon(ctx context.Context, id string) (controlapi.JobView, error) {
-	if id == "" {
-		return nil, fmt.Errorf("Job ID is empty")
-	}
-	var response jobResponse
-	err := c.do(ctx, http.MethodPut, []string{"v1", "jobs", id, "abandon"}, nil, true, "", &response)
-	return response.JobView, err
 }
 
 // Cleanup idempotently requests exact cleanup of one Job.
@@ -703,12 +671,6 @@ func decodeJob(contents []byte) (controlapi.JobView, error) {
 	switch discriminator.Kind {
 	case controlapi.JobKindDirect:
 		var job controlapi.DirectJob
-		if err := json.Unmarshal(contents, &job); err != nil {
-			return nil, fmt.Errorf("decode Dorf API Job response")
-		}
-		return job, nil
-	case controlapi.JobKindCoding:
-		var job controlapi.CodingJob
 		if err := json.Unmarshal(contents, &job); err != nil {
 			return nil, fmt.Errorf("decode Dorf API Job response")
 		}

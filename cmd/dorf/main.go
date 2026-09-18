@@ -21,7 +21,6 @@ import (
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	cloudflareapp "github.com/aphronio/dorf/internal/cloudflare"
 	"github.com/aphronio/dorf/internal/codex"
-	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/core"
@@ -84,7 +83,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	switch args[0] {
-	case "setup", "integration", "client", "migrate", "doctor", "provider", "profile", "release-manifest", "serve", "worker", "upgrade", "checkpoint":
+	case "setup", "client", "migrate", "doctor", "provider", "profile", "release-manifest", "serve", "worker", "upgrade", "checkpoint":
 	default:
 		return usage(stderr)
 	}
@@ -94,9 +93,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 	if args[0] == "setup" {
 		return setupCommand(ctx, cfg, args[1:], stdout, stderr)
-	}
-	if args[0] == "integration" {
-		return integrationCommand(ctx, cfg, args[1:], stdout, stderr)
 	}
 	if strings.TrimSpace(cfg.DatabaseURL) == "" {
 		return fmt.Errorf("PostgreSQL is not configured; run dorf setup")
@@ -182,7 +178,6 @@ func registerWorkerTasks(store postgres.Store, client *absurd.Client, cfg config
 	core.CleanupRuntimes = runtimes
 	core.RegisterCleanup()
 	direct.Register(core, store, runtimes)
-	coding.Register(core, store, runtimes)
 	return nil
 }
 
@@ -190,8 +185,7 @@ func coreApplication(store postgres.Store, client *absurd.Client) core.Applicati
 	return core.Application{Store: store, Tasks: client, AgentMessages: composedMessageAdmissions{store: store}}
 }
 
-// composedMessageAdmissions is closed-world deployment composition, not a
-// Core registry. Each known workflow or client supplies its execution envelope.
+// composedMessageAdmissions validates profile capabilities before direct admission.
 type composedMessageAdmissions struct{ store postgres.Store }
 
 func (a composedMessageAdmissions) AdmitAgentMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
@@ -215,8 +209,6 @@ func (a composedMessageAdmissions) AdmitAgentMessage(ctx context.Context, input 
 	switch {
 	case job.Workflow == "" && job.WorkflowRevision == "":
 		admitted, err = a.store.AdmitDirectMessage(ctx, input)
-	case job.Workflow == coding.Workflow && job.WorkflowRevision == coding.WorkflowRevision:
-		admitted, err = a.store.AdmitCodingMessage(ctx, input)
 	default:
 		return core.MessageAdmissionResult{}, fmt.Errorf("Job contract %s revision %s does not accept Messages in this deployment", job.Workflow, job.WorkflowRevision)
 	}
@@ -1400,6 +1392,6 @@ func boundedTaskError(raw json.RawMessage) string {
 }
 
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <version|update|setup|connect|auth|client|serve|integration|migrate|doctor|provider|profile|upgrade|checkpoint|run|job|workflow|worker|sandbox> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|update|setup|connect|auth|client|serve|migrate|doctor|provider|profile|upgrade|checkpoint|run|job|worker|sandbox> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

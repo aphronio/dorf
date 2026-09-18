@@ -280,38 +280,6 @@ The separate `profile` and `provider` commands remain available for custom artif
 operations. Their exact-artifact, credential, and route boundaries are described by the
 [release process](releasing.md) and [Provider Gateway](project/provider-gateway.md).
 
-## 2. Set up the optional GitHub integration
-
-Skip this section when a client or workflow needs only credential-free access to a public Git
-repository. A GitHub App is required for authenticated GitHub API or repository operations.
-
-Create the deployment-default App through GitHub's approval flow:
-
-```bash
-dorf integration github setup
-```
-
-Use `--org OWNER` when the organization should own the App; omit it for an App owned by the
-authenticated GitHub user. Setup prints a readable HTTPS link to Dorf's static GitHub Pages
-launcher and an explicit copy-and-paste fallback. The page has no backend, tracking, or callback; it
-submits the fixed App manifest directly to GitHub, then displays GitHub's returned one-time code
-with a Copy button. After approving GitHub's form, copy that code into the waiting command.
-Dorf exchanges it, verifies the returned App identity and exact supported permission envelope,
-atomically installs GitHub's returned credential bundle, and prints `GitHub App created`. Setup then
-prints the reusable App installation URL. Open it, install the App with access to at least one
-repository, return to the waiting command, and type `installed`. Dorf makes one authenticated
-observation through the App authority and prints `GitHub integration ready` only after GitHub reports
-at least one installation.
-
-The App registration uses the fixed module permission envelope owned by
-[D093](project/decisions/D093-github-authentication-is-an-optional-deployment-integration.md).
-Runtime operations still mint repository-scoped tokens with only their exact required subset. Setup
-runs no local callback listener or hosted relay and does not select, poll, or verify a repository.
-Repeating setup remotely proves the configured App identity, permission envelope, and presence of an
-installation. An already installed App returns ready without reading terminal input; an App with no
-installation resumes at the same reusable installation URL instead of creating another App.
-Replacing the configured credential bundle retains its explicit `--yes` approval boundary.
-
 ## 3. Connect one remote CLI Client
 
 The deployment host owns setup, Profiles, provider and Harness credentials, PostgreSQL, and the
@@ -393,7 +361,7 @@ dorf job abandon JOB_ID
 dorf job cleanup JOB_ID
 ```
 
-Use `--client-reference REFERENCE` with `dorf run` or `dorf workflow run coding` to
+Use `--client-reference REFERENCE` with `dorf run` to
 attach your thread or task reference. `dorf job list` and `dorf job inspect` show the creating
 Client and reference. An older Job shows an unknown creator. Use that information when choosing
 cleanup targets; attribution does not request cleanup or define a retention policy.
@@ -401,30 +369,6 @@ Client configuration may set `client_reference` as the default for new Jobs; an 
 overrides it. Omitting `MESSAGE_ID` from `dorf job message inspect` reads the latest settled reply
 in the Job's main Sandbox. Pending follow-ups and steer delivery acknowledgements do not replace
 that reply.
-
-To delegate the built-in coding workflow, save its complete input in a file and use its
-typed admission command:
-
-```bash
-dorf workflow run coding \
-  --input-file message.txt \
-  --repo https://github.com/OWNER/REPOSITORY.git \
-  --revision FULL_COMMIT_OID \
-  --base main \
-  --ai-connection AI_CONNECTION \
-  --reasoning high
-```
-
-Omit `--model` to use the selected AI connection's default Harness model. Pass `--model MODEL` only
-to override it for this Job. The Deployment resolves either choice before admission, and the
-accepted Job records the exact model it will use.
-
-Remote coding uses the deployment's GitHub integration; its request carries no integration
-credential. Coding Jobs use the same inspect, watch, Message, retry, file, Evidence, and cleanup commands
-shown above.
-Coding requests cleanup once it observes a terminal GitHub Outcome, so retrieve any needed Sandbox file
-before that external decision;
-retained Evidence remains readable after cleanup.
 
 For repository investigation, create a direct Job and use `dorf sandbox exec` for your repository
 setup, then send your instructions through `dorf job message send`. Choose and retrieve any report
@@ -436,7 +380,7 @@ Job, Message, and resource receipts; it does not convert investigation Jobs into
 `run` receipts include the accepted Job and Message. `job inspect` reports the Job ID and exact Sandbox IDs. Follow may queue
 before current work settles. Explicit steer targets only the exact active Turn and never becomes a Follow.
 `job watch` reconnects from the canonical snapshot, and Ctrl-C stops only the view. Retry is
-accepted only for eligible failed execution. Evidence is verified metadata. Sandbox file retrieval
+accepted only for eligible failed execution. Sandbox file retrieval
 returns exact bytes and must happen before cleanup, which closes Message admission and file reads.
 The requested file path can be absolute inside the Sandbox, relative to its workspace root, or
 relative to its execution user's home with `~/`. Traversal, symlinks, and directories are rejected.
@@ -444,10 +388,10 @@ relative to its execution user's home with `~/`. Traversal, symlinks, and direct
 Human Job and Message output uses `Queued` for accepted work waiting to start, `Working` for active
 execution, and `Needs attention` for failures or required intervention. Job setup reports `Starting`
 or `Connecting`. A direct Job with no outstanding work reports `Idle`. A successful Message result
-or completed workflow reports `Finished`; a steer delivery acknowledgement without a result reports
+reports `Finished`; a steer delivery acknowledgement without a result reports
 `Delivered; awaiting result`. These labels do not report progress within an agent Turn.
 
-Use `--output json` on Job, Message, retry, and Evidence operations and `--output jsonl` on watch for
+Use `--output json` on Job, Message, and retry operations and `--output jsonl` on watch for
 stable machine output. The ordinary mutation flow creates retry identity internally and retries the
 exact request once after a retryable transport or HTTP server failure; a human does not need to
 configure a key. A direct Job remains open and idle after a successful Turn until the caller
@@ -520,7 +464,7 @@ dorf job cleanup JOB_ID
 ```
 
 Repeat `--attach LOCAL_FILE` to send ordered files with the first Message or a later Message. The
-flag also works with both `dorf workflow run` commands. The CLI checks local file names,
+CLI checks local file names,
 regular-file status, and byte limits before creating a Job or sending a Message. The server
 validates image contents and profile support during Message admission. You may omit `--input-file`
 for a Message that has at least one attachment. Dorf sends each file by value, so later local
@@ -555,68 +499,23 @@ Dorf owns durable delivery, recovery, the exact
 Job-owned Sandbox, and execution of explicit cleanup. No workflow identity, Git repository, or
 GitHub integration is required.
 
-## 5. Run a coding Job on the deployment host
+## 5. Continue and release a Job
 
-This command uses the same authenticated control API on the deployment host and a remote client.
+Use `dorf job watch JOB_ID` to observe current facts. Stopping the watcher leaves work running.
+The Compose-managed worker recovers after process loss; use [Support](support.md) when operator
+action is needed. `dorf job retry JOB_ID` schedules one more attempt for eligible failed execution.
+`dorf job cleanup JOB_ID` closes admission and reconciles resource release.
 
-The selected profile owns the Harness. Omit `--profile` to use the verified deployment default.
-Create and verify a separate Pi profile when that Job should use Pi; both may reference the same
-exact credential-free image.
-
-Save the complete goal in `goal.txt`, then admit it with stable authority:
-
-```bash
-dorf workflow run coding \
-  --key my-change-v1 \
-  --input-file message.txt \
-  --repo https://github.com/OWNER/REPOSITORY.git \
-  --revision FULL_COMMIT_OID \
-  --branch dorf/my-change-v1 \
-  --base main \
-  --ai-connection AI_CONNECTION \
-  --reasoning high
-
-dorf job inspect JOB_ID
-```
-
-Admission derives the exact GitHub owner/repository from `--repo`. The coding runtime composed for
-the selected profile discovers the deployment-default App installation before admitting a new Job;
-the Job request carries no integration or permission settings. The caller supplies the exact starting
-`--revision` and base. Retrying an existing key reuses its retained installation so recovery does not
-depend on GitHub availability; the complete caller input must still match.
-
-To follow the same durable facts without repeatedly invoking inspection, use:
-
-```bash
-dorf job watch JOB_ID
-```
-
-The watcher reads canonical Job snapshots. `Ctrl-C` stops only the view, not the Job.
-
-The Compose-managed worker recovers after process loss; use [Support](support.md) when an operator
-action is needed. Use `dorf job message` for later input and `--intent steer` to target active
-work. The coding workflow observes the exact pull request for acceptance or
-rejection and requests cleanup after its terminal policy is satisfied. To stop without a GitHub
-decision:
-
-```bash
-dorf job abandon JOB_ID
-dorf job inspect JOB_ID
-```
-
-If `dorf job inspect JOB_ID` reports that the workflow stopped, repair the displayed cause and run
-`dorf job retry JOB_ID`. This schedules exactly one more bounded attempt on the same Absurd task and
-retains its checkpoints. The receipt reports scheduling identities but does not claim that a worker
-has resumed it yet; use `dorf job inspect JOB_ID` to observe current work and progress.
-
-Cleanup remains separately observable. `dorf job cleanup JOB_ID` is an explicit client request to
-release the Job's resources; Core reconciles that request or retries an incomplete cleanup, then
-inspection reports the resulting facts.
+Clients own repository setup, reviews, publication credentials, and external outcomes. Dorf no
+longer supplies a coding workflow, GitHub App setup, abandonment policy, or application Evidence API.
+Before upgrading a deployment with old workflow Jobs, complete their cleanup using the previous
+version and export any application records needed. The new migration removes coding inputs,
+revisions, review plans, proposals, outcomes, and application evidence. Generic Job, Message,
+AgentRun, resource ownership, lifecycle, and recovery receipts remain.
 
 ### Keep a worker running between turns
 
-New E2B-backed Jobs pause their Sandboxes when idle. Add `--keep-running` to `dorf run` or
-`dorf workflow run coding` when background work
+New E2B-backed Jobs pause their Sandboxes when idle. Add `--keep-running` to `dorf run` when background work
 must continue between turns. The override is saved with the Job and must match on an explicit
 admission replay. It does not disable provider timeout limits. Other providers keep their
 existing lifecycle until their pause capability is supported.

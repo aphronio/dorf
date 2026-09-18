@@ -21,15 +21,6 @@ type DorfAction struct {
 	SettledAt sql.NullTime
 }
 
-// One exact-Revision GitHub proposal projection per Job
-type DorfGithubProposal struct {
-	JobID            string
-	PRNumber         int64
-	PRURL            string
-	ProposedRevision string
-	BodyDigest       string
-}
-
 type DorfJobRetryRequest struct {
 	RequestKey string
 	JobID      string
@@ -44,38 +35,6 @@ type DorfJobTask struct {
 	TaskID     string
 	TaskName   string
 	AttachedAt time.Time
-}
-
-type DorfReviewRunProjection struct {
-	ID                    string
-	JobID                 string
-	MessageID             string
-	State                 string
-	Harness               string
-	ThreadID              string
-	BaselineRecorded      bool
-	BaselineTurnID        string
-	TurnID                string
-	TurnOutcome           string
-	Attention             string
-	Role                  string
-	InputRevision         string
-	Capability            string
-	StartedAt             sql.NullTime
-	FinishedAt            sql.NullTime
-	RequestFromKind       string
-	RequestFromID         string
-	RequestSequence       int64
-	RequestInput          string
-	RequestDeliveryIntent string
-	RequestTargetTurnID   string
-	RequestAdmittedAt     time.Time
-	SandboxID             string
-	SandboxName           string
-	OwnershipNonce        string
-	SubmissionNonce       string
-	ActiveResourceID      string
-	ProviderID            string
 }
 
 type DorfSandboxDeliveryHold struct {

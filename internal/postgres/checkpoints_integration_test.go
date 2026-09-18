@@ -276,7 +276,7 @@ func completedCheckpointFixture(t *testing.T, store postgres.Store, ctx context.
 	if err := store.BindSandboxResource(ctx, owned, "provider-original"); err != nil {
 		t.Fatal(err)
 	}
-	delivery, err := codingDelivery(ctx, store, job.ID)
+	delivery, err := nextDelivery(ctx, store, job.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

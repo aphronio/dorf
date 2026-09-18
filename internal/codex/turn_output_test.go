@@ -94,7 +94,7 @@ func TestProtocolRecoversCompleteFinalRepliesWithoutResubmission(t *testing.T) {
 	if err != nil || thread != "thread-final" || recovered.Output != steeredFinalOutput || !reflect.DeepEqual(recovered.AcceptedMessageIDs, []string{"request-original", "request-steer"}) {
 		t.Errorf("recovered thread=%q turn=%#v error=%v", thread, recovered, err)
 	}
-	if methods := reviewProtocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/read", "thread/list", "thread/read"}) {
+	if methods := protocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/read", "thread/list", "thread/read"}) {
 		t.Fatalf("native methods=%v", methods)
 	}
 }

@@ -1,9 +1,9 @@
 # D142: Review contracts are required only for coding
 
-- **Applicability:** current
+- **Applicability:** historical
 - **Areas:** harnesses, sandboxes, workflows
 - **Read when:** Changing ordinary adapter contracts or composing coding review execution.
-- **Decision history:** Separates mandatory review contracts from ordinary execution, 2026-09-18.
+- **Decision history:** Separates mandatory review contracts from ordinary execution, 2026-09-18.; application contracts retired by D144 — 2026-09-18.
 - **Decision:** Ordinary Harness and Sandbox interfaces do not require strict-review methods,
   review metadata attachment, or review attestation. Coding keeps its explicit review transport
   and Harness contracts. Runtime composition creates the review controller only for coding

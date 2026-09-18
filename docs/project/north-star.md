@@ -1,268 +1,91 @@
-# Dorf North Star — Portable, Controlled Agent Execution
-
-Dorf is the open-source control plane for running agent harnesses on infrastructure you control.
+# Dorf North Star
 
 **Your agents. Your infrastructure. One API.**
 
-The direction is to bring a verified Harness version and configuration, its skills, extensions or
-plugins, project instructions, workspace image or setup and dependencies, and vendor-supported
-connection into compatible isolated infrastructure. Operators should be able to choose verified
-local, bring-your-own-cloud, or managed profiles without rebuilding the agent system they trust.
-Connection custody does not mean copying raw user secrets into a Sandbox; each profile and adapter
-must define scoped routing or injection.
+Dorf is a stateful, self-hostable control plane for supported agent Harnesses on compatible isolated
+infrastructure. It keeps accepted input, native conversation bindings, resource ownership, and
+recovery dependable after the client disconnects. It does not replace the native Harness.
 
-Dorf owns the control-plane guarantees around the Harness: accepted Message text and attachments,
-AgentRun and Sandbox custody, external-effect reconciliation, recovery, Evidence, durable attachment
-of a typed Outcome when the consumer defines one, and execution of requested cleanup. A Harness may
-provide its own durable sessions; Dorf does not compete by duplicating them.
-
-This is the product and experience direction. It is not an API inventory, schema, package plan, or
-issue backlog. Current support belongs in [Support](../support.md), operator steps belong in
-[Getting started](../getting-started.md), and implementation detail belongs in code.
-
-## Ten-second model
-
-```text
-A client selects a verified Harness and Sandbox profile, then drives Core directly or delegates
-policy to a workflow. Dorf owns controlled execution, isolated resources, recovery, retained facts,
-and requested cleanup. The client or workflow owns what the work means.
-```
+Current support belongs in [Support](../support.md), operator steps in
+[Getting started](../getting-started.md), and technical authority in [Architecture](architecture.md).
 
 ## Product boundary
 
-This section is the sole current authority for ownership between Core, workflows, and clients.
-Architecture documents its technical consequences; the Decision Log records why it changed; other
-documents should link here rather than redefine it.
+Clients choose goals, supply instructions and tool configuration, prepare application files,
+interpret results, compose independent execution contexts, and decide when to release resources.
+Coding, repository selection, review policy, publication, GitHub credentials, and business outcomes
+belong to the client. Dorf ships no built-in application workflow.
 
-Dorf Core is the product: a stateful, self-hostable control plane with one application boundary for
-supported existing Harnesses on chosen compatible infrastructure. Core remains an internal
-application boundary inside a deployment backed by its durable dependencies. Native workflows
-compose it in-process; external clients may receive deliberately narrower authenticated projections,
-including fixed typed entry points for selected built-in workflows, without turning Core into an
-embeddable runtime, generic public API, or generic workflow API. Portability is capability-based:
-admission selects a verified profile and rejects combinations whose configuration,
-dependencies, credentials, host constraints, tools, isolation, recovery, or observation contract
-has not been proved.
+Dorf owns accepted immutable Message input and attachments, ordered delivery, exact native
+acceptance reconciliation and interruption, attested compute ownership, scoped model access,
+supported recovery, and requested cleanup. Harnesses own native execution and conversation history.
+Dorf exposes observations and durable receipts without treating agent prose as proof of success.
 
-Dorf does not own the user's memory, priorities, or cross-Job life. A personal assistant, CLI, CI,
-or another trusted client decides what to delegate and how separate Jobs compose.
-A workflow owns Job semantics, policy, evaluation, and what its Outcome means. Dorf owns custody of
-execution and durable attachment of that Outcome. A client may instead drive Core mechanisms
-directly and retain that policy itself. Native Dorf workflows and trusted client adapters reach the
-same small ownership boundary, whether through in-process composition or a supported external
-projection. Neither receives a privileged hidden path.
-
-Core provides mechanisms, never workflow or interaction policy. It may admit Message input and
-retain its verified attachments, run and recover AgentRuns, return the exact bytes of a
-caller-selected Sandbox file while that Sandbox remains available, retain Evidence, and reconcile
-cleanup after a caller requests it. It does
-not decide that a report is accepted, that a Job is semantically finished, that another Job should be
-started, or that resources should now be released. Those choices belong to a workflow or to a client
-such as a personal assistant, n8n, a UI, CI, or a human-operated CLI. Shipping a native workflow in
-the same repository, process, or binary does not move its policy into Core.
-
-Message intent is reusable custody rather than consumer policy. While admission is open, an accepted
-follow joins the FIFO, reuses the authoritative retained Harness Thread, and receives a distinct
-Turn, even when accepted before earlier work settles. A steer atomically captures the exact active
-Turn and has priority over queued follows. Explicit steer never falls back to a new Turn and fails
-honestly if that target becomes terminal. Automatic intent returns the same Message to the follow
-FIFO only after Core proves that its selected Turn terminated without accepting it. Consumers and
-workflows supply typed execution envelopes and deterministic
-infrastructure readiness; they do not authorize these intents, reorder them, or choose their Thread
-semantics.
-
-Core likewise owns no Git, coding, GitHub, publication, or human-in-the-loop policy. Those may be
-composed by a workflow, module, or client without becoming Core merely because several consumers use
-them.
-
-Apply this test before adding a Core concept: if the proposed fact or operation interprets
-acceptance, rejection, success, terminal meaning, human judgment, cross-Job composition, or when to
-clean up, first place it in the consuming workflow or client. Core should retain only the reusable
-custody or lifecycle mechanism that remains after that policy is removed.
-
-This gives each layer one job:
-
-```text
-Client       chooses goals, drives Core directly, or composes Jobs through workflows
-Workflow     owns semantics, policy, evaluation, and Outcome meaning
-Dorf core    owns Message input custody, invariant Follow/Steer delivery, Job-wide run custody, recovery, Evidence, exact Sandbox file reads, and requested cleanup execution
-Adapters     translate Harnesses, Sandboxes, providers, and external authorities
-```
+Apply this test before adding a concept: if it interprets business success, acceptance, rejection,
+human judgment, cross-Job composition, or release timing, place it in the client. Keep only the
+execution custody or lifecycle mechanism that remains after that policy is removed.
 
 ## Vocabulary
 
 | Term | Meaning |
 | --- | --- |
-| **Job** | One retained execution context, its accepted configuration, owned resources, Messages, and lifecycle; workflow-driven Jobs also pin a workflow version |
-| **Workflow** | Ordinary versioned policy that composes deterministic operations and bounded agent work for one kind of Job |
-| **Sandbox** | An isolated mutable workstation owned for a Job's lifetime |
-| **Message** | Durable text and optional ordered input attachments from a human, agent, or workflow |
-| **AgentRun** | Core's internal durable recovery fact for one bounded delivery of a Message to an agent |
-| **Harness** | Software hosting an agent, such as Codex app-server |
-| **Thread** | Continuing conversation context owned by a Harness |
-| **Turn** | One request/response cycle in a Harness Thread |
-| **Role** | The bounded responsibility and capability envelope of an AgentRun |
-| **Action** | Code-owned work that changes external state and must be reconciled safely |
-| **Evidence** | Immutable observed proof tied to the fact it supports |
-| **Outcome** | A typed consumer-defined terminal result, when used, separate from resource cleanup |
+| **Job** | The current durable execution handle with admitted configuration, Messages, owned resources, and lifecycle |
+| **Sandbox** | An isolated mutable workstation with exact resource ownership |
+| **Message** | Durable text and optional ordered attachments with delivery intent and an immutable request identity |
+| **AgentRun** | The current internal delivery and native execution recovery record for one Message |
+| **Harness** | Native software hosting an agent, such as Codex app-server or Pi |
+| **Thread / Turn** | The Harness's continuing conversation and individual execution identities |
+| **Action** | A fixed compute or model-route lifecycle effect with stable identity and reconciliation |
 
-Coding adds workflow facts such as Revision, ReviewPlan, Proposal, and GitHub acceptance.
-Those facts and policies do not become Core vocabulary merely because one workflow needs them.
-Repository investigation is client policy over direct execution; Dorf has no built-in investigation
-workflow or conventional report-path contract.
+Session naming and revised Thread/Turn ownership remain [proposals](../implementation/session-product-proposals.md).
+Removing application policy does not itself change the current Job or AgentRun model.
 
-`Role` is a field, not an executing object. There is no first-class Worker until personality,
-capability, reputation, ownership, or memory must persist across Jobs. A standing "researcher" or
-"simplifier" may begin as client configuration that creates bounded Jobs; repeated use must earn a
-durable cross-Job identity.
+## Message semantics
 
-## High-level flow
-
-```mermaid
-flowchart TD
-    Intent["Bounded intent"] --> Admit["Validate and admit controlled execution"]
-    Admit --> Contract["Pin caller contract, capabilities, and budget"]
-    Contract --> Sandbox["Create isolated Sandbox when needed"]
-    Sandbox --> Work["Run deterministic operations and bounded agent work"]
-    Work --> Observe["Observe facts, workflow results, Evidence, and external effects"]
-    Observe --> Decide{"Workflow or client policy"}
-    Decide -->|"more work"| Work
-    Decide -->|"human judgment"| Attention["Request input through a client"]
-    Attention --> Work
-    Decide -->|"typed terminal"| Outcome["Record Outcome when used"]
-    Decide -->|"release resources"| RequestCleanup
-    Outcome -.->|"later explicit request"| RequestCleanup["Workflow or client requests cleanup"]
-    RequestCleanup --> Cleanup["Core reconciles cleanup"]
-    Cleanup --> Receipt["Return result, Evidence, and cleanup state"]
-```
-
-Each workflow or client keeps its policy small and explicit in ordinary code. Dorf is not a
-configurable DAG engine: Absurd owns generic task execution mechanics, while Dorf and its consumers
-retain the product facts needed to explain and recover the Job.
+While admission is open, Follow joins the FIFO, reuses the retained Thread, and starts a distinct
+Turn. Steer captures the exact active Turn and may overtake queued Follows. Explicit Steer never
+silently becomes Follow. Auto returns the same Message to the FIFO only after proof that its
+selected Turn ended without accepting it. Interruption targets an exact Turn. Clients choose
+input and intent; Dorf reconciles delivery and preserves these rules.
 
 ## Workflow examples
 
-### Coding to a verified proposal
+An external coding client creates a direct Job, prepares its checkout, and sends instructions.
+It retrieves files before cleanup and owns revision selection, isolated reviews, publication,
+credentials, and the meaning of merge or close events. Several independently controlled agents
+use separate Jobs composed by that client. Native Harness subagents remain native behavior.
 
-A client delegates a complete coding goal. The coding workflow creates an isolated clone and branch,
-lets an implementation agent commit, observes an exact Revision, selects only useful review, and
-publishes an exact-Revision pull request.
-GitHub merge, close, or explicit abandonment supplies the workflow outcome; the workflow then
-conditionally requests cleanup under its explicit policy, which remains separate from both the
-Outcome and Core's cleanup execution. Core never infers the request from completion.
-
-### Client-directed repository investigation
-
-A client creates a direct Job, prepares the repository through the existing workspace command
-boundary, and sends its investigation instructions. The client chooses any report path, retrieves
-needed files before cleanup, and decides whether to continue or release resources. Dorf owns
-Message delivery, conversation continuity, workspace access, and requested cleanup. It does not
-choose the repository, validate a research conclusion, or assign report meaning.
-
-## Deterministic and agentic boundary
-
-| Programmatic and deterministic | Agentic judgment |
-| --- | --- |
-| Validate input, identity, authority, capabilities, and budget | Understand an ambiguous goal and unfamiliar material |
-| Create, inspect, and destroy Sandboxes | Choose an approach within the accepted envelope |
-| Sequence durable input and reconcile retries | Implement, investigate, synthesize, or review |
-| Run declared commands, schemas, probes, and policy rules | Interpret evidence that has no complete mechanical rule |
-| Observe external authorities and read exact caller-selected Sandbox files | Explain uncertainty and material decisions |
-| Hash, pin, invalidate, and render Evidence | Decide how to respond to human or reviewer Messages |
-| Reconcile external effects and cleanup | Request human judgment when no safe default exists |
-
-This boundary is a product promise: agent context is not spent rediscovering facts that code can
-establish, and deterministic mechanisms do not pretend to answer questions requiring judgment.
-
-Agent prose remains a Message or workflow result, not Evidence. Evidence proves observed
-facts: a
-Harness completed a Turn, a command returned an exit status, a source was captured, a Revision was
-observed, or an external authority contains an exact object. Fluent output never becomes its own
-proof.
+An investigation client similarly supplies its source and instructions, chooses report paths,
+retrieves needed files, and decides whether to continue. Neither application needs Dorf to assign
+meaning to its output. Public primitives must earn any additional guarantees through concrete use.
 
 ## Desired experience
 
-- **One delegation:** the client supplies a complete bounded goal, not orchestration instructions.
-- **Low-friction isolation:** a verified profile should carry the agent setup that already works into
-  chosen isolated infrastructure instead of making the operator rebuild it in a new framework.
-- **Detached by default:** watching a terminal or token stream is optional.
-- **Calm recovery:** client, controller, executor, and agent process loss do not erase accepted input
-  or create competing work.
-- **Dangerous work, bounded:** secrets, network, filesystem access, external writes, spend, and
-  destructive operations are explicit capabilities.
-- **Situation first:** inspection shows the goal, observed history, current work or attention,
-  result, Evidence, and cleanup without exposing executor internals by default.
-- **Precise interruption:** humans are asked only for consequential decisions or genuine ambiguity
-  without a safe default.
-- **Honest terminal:** workflow outcome and cleanup remain separate until both have converged.
-- **Owner-controlled deployment:** local, on-premise, or deliberately chosen managed infrastructure
-  may host the system without making Dorf's cloud an authority.
+- Supported agent setups run on verified owner-selected infrastructure.
+- Accepted input and recoverable execution survive client and worker process loss.
+- Inspection reports execution, delivery uncertainty, resource state, and cleanup honestly.
+- Model and provider credentials remain behind their defined authority boundaries.
+- Release follows an explicit client request; idle does not mean that the goal is complete.
 
 ## Layers and ownership
 
 ```text
-L0  Existing tools       Harnesses, Sandbox providers, source hosts, APIs, provider SDKs
-L1  Deterministic edge   Actions, observations, capability enforcement, adapters
-L2  Durable custody      Job identity, inbox, AgentRuns, Evidence, recovery, requested cleanup
-L3  Core consumers        clients, external products, and native workflows
-L4  Triggers and views    translate intent and render the same Job facts
+Client        Goals, application setup, evaluation, composition, release timing
+Dorf          Input and execution custody, resources, supported recovery, cleanup
+Adapters      Native Harness protocols, compute access, and model authority
+Harness       Conversation history, agent execution, native tools and subagents
 ```
-
-Clients may own interaction and composition policy around Jobs, but they do not silently reinterpret
-a pinned workflow's internal facts or become authority for its semantics. Trigger breadth is not a
-Core feature. A CLI, GitHub event, schedule, Slack command, or personal assistant should eventually
-invoke the same application boundary.
-
-## Native workflows as Core dogfood
-
-The intended authoring unit is a versioned, inspectable workflow contract:
-
-- typed input and workflow-specific outcomes;
-- required Harness, Sandbox, connections, credentials, and capabilities;
-- deterministic operations and external effects;
-- bounded agent judgment points;
-- budgets and human-attention boundaries;
-- evaluation cases and honest terminal conditions; and
-- source, version, provenance, and upgrade policy.
-
-Agents and developers should author ordinary code with good tools, machine-readable
-contracts, fixtures, local evaluation, and diagnostics. An agent may propose workflow changes, but a
-new version must pass its checks and evaluations and receive any required capability approval before
-activation. Humans must be able to inspect, edit, fork, pin, and roll back what the agent built.
-
-Native workflows compose the intended Core contract in-process. External clients receive only the
-operations that real use has earned. The [Remote Control API](../control-api.md) owns the current
-external contract and deferred additions. Dynamic agent-authored recipes do not drive Core
-requirements. Dorf does not become a generic automation canvas, graph framework, agent builder, or
-model or tool Harness.
-
-Native workflows are examples and proofs of compositions available over Core, not compatibility
-constraints or privileged product contracts. They remain Core consumers even when compiled into the
-Dorf binary. They may own rich domain policy, terminal conditions, and cleanup requests, but that
-policy must remain outside the Core contract and must not create a privileged execution path.
 
 ## Non-goals until evidence demands them
 
-- a visual automation canvas or user-programmable DAG;
-- an AI-company org chart, autonomous hierarchy, or swarm runtime;
-- opaque prompt-generated workflows that humans cannot inspect or edit;
-- a plugin or workflow marketplace before versioning, capabilities, provenance, and evaluations;
-- speculative matrices of Harnesses, Sandboxes, models, languages, and providers;
-- one mutable Sandbox shared by unrelated simultaneous Jobs;
-- persistent Worker personalities or cross-Job memory without a real consumer;
-- a mandatory agent review ritual without an earned workflow need;
-- compatibility work without a real consumer, retained deployment, or published contract.
+Dorf is not a workflow engine, agent builder, transcript replacement, application evidence store,
+skills marketplace, or universal provider/harness compatibility layer. A profile is a verified
+combination, not a promise that every provider supports every Harness or recovery mechanism.
 
 ## Proof that the North Star is real
 
-Dorf's durable custody is real when a client can admit a bounded Job, disappear, and later recover
-its typed result and supporting Evidence without duplicate agent Turns, Sandboxes, external
-effects, or results. Before requesting cleanup, a client can also retrieve the exact bytes of a
-caller-selected regular file from the Job's Sandbox.
-Messages accepted during work remain ordered, ambiguous effects reconcile against their authority,
-and cleanup is retryable and honest.
-
-Dorf's portability claim is real when common consumer and workflow code has no Harness- or
-Sandbox-specific branches beyond profile selection and capability admission. D063 records the
-accepted proof rationale. Current support and completed proofs belong in their owning operational
-and historical documents. General workflow authoring follows portability proof; it does not lead it.
+A client can admit input, disappear, and later observe exact delivery and native execution without
+duplicate unsafe effects. Messages remain ordered; ambiguous acceptance is reconciled against its
+authority. Cleanup accounts for exact owned resources and scoped access. Provider replacement and
+checkpoint recovery expose only their verified continuity guarantees. Agent output never becomes
+its own success authority.

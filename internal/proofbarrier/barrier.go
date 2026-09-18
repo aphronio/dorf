@@ -32,9 +32,8 @@ func FromEnv() (core.FaultBarrier, error) {
 		return nil, nil
 	}
 	messagePoint := point == core.BarrierBeforeSubmit || point == core.BarrierAfterSubmitBeforeBind || point == core.BarrierHarnessActive
-	publicationPoint := point == core.BarrierPushAccepted || point == core.BarrierPullRequestAccepted
 	cleanupPoint := point == core.BarrierRouteRevoked || point == core.BarrierSandboxDeleted
-	if !messagePoint && !publicationPoint && !cleanupPoint {
+	if !messagePoint && !cleanupPoint {
 		return nil, fmt.Errorf("unsupported proof fault barrier %q", point)
 	}
 	if os.Getenv("DORF_PROOF_FAULT_BARRIER_ENABLE") != proofEnablePhrase {

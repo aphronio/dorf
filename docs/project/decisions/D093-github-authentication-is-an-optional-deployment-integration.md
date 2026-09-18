@@ -1,9 +1,9 @@
 # D093: GitHub authentication is an optional deployment integration
 
-- **Applicability:** current
+- **Applicability:** historical
 - **Areas:** github, deployment, workflows
 - **Read when:** Changing GitHub App setup, credential custody, or repository token minting.
-- **Decision history:** Accepted module boundary refinement — 2026-08-24
+- **Decision history:** Accepted module boundary refinement — 2026-08-24; application contracts retired by D144 — 2026-09-18.
 - **Decision:** Refine D015's coding-branch authentication framing into one optional GitHub
   integration composed beside Core. The deployment owns one default protected GitHub App credential
   bundle and uses it to mint short-lived repository-scoped tokens. `dorf setup` remains the shared

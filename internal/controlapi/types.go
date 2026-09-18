@@ -34,8 +34,6 @@ var (
 	ErrMessageImageUnsupported        = errors.New("control API image attachments are unsupported for this profile")
 	ErrInterruptUnavailable           = errors.New("control API interrupt cannot be accepted")
 	ErrRetryUnavailable               = errors.New("control API Job retry unavailable")
-	ErrAbandonUnavailable             = errors.New("control API Job abandon unavailable")
-	ErrEvidenceUnverified             = errors.New("control API Evidence could not be verified")
 	ErrIdempotencyConflict            = errors.New("idempotency key is bound to different input")
 )
 
@@ -94,22 +92,8 @@ type AdmitJobRequest struct {
 	Reasoning       string `json:"reasoning,omitempty"`
 }
 
-type AdmitCodingJobRequest struct {
-	KeepRunning     bool   `json:"keep_running,omitempty"`
-	ClientReference string `json:"client_reference,omitempty"`
-	Repository      string `json:"repository"`
-	Revision        string `json:"revision"`
-	BaseBranch      string `json:"base_branch"`
-	Branch          string `json:"branch,omitempty"`
-	Profile         string `json:"profile,omitempty"`
-	AIConnection    string `json:"ai_connection,omitempty"`
-	Model           string `json:"model,omitempty"`
-	Reasoning       string `json:"reasoning,omitempty"`
-}
-
 const (
 	JobKindDirect = "direct"
-	JobKindCoding = "coding"
 )
 
 type JobCreator struct {
@@ -164,34 +148,6 @@ type DirectJob struct {
 
 func (j DirectJob) Common() Job   { return j.Job }
 func (DirectJob) jobKind() string { return JobKindDirect }
-
-type CodingJob struct {
-	Job
-	WorkflowRevision string          `json:"workflow_revision"`
-	Repository       string          `json:"repository"`
-	StartingRevision string          `json:"starting_revision"`
-	Revision         string          `json:"revision"`
-	Branch           string          `json:"branch"`
-	BaseBranch       string          `json:"base_branch"`
-	Proposal         *CodingProposal `json:"proposal"`
-	Outcome          *CodingOutcome  `json:"outcome"`
-}
-
-func (j CodingJob) Common() Job   { return j.Job }
-func (CodingJob) jobKind() string { return JobKindCoding }
-
-type CodingProposal struct {
-	Number   int64  `json:"number"`
-	URL      string `json:"url"`
-	Revision string `json:"revision"`
-}
-
-type CodingOutcome struct {
-	Kind           string    `json:"kind"`
-	ObservedState  string    `json:"observed_state"`
-	MergeCommitOID string    `json:"merge_commit_oid,omitempty"`
-	ObservedAt     time.Time `json:"observed_at"`
-}
 
 type Admission struct {
 	Open bool `json:"open"`
@@ -289,24 +245,6 @@ type Retry struct {
 	State string `json:"state"`
 }
 
-type EvidenceList struct {
-	Evidence []Evidence `json:"evidence"`
-}
-
-// Evidence is verified metadata only. The retained bytes and internal
-// execution-owner identities are not part of this endpoint.
-type Evidence struct {
-	ID         string    `json:"id"`
-	SHA256     string    `json:"sha256"`
-	ByteSize   int64     `json:"byte_size"`
-	MediaType  string    `json:"media_type"`
-	Producer   string    `json:"producer"`
-	Kind       string    `json:"kind"`
-	Revision   string    `json:"revision,omitempty"`
-	StartedAt  time.Time `json:"started_at,omitempty,omitzero"`
-	FinishedAt time.Time `json:"finished_at,omitempty,omitzero"`
-}
-
 // Problem is RFC 9457 Problem Details extended with stable Dorf recovery
 // fields. Details is always encoded, including when it is empty.
 type Problem struct {
@@ -333,15 +271,12 @@ type Jobs interface {
 	ExecSandbox(context.Context, string, provider.Command) (provider.CommandResult, error)
 	List(context.Context, int, string) (JobList, error)
 	AdmitDirect(context.Context, string, string, AdmitJobRequest) (DirectJob, bool, error)
-	AdmitCoding(context.Context, string, string, AdmitCodingJobRequest) (CodingJob, bool, error)
 	Get(context.Context, string) (JobView, error)
 	SendMessage(context.Context, string, string, SendMessageRequest) (Message, bool, error)
 	GetMessage(context.Context, string, string) (Message, error)
 	InterruptMessage(context.Context, string, string) (Message, error)
 	Retry(context.Context, string, string) (Retry, bool, error)
-	Abandon(context.Context, string) (JobView, error)
 	ReadSandboxFile(context.Context, string, string) ([]byte, error)
 	WriteSandboxFile(context.Context, string, string, []byte, bool) error
-	Evidence(context.Context, string) ([]Evidence, error)
 	RequestCleanup(context.Context, string) (JobView, error)
 }

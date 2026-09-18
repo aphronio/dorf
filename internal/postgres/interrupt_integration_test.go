@@ -24,7 +24,7 @@ func TestDirectAutomaticMessagesAndExactInterruptReconciliation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial, err := codingDelivery(ctx, store, job.ID)
+	initial, err := nextDelivery(ctx, store, job.ID)
 	if err != nil || initial == nil {
 		t.Fatalf("initial=%v err=%v", initial, err)
 	}
@@ -122,7 +122,7 @@ func TestDirectAutomaticMessagesAndExactInterruptReconciliation(t *testing.T) {
 	if err := store.FailAgentRun(ctx, core.AgentRunID(steer.Message.ID), "steer target settled before delivery"); err != nil {
 		t.Fatal(err)
 	}
-	next, err := codingDelivery(ctx, store, job.ID)
+	next, err := nextDelivery(ctx, store, job.ID)
 	if err != nil || next == nil || next.Message.ID != idle.Message.ID || next.AgentRun.ThreadID != "assistant-thread" {
 		t.Fatalf("follow did not retain the conversation: %+v %v", next, err)
 	}
@@ -155,7 +155,7 @@ func TestDeliveriesDeduplicatesInterruptedRunsForOneTurn(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
 	job, threadID := prepareTransportIntegrationJob(t, store, "duplicate-interrupted-turn")
-	target, err := codingDelivery(ctx, store, job.ID)
+	target, err := nextDelivery(ctx, store, job.ID)
 	if err != nil || target == nil {
 		t.Fatalf("target delivery=%+v err=%v", target, err)
 	}
@@ -166,14 +166,14 @@ func TestDeliveriesDeduplicatesInterruptedRunsForOneTurn(t *testing.T) {
 	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, turnID, "running"); err != nil {
 		t.Fatal(err)
 	}
-	steer, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{
+	steer, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{
 		JobID: job.ID, SandboxID: target.AgentRun.SandboxID, FromKind: core.MessageFromHuman,
 		FromID: "shared-interrupted-steer", Input: "apply this correction", Intent: core.MessageSteer,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	steerDelivery, err := codingDelivery(ctx, store, job.ID)
+	steerDelivery, err := nextDelivery(ctx, store, job.ID)
 	if err != nil || steerDelivery == nil || steerDelivery.Message.ID != steer.Message.ID {
 		t.Fatalf("steer delivery=%+v err=%v", steerDelivery, err)
 	}

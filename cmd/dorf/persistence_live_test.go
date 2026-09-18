@@ -575,7 +575,7 @@ func (p *livePersistenceProof) installRuntime(ref core.SandboxProfileRef) {
 	}
 	externals := livePersistenceExternals{Externals: terminal.Externals{Sandbox: p.sandbox, Agent: p.agent, Ownership: owner}, fixture: p.fixture}
 	execution := core.NewExecutionService(p.store, externals, nil, absurdruntime.RequireClaim).
-		WithAgentExecution(composedAgentExecution{store: p.store, externals: externals.Externals})
+		WithAgentExecution(composedAgentExecution{externals: externals.Externals})
 	direct.Register(core.Application{Store: p.store, Tasks: p.tasks, SandboxRuntimes: livePersistenceRuntime{ref: ref, execution: execution}}, p.store,
 		livePersistenceRuntime{ref: ref, execution: execution})
 }

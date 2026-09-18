@@ -4,22 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	provider "github.com/aphronio/dorf/internal/sandbox"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/clientconfig"
-	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
@@ -202,7 +200,6 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	t.Setenv("HOME", root)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
 	// Reaching host configuration would fail, so success proves client-only dispatch happens first.
-	t.Setenv("DORF_GITHUB_API_URL", "deliberately-invalid-host-configuration")
 	enrollmentFile := filepath.Join(root, "enrollment")
 	goalFile := filepath.Join(root, "goal")
 	messageFile := filepath.Join(root, "message")
@@ -226,9 +223,7 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 		{"job", "message", "--input-file", messageFile, jobs.job.ID},
 		{"job", "message", "inspect", jobs.job.ID},
 		{"job", "retry", jobs.job.ID},
-		{"job", "evidence", jobs.job.ID},
 		{"sandbox", "file", "get", "sandbox-1", "REPORT.md", "--output", download},
-		{"job", "abandon", jobs.job.ID},
 		{"job", "cleanup", jobs.job.ID},
 	}
 	var output strings.Builder
@@ -290,7 +285,7 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 		t.Fatalf("downloaded exact Sandbox file=%q err=%v", contents, err)
 	}
 	if !strings.Contains(output.String(), "Job job-1 accepted") || !strings.Contains(output.String(), "Message message-2 accepted") ||
-		!strings.Contains(output.String(), "Retry scheduled") || !strings.Contains(output.String(), "Job job-1 abandoned") || !strings.Contains(output.String(), "Cleanup requested for Job job-1") {
+		!strings.Contains(output.String(), "Retry scheduled") || !strings.Contains(output.String(), "Cleanup requested for Job job-1") {
 		t.Fatalf("remote CLI journey output omitted its Job result:\n%s", output.String())
 	}
 	for _, secret := range []string{code, credential, requestKey, messageAttempts[0], retryAttempts[0]} {
@@ -328,62 +323,6 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	rotated, _, found, err := loadClientConfig()
 	if err != nil || !found || rotated.Credential == original.Credential {
 		t.Fatalf("revoked Client credential was not rotated: found=%t err=%v", found, err)
-	}
-}
-
-func TestRemoteWorkflowCLIUsesExplicitTypedRoutes(t *testing.T) {
-	goal := "  exact coding goal\n"
-	goalFile := filepath.Join(t.TempDir(), "goal")
-	if err := os.WriteFile(goalFile, []byte(goal), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var codingRequest controlapi.AdmitCodingJobRequest
-	var paths, keys []string
-	var messages []string
-	client, err := controlclient.New("https://dorf.example.test", "credential", roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		paths = append(paths, request.URL.Path)
-		keys = append(keys, request.Header.Get("Idempotency-Key"))
-		response := httptest.NewRecorder()
-		response.Header().Set("Content-Type", "application/json")
-		response.WriteHeader(http.StatusCreated)
-		switch request.URL.Path {
-		case "/v1/workflows/coding/jobs":
-			if err := json.NewDecoder(request.Body).Decode(&codingRequest); err != nil {
-				return nil, err
-			}
-			_ = json.NewEncoder(response).Encode(controlapi.CodingJob{
-				Job:              controlapi.Job{ID: "coding-job", Kind: controlapi.JobKindCoding},
-				WorkflowRevision: "coding/v1", Repository: codingRequest.Repository, StartingRevision: codingRequest.Revision,
-				Revision: codingRequest.Revision, Branch: "dorf/coding-job", BaseBranch: codingRequest.BaseBranch,
-			})
-		case "/v1/jobs/coding-job/messages":
-			var message controlapi.SendMessageRequest
-			if err := json.NewDecoder(request.Body).Decode(&message); err != nil {
-				return nil, err
-			}
-			messages = append(messages, message.Text)
-			_ = json.NewEncoder(response).Encode(controlapi.Message{ID: "message-1", JobID: strings.Split(request.URL.Path, "/")[3], Sequence: 1, Intent: message.Intent})
-		default:
-			return nil, errors.New("unexpected workflow route " + request.URL.Path)
-		}
-		return response.Result(), nil
-	}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	revision := strings.Repeat("a", 40)
-	var codingOutput strings.Builder
-	if err := remoteWorkflowCommand(context.Background(), client, clientconfig.Config{DeploymentURL: "https://dorf.example.test"},
-		[]string{"run", "coding", "--key", "coding-key", "--input-file", goalFile, "--repo", "https://github.com/aphronio/dorf.git", "--revision", revision, "--base", "main", "--ai-connection", "coding-connection"},
-		&codingOutput, &strings.Builder{}); err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(messages, []string{goal}) || codingRequest.AIConnection != "coding-connection" || !slices.Equal(paths, []string{"/v1/workflows/coding/jobs", "/v1/jobs/coding-job/messages"}) ||
-		codingRequest.Model != "" || !slices.Equal(keys, []string{"coding-key", "coding-key"}) {
-		t.Fatalf("coding=%#v paths=%q keys=%q", codingRequest, paths, keys)
-	}
-	if !strings.Contains(codingOutput.String(), "repository: https://github.com/aphronio/dorf.git") {
-		t.Fatalf("coding output=%q", codingOutput.String())
 	}
 }
 
@@ -443,9 +382,6 @@ func TestControlJobClassificationIsClosed(t *testing.T) {
 		ok       bool
 	}{
 		{want: controlDirectJob, ok: true},
-		{workflow: coding.Workflow, revision: coding.WorkflowRevision, want: controlCodingJob, ok: true},
-		{workflow: coding.Workflow},
-		{workflow: coding.Workflow, revision: "unrecognized"},
 		{workflow: "unrecognized", revision: "1"},
 	}
 	for _, test := range tests {
@@ -624,10 +560,6 @@ func (j *remoteCLIJobs) AdmitDirect(_ context.Context, _ string, key string, inp
 	return j.job, true, nil
 }
 
-func (j *remoteCLIJobs) AdmitCoding(context.Context, string, string, controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, bool, error) {
-	return controlapi.CodingJob{}, false, controlapi.ErrInvalidInput
-}
-
 func (j *remoteCLIJobs) Get(_ context.Context, id string) (controlapi.JobView, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -645,10 +577,6 @@ func (j *remoteCLIJobs) RequestCleanup(_ context.Context, id string) (controlapi
 	}
 	j.job.Cleanup.State = "requested"
 	return j.job, nil
-}
-
-func (j *remoteCLIJobs) Abandon(ctx context.Context, id string) (controlapi.JobView, error) {
-	return j.Get(ctx, id)
 }
 
 func (j *remoteCLIJobs) SendMessage(_ context.Context, jobID, _ string, input controlapi.SendMessageRequest) (controlapi.Message, bool, error) {
@@ -688,13 +616,6 @@ func (j *remoteCLIJobs) ReadSandboxFile(_ context.Context, sandboxID, path strin
 	return []byte("exact report\x00\n"), nil
 }
 
-func (j *remoteCLIJobs) Evidence(_ context.Context, jobID string) ([]controlapi.Evidence, error) {
-	if jobID != j.job.ID {
-		return nil, controlapi.ErrJobNotFound
-	}
-	return []controlapi.Evidence{}, nil
-}
-
 func (j *remoteCLIJobs) WriteSandboxFile(context.Context, string, string, []byte, bool) error {
 	return nil
 }
@@ -724,7 +645,7 @@ func TestRemoteJobHumanExecutionLabels(t *testing.T) {
 			job := controlapi.Job{Execution: controlapi.State{State: test.state}, Attention: test.attention}
 			var view controlapi.JobView = controlapi.DirectJob{Job: job}
 			if test.state == "complete" {
-				view = controlapi.CodingJob{Job: job}
+				view = controlapi.DirectJob{Job: job}
 			}
 			renderRemoteJob(&output, view)
 			if !strings.Contains(output.String(), "  execution: "+test.want+"\n") {

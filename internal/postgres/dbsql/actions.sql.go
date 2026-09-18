@@ -11,33 +11,6 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 )
 
-const getAction = `-- name: GetAction :one
-select id,job_id,kind,state,scope_key,created_at,settled_at
-from dorf.actions
-where id=$1 and job_id=$2 and kind=$3
-`
-
-type GetActionParams struct {
-	ID    string
-	JobID string
-	Kind  core.ActionKind
-}
-
-func (q *Queries) GetAction(ctx context.Context, arg GetActionParams) (DorfAction, error) {
-	row := q.db.QueryRowContext(ctx, getAction, arg.ID, arg.JobID, arg.Kind)
-	var i DorfAction
-	err := row.Scan(
-		&i.ID,
-		&i.JobID,
-		&i.Kind,
-		&i.State,
-		&i.ScopeKey,
-		&i.CreatedAt,
-		&i.SettledAt,
-	)
-	return i, err
-}
-
 const getActionByIDForUpdate = `-- name: GetActionByIDForUpdate :one
 select id,job_id,kind,state,scope_key,created_at,settled_at
 from dorf.actions
@@ -47,34 +20,6 @@ for update
 
 func (q *Queries) GetActionByIDForUpdate(ctx context.Context, id string) (DorfAction, error) {
 	row := q.db.QueryRowContext(ctx, getActionByIDForUpdate, id)
-	var i DorfAction
-	err := row.Scan(
-		&i.ID,
-		&i.JobID,
-		&i.Kind,
-		&i.State,
-		&i.ScopeKey,
-		&i.CreatedAt,
-		&i.SettledAt,
-	)
-	return i, err
-}
-
-const getActionForUpdate = `-- name: GetActionForUpdate :one
-select id,job_id,kind,state,scope_key,created_at,settled_at
-from dorf.actions
-where id=$1 and job_id=$2 and kind=$3
-for update
-`
-
-type GetActionForUpdateParams struct {
-	ID    string
-	JobID string
-	Kind  core.ActionKind
-}
-
-func (q *Queries) GetActionForUpdate(ctx context.Context, arg GetActionForUpdateParams) (DorfAction, error) {
-	row := q.db.QueryRowContext(ctx, getActionForUpdate, arg.ID, arg.JobID, arg.Kind)
 	var i DorfAction
 	err := row.Scan(
 		&i.ID,
@@ -113,23 +58,6 @@ func (q *Queries) GetScopedAction(ctx context.Context, arg GetScopedActionParams
 		&i.SettledAt,
 	)
 	return i, err
-}
-
-const insertActionIfAbsent = `-- name: InsertActionIfAbsent :exec
-insert into dorf.actions(id,job_id,kind,state)
-values($1,$2,$3,'unsettled')
-on conflict do nothing
-`
-
-type InsertActionIfAbsentParams struct {
-	ID    string
-	JobID string
-	Kind  core.ActionKind
-}
-
-func (q *Queries) InsertActionIfAbsent(ctx context.Context, arg InsertActionIfAbsentParams) error {
-	_, err := q.db.ExecContext(ctx, insertActionIfAbsent, arg.ID, arg.JobID, arg.Kind)
-	return err
 }
 
 const insertScopedAction = `-- name: InsertScopedAction :execrows

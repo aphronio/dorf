@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/deployment"
@@ -153,13 +152,9 @@ func TestAdmittedJobRuntimeIgnoresLaterVerificationReceiptState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := coding.Admission{
-		JobAdmission: core.JobAdmission{
-			AdmissionKey:   "runtime-reverify-" + name,
-			SandboxProfile: name, ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
-		},
-		Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40), Branch: "dorf/runtime-reverify",
-		GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield",
+	input := core.JobAdmission{
+		AdmissionKey:   "runtime-reverify-" + name,
+		SandboxProfile: name, ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
 	}
 	queue := fmt.Sprintf("dorf_runtime_profile_%d", time.Now().UnixNano())
 	tasks, err := absurd.New(absurd.Options{DB: db, QueueName: queue})
@@ -170,7 +165,7 @@ func TestAdmittedJobRuntimeIgnoresLaterVerificationReceiptState(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = tasks.DropQueue(context.Background(), queue); _ = tasks.Close() })
-	job, created, err := store.AdmitCoding(ctx, input, queue)
+	job, created, err := store.AdmitDirect(ctx, input, queue)
 	if err != nil || !created {
 		t.Fatalf("admit Job=%#v created=%v err=%v", job, created, err)
 	}
@@ -187,10 +182,6 @@ func TestAdmittedJobRuntimeIgnoresLaterVerificationReceiptState(t *testing.T) {
 		sandbox, err := resolver.ResolveSandbox(ctx, job.ProfileRef())
 		if err != nil || sandbox.SandboxProfile != job.ProfileRef() || sandbox.Execution == nil {
 			t.Fatalf("%s Sandbox runtime=%#v err=%v", state, sandbox, err)
-		}
-		workflow, err := resolver.ResolveCoding(ctx, job.ProfileRef())
-		if err != nil || workflow.SandboxProfile != job.ProfileRef() || workflow.Agent == nil || workflow.Coding == nil {
-			t.Fatalf("%s coding runtime=%#v err=%v", state, workflow, err)
 		}
 	}
 	assertRuntime("pending verification")
@@ -234,7 +225,7 @@ func TestAdmittedJobRuntimeIgnoresLaterVerificationReceiptState(t *testing.T) {
 		t.Fatalf("direct=%#v err=%v", direct, err)
 	}
 	input.AdmissionKey += "-new"
-	newJob, created, err := store.AdmitCoding(ctx, input, queue)
+	newJob, created, err := store.AdmitDirect(ctx, input, queue)
 	if err != nil || !created || newJob.SandboxProfileRevision != next.DefinitionHash || newJob.ProfileRef() == job.ProfileRef() {
 		t.Fatalf("new admission=%#v created=%v err=%v", newJob, created, err)
 	}

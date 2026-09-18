@@ -1,9 +1,9 @@
 # D061: One fact-derived coding flow replaces the durable program counter
 
-- **Applicability:** current
+- **Applicability:** historical
 - **Areas:** workflows, core, persistence
 - **Read when:** Changing coding-flow sequencing, workflow projections, or durable progress representation.
-- **Decision history:** Accepted workflow-authority and inspection decision — 2026-08-10
+- **Decision history:** Accepted workflow-authority and inspection decision — 2026-08-10; application contracts retired by D144 — 2026-09-18.
 - **Decision:** Dorf does not persist `workflow_phase`, `next_work`, or another derived workflow
   status. It loads one concrete coding `Snapshot` and derives a disposable `Projection` containing
   readiness and the pure `CurrentWork` decision. Execution, human history, and structured inspection
