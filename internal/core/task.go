@@ -11,14 +11,8 @@ import (
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
-// MessageWakeV1 is persisted by Absurd under one immutable Session-local FIFO event.
-type MessageWakeV1 struct {
-	SessionID string `json:"job_id"`
-	Sequence  int64  `json:"sequence"`
-}
-
 // SessionExecutionWakeV1 is a disposable hint that asks a Session's current task to
-// reload authoritative workflow and Harness state.
+// reload authoritative Session and Harness state.
 type SessionExecutionWakeV1 struct {
 	SessionID string `json:"job_id"`
 	Revision  int64  `json:"revision"`
@@ -47,10 +41,6 @@ type nativeTerminalWakeStore interface {
 	SignalNativeTerminalWake(context.Context, string, NativeTerminalWakeTarget) (bool, error)
 }
 
-func MessageWakeEvent(sessionID string, sequence int64) string {
-	return fmt.Sprintf("dorf.job-message:%s:%020d", sessionID, sequence)
-}
-
 func SessionExecutionWakeEvent(sessionID string, revision int64) string {
 	return fmt.Sprintf("dorf.job-execution:v1:%s:%020d", sessionID, revision)
 }
@@ -70,11 +60,8 @@ func (a Application) ScheduleSessionTask(ctx context.Context, session Session, t
 // EmitMessageWake emits a disposable wake hint for one durably accepted FIFO
 // Message. Re-emission is safe because the event identity is deterministic.
 func (a Application) EmitMessageWake(ctx context.Context, message Message) error {
-	if err := a.Tasks.EmitEvent(ctx, a.Tasks.QueueName(), MessageWakeEvent(message.SessionID, message.Sequence), MessageWakeV1{SessionID: message.SessionID, Sequence: message.Sequence}); err != nil {
-		return fmt.Errorf("message %s sequence %d was accepted, but its wake hint failed; retry the same send key and complete Message request: %w", message.ID, message.Sequence, err)
-	}
 	if _, err := a.signalSessionExecutionWake(ctx, message.SessionID, "message:"+message.ID); err != nil {
-		return fmt.Errorf("message %s sequence %d was accepted and its FIFO wake emitted, but its execution wake hint failed; retry the same send key and complete Message request: %w", message.ID, message.Sequence, err)
+		return fmt.Errorf("message %s sequence %d was accepted, but its execution wake hint failed; retry the same send key and complete Message request: %w", message.ID, message.Sequence, err)
 	}
 	return nil
 }
@@ -130,28 +117,6 @@ func resolveSessionExecutionWake(sessionID string, revision int64, wake SessionE
 	}
 	if wake.SessionID != sessionID || wake.Revision != revision || wake.CauseKey == "" {
 		return fmt.Errorf("execution wake payload conflicts with Session %s revision %d", sessionID, revision)
-	}
-	return nil
-}
-
-// AwaitMessageWake waits for one Session's exact next FIFO Message hint. A timeout
-// asks the consumer to reload durable facts; only an event with the expected
-// Session and sequence is accepted as a wake.
-func (a Application) AwaitMessageWake(ctx context.Context, sessionID string, sequence int64, stepName string, timeout time.Duration) error {
-	wake, err := absurd.AwaitEvent[MessageWakeV1](ctx, MessageWakeEvent(sessionID, sequence), absurd.AwaitEventOptions{StepName: stepName, Timeout: timeout})
-	return resolveMessageWake(sessionID, sequence, wake, err)
-}
-
-func resolveMessageWake(sessionID string, sequence int64, wake MessageWakeV1, err error) error {
-	if err != nil {
-		var timeout *absurd.TimeoutError
-		if errors.As(err, &timeout) {
-			return nil
-		}
-		return err
-	}
-	if wake.SessionID != sessionID || wake.Sequence != sequence {
-		return fmt.Errorf("message wake payload conflicts with Session %s sequence %d", sessionID, sequence)
 	}
 	return nil
 }

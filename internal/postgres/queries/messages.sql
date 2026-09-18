@@ -69,25 +69,6 @@ left join dorf.agent_runs ar on ar.message_id=m.id
 where m.session_id=sqlc.arg(session_id)
 order by m.sequence;
 
--- name: NextWakeSequence :one
-select coalesce(
-    (
-        select min(m.sequence)
-        from dorf.session_messages m
-        join dorf.agent_runs ar on ar.message_id=m.id
-        where m.session_id=sqlc.arg(session_id)
-          and ar.state='pending' and ar.turn_id is null
-          and not exists (
-              select 1
-              from dorf.session_messages earlier
-              join dorf.agent_runs earlier_run on earlier_run.message_id=earlier.id
-              where earlier.session_id=m.session_id and earlier.sequence<m.sequence
-                and earlier_run.state not in ('completed','failed','interrupted')
-          )
-    ),
-    (select coalesce(max(sequence),0)+1 from dorf.session_messages where session_id=sqlc.arg(session_id))
-)::bigint;
-
 -- name: AgentMessageNeedsSkillRefresh :one
 with current_message as (
     select m.id,m.session_id,m.sequence,m.delivery_intent,ar.sandbox_id,ar.role

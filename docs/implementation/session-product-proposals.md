@@ -46,6 +46,7 @@ Completed: separate review contracts -> remove investigation -> remove coding
 Completed next: Job Thread ownership (slice 5, before setup/activation)
 
 Completed: Session naming (slice 5a)
+Current: remove audited leftovers before new feature slices
 Remaining candidates: setup/activation, delivery/Turn facts
 
 Each arrow is a proposed dependency, not approval to start the next slice.
@@ -185,6 +186,35 @@ a second transcript store, and additional configuration lifecycle states need th
 Consumer contract alignment and naming are complete. Discuss workspace access next only against
 a concrete client diff. Setup/activation remains proposed; the existing create → prepare → send
 sequence must be evaluated before adding another barrier or configuration revision model.
+
+## Post-Session cleanup audit
+
+Status: cleanup implementation agreed. Remove the audited leftovers in small commits before
+resuming feature slices. Preserve active Session custody; no deployment reset or migration is
+authorized by this cleanup.
+
+| Proposed cleanup | Evidence in the current implementation | Boundary to preserve |
+| --- | --- | --- |
+| Remove the unused FIFO wake channel | `EmitMessageWake` emits both Message and execution wakes, but `AwaitMessageWake` has no callers. The direct loop waits only on `AwaitSessionExecutionWake`. `NextWakeSequence` also has no callers. | Retain the execution wake, durable Message order, timeout reconciliation, and admission replay behavior. Delete tests of the retired wake channel with its code. |
+| Remove unused application helper paths | `SandboxHandle.ReadFile` and `EnsureNamedSandbox` have only test callers. The public file API uses `controlreader.Service`. The public Core `ScheduleSessionTask` wrapper also has only test callers. | Retain file ownership/cleanup proofs at the live API boundary, default provisioning, atomic admission scheduling, and cleanup task handoff. Resource-generation history is still required. |
+| Remove application selectors from current storage and execution | Session workflow name/revision and AgentRun role/capability/input revision still cross admission, SQL, projection, and validation. The sole production envelope fixes the role to direct and leaves capability/revision empty. | Keep exact Session/Sandbox ownership, native delivery attribution, and interruption. Simplify the envelope and prompt resolver as their application branches disappear; do not split Turn storage in this cleanup. |
+| Delete obsolete fixtures and contract residue | Admission tests still include a foreign coding workflow; baseline migration tests preserve retired coding/investigation records. OpenAPI `GitCommitOID` is unreachable from all paths. | Keep fresh initialization, idempotent migration, direct input/resource preservation, and conflicting native-binding proofs. Published migration history does not require preserving retired application fixtures. |
+
+Progress: the unused FIFO wake channel and its query/tests are removed. Message admission signals
+only the execution wake already consumed by the Session loop.
+
+`WorkflowAttention` is a misleading name for still-used execution, provider, upgrade, and recovery
+attention. Rename that responsibility rather than delete it. Similarly, fault barriers still support
+real failure proofs even where their method names contain Workflow.
+
+Opaque IDs, provider ownership labels, queued task payloads, and task/event names retain older Job
+strings. They do not implement a second public API. Distinguish those existing authority references
+from unnecessary compatibility branches; any change to retained identities needs an explicit
+transition for active resources and work. Do not retain unused fields solely for nonexistent
+application history.
+
+The controller, effect fences, retry receipts, resource generations, and ambiguous native acceptance
+remain active responsibilities. Their replacement is not justified by a naming or dead-code cleanup.
 
 ## Deferred proposals
 

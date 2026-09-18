@@ -1269,10 +1269,6 @@ func (s Store) Actions(ctx context.Context, sessionID string) ([]core.Action, er
 	return actions, nil
 }
 
-func (s Store) NextWakeSequence(ctx context.Context, sessionID string) (int64, error) {
-	return dbsql.New(s.DB).NextWakeSequence(ctx, sessionID)
-}
-
 func expectOne(result sql.Result, err error) error {
 	if err != nil {
 		return err

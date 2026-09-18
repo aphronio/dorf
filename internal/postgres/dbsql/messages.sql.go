@@ -367,30 +367,3 @@ func (q *Queries) NextMessageSequence(ctx context.Context, sessionID string) (in
 	err := row.Scan(&column_1)
 	return column_1, err
 }
-
-const nextWakeSequence = `-- name: NextWakeSequence :one
-select coalesce(
-    (
-        select min(m.sequence)
-        from dorf.session_messages m
-        join dorf.agent_runs ar on ar.message_id=m.id
-        where m.session_id=$1
-          and ar.state='pending' and ar.turn_id is null
-          and not exists (
-              select 1
-              from dorf.session_messages earlier
-              join dorf.agent_runs earlier_run on earlier_run.message_id=earlier.id
-              where earlier.session_id=m.session_id and earlier.sequence<m.sequence
-                and earlier_run.state not in ('completed','failed','interrupted')
-          )
-    ),
-    (select coalesce(max(sequence),0)+1 from dorf.session_messages where session_id=$1)
-)::bigint
-`
-
-func (q *Queries) NextWakeSequence(ctx context.Context, sessionID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, nextWakeSequence, sessionID)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
-}
