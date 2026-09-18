@@ -32,8 +32,8 @@ type Store interface {
 	RecordSandboxResourceDeleted(context.Context, core.Sandbox) error
 	RecordUpgradeCheckpointDeleted(context.Context, string) error
 	FinishSandboxUpgrade(context.Context, string, Receipt) error
-	SetWorkflowAttention(context.Context, string, string, string) error
-	ClearWorkflowAttention(context.Context, string, string) error
+	SetExecutionAttention(context.Context, string, string, string) error
+	ClearExecutionAttention(context.Context, string, string) error
 }
 
 type Service struct {
@@ -293,12 +293,12 @@ func (s Service) perform(ctx context.Context, r Receipt, step string, fn func() 
 		// Do not put native output, route credentials, or unbounded provider errors
 		// into diagnostics. The operation and exact custody provide correlation.
 		detail := "workspace upgrade " + step + " failed"
-		if saveErr := s.Store.SetWorkflowAttention(ctx, r.SessionID, source, detail); saveErr != nil {
+		if saveErr := s.Store.SetExecutionAttention(ctx, r.SessionID, source, detail); saveErr != nil {
 			return saveErr
 		}
 		return fmt.Errorf("%s; delivery remains held", detail)
 	}
-	return s.Store.ClearWorkflowAttention(ctx, r.SessionID, source)
+	return s.Store.ClearExecutionAttention(ctx, r.SessionID, source)
 }
 func (s Service) event(r Receipt, name string, failed bool, duration time.Duration) {
 	if s.Emit == nil {

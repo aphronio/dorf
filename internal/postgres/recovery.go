@@ -27,7 +27,7 @@ func (s Store) RequestCheckpointRecovery(ctx context.Context, queue string, requ
 		if result, err = replayCheckpointRecovery(ctx, q, request); err != nil || result.ID != "" {
 			return err
 		}
-		if !session.AdmissionOpen || session.CleanupState != core.CleanupPending || session.WorkflowName != "" || session.WorkflowRevision != "" {
+		if !session.AdmissionOpen || session.CleanupState != core.CleanupPending {
 			return fmt.Errorf("checkpoint recovery requires an open direct Session")
 		}
 		owned, err := authorizeCheckpointRecoveryRequest(ctx, q, request)

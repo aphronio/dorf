@@ -31,9 +31,6 @@ func LoadSnapshot(ctx context.Context, store InspectionStore, session core.Sessi
 	if session.ID == "" {
 		return Snapshot{}, fmt.Errorf("direct Session identity is empty")
 	}
-	if session.Workflow != "" || session.WorkflowRevision != "" {
-		return Snapshot{}, fmt.Errorf("Session %s is not direct", session.ID)
-	}
 
 	var err error
 	snapshot.Sandboxes, err = store.Sandboxes(ctx, session.ID)
@@ -70,7 +67,7 @@ func LoadSnapshot(ctx context.Context, store InspectionStore, session core.Sessi
 	for _, delivery := range snapshot.Deliveries {
 		message, run := delivery.Message, delivery.AgentRun
 		if message.SessionID != session.ID || run.SessionID != session.ID || run.MessageID != message.ID ||
-			run.Role != DirectAgentRole || run.SandboxID != mainID {
+			run.SandboxID != mainID {
 			return Snapshot{}, fmt.Errorf("Message %s does not have an exact direct delivery for Session %s", message.ID, session.ID)
 		}
 	}
@@ -97,8 +94,8 @@ type Projection struct {
 
 // Project derives current direct execution without reading or mutating state.
 func (s Snapshot) Project() Projection {
-	if s.Session.WorkflowAttention != "" {
-		return Projection{State: ExecutionAttention, Detail: s.Session.WorkflowAttention}
+	if s.Session.ExecutionAttention != "" {
+		return Projection{State: ExecutionAttention, Detail: s.Session.ExecutionAttention}
 	}
 	if !core.HasSucceededAction(s.Actions, core.ActionSandboxCreate, s.MainSandbox.ID) {
 		return Projection{State: ExecutionProvisioningSandbox}

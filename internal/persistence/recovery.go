@@ -85,8 +85,8 @@ type RecoveryStore interface {
 	RecordSandboxResourceDeleted(context.Context, core.Sandbox) error
 	AbandonCheckpointRecoveryForCleanup(context.Context, RecoveryReceipt) error
 	FinishCheckpointRecovery(context.Context, string, RecoveryReceipt) error
-	SetWorkflowAttention(context.Context, string, string, string) error
-	ClearWorkflowAttention(context.Context, string, string) error
+	SetExecutionAttention(context.Context, string, string, string) error
+	ClearExecutionAttention(context.Context, string, string) error
 }
 
 type RecoveryService struct {
@@ -131,7 +131,7 @@ func (s RecoveryService) Reconcile(ctx context.Context, sessionID string) (bool,
 				return s.attention(ctx, receipt, err)
 			}
 			progressed = true
-			return s.Store.ClearWorkflowAttention(ctx, sessionID, "recovery:"+receipt.ID)
+			return s.Store.ClearExecutionAttention(ctx, sessionID, "recovery:"+receipt.ID)
 		}
 		return nil
 	})
@@ -217,7 +217,7 @@ func (s RecoveryService) attention(ctx context.Context, receipt RecoveryReceipt,
 		return err
 	}
 	detail := "checkpoint recovery requires operator attention; delivery remains held"
-	if err := s.Store.SetWorkflowAttention(ctx, receipt.SessionID, "recovery:"+receipt.ID, detail); err != nil {
+	if err := s.Store.SetExecutionAttention(ctx, receipt.SessionID, "recovery:"+receipt.ID, detail); err != nil {
 		return err
 	}
 	return fmt.Errorf("%s: %w", detail, cause)

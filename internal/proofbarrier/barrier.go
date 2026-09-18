@@ -61,7 +61,7 @@ func FromEnv() (core.FaultBarrier, error) {
 	return Barrier{Point: point, Sequence: sequence, SessionID: sessionID, Dir: dir, Wait: 8 * time.Second, Lease: 10 * time.Second}, nil
 }
 
-func (b Barrier) ReachWorkflow(ctx context.Context, point, sessionID, identity string) error {
+func (b Barrier) ReachOperation(ctx context.Context, point, sessionID, identity string) error {
 	if point != b.Point || sessionID != b.SessionID {
 		return nil
 	}

@@ -205,17 +205,7 @@ func (a composedMessageAdmissions) AdmitAgentMessage(ctx context.Context, input 
 			return core.MessageAdmissionResult{}, controlapi.ErrInvalidInput
 		}
 	}
-	var admitted core.MessageAdmissionResult
-	switch {
-	case session.Workflow == "" && session.WorkflowRevision == "":
-		admitted, err = a.store.AdmitDirectMessage(ctx, input)
-	default:
-		return core.MessageAdmissionResult{}, fmt.Errorf("Session contract %s revision %s does not accept Messages in this deployment", session.Workflow, session.WorkflowRevision)
-	}
-	if err != nil {
-		return admitted, err
-	}
-	return admitted, nil
+	return a.store.AdmitDirectMessage(ctx, input)
 }
 
 func absurdClient(db *sql.DB) (*absurd.Client, error) {

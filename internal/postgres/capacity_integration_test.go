@@ -95,9 +95,6 @@ func (capacityExternals) AgentSteer(context.Context, core.Session, core.Delivery
 
 type capacityHarness struct{ tracker *capacityTracker }
 
-func (capacityHarness) ResolveAgentPrompt(_ context.Context, execution core.AgentMessageExecution) (string, error) {
-	return execution.Message.Input, nil
-}
 func (h capacityHarness) ResolveAgentRunOperation(_ context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
 	return capacityOperation{tracker: h.tracker, execution: execution}, nil
 }

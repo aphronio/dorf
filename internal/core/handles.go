@@ -93,7 +93,7 @@ func (h SessionHandle) DefaultSandbox(ctx context.Context) (SandboxHandle, error
 }
 
 // Sandbox returns one already-owned exact Sandbox without exposing provider
-// custody. It is the read-only bridge from a workflow-selected Message fact to
+// custody. It is the read-only bridge from the admitted Session to
 // the Sandbox-bound Agent convenience handle.
 func (h SessionHandle) Sandbox(ctx context.Context, id string) (SandboxHandle, error) {
 	if h.application == nil || h.application.Store == nil || h.id == "" || strings.TrimSpace(id) == "" {

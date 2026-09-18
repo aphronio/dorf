@@ -28,7 +28,7 @@ func (s Store) HoldSandboxDelivery(ctx context.Context, queue, sessionID, sandbo
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		if !session.AdmissionOpen || session.CleanupState != core.CleanupPending || session.WorkflowName != "" || session.WorkflowRevision != "" {
+		if !session.AdmissionOpen || session.CleanupState != core.CleanupPending {
 			return fmt.Errorf("delivery hold requires an open direct Session")
 		}
 		if err := q.InsertSandboxDeliveryHold(ctx, dbsql.InsertSandboxDeliveryHoldParams{ID: operationID, SandboxID: sandboxID}); err != nil {

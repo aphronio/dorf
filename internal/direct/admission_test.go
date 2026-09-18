@@ -116,23 +116,19 @@ func TestAdmissionServiceReplaySkipsVolatileAuthority(t *testing.T) {
 }
 
 func TestAdmissionServiceRejectsConflictingReplay(t *testing.T) {
-	request := AdmissionRequest{AdmissionKey: "replay", AgentsMD: "goal", Model: "model"}
 	session := core.Session{
 		ID: "job-replay", AdmissionKey: "replay", AgentsMD: "goal", SandboxProfile: "cloud",
 		ProviderConnection: "primary", Model: "model", ReasoningEffort: "high", AdmissionOpen: true,
 	}
 	tests := map[string]struct {
-		request  AdmissionRequest
-		workflow core.WorkflowName
+		request AdmissionRequest
 	}{
 		"changed input":    {request: AdmissionRequest{AdmissionKey: "replay", AgentsMD: "different", Model: "model"}},
 		"malformed replay": {request: AdmissionRequest{AdmissionKey: "replay", AgentsMD: "goal", Model: "model\x00"}},
-		"foreign workflow": {request: request, workflow: "coding-to-proposal"},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			stored := session
-			stored.Workflow = test.workflow
 			store := &admissionServiceStore{exists: true, session: stored}
 			if _, _, err := NewAdmissionService(store, "test-queue", &admissionServiceProvider{}).
 				Admit(context.Background(), test.request); !errors.Is(err, ErrAdmissionConflict) {

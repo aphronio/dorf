@@ -12,7 +12,7 @@ func TestObservationAdmissionRetainsKindAndSupportsAuto(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
 	session, _ := prepareTransportIntegrationSession(t, store, "observation")
-	input := core.MessageAdmission{SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), FromKind: core.MessageFromWorkflow, FromID: "event-1", Input: "Task updated", Intent: core.MessageFollow, Observation: true}
+	input := core.MessageAdmission{SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), FromKind: core.MessageFromHuman, FromID: "event-1", Input: "Task updated", Intent: core.MessageFollow, Observation: true}
 	accepted, err := store.AdmitDirectMessage(ctx, input)
 	if err != nil || !accepted.Created {
 		t.Fatalf("admit: %+v %v", accepted, err)

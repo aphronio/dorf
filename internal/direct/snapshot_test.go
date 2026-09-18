@@ -26,7 +26,7 @@ func TestSnapshotProjectsDirectExecutionIndependently(t *testing.T) {
 		state  ExecutionState
 		detail string
 	}{
-		{name: "Session attention", change: func(s *Snapshot) { s.Session.WorkflowAttention = "session needs intervention"; s.Actions = nil }, state: ExecutionAttention, detail: "session needs intervention"},
+		{name: "Session attention", change: func(s *Snapshot) { s.Session.ExecutionAttention = "session needs intervention"; s.Actions = nil }, state: ExecutionAttention, detail: "session needs intervention"},
 		{name: "provisioning Sandbox", change: func(s *Snapshot) { s.Actions = nil }, state: ExecutionProvisioningSandbox},
 		{name: "connecting route", change: func(s *Snapshot) { s.Actions = s.Actions[:1] }, state: ExecutionConnectingRoute},
 		{name: "working Agent", change: func(s *Snapshot) { s.Deliveries[0].AgentRun = core.AgentRun{State: core.AgentRunActive} }, state: ExecutionWorking},

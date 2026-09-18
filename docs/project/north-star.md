@@ -37,7 +37,7 @@ execution custody or lifecycle mechanism that remains after that policy is remov
 | **Thread / Turn** | The Harness's continuing conversation and individual execution identities |
 | **Action** | A fixed compute or model-route lifecycle effect with stable identity and reconciliation |
 
-A direct Session binds the primary Thread receiving client input; native subagent threads remain
+A Session binds the Thread receiving client input; native subagent threads remain
 Harness-owned. AgentRuns retain exact delivery and Turn attribution.
 Separate Turn ownership remains a [proposal](../implementation/session-product-proposals.md).
 

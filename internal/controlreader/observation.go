@@ -298,7 +298,7 @@ func (s Service) projectObservationAttention(ctx context.Context, result *Messag
 	switch {
 	case !execution.Session.AdmissionOpen || execution.Session.CleanupState != core.CleanupPending:
 		code = "session_closed"
-	case execution.Session.WorkflowAttention != "":
+	case execution.Session.ExecutionAttention != "":
 		code = "session_attention"
 	}
 	if code == "" && s.ObservationAttention != nil {

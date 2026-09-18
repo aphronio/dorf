@@ -24,8 +24,8 @@ type ExecutionStore interface {
 	AuthorizeSandboxAction(context.Context, string, string, string) (SandboxActionAuthorization, error)
 	RecordSandboxActionSuccess(context.Context, string) error
 	BindSandboxResource(context.Context, Sandbox, string) error
-	SetWorkflowAttention(context.Context, string, string, string) error
-	ClearWorkflowAttention(context.Context, string, string) error
+	SetExecutionAttention(context.Context, string, string, string) error
+	ClearExecutionAttention(context.Context, string, string) error
 	PrepareAgentRun(context.Context, string, string, string) error
 	BindAgentRun(context.Context, string, string, string, string, string) error
 	BindSteer(context.Context, string, string, string) error
@@ -61,7 +61,7 @@ type ScopedSteerExternals interface {
 
 type FaultBarrier interface {
 	Reach(context.Context, string, Delivery) error
-	ReachWorkflow(context.Context, string, string, string) error
+	ReachOperation(context.Context, string, string, string) error
 }
 
 // AgentRunOperation is the internal adapter operation for one authoritative
@@ -81,7 +81,6 @@ type ScopedAgentRunOperation interface {
 }
 
 type AgentExecutionResolver interface {
-	ResolveAgentPrompt(context.Context, AgentMessageExecution) (string, error)
 	ResolveAgentRunOperation(context.Context, AgentMessageExecution) (AgentRunOperation, error)
 }
 
@@ -171,11 +170,11 @@ func attentionNeeded(err error) bool {
 	return errors.As(err, &attention) && attention.AttentionNeeded()
 }
 
-func (s ExecutionService) reachWorkflow(ctx context.Context, point, sessionID, identity string) error {
+func (s ExecutionService) reachOperation(ctx context.Context, point, sessionID, identity string) error {
 	if s.barrier == nil {
 		return nil
 	}
-	return s.barrier.ReachWorkflow(ctx, point, sessionID, identity)
+	return s.barrier.ReachOperation(ctx, point, sessionID, identity)
 }
 
 // ReconcileSessionAgent advances at most one Message after its consumer has made
@@ -220,10 +219,7 @@ func (s ExecutionService) ReconcileSessionAgent(ctx context.Context, sessionID s
 		if authoritative.Session.CurrentTaskID != attachedSession.CurrentTaskID || !authoritative.Session.AdmissionOpen || authoritative.Session.CleanupState != CleanupPending {
 			return fmt.Errorf("Message %s changed exact current open Session authority", messageID)
 		}
-		input, err := s.agents.ResolveAgentPrompt(ctx, authoritative)
-		if err != nil {
-			return err
-		}
+		input := authoritative.Message.Input
 		if input == "" {
 			return fmt.Errorf("Message %s resolved empty agent input", messageID)
 		}
@@ -280,8 +276,8 @@ func (s ExecutionService) classifyAgentReconciliation(ctx context.Context, sessi
 	return AgentReconciliationReady, nil
 }
 
-// ObserveSettledAgentMessage reads the exact Harness Turn needed by typed
-// workflow evaluation after Core has durably settled its Message. It never
+// ObserveSettledAgentMessage reads the exact Harness Turn after Core has
+// durably settled its Message. It never
 // prepares, submits, steers, binds, or otherwise mutates AgentRun lifecycle.
 func (s ExecutionService) ObserveSettledAgentMessage(ctx context.Context, sessionID, messageID string) (MessageResult, error) {
 	if sessionID == "" || messageID == "" {
@@ -819,7 +815,7 @@ func (s ExecutionService) executeSandboxAction(ctx context.Context, sessionID, a
 				if claimErr := s.requireClaim(ctx); claimErr != nil {
 					return errors.Join(err, claimErr)
 				}
-				if attentionErr := s.store.SetWorkflowAttention(ctx, sessionID, actionID, err.Error()); attentionErr != nil {
+				if attentionErr := s.store.SetExecutionAttention(ctx, sessionID, actionID, err.Error()); attentionErr != nil {
 					return errors.Join(err, fmt.Errorf("record Sandbox Action attention: %w", attentionErr))
 				}
 			}
@@ -835,14 +831,14 @@ func (s ExecutionService) executeSandboxAction(ctx context.Context, sessionID, a
 			point = BarrierSandboxDeleted
 		}
 		if point != "" {
-			if err := s.reachWorkflow(ctx, point, authorized.Session.ID, authoritative.ID); err != nil {
+			if err := s.reachOperation(ctx, point, authorized.Session.ID, authoritative.ID); err != nil {
 				return err
 			}
 		}
 		if err := s.requireClaim(ctx); err != nil {
 			return err
 		}
-		if err := s.store.ClearWorkflowAttention(ctx, sessionID, actionID); err != nil {
+		if err := s.store.ClearExecutionAttention(ctx, sessionID, actionID); err != nil {
 			return err
 		}
 		return s.store.RecordSandboxActionSuccess(ctx, authoritative.ID)

@@ -34,8 +34,8 @@ reason to build it.
 
 A Session is the durable unit of user intent. Its initiating client, controller, task-executor process, and
 current agent process may disappear without erasing accepted input or observed progress. A Session owns
-one or more Sandboxes; each Sandbox is an isolated mutable workstation and has one deterministically
-named Provider Route. Immutable Action success records the Route and Sandbox lifecycle. AgentRuns use
+one admitted Sandbox, an isolated mutable workstation with retained physical resource generations
+for replacement and one deterministically named Provider Route. Immutable Action success records the Route and Sandbox lifecycle. AgentRuns use
 a Sandbox rather than owning infrastructure. The Session owns the binding to one harness
 Thread for client input. Native subagent threads remain the Harness's responsibility. Every AgentRun
 consumes one durable Message and retains its exact Turn binding. Every Message selected for agent delivery has one AgentRun record. While admission is open, a follow joins

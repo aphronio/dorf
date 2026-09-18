@@ -46,10 +46,6 @@ func newResponsivenessHarness() *responsivenessHarness {
 	}
 }
 
-func (h *responsivenessHarness) ResolveAgentPrompt(_ context.Context, execution core.AgentMessageExecution) (string, error) {
-	return execution.Message.Input, nil
-}
-
 func (h *responsivenessHarness) ResolveAgentRunOperation(_ context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
 	return responsivenessOperation{harness: h, execution: execution}, nil
 }

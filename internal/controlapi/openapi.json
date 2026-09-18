@@ -1177,11 +1177,6 @@
           "admitted_at": { "type": "string", "format": "date-time" }
         }
       },
-      "GitCommitOID": {
-        "type": "string",
-        "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$",
-        "description": "Exact lowercase full Git commit OID: 40 hexadecimal characters for SHA-1 or 64 for SHA-256"
-      },
       "ReasoningEffort": {
         "type": "string",
         "enum": ["low", "medium", "high", "xhigh"],

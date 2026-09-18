@@ -120,7 +120,7 @@ func TestObservationHardSessionAttentionOverridesDeliveryUncertainty(t *testing.
 		{
 			name: "workflow attention",
 			configure: func() {
-				store.execution.Session.WorkflowAttention = "workflow failed"
+				store.execution.Session.ExecutionAttention = "workflow failed"
 			},
 			callback:   func(context.Context, core.Session) (string, error) { return "task_failed", nil },
 			wantCode:   "session_attention",

@@ -989,9 +989,6 @@ func (a controlAPISessions) InterruptMessage(ctx context.Context, sessionID, mes
 	if err != nil {
 		return controlapi.Message{}, err
 	}
-	if session.Workflow != "" {
-		return controlapi.Message{}, controlapi.ErrInterruptUnavailable
-	}
 	execution, err := a.store.AgentMessageExecution(ctx, messageID)
 	if errors.Is(err, postgres.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
 		return controlapi.Message{}, controlapi.ErrMessageNotFound
@@ -1176,9 +1173,6 @@ func (a controlAPISessions) loadSession(ctx context.Context, sessionID string) (
 	if err != nil {
 		return core.Session{}, err
 	}
-	if session.Workflow != "" || session.WorkflowRevision != "" {
-		return core.Session{}, controlapi.ErrSessionNotFound
-	}
 	return session, nil
 }
 
@@ -1209,7 +1203,7 @@ func (a controlAPISessions) projectSession(ctx context.Context, session core.Ses
 	var attention *controlapi.Attention
 	if projection.State == direct.ExecutionAttention {
 		code := "agent_attention"
-		if session.WorkflowAttention != "" {
+		if session.ExecutionAttention != "" {
 			code = "session_attention"
 		}
 		attention = &controlapi.Attention{Code: code, Detail: "Session execution needs operator attention; inspect the deployment service logs."}

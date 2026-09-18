@@ -30,7 +30,7 @@ internal/controlreader	NewClient	21
 internal/core	(Application).VerifyAttachedTask	19
 internal/core	(ExecutionService).ObserveSettledAgentMessage	21
 internal/core	(ExecutionService).PrepareCleanup	16
-internal/core	(ExecutionService).ReconcileSessionAgent	29
+internal/core	(ExecutionService).ReconcileSessionAgent	28
 internal/core	(ExecutionService).executeSandboxAction	28
 internal/core	(ExecutionService).reconcileCleanupMessage	22
 internal/core	(agentRunContract).execute	21
@@ -39,8 +39,8 @@ internal/deployment	commitDeploymentEntry	22
 internal/deployment	loadDeployment	25
 internal/deployment	openDeploymentDirectory	25
 internal/deployment	saveDeployment	28
-internal/direct	LoadSnapshot	20
-internal/direct	Register	20
+internal/direct	LoadSnapshot	17
+internal/direct	Register	18
 internal/doctor	Run	18
 internal/e2b	(*Executor).Exec	41
 internal/gateway	(Gateway).ComposeState	19
@@ -52,13 +52,12 @@ internal/incus	(Adapter).ProviderRouteURL	16
 internal/incus	(ConnectionConfig).Validate	29
 internal/incus	(Sandbox).ReconcileOwnedCreate	18
 internal/pi	parseSession	26
-internal/postgres	(Store).AgentMessage	20
+internal/postgres	(Store).AgentMessage	19
 internal/postgres	(Store).BindAgentRun	31
 internal/postgres	(Store).CompleteCleanup	24
 internal/postgres	(Store).RecordSandboxProfileUnavailable	16
 internal/postgres	(Store).RedeemEnrollment	19
 internal/postgres	(Store).RetryFailedSession	23
-internal/postgres	admitMessageTx	17
 internal/postgres	applySandboxProfilePatch	26
 internal/postgres	authorizeSandboxActionTx	27
 internal/postgres	migrateDorf	19

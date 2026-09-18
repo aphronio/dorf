@@ -13,17 +13,12 @@ import (
 
 func normalizeCoreAdmission(input core.SessionAdmission) (core.SessionAdmission, error) {
 	input.AdmissionKey = strings.TrimSpace(input.AdmissionKey)
-	input.Workflow = core.WorkflowName(strings.TrimSpace(string(input.Workflow)))
-	input.WorkflowRevision = strings.TrimSpace(input.WorkflowRevision)
 	input.SandboxProfile = strings.TrimSpace(input.SandboxProfile)
 	input.ProviderConnection = strings.TrimSpace(input.ProviderConnection)
 	input.Model = strings.TrimSpace(input.Model)
 	input.ReasoningEffort = strings.TrimSpace(input.ReasoningEffort)
 	if !core.ValidClientReference(input.ClientReference) {
 		return core.SessionAdmission{}, fmt.Errorf("invalid client reference")
-	}
-	if (input.Workflow == "") != (input.WorkflowRevision == "") {
-		return core.SessionAdmission{}, fmt.Errorf("workflow name and revision must either both be absent or both be present")
 	}
 	if input.AdmissionKey == "" || input.SandboxProfile == "" || input.ProviderConnection == "" || input.Model == "" {
 		return core.SessionAdmission{}, fmt.Errorf("admission requires key, Sandbox profile, AI connection, model")
@@ -52,8 +47,7 @@ func admitSession(ctx context.Context, store Store, coreInput core.SessionAdmiss
 		}
 		rows, err = queries.InsertAdmittedSession(ctx, dbsql.InsertAdmittedSessionParams{
 			CreatedByClientID: coreInput.CreatedByClientID, ClientReference: coreInput.ClientReference,
-			ID: id, AdmissionKey: coreInput.AdmissionKey, WorkflowName: coreInput.Workflow, WorkflowRevision: coreInput.WorkflowRevision,
-			AgentsMd: coreInput.AgentsMD, SandboxProfile: coreInput.SandboxProfile, SandboxProfileRevision: revision, ProviderConnection: coreInput.ProviderConnection,
+			ID: id, AdmissionKey: coreInput.AdmissionKey, AgentsMd: coreInput.AgentsMD, SandboxProfile: coreInput.SandboxProfile, SandboxProfileRevision: revision, ProviderConnection: coreInput.ProviderConnection,
 			KeepRunning: coreInput.KeepRunning, Model: coreInput.Model, ReasoningEffort: coreInput.ReasoningEffort,
 		})
 		if err != nil {
@@ -66,8 +60,7 @@ func admitSession(ctx context.Context, store Store, coreInput core.SessionAdmiss
 	}
 	storedCore := core.SessionAdmission{
 		ClientReference: storedRow.ClientReference,
-		AdmissionKey:    storedRow.AdmissionKey, Workflow: core.WorkflowName(storedRow.WorkflowName), WorkflowRevision: storedRow.WorkflowRevision,
-		AgentsMD: storedRow.AgentsMd, SandboxProfile: storedRow.SandboxProfile, ProviderConnection: storedRow.ProviderConnection,
+		AdmissionKey:    storedRow.AdmissionKey, AgentsMD: storedRow.AgentsMd, SandboxProfile: storedRow.SandboxProfile, ProviderConnection: storedRow.ProviderConnection,
 		KeepRunning: storedRow.KeepRunning, Model: storedRow.Model, ReasoningEffort: storedRow.ReasoningEffort,
 	}
 	// A replay may come from another Client; only the first admission records its creator.

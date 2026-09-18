@@ -262,8 +262,7 @@ select s.id
 from dorf.sandboxes s
 join dorf.sessions j on j.id=s.session_id
 join dorf.sandbox_resources r on r.sandbox_id=s.id and r.id=s.active_resource_id
-where j.workflow_name='' and j.workflow_revision=''
-  and j.admission_open and j.cleanup_state='pending'
+where j.admission_open and j.cleanup_state='pending'
   and j.sandbox_last_active_at is not null
   and j.sandbox_last_active_at <= clock_timestamp()-make_interval(secs => $1::double precision)
   and r.provider_id is not null and r.deleted_at is null

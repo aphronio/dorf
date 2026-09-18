@@ -16,7 +16,7 @@ import (
 
 const agentMessageNeedsSkillRefresh = `-- name: AgentMessageNeedsSkillRefresh :one
 with current_message as (
-    select m.id,m.session_id,m.sequence,m.delivery_intent,ar.sandbox_id,ar.role
+    select m.id,m.session_id,m.sequence,m.delivery_intent,ar.sandbox_id
     from dorf.session_messages m join dorf.agent_runs ar on ar.message_id=m.id
     where m.id=$1
 ), previous_turn as (
@@ -25,7 +25,7 @@ with current_message as (
     join dorf.session_messages m on m.session_id=current.session_id and m.sequence<current.sequence
     join dorf.agent_runs ar on ar.message_id=m.id
     where m.delivery_intent='follow' and ar.turn_id is not null
-      and ar.sandbox_id=current.sandbox_id and ar.role=current.role
+      and ar.sandbox_id=current.sandbox_id
     order by m.sequence desc limit 1
 )
 select exists (
@@ -34,7 +34,7 @@ select exists (
     join dorf.session_messages requested on requested.session_id=current.session_id
     join dorf.agent_runs request_run on request_run.message_id=requested.id
     where current.delivery_intent='follow' and requested.refresh_skills
-      and request_run.sandbox_id=current.sandbox_id and request_run.role=current.role
+      and request_run.sandbox_id=current.sandbox_id
       and (
         (requested.delivery_intent='follow' and requested.sequence<=current.sequence
           and requested.sequence>coalesce((select sequence from previous_turn),0))
@@ -57,17 +57,16 @@ select coalesce(turn_id,'') as turn_id,coalesce(harness,'') as harness,
 from dorf.agent_runs ar
 where ar.session_id=$1 and ar.state='active' and ar.turn_id is not null
   and not ar.interrupt_requested
-  and ar.role=$2 and ar.sandbox_id=$3
+  and ar.sandbox_id=$2
   and (
     select count(*) from dorf.agent_runs active
     where active.session_id=$1 and active.state='active' and active.turn_id is not null
-      and active.role=$2 and active.sandbox_id=$3
+      and active.sandbox_id=$2
   )=1
 `
 
 type GetActiveAgentTurnParams struct {
 	SessionID string
-	Role      string
 	SandboxID string
 }
 
@@ -78,7 +77,7 @@ type GetActiveAgentTurnRow struct {
 }
 
 func (q *Queries) GetActiveAgentTurn(ctx context.Context, arg GetActiveAgentTurnParams) (GetActiveAgentTurnRow, error) {
-	row := q.db.QueryRowContext(ctx, getActiveAgentTurn, arg.SessionID, arg.Role, arg.SandboxID)
+	row := q.db.QueryRowContext(ctx, getActiveAgentTurn, arg.SessionID, arg.SandboxID)
 	var i GetActiveAgentTurnRow
 	err := row.Scan(&i.TurnID, &i.Harness, &i.ThreadID)
 	return i, err
@@ -240,9 +239,9 @@ select m.id as message_id,m.session_id as message_session_id,m.from_kind,m.from_
        (ar.baseline_turn_id is not null)::boolean as baseline_recorded,
        coalesce(ar.baseline_turn_id,'') as baseline_turn_id,coalesce(ar.turn_id,'') as turn_id,
        coalesce(ar.turn_outcome,'') as turn_outcome,
-       coalesce(ar.attention,'') as attention,coalesce(ar.role,'') as role,coalesce(ar.input_revision,'') as input_revision,
-       coalesce(ar.capability,'') as capability,coalesce(ar.sandbox_id,'') as sandbox_id,
-       coalesce(ar.submission_nonce,'') as submission_nonce,ar.started_at,ar.finished_at,
+       coalesce(ar.attention,'') as attention,
+       coalesce(ar.sandbox_id,'') as sandbox_id,
+       ar.started_at,ar.finished_at,
        -- Uncorrelated membership lets generic prepared plans hash identities once
        -- instead of scanning the Session's runs again for every Delivery.
        case when ar.harness is not null and ar.thread_id is not null
@@ -287,11 +286,7 @@ type ListDeliveriesRow struct {
 	TurnID                string
 	TurnOutcome           string
 	Attention             string
-	Role                  string
-	InputRevision         string
-	Capability            string
 	SandboxID             string
-	SubmissionNonce       string
 	StartedAt             sql.NullTime
 	FinishedAt            sql.NullTime
 	InterruptRequested    bool
@@ -333,11 +328,7 @@ func (q *Queries) ListDeliveries(ctx context.Context, sessionID string) ([]ListD
 			&i.TurnID,
 			&i.TurnOutcome,
 			&i.Attention,
-			&i.Role,
-			&i.InputRevision,
-			&i.Capability,
 			&i.SandboxID,
-			&i.SubmissionNonce,
 			&i.StartedAt,
 			&i.FinishedAt,
 			&i.InterruptRequested,

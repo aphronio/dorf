@@ -460,7 +460,7 @@ func (s Store) RecordSandboxProfileUnavailable(ctx context.Context, sessionID, p
 	if rows != 1 {
 		return fmt.Errorf("Sandbox profile %q has no settled Dorf %s verification to invalidate", profileName, core.BaseProfileContract)
 	}
-	rows, err = queries.SetWorkflowAttention(ctx, dbsql.SetWorkflowAttentionParams{
+	rows, err = queries.SetExecutionAttention(ctx, dbsql.SetExecutionAttentionParams{
 		SessionID: sessionID, Source: nullableString(source), Detail: nullableString(detail),
 	})
 	if err != nil {

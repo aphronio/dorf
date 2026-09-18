@@ -15,7 +15,7 @@ const completeCleanup = `-- name: CompleteCleanup :one
 with completed as (
     update dorf.sessions j0
     set cleanup_state='complete',cleanup_attention=null,
-        workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null,
+        execution_attention=null,execution_attention_source=null,execution_attention_at=null,
         cleaned_at=coalesce(cleaned_at,clock_timestamp())
     where j0.id=$1 and j0.cleanup_state='scheduled'
     returning j0.id

@@ -85,7 +85,6 @@ select not exists (
         or run.thread_id is not null
         or run.baseline_turn_id is not null
         or run.turn_id is not null
-        or run.submission_nonce is not null
         or run.started_at is not null
         or run.finished_at is not null
       )

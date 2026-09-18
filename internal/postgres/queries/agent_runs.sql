@@ -1,9 +1,9 @@
 -- name: InsertAdmittedAgentRun :execrows
 insert into dorf.agent_runs(
-    id,session_id,message_id,harness,thread_id,role,state,input_revision,capability,sandbox_id
+    id,session_id,message_id,harness,thread_id,state,sandbox_id
 )
 select sqlc.arg(id),j.id,sqlc.arg(message_id),sqlc.arg(harness),sqlc.arg(thread_id),
-       sqlc.arg(role),'pending',sqlc.arg(input_revision),sqlc.arg(capability),sqlc.arg(sandbox_id)
+       'pending',sqlc.arg(sandbox_id)
 from dorf.sessions j
 where j.id=sqlc.arg(session_id)
 on conflict do nothing;
@@ -27,7 +27,6 @@ from dorf.agent_runs ar,dorf.sandbox_profile_revisions p
 where ar.id=sqlc.arg(run_id) and j.id=ar.session_id
   and p.name=j.sandbox_profile and p.definition_hash=j.sandbox_profile_revision
   and p.harness=sqlc.arg(harness)
-  and j.workflow_name='' and j.workflow_revision=''
   and (j.thread_id is null or j.thread_id=sqlc.arg(thread_id));
 
 -- name: GetAgentRunByMessage :one
@@ -36,14 +35,14 @@ select id,session_id,message_id,state,
        (baseline_turn_id is not null)::boolean as baseline_recorded,
        coalesce(baseline_turn_id,'') as baseline_turn_id,
        coalesce(turn_id,'') as turn_id,coalesce(turn_outcome,'') as turn_outcome,
-       coalesce(attention,'') as attention,role,coalesce(input_revision,'') as input_revision,
-       coalesce(capability,'') as capability,coalesce(sandbox_id,'') as sandbox_id,
-       coalesce(submission_nonce,'') as submission_nonce,started_at,finished_at,interrupt_requested
+       coalesce(attention,'') as attention,
+       coalesce(sandbox_id,'') as sandbox_id,
+       started_at,finished_at,interrupt_requested
 from dorf.agent_runs
 where message_id=sqlc.arg(message_id)::text;
 
 -- name: GetAgentRunForBinding :one
-select session_id,sandbox_id,role,state,coalesce(harness,'') as harness,
+select session_id,sandbox_id,state,coalesce(harness,'') as harness,
        coalesce(thread_id,'') as thread_id,coalesce(turn_id,'') as turn_id,
        coalesce(turn_outcome,'') as turn_outcome
 from dorf.agent_runs

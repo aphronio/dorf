@@ -99,7 +99,6 @@ from dorf.agent_runs ar,dorf.sandbox_profile_revisions p
 where ar.id=$2 and j.id=ar.session_id
   and p.name=j.sandbox_profile and p.definition_hash=j.sandbox_profile_revision
   and p.harness=$3
-  and j.workflow_name='' and j.workflow_revision=''
   and (j.thread_id is null or j.thread_id=$1)
 `
 
@@ -169,9 +168,9 @@ select id,session_id,message_id,state,
        (baseline_turn_id is not null)::boolean as baseline_recorded,
        coalesce(baseline_turn_id,'') as baseline_turn_id,
        coalesce(turn_id,'') as turn_id,coalesce(turn_outcome,'') as turn_outcome,
-       coalesce(attention,'') as attention,role,coalesce(input_revision,'') as input_revision,
-       coalesce(capability,'') as capability,coalesce(sandbox_id,'') as sandbox_id,
-       coalesce(submission_nonce,'') as submission_nonce,started_at,finished_at,interrupt_requested
+       coalesce(attention,'') as attention,
+       coalesce(sandbox_id,'') as sandbox_id,
+       started_at,finished_at,interrupt_requested
 from dorf.agent_runs
 where message_id=$1::text
 `
@@ -188,11 +187,7 @@ type GetAgentRunByMessageRow struct {
 	TurnID             string
 	TurnOutcome        string
 	Attention          string
-	Role               string
-	InputRevision      string
-	Capability         string
 	SandboxID          string
-	SubmissionNonce    string
 	StartedAt          sql.NullTime
 	FinishedAt         sql.NullTime
 	InterruptRequested bool
@@ -213,11 +208,7 @@ func (q *Queries) GetAgentRunByMessage(ctx context.Context, messageID string) (G
 		&i.TurnID,
 		&i.TurnOutcome,
 		&i.Attention,
-		&i.Role,
-		&i.InputRevision,
-		&i.Capability,
 		&i.SandboxID,
-		&i.SubmissionNonce,
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.InterruptRequested,
@@ -226,7 +217,7 @@ func (q *Queries) GetAgentRunByMessage(ctx context.Context, messageID string) (G
 }
 
 const getAgentRunForBinding = `-- name: GetAgentRunForBinding :one
-select session_id,sandbox_id,role,state,coalesce(harness,'') as harness,
+select session_id,sandbox_id,state,coalesce(harness,'') as harness,
        coalesce(thread_id,'') as thread_id,coalesce(turn_id,'') as turn_id,
        coalesce(turn_outcome,'') as turn_outcome
 from dorf.agent_runs
@@ -237,7 +228,6 @@ for update
 type GetAgentRunForBindingRow struct {
 	SessionID   string
 	SandboxID   string
-	Role        string
 	State       core.AgentRunState
 	Harness     string
 	ThreadID    string
@@ -251,7 +241,6 @@ func (q *Queries) GetAgentRunForBinding(ctx context.Context, runID string) (GetA
 	err := row.Scan(
 		&i.SessionID,
 		&i.SandboxID,
-		&i.Role,
 		&i.State,
 		&i.Harness,
 		&i.ThreadID,
@@ -320,25 +309,22 @@ func (q *Queries) GetMessageInterruptTarget(ctx context.Context, arg GetMessageI
 
 const insertAdmittedAgentRun = `-- name: InsertAdmittedAgentRun :execrows
 insert into dorf.agent_runs(
-    id,session_id,message_id,harness,thread_id,role,state,input_revision,capability,sandbox_id
+    id,session_id,message_id,harness,thread_id,state,sandbox_id
 )
 select $1,j.id,$2,$3,$4,
-       $5,'pending',$6,$7,$8
+       'pending',$5
 from dorf.sessions j
-where j.id=$9
+where j.id=$6
 on conflict do nothing
 `
 
 type InsertAdmittedAgentRunParams struct {
-	ID            string
-	MessageID     string
-	Harness       sql.NullString
-	ThreadID      sql.NullString
-	Role          string
-	InputRevision sql.NullString
-	Capability    sql.NullString
-	SandboxID     string
-	SessionID     string
+	ID        string
+	MessageID string
+	Harness   sql.NullString
+	ThreadID  sql.NullString
+	SandboxID string
+	SessionID string
 }
 
 func (q *Queries) InsertAdmittedAgentRun(ctx context.Context, arg InsertAdmittedAgentRunParams) (int64, error) {
@@ -347,9 +333,6 @@ func (q *Queries) InsertAdmittedAgentRun(ctx context.Context, arg InsertAdmitted
 		arg.MessageID,
 		arg.Harness,
 		arg.ThreadID,
-		arg.Role,
-		arg.InputRevision,
-		arg.Capability,
 		arg.SandboxID,
 		arg.SessionID,
 	)

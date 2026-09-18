@@ -51,9 +51,6 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 		if err != nil {
 			return core.TaskResultV1{}, err
 		}
-		if session.Workflow != "" || session.WorkflowRevision != "" {
-			return core.TaskResultV1{}, fmt.Errorf("Session %s is not direct", session.ID)
-		}
 		if runtimes == nil {
 			return core.TaskResultV1{}, fmt.Errorf("Sandbox runtime resolution is not configured")
 		}

@@ -349,9 +349,6 @@ func (e liveUpgradeExternals) RouteRevoke(ctx context.Context, _ core.Session, s
 
 type liveUpgradeAgent struct{ terminal.Externals }
 
-func (e liveUpgradeAgent) ResolveAgentPrompt(_ context.Context, execution core.AgentMessageExecution) (string, error) {
-	return execution.Message.Input, nil
-}
 func (e liveUpgradeAgent) ResolveAgentRunOperation(_ context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
 	return terminal.NewAgentRunOperation(e.Externals, execution)
 }

@@ -1,5 +1,5 @@
 // Package core owns Dorf's in-process control-plane contract, durable custody
-// records, and recovery services. Workflows consume this boundary without
+// records, and recovery services. Clients consume this boundary without
 // inheriting provider, harness, or persistence implementations.
 package core
 
@@ -59,8 +59,6 @@ const (
 	AgentRunInterrupted AgentRunState = "interrupted"
 	AgentRunUncertain   AgentRunState = "uncertain"
 )
-
-type WorkflowName string
 
 type SandboxProvider string
 
@@ -158,32 +156,30 @@ func (p SandboxProfile) CurrentDefinitionHash() string {
 }
 
 type Session struct {
-	KeepRunning         bool         `json:"keep_running"`
-	CreatedByClientID   string       `json:"created_by_client_id,omitempty"`
-	CreatedByClientName string       `json:"created_by_client_name,omitempty"`
-	ClientReference     string       `json:"client_reference,omitempty"`
-	ID                  string       `json:"id"`
-	AdmissionKey        string       `json:"admission_key"`
-	Workflow            WorkflowName `json:"workflow"`
-	WorkflowRevision    string       `json:"workflow_revision"`
-	AgentsMD            string       `json:"agents_md,omitempty"`
+	KeepRunning         bool   `json:"keep_running"`
+	CreatedByClientID   string `json:"created_by_client_id,omitempty"`
+	CreatedByClientName string `json:"created_by_client_name,omitempty"`
+	ClientReference     string `json:"client_reference,omitempty"`
+	ID                  string `json:"id"`
+	AdmissionKey        string `json:"admission_key"`
+	AgentsMD            string `json:"agents_md,omitempty"`
 	// Harness is read from the immutable admitted profile, never stored on Session.
-	Harness                 string       `json:"-"`
-	ThreadID                string       `json:"-"`
-	SandboxProfile          string       `json:"sandbox_profile"`
-	SandboxProfileRevision  string       `json:"sandbox_profile_revision"`
-	ProviderConnection      string       `json:"provider_connection"`
-	Model                   string       `json:"model"`
-	ReasoningEffort         string       `json:"reasoning_effort"`
-	AdmissionOpen           bool         `json:"admission_open"`
-	CleanupState            CleanupState `json:"cleanup_state"`
-	CurrentTaskID           string       `json:"current_task_id,omitempty"`
-	WorkflowAttention       string       `json:"workflow_attention,omitempty"`
-	WorkflowAttentionSource string       `json:"workflow_attention_source,omitempty"`
-	WorkflowAttentionAt     time.Time    `json:"workflow_attention_at,omitempty"`
-	CleanupAttention        string       `json:"cleanup_attention,omitempty"`
-	AdmittedAt              time.Time    `json:"admitted_at,omitempty"`
-	CleanedAt               time.Time    `json:"cleaned_at,omitempty"`
+	Harness                  string       `json:"-"`
+	ThreadID                 string       `json:"-"`
+	SandboxProfile           string       `json:"sandbox_profile"`
+	SandboxProfileRevision   string       `json:"sandbox_profile_revision"`
+	ProviderConnection       string       `json:"provider_connection"`
+	Model                    string       `json:"model"`
+	ReasoningEffort          string       `json:"reasoning_effort"`
+	AdmissionOpen            bool         `json:"admission_open"`
+	CleanupState             CleanupState `json:"cleanup_state"`
+	CurrentTaskID            string       `json:"current_task_id,omitempty"`
+	ExecutionAttention       string       `json:"execution_attention,omitempty"`
+	ExecutionAttentionSource string       `json:"execution_attention_source,omitempty"`
+	ExecutionAttentionAt     time.Time    `json:"execution_attention_at,omitempty"`
+	CleanupAttention         string       `json:"cleanup_attention,omitempty"`
+	AdmittedAt               time.Time    `json:"admitted_at,omitempty"`
+	CleanedAt                time.Time    `json:"cleaned_at,omitempty"`
 }
 
 // Sandbox is infrastructure owned for the lifetime of a Session. AgentRuns use a
@@ -219,9 +215,8 @@ type Route struct {
 type MessageFromKind string
 
 const (
-	MessageFromHuman    MessageFromKind = "human"
-	MessageFromAgent    MessageFromKind = "agent"
-	MessageFromWorkflow MessageFromKind = "workflow"
+	MessageFromHuman MessageFromKind = "human"
+	MessageFromAgent MessageFromKind = "agent"
 )
 
 type MessageAttachmentKind string
@@ -288,14 +283,9 @@ type AgentRun struct {
 	TurnOutcome        string        `json:"turn_outcome,omitempty"`
 	InterruptRequested bool          `json:"interrupt_requested"`
 	Attention          string        `json:"attention,omitempty"`
-	Role               string        `json:"role"`
-	// InputRevision retains legacy delivery attribution; direct input leaves it empty.
-	InputRevision   string    `json:"input_revision,omitempty"`
-	Capability      string    `json:"capability,omitempty"`
-	SandboxID       string    `json:"sandbox_id,omitempty"`
-	SubmissionNonce string    `json:"-"`
-	StartedAt       time.Time `json:"started_at,omitempty"`
-	FinishedAt      time.Time `json:"finished_at,omitempty"`
+	SandboxID          string        `json:"sandbox_id,omitempty"`
+	StartedAt          time.Time     `json:"started_at,omitempty"`
+	FinishedAt         time.Time     `json:"finished_at,omitempty"`
 }
 
 // MessageInterruptTarget is the original Turn-starting run selected by Stop.
@@ -334,7 +324,7 @@ func (r MessageResult) Terminal() bool { return r.Outcome != "" }
 
 // AgentMessageWork is the opaque static-composition result that one exact
 // Message in one exact Sandbox still needs Core reconciliation. Core consumes
-// it inside the Session fence; workflow coordinators never receive it.
+// it inside the Session fence; clients address Messages instead.
 type AgentMessageWork struct {
 	MessageID string `json:"message_id"`
 	SandboxID string `json:"sandbox_id"`

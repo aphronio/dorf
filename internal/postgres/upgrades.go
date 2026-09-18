@@ -34,7 +34,7 @@ func (s Store) RequestSandboxUpgrade(ctx context.Context, queue string, request 
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		if !session.AdmissionOpen || session.CleanupState != core.CleanupPending || session.WorkflowName != "" || session.WorkflowRevision != "" {
+		if !session.AdmissionOpen || session.CleanupState != core.CleanupPending {
 			return fmt.Errorf("upgrade requires an open direct Session")
 		}
 		if err := requireSandboxDeliveryUnheld(ctx, q, request.SandboxID); err != nil {

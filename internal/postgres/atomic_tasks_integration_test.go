@@ -151,9 +151,9 @@ func TestAdmissionPrimaryKeyConflictDoesNotAdoptForeignSession(t *testing.T) {
 	foreignAdmissionKey := input.AdmissionKey + "-foreign"
 	if _, err := store.DB.ExecContext(ctx, `
 insert into dorf.sessions(
-    id,admission_key,workflow_name,workflow_revision,agents_md,
+    id,admission_key,agents_md,
     sandbox_profile,sandbox_profile_revision,provider_connection,model,reasoning_effort,keep_running
-) values($1,$2,'','','',$3,(select active_revision from dorf.sandbox_profiles where name=$3),$4,$5,$6,false)
+) values($1,$2,'',$3,(select active_revision from dorf.sandbox_profiles where name=$3),$4,$5,$6,false)
 `, sessionID, foreignAdmissionKey, input.SandboxProfile, input.ProviderConnection, input.Model, input.ReasoningEffort); err != nil {
 		t.Fatal(err)
 	}

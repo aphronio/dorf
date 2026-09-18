@@ -242,6 +242,21 @@ func TestCheckpointCandidateScanReturnsOnlyChangedIdleBoundaries(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
 	_, sandboxID, boundary := completedCheckpointFixture(t, store, ctx, "candidate")
+	// The shared test database may contain more than one scan page of fixtures.
+	// Put this fixture first and retire it when the proof ends.
+	if _, err := store.DB.ExecContext(ctx, `update dorf.sessions set sandbox_last_active_at='2000-01-01' where id=$1`, boundary.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := store.DB.ExecContext(context.Background(), `update dorf.sessions set admission_open=false where id=$1`, boundary.SessionID); err != nil {
+			t.Error(err)
+		}
+	})
+	var err error
+	boundary, err = store.Boundary(ctx, sandboxID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	assertCheckpointCandidate(t, store, ctx, sandboxID, boundary, true)
 
 	if _, err := store.PublishCheckpoint(ctx, boundary, checkpointReference("candidate-repository", boundary.SessionID)); err != nil {

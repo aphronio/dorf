@@ -13,19 +13,19 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 )
 
-const clearWorkflowAttention = `-- name: ClearWorkflowAttention :execrows
+const clearExecutionAttention = `-- name: ClearExecutionAttention :execrows
 update dorf.sessions
-set workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null
-where id=$1 and workflow_attention_source=$2
+set execution_attention=null,execution_attention_source=null,execution_attention_at=null
+where id=$1 and execution_attention_source=$2
 `
 
-type ClearWorkflowAttentionParams struct {
+type ClearExecutionAttentionParams struct {
 	SessionID string
 	Source    sql.NullString
 }
 
-func (q *Queries) ClearWorkflowAttention(ctx context.Context, arg ClearWorkflowAttentionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, clearWorkflowAttention, arg.SessionID, arg.Source)
+func (q *Queries) ClearExecutionAttention(ctx context.Context, arg ClearExecutionAttentionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, clearExecutionAttention, arg.SessionID, arg.Source)
 	if err != nil {
 		return 0, err
 	}
@@ -33,7 +33,7 @@ func (q *Queries) ClearWorkflowAttention(ctx context.Context, arg ClearWorkflowA
 }
 
 const getAdmittedSessionForUpdate = `-- name: GetAdmittedSessionForUpdate :one
-select id,admission_key,workflow_name,workflow_revision,agents_md,sandbox_profile,provider_connection,
+select id,admission_key,agents_md,sandbox_profile,provider_connection,
        model,reasoning_effort,client_reference,keep_running
 from dorf.sessions
 where admission_key=$1
@@ -43,8 +43,6 @@ for update
 type GetAdmittedSessionForUpdateRow struct {
 	ID                 string
 	AdmissionKey       string
-	WorkflowName       core.WorkflowName
-	WorkflowRevision   string
 	AgentsMd           string
 	SandboxProfile     string
 	ProviderConnection string
@@ -60,8 +58,6 @@ func (q *Queries) GetAdmittedSessionForUpdate(ctx context.Context, admissionKey 
 	err := row.Scan(
 		&i.ID,
 		&i.AdmissionKey,
-		&i.WorkflowName,
-		&i.WorkflowRevision,
 		&i.AgentsMd,
 		&i.SandboxProfile,
 		&i.ProviderConnection,
@@ -111,12 +107,12 @@ func (q *Queries) GetCurrentSessionTaskForUpdate(ctx context.Context, sessionID 
 const getSession = `-- name: GetSession :one
 select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(creator.name,'') as created_by_client_name,j.client_reference,
        p.harness,coalesce(j.thread_id,'') as thread_id,
-       j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
+       j.id,j.admission_key,j.agents_md,
        j.sandbox_profile,j.sandbox_profile_revision,j.provider_connection,j.model,j.reasoning_effort,j.keep_running,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
-       coalesce(j.workflow_attention,'') as workflow_attention,
-       coalesce(j.workflow_attention_source,'') as workflow_attention_source,
-       j.workflow_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
+       coalesce(j.execution_attention,'') as execution_attention,
+       coalesce(j.execution_attention_source,'') as execution_attention_source,
+       j.execution_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
        j.admitted_at,j.cleaned_at
 from dorf.sessions j
 join dorf.sandbox_profile_revisions p on p.name=j.sandbox_profile and p.definition_hash=j.sandbox_profile_revision
@@ -128,31 +124,29 @@ where j.id=$1
 `
 
 type GetSessionRow struct {
-	CreatedByClientID       string
-	CreatedByClientName     string
-	ClientReference         string
-	Harness                 string
-	ThreadID                string
-	ID                      string
-	AdmissionKey            string
-	WorkflowName            core.WorkflowName
-	WorkflowRevision        string
-	AgentsMd                string
-	SandboxProfile          string
-	SandboxProfileRevision  string
-	ProviderConnection      string
-	Model                   string
-	ReasoningEffort         string
-	KeepRunning             bool
-	AdmissionOpen           bool
-	CleanupState            core.CleanupState
-	CurrentTaskID           string
-	WorkflowAttention       string
-	WorkflowAttentionSource string
-	WorkflowAttentionAt     sql.NullTime
-	CleanupAttention        string
-	AdmittedAt              time.Time
-	CleanedAt               sql.NullTime
+	CreatedByClientID        string
+	CreatedByClientName      string
+	ClientReference          string
+	Harness                  string
+	ThreadID                 string
+	ID                       string
+	AdmissionKey             string
+	AgentsMd                 string
+	SandboxProfile           string
+	SandboxProfileRevision   string
+	ProviderConnection       string
+	Model                    string
+	ReasoningEffort          string
+	KeepRunning              bool
+	AdmissionOpen            bool
+	CleanupState             core.CleanupState
+	CurrentTaskID            string
+	ExecutionAttention       string
+	ExecutionAttentionSource string
+	ExecutionAttentionAt     sql.NullTime
+	CleanupAttention         string
+	AdmittedAt               time.Time
+	CleanedAt                sql.NullTime
 }
 
 func (q *Queries) GetSession(ctx context.Context, sessionID string) (GetSessionRow, error) {
@@ -166,8 +160,6 @@ func (q *Queries) GetSession(ctx context.Context, sessionID string) (GetSessionR
 		&i.ThreadID,
 		&i.ID,
 		&i.AdmissionKey,
-		&i.WorkflowName,
-		&i.WorkflowRevision,
 		&i.AgentsMd,
 		&i.SandboxProfile,
 		&i.SandboxProfileRevision,
@@ -178,9 +170,9 @@ func (q *Queries) GetSession(ctx context.Context, sessionID string) (GetSessionR
 		&i.AdmissionOpen,
 		&i.CleanupState,
 		&i.CurrentTaskID,
-		&i.WorkflowAttention,
-		&i.WorkflowAttentionSource,
-		&i.WorkflowAttentionAt,
+		&i.ExecutionAttention,
+		&i.ExecutionAttentionSource,
+		&i.ExecutionAttentionAt,
 		&i.CleanupAttention,
 		&i.AdmittedAt,
 		&i.CleanedAt,
@@ -189,7 +181,7 @@ func (q *Queries) GetSession(ctx context.Context, sessionID string) (GetSessionR
 }
 
 const getSessionAdmissionForUpdate = `-- name: GetSessionAdmissionForUpdate :one
-select j.workflow_name,j.workflow_revision,j.admission_open,j.cleanup_state,
+select j.admission_open,j.cleanup_state,
        p.harness,coalesce(j.thread_id,'') as thread_id
 from dorf.sessions j
 join dorf.sandbox_profile_revisions p on p.name=j.sandbox_profile and p.definition_hash=j.sandbox_profile_revision
@@ -198,20 +190,16 @@ for update of j
 `
 
 type GetSessionAdmissionForUpdateRow struct {
-	WorkflowName     core.WorkflowName
-	WorkflowRevision string
-	AdmissionOpen    bool
-	CleanupState     core.CleanupState
-	Harness          string
-	ThreadID         string
+	AdmissionOpen bool
+	CleanupState  core.CleanupState
+	Harness       string
+	ThreadID      string
 }
 
 func (q *Queries) GetSessionAdmissionForUpdate(ctx context.Context, sessionID string) (GetSessionAdmissionForUpdateRow, error) {
 	row := q.db.QueryRowContext(ctx, getSessionAdmissionForUpdate, sessionID)
 	var i GetSessionAdmissionForUpdateRow
 	err := row.Scan(
-		&i.WorkflowName,
-		&i.WorkflowRevision,
 		&i.AdmissionOpen,
 		&i.CleanupState,
 		&i.Harness,
@@ -223,13 +211,13 @@ func (q *Queries) GetSessionAdmissionForUpdate(ctx context.Context, sessionID st
 const getSessionForSandboxActionAuthorization = `-- name: GetSessionForSandboxActionAuthorization :one
 select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(creator.name,'') as created_by_client_name,j.client_reference,
        p.harness,coalesce(j.thread_id,'') as thread_id,
-       j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
+       j.id,j.admission_key,j.agents_md,
        j.sandbox_profile,j.sandbox_profile_revision,j.provider_connection,j.model,j.reasoning_effort,j.keep_running,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(current_task.task_name,'') as current_task_name,
-       coalesce(j.workflow_attention,'') as workflow_attention,
-       coalesce(j.workflow_attention_source,'') as workflow_attention_source,
-       j.workflow_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
+       coalesce(j.execution_attention,'') as execution_attention,
+       coalesce(j.execution_attention_source,'') as execution_attention_source,
+       j.execution_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
        j.admitted_at,j.cleaned_at
 from dorf.sessions j
 join dorf.sandbox_profile_revisions p on p.name=j.sandbox_profile and p.definition_hash=j.sandbox_profile_revision
@@ -242,32 +230,30 @@ for update of j
 `
 
 type GetSessionForSandboxActionAuthorizationRow struct {
-	CreatedByClientID       string
-	CreatedByClientName     string
-	ClientReference         string
-	Harness                 string
-	ThreadID                string
-	ID                      string
-	AdmissionKey            string
-	WorkflowName            core.WorkflowName
-	WorkflowRevision        string
-	AgentsMd                string
-	SandboxProfile          string
-	SandboxProfileRevision  string
-	ProviderConnection      string
-	Model                   string
-	ReasoningEffort         string
-	KeepRunning             bool
-	AdmissionOpen           bool
-	CleanupState            core.CleanupState
-	CurrentTaskID           string
-	CurrentTaskName         string
-	WorkflowAttention       string
-	WorkflowAttentionSource string
-	WorkflowAttentionAt     sql.NullTime
-	CleanupAttention        string
-	AdmittedAt              time.Time
-	CleanedAt               sql.NullTime
+	CreatedByClientID        string
+	CreatedByClientName      string
+	ClientReference          string
+	Harness                  string
+	ThreadID                 string
+	ID                       string
+	AdmissionKey             string
+	AgentsMd                 string
+	SandboxProfile           string
+	SandboxProfileRevision   string
+	ProviderConnection       string
+	Model                    string
+	ReasoningEffort          string
+	KeepRunning              bool
+	AdmissionOpen            bool
+	CleanupState             core.CleanupState
+	CurrentTaskID            string
+	CurrentTaskName          string
+	ExecutionAttention       string
+	ExecutionAttentionSource string
+	ExecutionAttentionAt     sql.NullTime
+	CleanupAttention         string
+	AdmittedAt               time.Time
+	CleanedAt                sql.NullTime
 }
 
 func (q *Queries) GetSessionForSandboxActionAuthorization(ctx context.Context, sessionID string) (GetSessionForSandboxActionAuthorizationRow, error) {
@@ -281,8 +267,6 @@ func (q *Queries) GetSessionForSandboxActionAuthorization(ctx context.Context, s
 		&i.ThreadID,
 		&i.ID,
 		&i.AdmissionKey,
-		&i.WorkflowName,
-		&i.WorkflowRevision,
 		&i.AgentsMd,
 		&i.SandboxProfile,
 		&i.SandboxProfileRevision,
@@ -294,9 +278,9 @@ func (q *Queries) GetSessionForSandboxActionAuthorization(ctx context.Context, s
 		&i.CleanupState,
 		&i.CurrentTaskID,
 		&i.CurrentTaskName,
-		&i.WorkflowAttention,
-		&i.WorkflowAttentionSource,
-		&i.WorkflowAttentionAt,
+		&i.ExecutionAttention,
+		&i.ExecutionAttentionSource,
+		&i.ExecutionAttentionAt,
 		&i.CleanupAttention,
 		&i.AdmittedAt,
 		&i.CleanedAt,
@@ -320,14 +304,14 @@ func (q *Queries) GetSessionSandboxProfileForUpdate(ctx context.Context, session
 
 const insertAdmittedSession = `-- name: InsertAdmittedSession :execrows
 insert into dorf.sessions(
-    id,admission_key,workflow_name,workflow_revision,agents_md,created_by_client_id,client_reference,
+    id,admission_key,agents_md,created_by_client_id,client_reference,
     sandbox_profile,sandbox_profile_revision,provider_connection,model,reasoning_effort,keep_running
 )
 values(
-    $1,$2,$3,$4,
-    $5,nullif($6::text,''),$7,
-    $8,$9,$10,$11,
-    $12,$13
+    $1,$2,
+    $3,nullif($4::text,''),$5,
+    $6,$7,$8,$9,
+    $10,$11
 )
 on conflict do nothing
 `
@@ -335,8 +319,6 @@ on conflict do nothing
 type InsertAdmittedSessionParams struct {
 	ID                     string
 	AdmissionKey           string
-	WorkflowName           core.WorkflowName
-	WorkflowRevision       string
 	AgentsMd               string
 	CreatedByClientID      string
 	ClientReference        string
@@ -352,8 +334,6 @@ func (q *Queries) InsertAdmittedSession(ctx context.Context, arg InsertAdmittedS
 	result, err := q.db.ExecContext(ctx, insertAdmittedSession,
 		arg.ID,
 		arg.AdmissionKey,
-		arg.WorkflowName,
-		arg.WorkflowRevision,
 		arg.AgentsMd,
 		arg.CreatedByClientID,
 		arg.ClientReference,
@@ -432,14 +412,13 @@ func (q *Queries) ListSessionTasks(ctx context.Context, sessionID string) ([]Dor
 	return items, nil
 }
 
-const listSupportedSessions = `-- name: ListSupportedSessions :many
-select j.id,j.workflow_name,j.workflow_revision,j.admitted_at,
+const listSessions = `-- name: ListSessions :many
+select j.id,j.admitted_at,
        coalesce(j.created_by_client_id,'') as created_by_client_id,coalesce(creator.name,'') as created_by_client_name,j.client_reference
 from dorf.sessions j
 join dorf.sandbox_profile_revisions p on p.name=j.sandbox_profile and p.definition_hash=j.sandbox_profile_revision
 left join dorf.control_clients creator on creator.id=j.created_by_client_id
-where j.workflow_name='' and j.workflow_revision=''
-  and (
+where (
         not $1::boolean or
         j.admitted_at < $2::timestamptz or
         (j.admitted_at=$2::timestamptz and j.id < $3::text)
@@ -448,25 +427,23 @@ order by j.admitted_at desc,j.id desc
 limit $4
 `
 
-type ListSupportedSessionsParams struct {
+type ListSessionsParams struct {
 	HasCursor        bool
 	CursorAdmittedAt time.Time
 	CursorID         string
 	PageSize         int32
 }
 
-type ListSupportedSessionsRow struct {
+type ListSessionsRow struct {
 	ID                  string
-	WorkflowName        core.WorkflowName
-	WorkflowRevision    string
 	AdmittedAt          time.Time
 	CreatedByClientID   string
 	CreatedByClientName string
 	ClientReference     string
 }
 
-func (q *Queries) ListSupportedSessions(ctx context.Context, arg ListSupportedSessionsParams) ([]ListSupportedSessionsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listSupportedSessions,
+func (q *Queries) ListSessions(ctx context.Context, arg ListSessionsParams) ([]ListSessionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSessions,
 		arg.HasCursor,
 		arg.CursorAdmittedAt,
 		arg.CursorID,
@@ -476,13 +453,11 @@ func (q *Queries) ListSupportedSessions(ctx context.Context, arg ListSupportedSe
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListSupportedSessionsRow
+	var items []ListSessionsRow
 	for rows.Next() {
-		var i ListSupportedSessionsRow
+		var i ListSessionsRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.WorkflowName,
-			&i.WorkflowRevision,
 			&i.AdmittedAt,
 			&i.CreatedByClientID,
 			&i.CreatedByClientName,
@@ -534,23 +509,23 @@ func (q *Queries) SetCleanupAttention(ctx context.Context, arg SetCleanupAttenti
 	return result.RowsAffected()
 }
 
-const setWorkflowAttention = `-- name: SetWorkflowAttention :execrows
+const setExecutionAttention = `-- name: SetExecutionAttention :execrows
 update dorf.sessions
-set workflow_attention=$1,
-    workflow_attention_source=$2,
-    workflow_attention_at=clock_timestamp()
+set execution_attention=$1,
+    execution_attention_source=$2,
+    execution_attention_at=clock_timestamp()
 where id=$3
-  and (workflow_attention_source is null or workflow_attention_source=$2)
+  and (execution_attention_source is null or execution_attention_source=$2)
 `
 
-type SetWorkflowAttentionParams struct {
+type SetExecutionAttentionParams struct {
 	Detail    sql.NullString
 	Source    sql.NullString
 	SessionID string
 }
 
-func (q *Queries) SetWorkflowAttention(ctx context.Context, arg SetWorkflowAttentionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, setWorkflowAttention, arg.Detail, arg.Source, arg.SessionID)
+func (q *Queries) SetExecutionAttention(ctx context.Context, arg SetExecutionAttentionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setExecutionAttention, arg.Detail, arg.Source, arg.SessionID)
 	if err != nil {
 		return 0, err
 	}

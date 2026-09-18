@@ -51,8 +51,8 @@ of fact.
 The same mutable fact must not be mirrored into multiple authorities. Read models may project facts
 for inspection, but they are disposable and rebuildable. Agent prose and application reports are client inputs; they do not prove platform execution or business success.
 
-Resource ownership follows lifetime. A Session is the aggregate owner of every Sandbox allocated for
-it. A Sandbox owns or deterministically identifies its
+Resource ownership follows lifetime. Admission reserves one logical Sandbox for a Session;
+replacement retains separate physical resource generations. A Sandbox owns or deterministically identifies its
 scoped provider route and injected authority. AgentRuns use a Sandbox but never own it; they remain
 internal durable recovery facts rather than caller-coordinated resources. Cleanup begins at the Session
 and reconciles resources against their external authorities before declaring them removed, but only
@@ -170,8 +170,8 @@ Thread receiving client input; it does not limit native subagent threads managed
 
 Accepted client input receives immutable Session-local identity and order. A caller-retained per-send
 idempotency key binds its complete admitted delivery request: the exact Sandbox, text, ordered
-attachment manifest, follow or steer intent and target, authorized Role, capability and input
-Revision when used, and the authoritative retained Thread. The same key and request return the same
+attachment manifest, requested delivery intent, observation and instruction settings. Effective
+delivery retains its captured target and authoritative native binding. The same key and request return the same
 Message. Changing any bound field or attachment order conflicts. A different key may admit identical
 input. Sending through the Agent handle defaults to follow. While admission remains open, every
 accepted follow enters the FIFO, including input accepted before an earlier Turn settles. Delivery
@@ -197,7 +197,7 @@ through the native image input. Cleanup deletes the working copies. The retained
 still support exact receipt replay after cleanup, but replay does not start another AgentRun.
 
 An AgentRun is Core's internal durable recovery fact for one bounded delivery of one Message to an
-agent in a named Role and capability envelope. It retains the exact Harness, Thread, Turn,
+agent in the Session's admitted Sandbox. It retains the exact Harness, Thread, Turn,
 submission, observation, and terminal facts needed to reconcile uncertain delivery. Harness
 transcript and workspace details remain behind their adapters. Retrying uncertain delivery
 reconciles the same AgentRun; it does not silently create another judgment attempt.
@@ -248,9 +248,9 @@ adapter relies on native exact-Turn validation for the interrupt request, then r
 outcome. A native rejection still requires that read. A transport failure after the attempt uses
 fresh authenticated history without replaying the mutation in the operation.
 
-Consumers and workflows choose a typed execution envelope, including Role, capability, and any input
-Revision, but do not authorize message intent, reorder accepted input, or choose Thread semantics.
-Follow and steer retain the invariant behavior above. Clients compose independent responsibilities through separate Sessions.
+The admitted Session selects its Harness and Sandbox. No workflow, review role, capability, or
+repository revision participates in Message delivery. Clients compose independent responsibilities
+through separate Sessions.
 
 ### Deterministic operations
 
@@ -260,8 +260,8 @@ Before repeating an unsettled Action, Dorf inspects the actual authority. Immuta
 identical retry a no-op.
 
 Agent tool calls and agent-authored files are AgentRun work, not automatically Actions.
-Core exposes settled agent work through the Agent application handle; a workflow observes its
-relevant domain results and records natural typed facts. Generic result strings, arbitrary metadata
+The public observation API exposes settled agent work; clients interpret the results and retain
+their application facts. Generic result strings, arbitrary metadata
 bags, and copied external state are not substitutes for domain records.
 
 ### Message attachments, workspace files, and inspection

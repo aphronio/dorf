@@ -68,8 +68,7 @@ func (s Sandbox) connection() ConnectionConfig {
 }
 
 // ReconcileOwnedCreate creates or recovers the exact Sandbox recorded by the
-// durable core. Workflow-specific labels are attached only after ownership is
-// attested and are never part of cleanup identity.
+// durable core, using the same ownership identity as cleanup.
 func (s Sandbox) ReconcileOwnedCreate(ctx context.Context, metadata OwnershipMetadata) error {
 	if err := validateOwnership(metadata); err != nil {
 		return err

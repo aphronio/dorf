@@ -81,7 +81,8 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D096: Follow and steer are invariant custody; cleanup timing remains consumer policy](decisions/D096-follow-and-steer-are-invariant-custody-cleanup-timing-remains-consumer-policy.md) (`partial`). Changing follow, steer, or consumer-controlled cleanup semantics.
 - [D106: Remove unused workflow capability declarations](decisions/D106-remove-unused-workflow-capability-declarations.md) (`current`). Adding optional provider requirements or workflow runtime metadata.
 - [D143: Retire built-in investigation](decisions/D143-retire-built-in-investigation.md) (`current`). Changing the supported workflow surface or retiring application-owned records.
-- [D144: Retire built-in coding](decisions/D144-retire-built-in-coding.md) (`current`). Changing application policy ownership or the direct-only public boundary.
+- [D144: Retire built-in coding](decisions/D144-retire-built-in-coding.md) (`partial`). Changing application policy ownership or the direct-only public boundary.
+- [D147: Remove residual application machinery](decisions/D147-remove-residual-application-machinery.md) (`current`). Changing Session execution facts, scheduling, or retained application machinery.
 
 ## Interaction
 
@@ -209,8 +210,9 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D127: Message observations deliver completed prefix deltas](decisions/D127-message-observations-deliver-completed-prefix-deltas.md) (`current`). Changing Message observation, native connection reuse, stream replay, or idle behavior.
 - [D131: Application observations reuse automatic delivery](decisions/D131-application-observations-reuse-automatic-delivery.md) (`current`). Delivering application updates into active work or recovering native start-or-steer races.
 - [D143: Retire built-in investigation](decisions/D143-retire-built-in-investigation.md) (`current`). Changing the supported workflow surface or retiring application-owned records.
-- [D144: Retire built-in coding](decisions/D144-retire-built-in-coding.md) (`current`). Changing application policy ownership or the direct-only public boundary.
+- [D144: Retire built-in coding](decisions/D144-retire-built-in-coding.md) (`partial`). Changing application policy ownership or the direct-only public boundary.
 - [D146: Name the execution context Session](decisions/D146-name-the-execution-context-session.md) (`current`). Changing execution resource names, Thread ownership, or upgrading clients.
+- [D147: Remove residual application machinery](decisions/D147-remove-residual-application-machinery.md) (`current`). Changing Session execution facts, scheduling, or retained application machinery.
 
 ## Deployment and setup
 
@@ -264,9 +266,10 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D134: Delivery holds survive executor restarts](decisions/D134-delivery-holds-survive-executor-restarts.md) (`current`). Coordinating a persistent Sandbox upgrade or explaining accepted input that is waiting during maintenance.
 - [D135: Package recovery releases verified resource custody](decisions/D135-package-recovery-releases-verified-resource-custody.md) (`current`). Executing package upgrades, recovering replacement VMs, or investigating held messages and upgrade failures.
 - [D143: Retire built-in investigation](decisions/D143-retire-built-in-investigation.md) (`current`). Changing the supported workflow surface or retiring application-owned records.
-- [D144: Retire built-in coding](decisions/D144-retire-built-in-coding.md) (`current`). Changing application policy ownership or the direct-only public boundary.
+- [D144: Retire built-in coding](decisions/D144-retire-built-in-coding.md) (`partial`). Changing application policy ownership or the direct-only public boundary.
 - [D145: Direct Job owns its Thread](decisions/D145-direct-job-owns-its-thread.md) (`partial`). Changing conversation continuity, native acceptance recovery, or Thread migration.
 - [D146: Name the execution context Session](decisions/D146-name-the-execution-context-session.md) (`current`). Changing execution resource names, Thread ownership, or upgrading clients.
+- [D147: Remove residual application machinery](decisions/D147-remove-residual-application-machinery.md) (`current`). Changing Session execution facts, scheduling, or retained application machinery.
 
 ## GitHub integration
 

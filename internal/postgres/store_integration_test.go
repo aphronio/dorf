@@ -47,7 +47,7 @@ func (providerCheck) DefaultConnection() (string, error) { return "primary", nil
 
 func (providerCheck) DefaultModel(string) (string, error) { return "gpt-5.6-sol", nil }
 
-type failOnceWorkflowBarrier struct {
+type failOnceOperationBarrier struct {
 	mu     sync.Mutex
 	point  string
 	failed bool
@@ -58,9 +58,9 @@ type actionAttentionError string
 func (e actionAttentionError) Error() string       { return string(e) }
 func (actionAttentionError) AttentionNeeded() bool { return true }
 
-func (*failOnceWorkflowBarrier) Reach(context.Context, string, core.Delivery) error { return nil }
+func (*failOnceOperationBarrier) Reach(context.Context, string, core.Delivery) error { return nil }
 
-func (b *failOnceWorkflowBarrier) ReachWorkflow(_ context.Context, point, _, _ string) error {
+func (b *failOnceOperationBarrier) ReachOperation(_ context.Context, point, _, _ string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if point == b.point && !b.failed {
@@ -189,7 +189,7 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 	return db, store, client
 }
 
-func TestWorkflowEnsureAndCleanupSerializeBothWinnerOrders(t *testing.T) {
+func TestProvisionAndCleanupSerializeBothWinnerOrders(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
 	externals := &blockingCreateExternals{
@@ -312,7 +312,7 @@ func TestPostgresDirectBootstrapFollowAndExplicitCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !session.AdmissionOpen || session.CleanupState != core.CleanupPending || session.WorkflowAttention != "" || len(deliveries) != 0 || len(actions) != 2 {
+	if !session.AdmissionOpen || session.CleanupState != core.CleanupPending || session.ExecutionAttention != "" || len(deliveries) != 0 || len(actions) != 2 {
 		t.Fatalf("Session setup should be idle with no Messages: session=%#v actions=%#v deliveries=%#v", session, actions, deliveries)
 	}
 	idleTask, err := client.FetchTaskResult(ctx, client.QueueName(), session.CurrentTaskID)
@@ -392,7 +392,7 @@ func TestPostgresDirectAdmissionReplayRecoversTaskAttachment(t *testing.T) {
 		SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
 	}
 	session, created, err := admitDirectFixture(t, store, ctx, input)
-	if err != nil || !created || session.Workflow != "" || session.WorkflowRevision != "" {
+	if err != nil || !created {
 		t.Fatalf("direct admission session=%#v created=%t err=%v", session, created, err)
 	}
 	request := direct.AdmissionRequest{
@@ -414,9 +414,7 @@ func TestPostgresDirectAdmissionReplayRecoversTaskAttachment(t *testing.T) {
 		t.Fatalf("client scheduled replay session=%#v created=%t err=%v", replayed, created, err)
 	}
 	deliveries, err := store.Deliveries(ctx, session.ID)
-	if err != nil || len(deliveries) != 1 || deliveries[0].AgentRun.Role != direct.DirectAgentRole ||
-		deliveries[0].AgentRun.Capability != "" || deliveries[0].AgentRun.InputRevision != "" ||
-		deliveries[0].AgentRun.SandboxID != core.MainSandboxName(session.ID) {
+	if err != nil || len(deliveries) != 1 || deliveries[0].AgentRun.SandboxID != core.MainSandboxName(session.ID) {
 		t.Fatalf("initial direct delivery=%#v err=%v", deliveries, err)
 	}
 }
@@ -473,8 +471,8 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	if err != nil || !distinct.Created || distinct.Message.ID == first.Message.ID || distinct.Message.Sequence != 2 {
 		t.Fatalf("distinct identical message=%#v err=%v", distinct, err)
 	}
-	crossKind, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), FromKind: "workflow", FromID: distinct.Message.FromID, Input: "same source identity from the workflow"})
-	if err != nil || !crossKind.Created || crossKind.Message.Sequence != 3 || crossKind.Message.ID == distinct.Message.ID || crossKind.Message.ID != core.MessageID(session.ID, "workflow", distinct.Message.FromID) || crossKind.Message.FromKind != "workflow" || crossKind.Message.FromID != distinct.Message.FromID {
+	crossKind, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), FromKind: "agent", FromID: distinct.Message.FromID, Input: "same source identity from the agent"})
+	if err != nil || !crossKind.Created || crossKind.Message.Sequence != 3 || crossKind.Message.ID == distinct.Message.ID || crossKind.Message.ID != core.MessageID(session.ID, "agent", distinct.Message.FromID) || crossKind.Message.FromKind != "agent" || crossKind.Message.FromID != distinct.Message.FromID {
 		t.Fatalf("cross-kind source identity=%#v err=%v", crossKind, err)
 	}
 
@@ -999,7 +997,7 @@ func TestUnavailableSandboxProfileFencesNewSessionsAndPreservesExactAttention(t 
 		t.Fatalf("stale receipt write reopened unavailable profile=%#v err=%v", stored, err)
 	}
 	stopped, err := store.Session(ctx, session.ID)
-	if err != nil || stopped.WorkflowAttentionSource != source || stopped.WorkflowAttention != failure.Error() {
+	if err != nil || stopped.ExecutionAttentionSource != source || stopped.ExecutionAttention != failure.Error() {
 		t.Fatalf("stopped Session=%#v err=%v", stopped, err)
 	}
 	newInput := input
@@ -1857,7 +1855,7 @@ func TestSandboxActionAttentionPersistsAcrossRetryAndClearsOnSuccess(t *testing.
 		t.Fatalf("failed task=%#v err=%v", failed, err)
 	}
 	attention, err := store.Session(ctx, session.ID)
-	if err != nil || attention.WorkflowAttention != `provider route does not currently advertise model "missing-model"` || attention.WorkflowAttentionSource != actionID || attention.WorkflowAttentionAt.IsZero() {
+	if err != nil || attention.ExecutionAttention != `provider route does not currently advertise model "missing-model"` || attention.ExecutionAttentionSource != actionID || attention.ExecutionAttentionAt.IsZero() {
 		t.Fatalf("durable Action attention Session=%#v err=%v", attention, err)
 	}
 	unsettled, err := store.GetOrCreateSandboxAction(ctx, sandboxID, core.ActionRouteCreate)
@@ -1872,7 +1870,7 @@ func TestSandboxActionAttentionPersistsAcrossRetryAndClearsOnSuccess(t *testing.
 		t.Fatal(err)
 	}
 	recovered, err := store.Session(ctx, session.ID)
-	if err != nil || recovered.WorkflowAttention != "" || recovered.WorkflowAttentionSource != "" || !recovered.WorkflowAttentionAt.IsZero() {
+	if err != nil || recovered.ExecutionAttention != "" || recovered.ExecutionAttentionSource != "" || !recovered.ExecutionAttentionAt.IsZero() {
 		t.Fatalf("recovered Session retained Action attention: Session=%#v err=%v", recovered, err)
 	}
 	settled, err := store.GetOrCreateSandboxAction(ctx, sandboxID, core.ActionRouteCreate)
@@ -1923,7 +1921,7 @@ func TestSandboxCleanupRequiresRouteRevoke(t *testing.T) {
 		t.Fatalf("forged tuple or premature cleanup mutated provider: %v", got)
 	}
 
-	barrier := &failOnceWorkflowBarrier{point: core.BarrierSandboxCreated}
+	barrier := &failOnceOperationBarrier{point: core.BarrierSandboxCreated}
 	recovery := core.NewExecutionService(store, externals, barrier, absurdruntime.RequireClaim)
 	recoveryTaskName := "lost-provider-receipt-v1"
 	client.MustRegister(absurd.Task(recoveryTaskName, func(taskCtx context.Context, _ core.SessionTaskParams) (core.TaskResultV1, error) {
@@ -2242,10 +2240,6 @@ type integrationAgentExecution struct {
 	externals *integrationExternals
 }
 
-func (s integrationAgentExecution) ResolveAgentPrompt(_ context.Context, execution core.AgentMessageExecution) (string, error) {
-	return execution.Message.Input, nil
-}
-
 func (s integrationAgentExecution) ResolveAgentRunOperation(_ context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
 	return integrationAgentOperation{externals: s.externals, execution: execution}, nil
 }
@@ -2255,10 +2249,6 @@ func (s integrationAgentExecution) ResolveAgentRunOperation(_ context.Context, e
 type resultBoundaryAgentExecution struct {
 	externals *integrationExternals
 	operation core.AgentRunOperation
-}
-
-func (resultBoundaryAgentExecution) ResolveAgentPrompt(_ context.Context, execution core.AgentMessageExecution) (string, error) {
-	return execution.Message.Input, nil
 }
 
 func (s resultBoundaryAgentExecution) ResolveAgentRunOperation(_ context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
@@ -2274,20 +2264,12 @@ type cleanupOnlyAgentExecution struct {
 	externals      *integrationExternals
 }
 
-func (s *cleanupOnlyAgentExecution) ResolveAgentPrompt(context.Context, core.AgentMessageExecution) (string, error) {
-	s.executionCalls++
-	return "", errors.New("ordinary prompt resolution must not run after admission closes")
-}
-
 func (s *cleanupOnlyAgentExecution) ResolveAgentRunOperation(_ context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
 	if execution.Session.AdmissionOpen {
 		s.executionCalls++
 		return nil, errors.New("ordinary execution Harness selection unexpectedly ran")
 	}
 	s.cleanupCalls++
-	if execution.AgentRun.Role != "direct" {
-		return nil, fmt.Errorf("cleanup did not reload the exact closed ordinary coding run")
-	}
 	return integrationAgentOperation{externals: s.externals, execution: execution}, nil
 }
 
@@ -2517,11 +2499,11 @@ func TestPostgresSessionFenceSerializesOverlappingClaims(t *testing.T) {
 	}
 }
 
-func TestCleanupCompletesWithExplanatoryWorkflowAttention(t *testing.T) {
+func TestCleanupCompletesWithExplanatoryExecutionAttention(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
 	session, _ := prepareTransportIntegrationSession(t, store, "cleanup-attention")
-	if err := store.SetWorkflowAttention(ctx, session.ID, "operator:test", "explanatory only"); err != nil {
+	if err := store.SetExecutionAttention(ctx, session.ID, "operator:test", "explanatory only"); err != nil {
 		t.Fatal(err)
 	}
 	deliveries, err := store.Deliveries(ctx, session.ID)
@@ -2559,7 +2541,7 @@ func TestCleanupCompletesWithExplanatoryWorkflowAttention(t *testing.T) {
 		t.Fatal("foreign cleanup task replay was accepted")
 	}
 	cleaned, err := store.Session(ctx, session.ID)
-	if err != nil || cleaned.CleanupState != core.CleanupComplete || cleaned.WorkflowAttention != "" || cleaned.WorkflowAttentionSource != "" || !cleaned.WorkflowAttentionAt.IsZero() {
+	if err != nil || cleaned.CleanupState != core.CleanupComplete || cleaned.ExecutionAttention != "" || cleaned.ExecutionAttentionSource != "" || !cleaned.ExecutionAttentionAt.IsZero() {
 		t.Fatalf("cleanup terminal retained explanatory attention: session=%#v err=%v", cleaned, err)
 	}
 }

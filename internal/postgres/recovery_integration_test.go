@@ -232,7 +232,7 @@ func TestCheckpointRecoveryHoldsForPostBoundaryNativeSubmission(t *testing.T) {
 		t.Fatalf("unsafe recovery released delivery: held=%v err=%v", held, err)
 	}
 	attention, err := store.Session(ctx, session.ID)
-	if err != nil || attention.WorkflowAttentionSource != "recovery:"+request.ID || attention.WorkflowAttention == "" {
+	if err != nil || attention.ExecutionAttentionSource != "recovery:"+request.ID || attention.ExecutionAttention == "" {
 		t.Fatalf("unsafe recovery omitted attention: session=%#v err=%v", attention, err)
 	}
 }

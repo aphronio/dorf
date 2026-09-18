@@ -30,7 +30,7 @@ const (
 	AbsurdSchemaSHA256  = "d34309370c539f3a51f2b36b69b1f77551f8e4a14480a1c8def8bb8f40fd9aab"
 )
 
-var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql", "009_message_attachments.sql", "010_job_idle_policy.sql", "011_message_developer_instructions.sql", "012_sandbox_idle_grace.sql", "013_message_observation.sql", "014_job_execution_wakes.sql", "015_observation_auto.sql", "016_profile_revisions.sql", "017_sandbox_resources.sql", "018_sandbox_delivery_holds.sql", "019_sandbox_upgrades.sql", "020_sandbox_checkpoints.sql", "021_checkpoint_recovery.sql", "022_remove_investigation.sql", "023_remove_coding.sql", "024_job_thread.sql", "025_sessions.sql"}
+var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql", "009_message_attachments.sql", "010_job_idle_policy.sql", "011_message_developer_instructions.sql", "012_sandbox_idle_grace.sql", "013_message_observation.sql", "014_job_execution_wakes.sql", "015_observation_auto.sql", "016_profile_revisions.sql", "017_sandbox_resources.sql", "018_sandbox_delivery_holds.sql", "019_sandbox_upgrades.sql", "020_sandbox_checkpoints.sql", "021_checkpoint_recovery.sql", "022_remove_investigation.sql", "023_remove_coding.sql", "024_job_thread.sql", "025_sessions.sql", "026_session_execution_facts.sql"}
 
 type Store struct{ DB *sql.DB }
 
@@ -169,13 +169,6 @@ func migrateDorf(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-type admittedAgentRun struct {
-	Role          string
-	Capability    string
-	InputRevision string
-	SandboxID     string
-}
-
 func (s Store) admitMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
 	input, err := normalizeMessage(input)
 	if err != nil {
@@ -210,7 +203,7 @@ func normalizeMessage(input core.MessageAdmission) (core.MessageAdmission, error
 	if input.SessionID == "" || input.SandboxID == "" || input.FromID == "" {
 		return core.MessageAdmission{}, fmt.Errorf("message admission requires Session ID, exact Sandbox ID, from ID, and text or attachments")
 	}
-	if input.FromKind != core.MessageFromHuman && input.FromKind != core.MessageFromAgent && input.FromKind != core.MessageFromWorkflow {
+	if input.FromKind != core.MessageFromHuman && input.FromKind != core.MessageFromAgent {
 		return core.MessageAdmission{}, fmt.Errorf("invalid message from kind")
 	}
 	if len(input.FromID) > 256 {
@@ -238,9 +231,6 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 		}
 		return core.Message{}, false, err
 	}
-	if session.WorkflowName != "" || session.WorkflowRevision != "" {
-		return core.Message{}, false, fmt.Errorf("Session %s is not client-directed", input.SessionID)
-	}
 	row, err := queries.GetMessageBySender(ctx, dbsql.GetMessageBySenderParams{SessionID: input.SessionID, FromKind: input.FromKind, FromID: input.FromID})
 	if err == nil {
 		return replayMessageAdmission(ctx, queries, row, input)
@@ -251,14 +241,10 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 	if !session.AdmissionOpen {
 		return core.Message{}, false, fmt.Errorf("%w for Session %s", core.ErrMessageAdmissionClosed, input.SessionID)
 	}
-	run, err := resolveDirectMessageEnvelope(input)
-	if err != nil {
-		return core.Message{}, false, err
+	if input.SandboxID != core.MainSandboxName(input.SessionID) {
+		return core.Message{}, false, fmt.Errorf("Message requires the exact Session Sandbox")
 	}
-	if run.Role == "" || run.SandboxID != input.SandboxID {
-		return core.Message{}, false, fmt.Errorf("Message execution envelope returned a foreign Sandbox delivery")
-	}
-	target, err := resolveMessageTarget(ctx, queries, input, run)
+	target, err := resolveMessageTarget(ctx, queries, input)
 	if err != nil {
 		return core.Message{}, false, err
 	}
@@ -285,11 +271,10 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 	rows, err := queries.InsertAdmittedAgentRun(ctx, dbsql.InsertAdmittedAgentRunParams{
 		ID: runID, SessionID: message.SessionID, MessageID: message.ID,
 		Harness: nullableString(target.harness), ThreadID: nullableString(target.threadID),
-		Role: run.Role, InputRevision: nullableString(run.InputRevision),
-		Capability: nullableString(run.Capability), SandboxID: run.SandboxID,
+		SandboxID: input.SandboxID,
 	})
 	if err := expectOneRows(rows, err); err != nil {
-		return core.Message{}, false, fmt.Errorf("insert %s execution-envelope AgentRun: %w", run.Role, err)
+		return core.Message{}, false, fmt.Errorf("insert Message AgentRun: %w", err)
 	}
 	storedMessage, err := queries.GetMessageBySender(ctx, dbsql.GetMessageBySenderParams{SessionID: message.SessionID, FromKind: message.FromKind, FromID: message.FromID})
 	if err != nil {
@@ -325,9 +310,9 @@ type messageTarget struct {
 	turnID   string
 }
 
-func resolveMessageTarget(ctx context.Context, queries *dbsql.Queries, input core.MessageAdmission, run admittedAgentRun) (messageTarget, error) {
+func resolveMessageTarget(ctx context.Context, queries *dbsql.Queries, input core.MessageAdmission) (messageTarget, error) {
 	target := messageTarget{intent: core.MessageFollow}
-	held, err := queries.SandboxDeliveryHeld(ctx, run.SandboxID)
+	held, err := queries.SandboxDeliveryHeld(ctx, input.SandboxID)
 	if err != nil {
 		return messageTarget{}, err
 	}
@@ -341,7 +326,7 @@ func resolveMessageTarget(ctx context.Context, queries *dbsql.Queries, input cor
 		return target, nil
 	}
 	active, err := queries.GetActiveAgentTurn(ctx, dbsql.GetActiveAgentTurnParams{
-		SessionID: input.SessionID, Role: run.Role, SandboxID: run.SandboxID,
+		SessionID: input.SessionID, SandboxID: input.SandboxID,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		if input.Intent == core.MessageSteer {
@@ -369,14 +354,13 @@ func (s Store) Session(ctx context.Context, id string) (core.Session, error) {
 	}
 	return core.Session{
 		CreatedByClientID: row.CreatedByClientID, CreatedByClientName: row.CreatedByClientName, ClientReference: row.ClientReference,
-		ID: row.ID, AdmissionKey: row.AdmissionKey, Workflow: core.WorkflowName(row.WorkflowName), WorkflowRevision: row.WorkflowRevision,
-		AgentsMD: row.AgentsMd,
-		Harness:  row.Harness, ThreadID: row.ThreadID,
+		ID: row.ID, AdmissionKey: row.AdmissionKey, AgentsMD: row.AgentsMd,
+		Harness: row.Harness, ThreadID: row.ThreadID,
 		SandboxProfile: row.SandboxProfile, SandboxProfileRevision: row.SandboxProfileRevision, ProviderConnection: row.ProviderConnection,
 		KeepRunning: row.KeepRunning, Model: row.Model, ReasoningEffort: row.ReasoningEffort, AdmissionOpen: row.AdmissionOpen, CleanupState: core.CleanupState(row.CleanupState),
-		CurrentTaskID:     row.CurrentTaskID,
-		WorkflowAttention: row.WorkflowAttention, WorkflowAttentionSource: row.WorkflowAttentionSource,
-		WorkflowAttentionAt: timeValue(row.WorkflowAttentionAt), CleanupAttention: row.CleanupAttention,
+		CurrentTaskID:      row.CurrentTaskID,
+		ExecutionAttention: row.ExecutionAttention, ExecutionAttentionSource: row.ExecutionAttentionSource,
+		ExecutionAttentionAt: timeValue(row.ExecutionAttentionAt), CleanupAttention: row.CleanupAttention,
 		AdmittedAt: row.AdmittedAt, CleanedAt: timeValue(row.CleanedAt),
 	}, nil
 }
@@ -521,8 +505,8 @@ func exactScopedAction(row dbsql.DorfAction, sessionID string, kind core.ActionK
 	return actionFromValues(row.ID, row.SessionID, row.Kind, row.State, row.ScopeKey, row.CreatedAt, row.SettledAt), nil
 }
 
-func agentRunFromValues(id, sessionID, messageID string, state core.AgentRunState, harness, threadID string, baselineRecorded bool, baselineTurnID, turnID, turnOutcome, attention, role, inputRevision string) core.AgentRun {
-	return core.AgentRun{ID: id, SessionID: sessionID, MessageID: messageID, Harness: harness, ThreadID: threadID, State: state, BaselineRecorded: baselineRecorded, BaselineTurnID: baselineTurnID, TurnID: turnID, TurnOutcome: turnOutcome, Attention: attention, Role: role, InputRevision: inputRevision}
+func agentRunFromValues(id, sessionID, messageID string, state core.AgentRunState, harness, threadID string, baselineRecorded bool, baselineTurnID, turnID, turnOutcome, attention string) core.AgentRun {
+	return core.AgentRun{ID: id, SessionID: sessionID, MessageID: messageID, Harness: harness, ThreadID: threadID, State: state, BaselineRecorded: baselineRecorded, BaselineTurnID: baselineTurnID, TurnID: turnID, TurnOutcome: turnOutcome, Attention: attention}
 }
 
 func agentRunOutcome(state core.AgentRunState, outcome string) string {
@@ -685,10 +669,8 @@ func (s Store) Deliveries(ctx context.Context, sessionID string) ([]core.Deliver
 		message.RefreshSkills = r.RefreshSkills
 		message.Observation = r.Observation
 		message.DeveloperInstructions = instructionPointer(r.DeveloperInstructions)
-		run := agentRunFromValues(r.AgentRunID, r.AgentRunSessionID, r.AgentRunMessageID, r.State, r.Harness, r.ThreadID, r.BaselineRecorded, r.BaselineTurnID, r.TurnID, r.TurnOutcome, r.Attention, r.Role, r.InputRevision)
-		run.Capability = r.Capability
+		run := agentRunFromValues(r.AgentRunID, r.AgentRunSessionID, r.AgentRunMessageID, r.State, r.Harness, r.ThreadID, r.BaselineRecorded, r.BaselineTurnID, r.TurnID, r.TurnOutcome, r.Attention)
 		run.SandboxID = r.SandboxID
-		run.SubmissionNonce = r.SubmissionNonce
 		run.InterruptRequested = r.InterruptRequested
 		run.StartedAt = timeValue(r.StartedAt)
 		run.FinishedAt = timeValue(r.FinishedAt)
@@ -719,10 +701,8 @@ func (s Store) AgentMessageExecution(ctx context.Context, messageID string) (cor
 	if err != nil {
 		return core.AgentMessageExecution{}, fmt.Errorf("Message %s has no atomically admitted AgentRun: %w", message.ID, err)
 	}
-	run := agentRunFromValues(runRow.ID, runRow.SessionID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention, runRow.Role, runRow.InputRevision)
-	run.Capability = runRow.Capability
+	run := agentRunFromValues(runRow.ID, runRow.SessionID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention)
 	run.SandboxID = runRow.SandboxID
-	run.SubmissionNonce = runRow.SubmissionNonce
 	run.InterruptRequested = runRow.InterruptRequested
 	run.StartedAt = timeValue(runRow.StartedAt)
 	run.FinishedAt = timeValue(runRow.FinishedAt)
@@ -760,30 +740,30 @@ func nullableString(value string) sql.NullString {
 	return sql.NullString{String: value, Valid: value != ""}
 }
 
-func (s Store) SetWorkflowAttention(ctx context.Context, sessionID, source, detail string) error {
+func (s Store) SetExecutionAttention(ctx context.Context, sessionID, source, detail string) error {
 	source, detail = strings.TrimSpace(source), strings.TrimSpace(detail)
 	if sessionID == "" || source == "" || detail == "" {
-		return fmt.Errorf("workflow attention requires Session ID, exact source, and detail")
+		return fmt.Errorf("execution attention requires Session ID, exact source, and detail")
 	}
 	if len(detail) > 4096 {
 		detail = detail[:4096]
 	}
-	return expectOneRows(dbsql.New(s.DB).SetWorkflowAttention(ctx, dbsql.SetWorkflowAttentionParams{SessionID: sessionID, Source: sql.NullString{String: source, Valid: true}, Detail: sql.NullString{String: detail, Valid: true}}))
+	return expectOneRows(dbsql.New(s.DB).SetExecutionAttention(ctx, dbsql.SetExecutionAttentionParams{SessionID: sessionID, Source: sql.NullString{String: source, Valid: true}, Detail: sql.NullString{String: detail, Valid: true}}))
 }
 
-func (s Store) ClearWorkflowAttention(ctx context.Context, sessionID, source string) error {
+func (s Store) ClearExecutionAttention(ctx context.Context, sessionID, source string) error {
 	source = strings.TrimSpace(source)
 	if sessionID == "" || source == "" {
-		return fmt.Errorf("workflow attention clearing requires Session ID and exact source")
+		return fmt.Errorf("execution attention clearing requires Session ID and exact source")
 	}
-	rows, err := dbsql.New(s.DB).ClearWorkflowAttention(ctx, dbsql.ClearWorkflowAttentionParams{
+	rows, err := dbsql.New(s.DB).ClearExecutionAttention(ctx, dbsql.ClearExecutionAttentionParams{
 		SessionID: sessionID, Source: sql.NullString{String: source, Valid: true},
 	})
 	if err != nil {
 		return err
 	}
 	if rows > 1 {
-		return fmt.Errorf("workflow attention source %s changed %d Sessions", source, rows)
+		return fmt.Errorf("execution attention source %s changed %d Sessions", source, rows)
 	}
 	return nil
 }
@@ -880,12 +860,12 @@ func authorizeSandboxActionTx(ctx context.Context, queries *dbsql.Queries, id, t
 	return core.SandboxActionAuthorization{
 		Session: core.Session{
 			CreatedByClientID: session.CreatedByClientID, CreatedByClientName: session.CreatedByClientName, ClientReference: session.ClientReference,
-			ID: session.ID, AdmissionKey: session.AdmissionKey, Workflow: session.WorkflowName, WorkflowRevision: session.WorkflowRevision, AgentsMD: session.AgentsMd,
+			ID: session.ID, AdmissionKey: session.AdmissionKey, AgentsMD: session.AgentsMd,
 			Harness: session.Harness, ThreadID: session.ThreadID,
 			KeepRunning: session.KeepRunning, SandboxProfile: session.SandboxProfile, SandboxProfileRevision: session.SandboxProfileRevision, ProviderConnection: session.ProviderConnection, Model: session.Model, ReasoningEffort: session.ReasoningEffort,
 			AdmissionOpen: session.AdmissionOpen, CleanupState: session.CleanupState, CurrentTaskID: session.CurrentTaskID,
-			WorkflowAttention: session.WorkflowAttention, WorkflowAttentionSource: session.WorkflowAttentionSource,
-			WorkflowAttentionAt: timeValue(session.WorkflowAttentionAt), CleanupAttention: session.CleanupAttention,
+			ExecutionAttention: session.ExecutionAttention, ExecutionAttentionSource: session.ExecutionAttentionSource,
+			ExecutionAttentionAt: timeValue(session.ExecutionAttentionAt), CleanupAttention: session.CleanupAttention,
 			AdmittedAt: session.AdmittedAt, CleanedAt: timeValue(session.CleanedAt),
 		},
 		Sandbox: core.Sandbox{ID: owned.ID, SessionID: owned.SessionID, Name: owned.Name, OwnershipNonce: owned.OwnershipNonce, ResourceID: owned.ActiveResourceID, ProviderID: owned.ProviderID},
@@ -929,7 +909,7 @@ func (s Store) AgentMessage(ctx context.Context, sessionID string) (*core.AgentM
 	if err != nil {
 		return nil, fmt.Errorf("delivery Message %s has no atomically admitted AgentRun: %w", message.ID, err)
 	}
-	run := agentRunFromValues(runRow.ID, runRow.SessionID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention, runRow.Role, runRow.InputRevision)
+	run := agentRunFromValues(runRow.ID, runRow.SessionID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention)
 	run.SandboxID = runRow.SandboxID
 	if message.Intent == core.MessageFollow && run.State == core.AgentRunPending && run.ThreadID == "" && session.ThreadID != "" {
 		if err := expectOneRows(queries.BindPendingFollowToSessionThread(ctx, message.ID)); err != nil {
@@ -937,7 +917,7 @@ func (s Store) AgentMessage(ctx context.Context, sessionID string) (*core.AgentM
 		}
 		run.Harness, run.ThreadID = session.Harness, session.ThreadID
 	}
-	if run.Role == "" || run.SandboxID == "" {
+	if run.SandboxID == "" {
 		return nil, fmt.Errorf("delivery candidate AgentRun %s has an incomplete execution envelope", run.ID)
 	}
 	if run.ThreadID != "" && (run.Harness != session.Harness || run.ThreadID != session.ThreadID) {

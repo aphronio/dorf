@@ -11,8 +11,6 @@ import (
 	profileapp "github.com/aphronio/dorf/internal/profile"
 )
 
-const DirectAgentRole = "direct"
-
 var (
 	ErrInvalidAdmission  = errors.New("invalid direct admission")
 	ErrAdmissionConflict = errors.New("direct admission key is bound to different input")
@@ -115,9 +113,6 @@ func (s AdmissionService) replay(ctx context.Context, request AdmissionRequest) 
 	session, err := s.store.Session(ctx, core.SessionID(request.AdmissionKey))
 	if err != nil {
 		return core.Session{}, false, err
-	}
-	if session.Workflow != "" || session.WorkflowRevision != "" {
-		return core.Session{}, false, ErrAdmissionConflict
 	}
 	admission, err := normalizeAdmissionRequest(request)
 	if err != nil {

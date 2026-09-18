@@ -186,12 +186,6 @@ type composedAgentExecution struct {
 	externals terminal.Externals
 }
 
-func (s composedAgentExecution) ResolveAgentPrompt(_ context.Context, execution core.AgentMessageExecution) (string, error) {
-	if err := validateDirectAgentExecution(execution); err != nil {
-		return "", err
-	}
-	return execution.Message.Input, nil
-}
 func (s composedAgentExecution) ResolveAgentRunOperation(_ context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
 	if err := validateDirectAgentExecution(execution); err != nil {
 		return nil, err
@@ -200,8 +194,7 @@ func (s composedAgentExecution) ResolveAgentRunOperation(_ context.Context, exec
 }
 func validateDirectAgentExecution(execution core.AgentMessageExecution) error {
 	session, run := execution.Session, execution.AgentRun
-	if session.Workflow != "" || session.WorkflowRevision != "" || run.Role != direct.DirectAgentRole ||
-		run.Capability != "" || run.InputRevision != "" || run.SandboxID != core.MainSandboxName(session.ID) ||
+	if run.SandboxID != core.MainSandboxName(session.ID) ||
 		execution.Sandbox.Name != core.DefaultSandbox {
 		return fmt.Errorf("Message %s conflicts with the exact client-directed Agent contract", execution.Message.ID)
 	}

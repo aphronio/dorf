@@ -1,10 +1,11 @@
 # D144: Retire built-in coding
 
-- **Applicability:** current
+- **Applicability:** partial
 - **Areas:** workflows, client-api, persistence
 - **Read when:** Changing application policy ownership or the direct-only public boundary.
 - **Decision history:** Retires built-in coding and its review, publication, outcome, Evidence,
-  and GitHub integration contracts, 2026-09-18.
+  and GitHub integration contracts, 2026-09-18. D147 removes the remaining application attribution
+  and supersedes its preservation below.
 - **Decision:** Make direct execution the only supported application path. Clients own repository
   setup, review, publication, credentials, evaluation, and business outcomes. Remove the application
   packages, CLI/API entry points, GitHub App setup page, strict-review adapters, and application

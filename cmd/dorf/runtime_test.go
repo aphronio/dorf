@@ -10,7 +10,6 @@ import (
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/deployment"
-	"github.com/aphronio/dorf/internal/direct"
 	"github.com/aphronio/dorf/internal/incus"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/terminal"
@@ -40,40 +39,28 @@ func TestConfiguredObservationsSurviveUnavailableExport(t *testing.T) {
 	}
 }
 
-func TestDirectClientPromptIsExactAndFailClosed(t *testing.T) {
+func TestSessionOperationRejectsForeignSandbox(t *testing.T) {
 	session := core.Session{ID: "job-direct"}
 	message := core.Message{ID: "message-direct", SessionID: session.ID, Input: "raw caller prompt\nwith exact spacing\n"}
 	sandbox := core.Sandbox{ID: core.MainSandboxName(session.ID), SessionID: session.ID, Name: core.DefaultSandbox}
 	execution := core.AgentMessageExecution{
 		Session: session, Message: message, Sandbox: sandbox,
-		AgentRun: core.AgentRun{ID: core.AgentRunID(message.ID), SessionID: session.ID, MessageID: message.ID, Role: direct.DirectAgentRole, SandboxID: sandbox.ID},
+		AgentRun: core.AgentRun{ID: core.AgentRunID(message.ID), SessionID: session.ID, MessageID: message.ID, SandboxID: sandbox.ID},
 	}
 	resolved := composedAgentExecution{externals: terminal.Externals{
 		Sandbox: ordinarySandbox{}, Agent: ordinaryHarness{Harness: codex.Agent{}},
 	}}
-	prompt, err := resolved.ResolveAgentPrompt(context.Background(), execution)
-	if err != nil || prompt != execution.Message.Input {
-		t.Fatalf("direct prompt=%q err=%v", prompt, err)
-	}
 	if _, err := resolved.ResolveAgentRunOperation(context.Background(), execution); err != nil {
 		t.Fatalf("direct operation: %v", err)
 	}
 
 	for name, mutate := range map[string]func(*core.AgentMessageExecution){
-		"workflow":          func(value *core.AgentMessageExecution) { value.Session.Workflow = "foreign" },
-		"workflow revision": func(value *core.AgentMessageExecution) { value.Session.WorkflowRevision = "foreign" },
-		"role":              func(value *core.AgentMessageExecution) { value.AgentRun.Role = "implement" },
-		"capability":        func(value *core.AgentMessageExecution) { value.AgentRun.Capability = "foreign" },
-		"revision":          func(value *core.AgentMessageExecution) { value.AgentRun.InputRevision = "foreign" },
-		"run Sandbox":       func(value *core.AgentMessageExecution) { value.AgentRun.SandboxID = "foreign" },
-		"Sandbox name":      func(value *core.AgentMessageExecution) { value.Sandbox.Name = "foreign" },
+		"run Sandbox":  func(value *core.AgentMessageExecution) { value.AgentRun.SandboxID = "foreign" },
+		"Sandbox name": func(value *core.AgentMessageExecution) { value.Sandbox.Name = "foreign" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			changed := execution
 			mutate(&changed)
-			if _, err := resolved.ResolveAgentPrompt(context.Background(), changed); err == nil {
-				t.Fatal("changed direct Agent contract resolved a prompt")
-			}
 			if _, err := resolved.ResolveAgentRunOperation(context.Background(), changed); err == nil {
 				t.Fatal("changed direct Agent contract resolved a Harness operation")
 			}

@@ -21,7 +21,7 @@ func TestStableIdentitiesDoNotContainGoalOrSecrets(t *testing.T) {
 	if messageA == messageB || AgentRunID(messageA) == AgentRunID(messageB) {
 		t.Fatal("distinct logical inputs share delivery identities")
 	}
-	if messageA == MessageID(sessionA, MessageFromWorkflow, "caller-a") {
+	if messageA == MessageID(sessionA, MessageFromAgent, "caller-a") {
 		t.Fatal("different senders share a Message identity")
 	}
 	if AgentRunID(messageA) != AgentRunID(messageA) {

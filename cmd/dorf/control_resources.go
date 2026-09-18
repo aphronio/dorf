@@ -78,7 +78,7 @@ func (a controlAPISessions) projectUpgrades(ctx context.Context, session core.Se
 				continue
 			}
 			status := receipt.Status()
-			if receipt.FinishedAt.IsZero() && session.WorkflowAttentionSource == "upgrade:"+receipt.ID && session.WorkflowAttention != "" {
+			if receipt.FinishedAt.IsZero() && session.ExecutionAttentionSource == "upgrade:"+receipt.ID && session.ExecutionAttention != "" {
 				status = "failed"
 			}
 			view.Sandboxes[i].Upgrades = append(view.Sandboxes[i].Upgrades, controlapi.SandboxUpgrade{

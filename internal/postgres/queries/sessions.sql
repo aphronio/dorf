@@ -1,12 +1,12 @@
 -- name: GetSession :one
 select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(creator.name,'') as created_by_client_name,j.client_reference,
        p.harness,coalesce(j.thread_id,'') as thread_id,
-       j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
+       j.id,j.admission_key,j.agents_md,
        j.sandbox_profile,j.sandbox_profile_revision,j.provider_connection,j.model,j.reasoning_effort,j.keep_running,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
-       coalesce(j.workflow_attention,'') as workflow_attention,
-       coalesce(j.workflow_attention_source,'') as workflow_attention_source,
-       j.workflow_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
+       coalesce(j.execution_attention,'') as execution_attention,
+       coalesce(j.execution_attention_source,'') as execution_attention_source,
+       j.execution_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
        j.admitted_at,j.cleaned_at
 from dorf.sessions j
 join dorf.sandbox_profile_revisions p on p.name=j.sandbox_profile and p.definition_hash=j.sandbox_profile_revision
@@ -16,14 +16,13 @@ left join lateral (
 ) current_task on true
 where j.id=sqlc.arg(session_id);
 
--- name: ListSupportedSessions :many
-select j.id,j.workflow_name,j.workflow_revision,j.admitted_at,
+-- name: ListSessions :many
+select j.id,j.admitted_at,
        coalesce(j.created_by_client_id,'') as created_by_client_id,coalesce(creator.name,'') as created_by_client_name,j.client_reference
 from dorf.sessions j
 join dorf.sandbox_profile_revisions p on p.name=j.sandbox_profile and p.definition_hash=j.sandbox_profile_revision
 left join dorf.control_clients creator on creator.id=j.created_by_client_id
-where j.workflow_name='' and j.workflow_revision=''
-  and (
+where (
         not sqlc.arg(has_cursor)::boolean or
         j.admitted_at < sqlc.arg(cursor_admitted_at)::timestamptz or
         (j.admitted_at=sqlc.arg(cursor_admitted_at)::timestamptz and j.id < sqlc.arg(cursor_id)::text)
@@ -33,11 +32,11 @@ limit sqlc.arg(page_size);
 
 -- name: InsertAdmittedSession :execrows
 insert into dorf.sessions(
-    id,admission_key,workflow_name,workflow_revision,agents_md,created_by_client_id,client_reference,
+    id,admission_key,agents_md,created_by_client_id,client_reference,
     sandbox_profile,sandbox_profile_revision,provider_connection,model,reasoning_effort,keep_running
 )
 values(
-    sqlc.arg(id),sqlc.arg(admission_key),sqlc.arg(workflow_name),sqlc.arg(workflow_revision),
+    sqlc.arg(id),sqlc.arg(admission_key),
     sqlc.arg(agents_md),nullif(sqlc.arg(created_by_client_id)::text,''),sqlc.arg(client_reference),
     sqlc.arg(sandbox_profile),sqlc.arg(sandbox_profile_revision),sqlc.arg(provider_connection),sqlc.arg(model),
     sqlc.arg(reasoning_effort),sqlc.arg(keep_running)
@@ -45,14 +44,14 @@ values(
 on conflict do nothing;
 
 -- name: GetAdmittedSessionForUpdate :one
-select id,admission_key,workflow_name,workflow_revision,agents_md,sandbox_profile,provider_connection,
+select id,admission_key,agents_md,sandbox_profile,provider_connection,
        model,reasoning_effort,client_reference,keep_running
 from dorf.sessions
 where admission_key=sqlc.arg(admission_key)
 for update;
 
 -- name: GetSessionAdmissionForUpdate :one
-select j.workflow_name,j.workflow_revision,j.admission_open,j.cleanup_state,
+select j.admission_open,j.cleanup_state,
        p.harness,coalesce(j.thread_id,'') as thread_id
 from dorf.sessions j
 join dorf.sandbox_profile_revisions p on p.name=j.sandbox_profile and p.definition_hash=j.sandbox_profile_revision
@@ -62,13 +61,13 @@ for update of j;
 -- name: GetSessionForSandboxActionAuthorization :one
 select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(creator.name,'') as created_by_client_name,j.client_reference,
        p.harness,coalesce(j.thread_id,'') as thread_id,
-       j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
+       j.id,j.admission_key,j.agents_md,
        j.sandbox_profile,j.sandbox_profile_revision,j.provider_connection,j.model,j.reasoning_effort,j.keep_running,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(current_task.task_name,'') as current_task_name,
-       coalesce(j.workflow_attention,'') as workflow_attention,
-       coalesce(j.workflow_attention_source,'') as workflow_attention_source,
-       j.workflow_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
+       coalesce(j.execution_attention,'') as execution_attention,
+       coalesce(j.execution_attention_source,'') as execution_attention_source,
+       j.execution_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
        j.admitted_at,j.cleaned_at
 from dorf.sessions j
 join dorf.sandbox_profile_revisions p on p.name=j.sandbox_profile and p.definition_hash=j.sandbox_profile_revision
@@ -114,18 +113,18 @@ update dorf.sessions
 set cleanup_state='scheduled'
 where id=sqlc.arg(session_id) and not admission_open and cleanup_state='requested';
 
--- name: SetWorkflowAttention :execrows
+-- name: SetExecutionAttention :execrows
 update dorf.sessions
-set workflow_attention=sqlc.arg(detail),
-    workflow_attention_source=sqlc.arg(source),
-    workflow_attention_at=clock_timestamp()
+set execution_attention=sqlc.arg(detail),
+    execution_attention_source=sqlc.arg(source),
+    execution_attention_at=clock_timestamp()
 where id=sqlc.arg(session_id)
-  and (workflow_attention_source is null or workflow_attention_source=sqlc.arg(source));
+  and (execution_attention_source is null or execution_attention_source=sqlc.arg(source));
 
--- name: ClearWorkflowAttention :execrows
+-- name: ClearExecutionAttention :execrows
 update dorf.sessions
-set workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null
-where id=sqlc.arg(session_id) and workflow_attention_source=sqlc.arg(source);
+set execution_attention=null,execution_attention_source=null,execution_attention_at=null
+where id=sqlc.arg(session_id) and execution_attention_source=sqlc.arg(source);
 
 -- name: SetCleanupAttention :execrows
 update dorf.sessions

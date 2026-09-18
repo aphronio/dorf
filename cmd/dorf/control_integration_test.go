@@ -536,26 +536,23 @@ func TestControlAPISessionListKeepsKeysetContinuity(t *testing.T) {
 	base := fmt.Sprintf("job-page-%d", time.Now().UnixNano())
 	tiedAt := time.Now().UTC().AddDate(100, 0, 0).Truncate(time.Microsecond)
 	type listedFixture struct {
-		id       string
-		workflow string
-		revision string
-		at       time.Time
+		id string
+		at time.Time
 	}
 	fixtures := []listedFixture{
-		{base + "-z", "", "", tiedAt},
-		{base + "-y", "", "", tiedAt},
-		{base + "-x", "", "", tiedAt.Add(-time.Second)},
-		{base + "-w", "", "", tiedAt.Add(-2 * time.Second)},
-		// A retained but unrecognized workflow revision must not consume a page slot.
+		{base + "-z", tiedAt},
+		{base + "-y", tiedAt},
+		{base + "-x", tiedAt.Add(-time.Second)},
+		{base + "-w", tiedAt.Add(-2 * time.Second)},
 	}
 	insert := func(fixture listedFixture) {
 		t.Helper()
 		_, err := store.DB.ExecContext(ctx, `
 insert into dorf.sessions(
-    id,admission_key,workflow_name,workflow_revision,
+    id,admission_key,
     sandbox_profile,sandbox_profile_revision,provider_connection,model,reasoning_effort,admitted_at
-) values($1,$2,$3,$4,$5,(select candidate_revision from dorf.sandbox_profiles where name=$5),'primary','model-test','high',$6)
-`, fixture.id, "admission-"+fixture.id, fixture.workflow, fixture.revision, profileName, fixture.at)
+) values($1,$2,$3,(select candidate_revision from dorf.sandbox_profiles where name=$3),'primary','model-test','high',$4)
+`, fixture.id, "admission-"+fixture.id, profileName, fixture.at)
 		if err != nil {
 			t.Fatalf("insert Session list fixture %s: %v", fixture.id, err)
 		}
@@ -580,7 +577,7 @@ insert into dorf.sessions(
 		t.Fatalf("first Session page=%#v", first)
 	}
 
-	newer := listedFixture{base + "-new", "", "", tiedAt.Add(3 * time.Second)}
+	newer := listedFixture{base + "-new", tiedAt.Add(3 * time.Second)}
 	fixtures = append(fixtures, newer)
 	insert(newer)
 	secondResponse := controlTestRequest(t, handler, http.MethodGet,

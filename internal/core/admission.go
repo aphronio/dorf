@@ -83,16 +83,12 @@ func ValidMessageInput(input MessageInput) bool {
 		(strings.TrimSpace(input.Text) != "" || len(input.Attachments) != 0) && ValidMessageAttachments(input.Attachments)
 }
 
-// SessionAdmission is the complete Core input shared by workflow and direct-client
-// admission. Workflow packages extend it with their own typed input; a direct
-// client leaves both workflow identity fields empty.
+// SessionAdmission is the complete admitted execution configuration.
 type SessionAdmission struct {
 	KeepRunning        bool
 	CreatedByClientID  string
 	ClientReference    string
 	AdmissionKey       string
-	Workflow           WorkflowName
-	WorkflowRevision   string
 	AgentsMD           string
 	SandboxProfile     string
 	ProviderConnection string

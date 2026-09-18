@@ -27,10 +27,6 @@ sql:
             go_type:
               import: "github.com/aphronio/dorf/internal/core"
               type: "CleanupState"
-          - column: "dorf.sessions.workflow_name"
-            go_type:
-              import: "github.com/aphronio/dorf/internal/core"
-              type: "WorkflowName"
           - column: "dorf.session_messages.from_kind"
             go_type:
               import: "github.com/aphronio/dorf/internal/core"

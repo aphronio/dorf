@@ -37,7 +37,7 @@ func (a controlAPISessions) List(ctx context.Context, limit int, cursor string) 
 			return controlapi.SessionList{}, err
 		}
 	}
-	rows, err := a.store.ListSupportedSessions(ctx, limit+1, cursorAt, cursorID)
+	rows, err := a.store.ListSessions(ctx, limit+1, cursorAt, cursorID)
 	if err != nil {
 		return controlapi.SessionList{}, err
 	}
