@@ -8,44 +8,23 @@ from dorf.jobs j
 where j.id=sqlc.arg(job_id)
 on conflict do nothing;
 
--- name: GetLatestAgentThreadBinding :one
-select coalesce(ar.harness,'') as harness,coalesce(ar.thread_id,'') as thread_id
+-- name: BindPendingFollowToJobThread :execrows
+update dorf.agent_runs ar
+set harness=j.thread_harness,thread_id=j.thread_id
+from dorf.jobs j, dorf.job_messages m
+where ar.message_id=sqlc.arg(message_id) and m.id=ar.message_id
+  and j.id=ar.job_id and m.delivery_intent='follow'
+  and ar.state='pending' and ar.baseline_turn_id is null and ar.thread_id is null
+  and j.thread_id is not null
+  and (ar.harness is null or ar.harness=j.thread_harness);
+
+-- name: BindJobThread :execrows
+update dorf.jobs j
+set thread_harness=sqlc.arg(harness),thread_id=sqlc.arg(thread_id)
 from dorf.agent_runs ar
-left join dorf.job_messages m on m.id=ar.message_id
-where ar.job_id=sqlc.arg(job_id) and ar.role=sqlc.arg(role)
-  and ar.sandbox_id=sqlc.arg(sandbox_id) and ar.thread_id is not null
-order by m.sequence desc nulls last,ar.started_at desc nulls last,ar.id desc
-limit 1;
-
--- name: BindPendingFollowToPriorThread :execrows
-with prior as (
-    select prior_run.harness,prior_run.thread_id
-    from dorf.agent_runs current_run
-    join dorf.job_messages current_message on current_message.id=current_run.message_id
-    join dorf.job_messages prior_message on prior_message.job_id=current_message.job_id
-      and prior_message.sequence<current_message.sequence
-    join dorf.agent_runs prior_run on prior_run.message_id=prior_message.id
-    where current_run.message_id=sqlc.arg(message_id)
-      and current_message.delivery_intent='follow'
-      and prior_run.role=current_run.role and prior_run.sandbox_id=current_run.sandbox_id
-      and prior_run.harness is not null and prior_run.thread_id is not null
-    order by prior_message.sequence desc
-    limit 1
-)
-update dorf.agent_runs current_run
-set harness=prior.harness,thread_id=prior.thread_id
-from prior
-where current_run.message_id=sqlc.arg(message_id)
-  and current_run.state='pending' and current_run.baseline_turn_id is null
-  and current_run.thread_id is null
-  and (current_run.harness is null or current_run.harness=prior.harness);
-
--- name: ListAgentThreadBindings :many
-select harness,thread_id
-from dorf.agent_runs
-where job_id=sqlc.arg(job_id) and sandbox_id=sqlc.arg(sandbox_id)
-  and role=sqlc.arg(role) and thread_id is not null
-order by id;
+where ar.id=sqlc.arg(run_id) and j.id=ar.job_id
+  and j.workflow_name='' and j.workflow_revision=''
+  and (j.thread_id is null or (j.thread_harness=sqlc.arg(harness) and j.thread_id=sqlc.arg(thread_id)));
 
 -- name: GetAgentRunByMessage :one
 select id,job_id,message_id,state,

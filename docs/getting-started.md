@@ -99,6 +99,12 @@ docker compose restart worker control-api
 docker compose logs --tail=200 worker control-api
 ```
 
+When upgrading a deployment that predates Job-owned Thread bindings, stop its old worker with
+`docker compose stop worker` from this directory before running the updated `dorf setup`.
+Setup applies the migration and starts the updated worker. Do not restart an old worker against
+the migrated database: it cannot maintain the new binding. Existing native conversations are
+retained. See [D145](project/decisions/D145-direct-job-owns-its-thread.md) for migration behavior.
+
 Do not edit the generated `.env`; rerun setup to change and apply its source facts.
 
 Setup offers prepared local Incus, remote Incus over Tailscale, cloud E2B, any combination, or none.

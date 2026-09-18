@@ -40,7 +40,7 @@ of fact.
 
 | Fact | Authority |
 | --- | --- |
-| Job identity, accepted execution contract, durable lifecycle, and cleanup request/execution | Dorf-owned PostgreSQL facts |
+| Job identity, accepted execution contract, native Thread binding, durable lifecycle, and cleanup request/execution | Dorf-owned PostgreSQL facts |
 | Task claims, checkpoints, retry schedule, sleeps, waits, and cancellation | Absurd schema in the same PostgreSQL deployment |
 | Agent transcript, tool items, Thread, Turn, and native history | The selected Harness |
 | Mutable files, running processes, and local tool output | A Job-owned Sandbox |
@@ -159,6 +159,14 @@ rather than alternate application contracts.
 
 ### Messages and AgentRuns
 
+A direct Job owns one primary native conversation binding: the Harness name and Thread ID. The binding
+is absent until native acceptance is proven. Recording the first accepted Turn commits the Job
+binding and AgentRun receipt together; subsequent acceptance must match that binding. Pending
+Follows acquire their Thread from the Job when selected. An uncertain initial submission keeps
+its recovery identity and blocks later input even while the Job binding is absent. AgentRuns
+retain their exact native attribution for delivery recovery and interruption. This binds the
+Thread receiving client input; it does not limit native subagent threads managed by the Harness.
+
 Accepted client input receives immutable Job-local identity and order. A caller-retained per-send
 idempotency key binds its complete admitted delivery request: the exact Sandbox, text, ordered
 attachment manifest, follow or steer intent and target, authorized Role, capability and input
@@ -196,8 +204,8 @@ reconciles the same AgentRun; it does not silently create another judgment attem
 An Agent handle is bound to one exact Job-owned Sandbox. Submission, history reconciliation, wait,
 and steer through that handle cannot fall back to another Sandbox in the Job.
 
-Passive timeline reads use an optional Sandbox runtime capability. The provider reader derives
-the default Sandbox and unique native thread from retained Job deliveries under the cleanup fence.
+Passive timeline reads use an optional Sandbox runtime capability. The provider reader reads
+the Job's Thread binding and attests its default Sandbox under the cleanup fence.
 It passes those bound coordinates to the Harness adapter and returns original conversation items.
 The Harness owns ordering and history storage. Dorf adds no transcript table, execution, or
 observation subscription. The [Remote Control API](../control-api.md) owns public read semantics.

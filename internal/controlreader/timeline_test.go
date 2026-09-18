@@ -42,10 +42,9 @@ func (r *timelineTestRuntime) ReadTimeline(_ context.Context, job core.Job, owne
 }
 
 func TestTimelineClientEnforcesCustodyAndPropagatesNativeFailures(t *testing.T) {
-	job := core.Job{ID: "job", SandboxProfile: "profile", CleanupState: core.CleanupPending}
+	job := core.Job{ID: "job", SandboxProfile: "profile", CleanupState: core.CleanupPending, ThreadHarness: "codex", ThreadID: "bound"}
 	owned := core.Sandbox{ID: "sandbox", Name: core.DefaultSandbox, JobID: job.ID, OwnershipNonce: strings.Repeat("a", 64)}
-	delivery := core.Delivery{Message: core.Message{ID: "message", JobID: job.ID}, AgentRun: core.AgentRun{ID: "run", JobID: job.ID, MessageID: "message", SandboxID: owned.ID, Harness: "codex", ThreadID: "bound"}}
-	store := &timelineTestStore{readerTestStore: &readerTestStore{job: job, sandbox: owned}, deliveries: []core.Delivery{delivery}}
+	store := &timelineTestStore{readerTestStore: &readerTestStore{job: job, sandbox: owned}}
 	runtime := &timelineTestRuntime{store: store, result: core.HarnessTimeline{Harness: "codex", ThreadID: "bound", TurnID: "selected", Status: "inProgress", Items: []json.RawMessage{json.RawMessage(`{"id":"item","type":"agentMessage","phase":"commentary"}`)}}}
 	handler, err := NewHandler(strings.Repeat("b", 64), Service{Store: store, Runtimes: runtime})
 	if err != nil {
@@ -59,11 +58,10 @@ func TestTimelineClientEnforcesCustodyAndPropagatesNativeFailures(t *testing.T) 
 	if err != nil || result.TurnID != "selected" || runtime.calls != 1 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	for _, test := range []string{"missing-job", "cleanup", "no-binding", "conflicting-binding", "foreign-job", "foreign-sandbox", "foreign-thread", "unknown-turn", "unsupported", "oversized"} {
+	for _, test := range []string{"missing-job", "cleanup", "no-binding", "foreign-sandbox", "foreign-thread", "unknown-turn", "unsupported", "oversized"} {
 		t.Run(test, func(t *testing.T) {
 			store.job = job
 			store.sandbox = owned
-			store.deliveries = []core.Delivery{delivery}
 			runtime.err = nil
 			runtime.result.ThreadID = "bound"
 			runtime.result.Items = []json.RawMessage{json.RawMessage(`{"id":"item","type":"agentMessage"}`)}
@@ -76,13 +74,7 @@ func TestTimelineClientEnforcesCustodyAndPropagatesNativeFailures(t *testing.T) 
 			case "cleanup":
 				store.job.CleanupState = core.CleanupRequested
 			case "no-binding":
-				store.deliveries = nil
-			case "conflicting-binding":
-				other := delivery
-				other.AgentRun.ThreadID = "other"
-				store.deliveries = append(store.deliveries, other)
-			case "foreign-job":
-				store.deliveries[0].AgentRun.JobID = "foreign"
+				store.job.ThreadHarness, store.job.ThreadID = "", ""
 			case "foreign-sandbox":
 				store.sandbox.JobID = "foreign"
 			case "foreign-thread":

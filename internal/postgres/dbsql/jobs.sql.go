@@ -110,6 +110,7 @@ func (q *Queries) GetCurrentJobTaskForUpdate(ctx context.Context, jobID string) 
 
 const getJob = `-- name: GetJob :one
 select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(creator.name,'') as created_by_client_name,j.client_reference,
+       coalesce(j.thread_harness,'') as thread_harness,coalesce(j.thread_id,'') as thread_id,
        j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        j.sandbox_profile,j.sandbox_profile_revision,j.provider_connection,j.model,j.reasoning_effort,j.keep_running,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
@@ -129,6 +130,8 @@ type GetJobRow struct {
 	CreatedByClientID       string
 	CreatedByClientName     string
 	ClientReference         string
+	ThreadHarness           string
+	ThreadID                string
 	ID                      string
 	AdmissionKey            string
 	WorkflowName            core.WorkflowName
@@ -158,6 +161,8 @@ func (q *Queries) GetJob(ctx context.Context, jobID string) (GetJobRow, error) {
 		&i.CreatedByClientID,
 		&i.CreatedByClientName,
 		&i.ClientReference,
+		&i.ThreadHarness,
+		&i.ThreadID,
 		&i.ID,
 		&i.AdmissionKey,
 		&i.WorkflowName,
@@ -183,7 +188,8 @@ func (q *Queries) GetJob(ctx context.Context, jobID string) (GetJobRow, error) {
 }
 
 const getJobAdmissionForUpdate = `-- name: GetJobAdmissionForUpdate :one
-select workflow_name,workflow_revision,admission_open,cleanup_state
+select workflow_name,workflow_revision,admission_open,cleanup_state,
+       coalesce(thread_harness,'') as thread_harness,coalesce(thread_id,'') as thread_id
 from dorf.jobs
 where id=$1
 for update
@@ -194,6 +200,8 @@ type GetJobAdmissionForUpdateRow struct {
 	WorkflowRevision string
 	AdmissionOpen    bool
 	CleanupState     core.CleanupState
+	ThreadHarness    string
+	ThreadID         string
 }
 
 func (q *Queries) GetJobAdmissionForUpdate(ctx context.Context, jobID string) (GetJobAdmissionForUpdateRow, error) {
@@ -204,12 +212,15 @@ func (q *Queries) GetJobAdmissionForUpdate(ctx context.Context, jobID string) (G
 		&i.WorkflowRevision,
 		&i.AdmissionOpen,
 		&i.CleanupState,
+		&i.ThreadHarness,
+		&i.ThreadID,
 	)
 	return i, err
 }
 
 const getJobForSandboxActionAuthorization = `-- name: GetJobForSandboxActionAuthorization :one
 select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(creator.name,'') as created_by_client_name,j.client_reference,
+       coalesce(j.thread_harness,'') as thread_harness,coalesce(j.thread_id,'') as thread_id,
        j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        j.sandbox_profile,j.sandbox_profile_revision,j.provider_connection,j.model,j.reasoning_effort,j.keep_running,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
@@ -231,6 +242,8 @@ type GetJobForSandboxActionAuthorizationRow struct {
 	CreatedByClientID       string
 	CreatedByClientName     string
 	ClientReference         string
+	ThreadHarness           string
+	ThreadID                string
 	ID                      string
 	AdmissionKey            string
 	WorkflowName            core.WorkflowName
@@ -261,6 +274,8 @@ func (q *Queries) GetJobForSandboxActionAuthorization(ctx context.Context, jobID
 		&i.CreatedByClientID,
 		&i.CreatedByClientName,
 		&i.ClientReference,
+		&i.ThreadHarness,
+		&i.ThreadID,
 		&i.ID,
 		&i.AdmissionKey,
 		&i.WorkflowName,

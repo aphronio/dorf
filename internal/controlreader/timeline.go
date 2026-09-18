@@ -51,7 +51,7 @@ func (s Service) ReadTimeline(ctx context.Context, jobID, turnID string) (core.H
 		if job.ID != jobID || job.CleanupState != core.CleanupPending {
 			return core.ErrTimelineUnavailable
 		}
-		owned, harness, threadID, err := timelineBinding(ctx, store, jobID)
+		owned, harness, threadID, err := timelineBinding(ctx, store, job)
 		if err != nil {
 			return err
 		}
@@ -76,37 +76,16 @@ func (s Service) ReadTimeline(ctx context.Context, jobID, turnID string) (core.H
 	return result, nil
 }
 
-func timelineBinding(ctx context.Context, store timelineStore, jobID string) (core.Sandbox, string, string, error) {
-	sandboxes, err := store.Sandboxes(ctx, jobID)
-	if err != nil {
-		return core.Sandbox{}, "", "", err
-	}
-	owned, err := defaultTimelineSandbox(sandboxes, jobID)
-	if err != nil {
-		return core.Sandbox{}, "", "", err
-	}
-	deliveries, err := store.Deliveries(ctx, jobID)
-	if err != nil {
-		return core.Sandbox{}, "", "", err
-	}
-	var harness, threadID string
-	for _, delivery := range deliveries {
-		run := delivery.AgentRun
-		if run.SandboxID != owned.ID || run.ThreadID == "" {
-			continue
-		}
-		if run.JobID != jobID || delivery.Message.JobID != jobID || !validIdentity(run.ThreadID) || !validIdentity(run.Harness) {
-			return core.Sandbox{}, "", "", core.ErrTimelineUnavailable
-		}
-		if threadID != "" && (threadID != run.ThreadID || harness != run.Harness) {
-			return core.Sandbox{}, "", "", core.ErrTimelineUnavailable
-		}
-		harness, threadID = run.Harness, run.ThreadID
-	}
-	if threadID == "" {
+func timelineBinding(ctx context.Context, store timelineStore, job core.Job) (core.Sandbox, string, string, error) {
+	if !validIdentity(job.ThreadHarness) || !validIdentity(job.ThreadID) {
 		return core.Sandbox{}, "", "", core.ErrTimelineUnavailable
 	}
-	return owned, harness, threadID, nil
+	sandboxes, err := store.Sandboxes(ctx, job.ID)
+	if err != nil {
+		return core.Sandbox{}, "", "", err
+	}
+	owned, err := defaultTimelineSandbox(sandboxes, job.ID)
+	return owned, job.ThreadHarness, job.ThreadID, err
 }
 
 func (c Client) ReadTimeline(ctx context.Context, jobID, turnID string) (core.HarnessTimeline, error) {

@@ -11,6 +11,12 @@ reliable control-plane primitive required by a proven client or workflow, then l
 broader seams. Do not turn possible Harnesses, Sandboxes, clients, or workflows into speculative
 abstractions.
 
+Existing clients supply evidence of a need, not application-specific requirements for Core.
+For each API change, identify what becomes simpler for a real client, the underlying execution or
+resource responsibility, and whether another client could use the same operation without knowing
+that application's domain. Prove the smallest general primitive through current use. Keep goals,
+policy, and application identities with the client; possible future clients do not justify a framework.
+
 ## Build from conviction, not competitor parity
 
 Competitors are evidence about the market, not a specification for Dorf. Inspect an adjacent product
@@ -30,9 +36,9 @@ A Job is the durable unit of user intent. Its initiating client, controller, tas
 current agent process may disappear without erasing accepted input or observed progress. A Job owns
 one or more Sandboxes; each Sandbox is an isolated mutable workstation and has one deterministically
 named Provider Route. Immutable Action success records the Route and Sandbox lifecycle. AgentRuns use
-a Sandbox rather than owning infrastructure. A continuing harness Thread supplies conversation
-continuity. Every AgentRun consumes one durable Message and retains its exact Turn binding. Every
-Message selected for agent delivery has one AgentRun record. While admission is open, a follow joins
+a Sandbox rather than owning infrastructure. The Job owns the binding to one primary harness
+Thread for client input. Native subagent threads remain the Harness's responsibility. Every AgentRun
+consumes one durable Message and retains its exact Turn binding. Every Message selected for agent delivery has one AgentRun record. While admission is open, a follow joins
 the FIFO, reuses the authoritative retained Thread, and creates a distinct Turn. A steer atomically
 targets the exact active Turn and may overtake queued follows. Explicit steer never falls back to a
 new Turn and fails honestly when that target becomes terminal. Automatic intent preserves eventual

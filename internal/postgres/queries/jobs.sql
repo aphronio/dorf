@@ -1,5 +1,6 @@
 -- name: GetJob :one
 select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(creator.name,'') as created_by_client_name,j.client_reference,
+       coalesce(j.thread_harness,'') as thread_harness,coalesce(j.thread_id,'') as thread_id,
        j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        j.sandbox_profile,j.sandbox_profile_revision,j.provider_connection,j.model,j.reasoning_effort,j.keep_running,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
@@ -49,7 +50,8 @@ where admission_key=sqlc.arg(admission_key)
 for update;
 
 -- name: GetJobAdmissionForUpdate :one
-select workflow_name,workflow_revision,admission_open,cleanup_state
+select workflow_name,workflow_revision,admission_open,cleanup_state,
+       coalesce(thread_harness,'') as thread_harness,coalesce(thread_id,'') as thread_id
 from dorf.jobs
 where id=sqlc.arg(job_id)
 for update;
@@ -62,6 +64,7 @@ for update;
 
 -- name: GetJobForSandboxActionAuthorization :one
 select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(creator.name,'') as created_by_client_name,j.client_reference,
+       coalesce(j.thread_harness,'') as thread_harness,coalesce(j.thread_id,'') as thread_id,
        j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.agents_md,
        j.sandbox_profile,j.sandbox_profile_revision,j.provider_connection,j.model,j.reasoning_effort,j.keep_running,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,

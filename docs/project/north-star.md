@@ -29,7 +29,7 @@ execution custody or lifecycle mechanism that remains after that policy is remov
 
 | Term | Meaning |
 | --- | --- |
-| **Job** | The current durable execution handle with admitted configuration, Messages, owned resources, and lifecycle |
+| **Job** | The current durable execution handle with admitted configuration, one primary native Thread binding, Messages, owned resources, and lifecycle |
 | **Sandbox** | An isolated mutable workstation with exact resource ownership |
 | **Message** | Durable text and optional ordered attachments with delivery intent and an immutable request identity |
 | **AgentRun** | The current internal delivery and native execution recovery record for one Message |
@@ -37,8 +37,9 @@ execution custody or lifecycle mechanism that remains after that policy is remov
 | **Thread / Turn** | The Harness's continuing conversation and individual execution identities |
 | **Action** | A fixed compute or model-route lifecycle effect with stable identity and reconciliation |
 
-Session naming and revised Thread/Turn ownership remain [proposals](../implementation/session-product-proposals.md).
-Removing application policy does not itself change the current Job or AgentRun model.
+A direct Job binds the primary Thread receiving client input; native subagent threads remain
+Harness-owned. AgentRuns retain exact delivery and Turn attribution.
+Session naming and separate Turn ownership remain [proposals](../implementation/session-product-proposals.md).
 
 ## Message semantics
 

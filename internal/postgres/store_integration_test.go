@@ -1542,7 +1542,7 @@ func TestTerminalHarnessTurnAllowsSameThreadFollowFIFO(t *testing.T) {
 	}
 }
 
-func TestEarlyDirectFollowsAdoptAuthoritativeThreadAndSubmitDistinctTurns(t *testing.T) {
+func TestEarlyDirectFollowsRecoverInitialAcceptanceAndContinueJobThread(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	job, created, err := admitDirectFixture(t, store, ctx, directJobInput(
@@ -1582,6 +1582,21 @@ func TestEarlyDirectFollowsAdoptAuthoritativeThreadAndSubmitDistinctTurns(t *tes
 	}
 
 	externals := &integrationExternals{turnStatus: "completed"}
+	// Native acceptance survives a worker loss before the local binding is saved.
+	initial, err := store.AgentMessageExecution(ctx, messageIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PrepareAgentRun(ctx, initial.AgentRun.ID, "codex", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (integrationAgentOperation{externals: externals, execution: initial}).Submit(ctx, initial.AgentRun, wantInputs[0]); err != nil {
+		t.Fatal(err)
+	}
+	unbound, err := store.Job(ctx, job.ID)
+	if err != nil || unbound.ThreadID != "" {
+		t.Fatalf("unacknowledged initial acceptance: job=%+v err=%v", unbound, err)
+	}
 	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
 		WithAgentExecution(integrationAgentExecution{store: store, externals: externals})
 	taskName := "dorf-early-follow-proof-v1"
@@ -1624,7 +1639,11 @@ func TestEarlyDirectFollowsAdoptAuthoritativeThreadAndSubmitDistinctTurns(t *tes
 	if err != nil || len(deliveries) != len(wantInputs) {
 		t.Fatalf("settled deliveries=%#v err=%v", deliveries, err)
 	}
-	threadID := deliveries[0].AgentRun.ThreadID
+	bound, err := store.Job(ctx, job.ID)
+	if err != nil || bound.ThreadHarness != "codex" || bound.ThreadID == "" || externals.initialStarts != 1 {
+		t.Fatalf("recovered Job binding=%+v initial starts=%d err=%v", bound, externals.initialStarts, err)
+	}
+	threadID := bound.ThreadID
 	turnIDs := make(map[string]struct{}, len(deliveries))
 	for i, delivery := range deliveries {
 		if delivery.AgentRun.State != core.AgentRunCompleted || threadID == "" || delivery.AgentRun.ThreadID != threadID || delivery.AgentRun.TurnID == "" {
@@ -1634,6 +1653,61 @@ func TestEarlyDirectFollowsAdoptAuthoritativeThreadAndSubmitDistinctTurns(t *tes
 	}
 	if len(turnIDs) != len(deliveries) {
 		t.Fatalf("early follows reused a prior Turn: %#v", deliveries)
+	}
+}
+
+func TestConcurrentNativeBindingsKeepOneJobThread(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, _ := prepareTransportIntegrationJob(t, store, "concurrent-thread-binding")
+	if _, err := store.AdmitDirectMessage(ctx, core.MessageAdmission{
+		JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman,
+		FromID: "second", Input: "continue",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deliveries, err := store.Deliveries(ctx, job.ID)
+	if err != nil || len(deliveries) != 2 {
+		t.Fatalf("deliveries=%+v err=%v", deliveries, err)
+	}
+	for _, delivery := range deliveries {
+		if err := store.PrepareAgentRun(ctx, delivery.AgentRun.ID, "codex", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for i, delivery := range deliveries {
+		go func() {
+			<-start
+			results <- store.BindAgentRun(ctx, delivery.AgentRun.ID, "codex", fmt.Sprintf("thread-%d", i), fmt.Sprintf("turn-%d", i), "completed")
+		}()
+	}
+	close(start)
+	first, second := <-results, <-results
+	if (first == nil) == (second == nil) {
+		t.Fatalf("want one accepted binding: %v / %v", first, second)
+	}
+	bound, err := store.Job(ctx, job.ID)
+	if err != nil || bound.ThreadHarness != "codex" || bound.ThreadID == "" {
+		t.Fatalf("Job binding=%+v err=%v", bound, err)
+	}
+	deliveries, err = store.Deliveries(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, delivery := range deliveries {
+		run := delivery.AgentRun
+		if run.State == core.AgentRunCompleted {
+			if run.ThreadID != bound.ThreadID {
+				t.Fatalf("accepted run disagrees with Job: %+v", run)
+			}
+			if err := store.BindAgentRun(ctx, run.ID, run.Harness, run.ThreadID, run.TurnID, "completed"); err != nil {
+				t.Fatalf("binding replay: %v", err)
+			}
+		} else if run.State != core.AgentRunSubmitting || run.ThreadID != "" || run.TurnID != "" {
+			t.Fatalf("rejected binding partially committed: %+v", run)
+		}
 	}
 }
 
@@ -2322,6 +2396,7 @@ type integrationExternals struct {
 	inputs          []string
 	effects         []core.ActionKind
 	turnStatus      string
+	initialStarts   int
 	steerErr        error
 	terminalOnSteer bool
 	startOnSteer    bool
@@ -2397,6 +2472,7 @@ func (o integrationAgentOperation) Submit(_ context.Context, run core.AgentRun, 
 		status = "running"
 	}
 	if run.ThreadID == "" {
+		o.externals.initialStarts++
 		if len(o.externals.turns) == 0 {
 			turn := core.HarnessTurn{ID: "integration-turn-" + o.execution.Message.ID, Status: status}
 			o.externals.submitted = append(o.externals.submitted, o.execution.Message.Sequence)

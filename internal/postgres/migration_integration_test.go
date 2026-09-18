@@ -125,6 +125,29 @@ insert into dorf.codebase_investigation_sources(job_id,workflow_name,repository,
 values('job-retired','codebase-investigation','https://example.test/source.git',repeat('a',40))`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := tx.ExecContext(ctx, `
+update dorf.agent_runs set state='completed',harness='codex',thread_id='thread-current',
+    turn_id='turn-current',turn_outcome='completed' where id='run-current';
+insert into dorf.job_messages(id,job_id,from_kind,from_id,sequence,input)
+values('message-queued','job-current','human','queued',2,'continue');
+insert into dorf.agent_runs(id,job_id,message_id,role,state,sandbox_id)
+values('run-queued','job-current','message-queued','direct','pending','sandbox-current')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, binding := range []struct{ harness, thread string }{{"codex", "other-thread"}, {"pi", "thread-current"}} {
+		if _, err := tx.ExecContext(ctx, `savepoint conflicting_thread`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.ExecContext(ctx, `update dorf.agent_runs set harness=$1,thread_id=$2 where id='run-queued'`, binding.harness, binding.thread); err != nil {
+			t.Fatal(err)
+		}
+		if err := migrateDorf(ctx, tx); err == nil || !strings.Contains(err.Error(), "conflicting or incomplete retained Thread bindings") {
+			t.Fatalf("conflicting Thread migration: %v", err)
+		}
+		if _, err := tx.ExecContext(ctx, `rollback to savepoint conflicting_thread`); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := migrateDorf(ctx, tx); err != nil {
 		t.Fatalf("baseline replay: %v", err)
 	}
@@ -158,6 +181,14 @@ from dorf.jobs j join dorf.job_messages m on m.job_id=j.id where j.id='job-retir
 	}
 	if err := migrateDorf(ctx, tx); err != nil {
 		t.Fatalf("attribution migration replay: %v", err)
+	}
+	var harness, thread string
+	if err := tx.QueryRowContext(ctx, `select thread_harness,thread_id from dorf.jobs where id='job-current'`).Scan(&harness, &thread); err != nil || harness != "codex" || thread != "thread-current" {
+		t.Fatalf("migrated Job Thread=%s/%s err=%v", harness, thread, err)
+	}
+	var queuedThread sql.NullString
+	if err := tx.QueryRowContext(ctx, `select thread_id from dorf.agent_runs where id='run-queued'`).Scan(&queuedThread); err != nil || queuedThread.Valid {
+		t.Fatalf("migration changed queued delivery attribution: thread=%v err=%v", queuedThread, err)
 	}
 	var retainedInput string
 	if err := tx.QueryRowContext(ctx, `select input from dorf.job_messages where id='message-current'`).Scan(&retainedInput); err != nil || retainedInput != "run direct caller intent" {

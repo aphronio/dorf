@@ -165,6 +165,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D137: Provider images share one Nix workstation](decisions/D137-provider-images-share-one-nix-workstation.md) (`current`). Changing shared guest tools, browser installation, or package parity between Incus and E2B.
 - [D138: Session checkpoints use stock restic and scoped object storage](decisions/D138-session-checkpoints-use-stock-restic.md) (`current`). Changing session checkpoint storage, capture, or recovery.
 - [D139: Codex routes use native launch overrides](decisions/D139-codex-routes-use-native-launch-overrides.md) (`current`). Changing Codex route installation, native configuration ownership, or app-server launch.
+- [D145: Direct Job owns its Thread](decisions/D145-direct-job-owns-its-thread.md) (`current`). Changing conversation continuity, native acceptance recovery, or Thread migration.
 
 ## Model access
 
@@ -262,6 +263,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D135: Package recovery releases verified resource custody](decisions/D135-package-recovery-releases-verified-resource-custody.md) (`current`). Executing package upgrades, recovering replacement VMs, or investigating held messages and upgrade failures.
 - [D143: Retire built-in investigation](decisions/D143-retire-built-in-investigation.md) (`current`). Changing the supported workflow surface or retiring application-owned records.
 - [D144: Retire built-in coding](decisions/D144-retire-built-in-coding.md) (`current`). Changing application policy ownership or the direct-only public boundary.
+- [D145: Direct Job owns its Thread](decisions/D145-direct-job-owns-its-thread.md) (`current`). Changing conversation continuity, native acceptance recovery, or Thread migration.
 
 ## GitHub integration
 

@@ -167,6 +167,8 @@ type Job struct {
 	Workflow                WorkflowName `json:"workflow"`
 	WorkflowRevision        string       `json:"workflow_revision"`
 	AgentsMD                string       `json:"agents_md,omitempty"`
+	ThreadHarness           string       `json:"-"`
+	ThreadID                string       `json:"-"`
 	SandboxProfile          string       `json:"sandbox_profile"`
 	SandboxProfileRevision  string       `json:"sandbox_profile_revision"`
 	ProviderConnection      string       `json:"provider_connection"`

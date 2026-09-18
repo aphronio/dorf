@@ -31,7 +31,7 @@ const (
 	AbsurdSchemaSHA256  = "d34309370c539f3a51f2b36b69b1f77551f8e4a14480a1c8def8bb8f40fd9aab"
 )
 
-var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql", "009_message_attachments.sql", "010_job_idle_policy.sql", "011_message_developer_instructions.sql", "012_sandbox_idle_grace.sql", "013_message_observation.sql", "014_job_execution_wakes.sql", "015_observation_auto.sql", "016_profile_revisions.sql", "017_sandbox_resources.sql", "018_sandbox_delivery_holds.sql", "019_sandbox_upgrades.sql", "020_sandbox_checkpoints.sql", "021_checkpoint_recovery.sql", "022_remove_investigation.sql", "023_remove_coding.sql"}
+var dorfMigrations = []string{"001_greenfield.sql", "002_non_expiring_client_credentials.sql", "003_message_interrupt.sql", "004_direct_conversation_setup.sql", "005_message_instructions.sql", "006_remove_message_instructions.sql", "007_job_client_attribution.sql", "008_message_skill_refresh.sql", "009_message_attachments.sql", "010_job_idle_policy.sql", "011_message_developer_instructions.sql", "012_sandbox_idle_grace.sql", "013_message_observation.sql", "014_job_execution_wakes.sql", "015_observation_auto.sql", "016_profile_revisions.sql", "017_sandbox_resources.sql", "018_sandbox_delivery_holds.sql", "019_sandbox_upgrades.sql", "020_sandbox_checkpoints.sql", "021_checkpoint_recovery.sql", "022_remove_investigation.sql", "023_remove_coding.sql", "024_job_thread.sql"}
 
 type Store struct{ DB *sql.DB }
 
@@ -371,7 +371,8 @@ func (s Store) Job(ctx context.Context, id string) (core.Job, error) {
 	return core.Job{
 		CreatedByClientID: row.CreatedByClientID, CreatedByClientName: row.CreatedByClientName, ClientReference: row.ClientReference,
 		ID: row.ID, AdmissionKey: row.AdmissionKey, Workflow: core.WorkflowName(row.WorkflowName), WorkflowRevision: row.WorkflowRevision,
-		AgentsMD:       row.AgentsMd,
+		AgentsMD:      row.AgentsMd,
+		ThreadHarness: row.ThreadHarness, ThreadID: row.ThreadID,
 		SandboxProfile: row.SandboxProfile, SandboxProfileRevision: row.SandboxProfileRevision, ProviderConnection: row.ProviderConnection,
 		KeepRunning: row.KeepRunning, Model: row.Model, ReasoningEffort: row.ReasoningEffort, AdmissionOpen: row.AdmissionOpen, CleanupState: core.CleanupState(row.CleanupState),
 		CurrentTaskID:     row.CurrentTaskID,
@@ -968,6 +969,7 @@ func authorizeSandboxActionTx(ctx context.Context, queries *dbsql.Queries, id, t
 		Job: core.Job{
 			CreatedByClientID: job.CreatedByClientID, CreatedByClientName: job.CreatedByClientName, ClientReference: job.ClientReference,
 			ID: job.ID, AdmissionKey: job.AdmissionKey, Workflow: job.WorkflowName, WorkflowRevision: job.WorkflowRevision, AgentsMD: job.AgentsMd,
+			ThreadHarness: job.ThreadHarness, ThreadID: job.ThreadID,
 			KeepRunning: job.KeepRunning, SandboxProfile: job.SandboxProfile, SandboxProfileRevision: job.SandboxProfileRevision, ProviderConnection: job.ProviderConnection, Model: job.Model, ReasoningEffort: job.ReasoningEffort,
 			AdmissionOpen: job.AdmissionOpen, CleanupState: job.CleanupState, CurrentTaskID: job.CurrentTaskID,
 			WorkflowAttention: job.WorkflowAttention, WorkflowAttentionSource: job.WorkflowAttentionSource,
@@ -1017,38 +1019,17 @@ func (s Store) AgentMessage(ctx context.Context, jobID string) (*core.AgentMessa
 	}
 	run := agentRunFromValues(runRow.ID, runRow.JobID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention, runRow.Role, runRow.InputRevision)
 	run.SandboxID = runRow.SandboxID
-	if message.Intent == core.MessageFollow && run.State == core.AgentRunPending && run.ThreadID == "" {
-		if _, err := queries.BindPendingFollowToPriorThread(ctx, message.ID); err != nil {
+	if message.Intent == core.MessageFollow && run.State == core.AgentRunPending && run.ThreadID == "" && job.ThreadID != "" {
+		if err := expectOneRows(queries.BindPendingFollowToJobThread(ctx, message.ID)); err != nil {
 			return nil, err
 		}
-		runRow, err = queries.GetAgentRunByMessage(ctx, message.ID)
-		if err != nil {
-			return nil, err
-		}
-		run = agentRunFromValues(runRow.ID, runRow.JobID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention, runRow.Role, runRow.InputRevision)
-		run.SandboxID = runRow.SandboxID
-		if run.ThreadID == "" {
-			prior, priorErr := queries.GetLatestAgentThreadBinding(ctx, dbsql.GetLatestAgentThreadBindingParams{JobID: jobID, Role: run.Role, SandboxID: run.SandboxID})
-			if priorErr == nil && prior.ThreadID != "" {
-				return nil, fmt.Errorf("eligible Follow Message %s did not adopt authoritative prior Agent Thread %s", message.ID, prior.ThreadID)
-			}
-			if priorErr != nil && !errors.Is(priorErr, sql.ErrNoRows) {
-				return nil, priorErr
-			}
-		}
+		run.Harness, run.ThreadID = job.ThreadHarness, job.ThreadID
 	}
 	if run.Role == "" || run.SandboxID == "" {
 		return nil, fmt.Errorf("delivery candidate AgentRun %s has an incomplete execution envelope", run.ID)
 	}
-	bindings, err := queries.ListAgentThreadBindings(ctx, dbsql.ListAgentThreadBindingsParams{JobID: jobID, Role: run.Role, SandboxID: run.SandboxID})
-	if err != nil {
-		return nil, err
-	}
-	for i, binding := range bindings {
-		if i > 0 && (binding.Harness != bindings[0].Harness || binding.ThreadID != bindings[0].ThreadID) ||
-			run.ThreadID != "" && (run.Harness != binding.Harness.String || run.ThreadID != binding.ThreadID.String) {
-			return nil, fmt.Errorf("Job %s Agent lane %s/%s disagrees on its Harness Thread", jobID, run.Role, run.SandboxID)
-		}
+	if run.ThreadID != "" && (run.Harness != job.ThreadHarness || run.ThreadID != job.ThreadID) {
+		return nil, fmt.Errorf("AgentRun %s conflicts with Job %s Thread", run.ID, jobID)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -1117,6 +1098,11 @@ func (s Store) BindAgentRun(ctx context.Context, runID, harness, threadID, turnI
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(s.DB).WithTx(tx)
+	// Lock the Job before the run, matching admission and delivery selection.
+	// The binding and accepted Turn commit together, including on recovery.
+	if err := expectOneRows(queries.BindJobThread(ctx, dbsql.BindJobThreadParams{RunID: runID, Harness: nullableString(harness), ThreadID: nullableString(threadID)})); err != nil {
+		return fmt.Errorf("AgentRun %s cannot bind the Job Thread: %w", runID, err)
+	}
 	run, err := queries.GetAgentRunForBinding(ctx, runID)
 	if err != nil {
 		return err
@@ -1132,15 +1118,6 @@ func (s Store) BindAgentRun(ctx context.Context, runID, harness, threadID, turnI
 	}
 	if run.State == core.AgentRunPending {
 		return fmt.Errorf("AgentRun %s must be prepared before binding a harness Turn", runID)
-	}
-	bindings, err := queries.ListAgentThreadBindings(ctx, dbsql.ListAgentThreadBindingsParams{JobID: run.JobID, Role: run.Role, SandboxID: run.SandboxID})
-	if err != nil {
-		return err
-	}
-	for _, binding := range bindings {
-		if binding.Harness.String != harness || binding.ThreadID.String != threadID {
-			return fmt.Errorf("AgentRun %s conflicts with Job %s Agent lane Thread", runID, run.JobID)
-		}
 	}
 	if err := expectOneRows(queries.BindAgentRunIdentity(ctx, dbsql.BindAgentRunIdentityParams{Harness: sql.NullString{String: harness, Valid: true}, ThreadID: sql.NullString{String: threadID, Valid: true}, RunID: runID})); err != nil {
 		return err

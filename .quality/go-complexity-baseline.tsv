@@ -52,8 +52,8 @@ internal/incus	(Adapter).ProviderRouteURL	16
 internal/incus	(ConnectionConfig).Validate	29
 internal/incus	(Sandbox).ReconcileOwnedCreate	18
 internal/pi	parseSession	26
-internal/postgres	(Store).AgentMessage	30
-internal/postgres	(Store).BindAgentRun	34
+internal/postgres	(Store).AgentMessage	20
+internal/postgres	(Store).BindAgentRun	31
 internal/postgres	(Store).CompleteCleanup	24
 internal/postgres	(Store).EnsureSandbox	21
 internal/postgres	(Store).RecordSandboxProfileUnavailable	16

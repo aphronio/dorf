@@ -1,6 +1,6 @@
 # Session product: proposed slices
 
-Status: iterative tracker. Slices 1–3 have agreed implementation scopes; later slices remain
+Status: iterative tracker. Slices 1–3 and 5 have agreed implementation scopes; other slices remain
 proposals requiring their own discussion and agreement.
 
 This tracker explores a smaller product centered on one durable Session, with application goals,
@@ -36,16 +36,15 @@ decision record. This proposal tracker is not a substitute for either.
 | 2. Remove investigation | Verified | Retire the built-in investigation workflow; clients use direct Jobs for repository investigation. | Agreed scope is recorded below. |
 | 3. Remove coding application | Verified | Retire coding, review, and publication policy while keeping direct execution. | Discuss the smallest concrete removal; add client primitives only for a proven need. Settle further Session vocabulary and ownership changes in their implementing slices. |
 | 4. Dependable setup and activation | Proposed | Hold native delivery until an exact configuration revision is ready; validate provider and harness options in their selected adapters. | Define lifetime-pinned versus changeable settings, profile/package compatibility, field ownership, quiescent updates, and uncertain setup-command outcomes. |
-| 5. Session owns its Thread | Proposed | Store the authoritative native conversation binding directly on the execution owner. | Prove uncertain initial acceptance and queued Follow recovery; define legacy binding conversion and conflict handling. Decide when public and internal Job naming changes. |
+| 5. Job owns its Thread | Verified | Store the authoritative native conversation binding directly on the execution owner. | Prove uncertain initial acceptance and queued Follow recovery; define legacy binding conversion and conflict handling. Decide when public and internal Job naming changes. |
 | 6. Separate delivery from Turn execution | Proposed | Several accepted Message receipts reference one Turn outcome; interruption targets that exact Turn. | Prove accepted, rejected, and uncertain Steers, Auto successor adoption, and preserved native submission attribution. |
 | 7. Finish application removal | Dropped | Application evidence and application-only tables are removed with coding. | Remaining generic Job/AgentRun fields belong to their future ownership slices. |
 
 ```text
-Separate review contracts -> remove investigation -> discuss the next slice
+Completed: separate review contracts -> remove investigation -> remove coding
+Completed next: Job Thread ownership (slice 5, before setup/activation)
 
-Remaining candidate slices:
-  product boundary, application removal, setup/activation,
-  Session Thread ownership, delivery/Turn facts, schema retirement
+Remaining candidates: setup/activation, Session naming, delivery/Turn facts
 
 Each arrow is a proposed dependency, not approval to start the next slice.
 ```
@@ -115,8 +114,21 @@ Each arrow is a proposed dependency, not approval to start the next slice.
 
 ### Slice 5: conversation ownership
 
-- Agreed scope: pending discussion.
-- Implementation and verification: pending.
+- Agreed scope: one authoritative Harness/Thread binding on each direct Job. Bind it atomically
+  with proven native acceptance; use it for subsequent Follows and conversation timeline reads.
+- Remove backward Thread discovery and repeated scans of prior runs. Keep exact AgentRun
+  attribution, uncertain-submission recovery, FIFO/steering, Job naming, and the existing controller.
+- Move this ahead of setup/activation: creation already starts no conversation, so clients can
+  prepare their workspace before sending input. Managed route files already preserve client settings.
+- Backfill consistent direct history through an append-only migration; reject conflicting bindings.
+  Stop old workers for migration rather than retaining a second read/write path.
+- Decision: [D145](../project/decisions/D145-direct-job-owns-its-thread.md).
+- Verification: `mise run check` passed, including PostgreSQL migration/replay and conflict checks,
+  initial-acceptance recovery with queued Follows, concurrent binding/receipt atomicity, and timeline
+  custody. `mise run docs:check` passed. Native protocols are unchanged; no live provider proof
+  was required or rerun. Only the disposable test database was migrated.
+- Net physical Go change: 42 fewer handwritten implementation lines, 45 fewer generated lines,
+  and 99 additional test lines. No deployment was changed.
 
 ### Slice 6: delivery and execution facts
 
@@ -126,6 +138,30 @@ Each arrow is a proposed dependency, not approval to start the next slice.
 ### Slice 7: remaining application removal
 
 - Folded into slice 3 to remove application evidence and storage with their final consumers.
+
+## Client API review: proposals to discuss
+
+Apply [Build a small thing that composes](../project/principles.md#build-a-small-thing-that-composes):
+inspect real callers before changing the contract, describe the client simplification, and keep
+application policy outside Dorf. Consumer-specific source evidence belongs outside this public
+repository. These candidates have not been approved for implementation.
+
+| Candidate | Client simplification | Scope to settle |
+| --- | --- | --- |
+| Align existing consumers with application retirement | A client can regenerate its models and use the supported direct contract without retired workflow types or dispatch paths. | Audit actual callers before deployment. Retire unused application flows or implement their policy in the client through existing primitives. No workflow restoration in Core. |
+| Job → Session vocabulary | One consistent name for the durable context across creation, continued input, inspection, and release. | Agree on a coordinated API/client change, retained ID and request-key behavior, and concrete deployment order. A rename alone does not simplify execution or justify another resource. |
+| Workspace access through the Session handle | Clients need not repeatedly retrieve a collection and select the default Sandbox before reading files or executing commands. | First compare a small client helper with a public API change. Preserve readiness, delivery holds, exact ownership, bounded files, and unknown command outcomes. Resource generations remain internal custody. |
+| Separate Message delivery from Turn observation | Clients can distinguish input acceptance from the shared execution outcome without reconstructing it across steering Messages. | Keep this in slice 6; demonstrate an actual reduction in client reconciliation while retaining reply ordering, cursor gaps, completion watermarks, and exact interruption. |
+
+Use **Session** for the durable public context, **Message** for admitted input, **Turn** for native
+execution, and **Sandbox** for supported isolated compute in the proposed vocabulary. **Thread**
+identifies the primary native conversation receiving input; native subagent threads remain
+Harness-owned. A Session ID need not equal any native Thread or session ID. Saved Agent resources,
+a second transcript store, and additional configuration lifecycle states need their own use case.
+
+Review order: consumer contract alignment first, then discuss naming or workspace access against
+a concrete client diff. Setup/activation remains proposed; the existing create → prepare → send
+sequence must be evaluated before adding another barrier or configuration revision model.
 
 ## Deferred proposals
 
