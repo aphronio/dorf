@@ -45,6 +45,7 @@ decision record. This proposal tracker is not a substitute for either.
 | 8. Native boundary and capability proof | Verified | Record the thin control-plane contract, inspect Codex and client use, and remove the abandoned shared-Turn patch. | Source and isolated-server evidence are recorded below; runtime behavior is unchanged. |
 | 9. Replace queued Messages with native input and observation | Verified | One ready-Session send path, native history and controls, coordinated client replacement, and deletion of the old input pipeline. | Resolve exact event shapes and the capability review's input, uncertainty, observation, maintenance and recovery proofs; no new streaming capability is required. |
 | 10. Remove obsolete lifecycle attachment repair | Verified | Make running-task validation read-only; delete unused orchestration entry points. | Keep atomic scheduling, exact current-task checks, effect fences, retry receipts and wake semantics. The agreed deletions are recorded below. |
+| 11. Simplify Incus command access | Verified | Verify ownership and execute through one short-lived Incus client; remove redundant file prechecks. | Preserve cancellation, exact ownership and existing file guarantees; verification is recorded below. |
 
 ```text
 Completed: separate review contracts -> remove investigation -> remove coding
@@ -177,7 +178,8 @@ Each arrow is a proposed dependency, not approval to start the next slice.
 
 - Agreed scope: rename Job to Session across Go, SQL storage, public API, CLI, and existing clients.
   Use `ThreadID` for the current input target. Derive Harness from the immutable admitted
-  profile; remove the redundant stored binding field. Profile naming is deferred.
+  profile; remove the redundant stored binding field. Profile naming and configuration restructuring
+  have no demonstrated current need; revisit only for a concrete requirement.
 - Preserve opaque IDs, request keys, accepted input, native Thread/Turn attribution, resource
   ownership, queued work, and execution behavior. No public aliases or parallel compatibility path.
 - Session-level input targets its bound Thread. Additional explicitly addressed Threads can be
@@ -279,6 +281,54 @@ Each arrow is a proposed dependency, not approval to start the next slice.
   Production deployments were not changed by this slice.
 - A bounded-controller rewrite remains a separate proposal. The remaining responsibilities do
   not by themselves justify a second scheduling mechanism.
+
+### Slice 11: guest-execution review and Incus cleanup
+
+- Status: scope agreed, implemented and verified on 2026-09-19. The review covered
+  shared files, provider command runners and native connection/process custody. Backup scope
+  and lifecycle scheduling remain separate. Profile naming and restructuring are not planned
+  without a concrete requirement.
+- Existing reuse: [file operations](../../internal/sandbox/file.go) already share bounded reads,
+  exact byte validation, atomic writes and create-only behavior across Incus and E2B. Both adapters
+  batch instruction reads. [E2B access](../../internal/e2b/access.go) already resolves provider
+  capabilities once per synchronous operation. [Codex input](../../internal/codex/native.go)
+  reads instructions and submits through that scope; native observation outlives it. Adding a
+  shared guest daemon has no demonstrated net simplification from this review.
+- Removed duplication: [Incus file methods and Run](../../internal/incus/adapter.go) previously
+  repeated ownership checks or opened a second client solely to execute. `Run` now validates
+  ownership and executes through the same client, closing it after observation finishes. File
+  helpers use that runner without an outer attestation.
+
+| Successful Incus path | Previous client opens / ownership inventories | Implemented |
+| --- | --- | --- |
+| `Run` / `Exec`, batch read, public file write | 2 / 1 | 1 / 1 |
+| Single-file `ReadFile`, internal `PutFile` | 3 / 2 | 1 / 1 |
+
+These are source-derived call counts, not measured network round trips or latency improvements.
+The lower name-only `Sandbox.Exec` wrapper is removed. Every operation still checks ownership
+freshly; no long-lived cache, generic scoped-access implementation or new public API is added.
+Endpoint dials retain their own fresh ownership checks.
+
+Native transport alternatives were checked against the
+[official app-server documentation](https://developers.openai.com/codex/app-server) and cached
+`rust-v0.154.0` source (commit `6b9826e3aa83b1a5947db50f4332cb9c65f1b340`):
+
+- The [filesystem request types](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/app-server-protocol/src/protocol/v2/fs.rs)
+  offer path-only reads and path/data writes, without equivalent read bounds, create-only or
+  no-follow request options. Additional helpers/proofs would still be needed for Dorf's file contract.
+- [Command controls](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/app-server/src/command_exec.rs)
+  identify processes by connection and request termination when that connection closes. A terminate
+  response alone does not prove process exit. Substitution needs its own cancellation and uncertain
+  outcome proof; provider execution remains necessary to bootstrap, stop and repair the Harness.
+- Keep Codex process inspection/authentication and the existing native subscription lifetime.
+  Switching file/command transport would currently retain a second path for bootstrap and maintenance.
+
+Verification: the extended adapter test confirms one client open, ownership inventory and close per
+operation, with foreign ownership rejected and changed ownership rechecked before exec or file access.
+The full `mise run check` gate passes, including shared file bounds/integrity tests. A disposable
+Incus command proof passes stdin/environment, capped and uncapped output, timeout, cancellation and
+remote process absence. The retained-worker proof passes package upgrade, forced rollback, native
+continuation and complete resource/checkpoint cleanup. No application deployment was changed.
 
 ### Public exec output capture
 

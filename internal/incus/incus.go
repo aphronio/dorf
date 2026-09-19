@@ -298,15 +298,6 @@ func (s Sandbox) PrivateIPv4(ctx context.Context, name string) (string, error) {
 	return "", fmt.Errorf("Sandbox default route did not report an IPv4 source address")
 }
 
-func (s Sandbox) Exec(ctx context.Context, name string, input []byte, maxOutputBytes int, args ...string) (Result, error) {
-	client, err := s.open(ctx)
-	if err != nil {
-		return Result{}, err
-	}
-	defer client.Close()
-	return client.Exec(ctx, name, input, maxOutputBytes, args...)
-}
-
 func (s Sandbox) PortForwardEndpoint(ctx context.Context, metadata OwnershipMetadata, port int) (provider.Endpoint, error) {
 	if port < 1 || port > 65535 {
 		return provider.Endpoint{}, fmt.Errorf("Incus endpoint port must be between 1 and 65535")

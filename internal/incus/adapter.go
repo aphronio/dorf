@@ -36,16 +36,10 @@ func (a Adapter) DeleteOwned(ctx context.Context, owner provider.Ownership) erro
 }
 
 func (a Adapter) PutFile(ctx context.Context, owner provider.Ownership, destination string, contents []byte) error {
-	if err := a.Sandbox.AttestOwnership(ctx, owner); err != nil {
-		return err
-	}
 	return provider.PutFileViaExec(ctx, owner, destination, contents, a.Exec)
 }
 
 func (a Adapter) ReadFile(ctx context.Context, owner provider.Ownership, relativePath string) ([]byte, error) {
-	if err := a.Sandbox.AttestOwnership(ctx, owner); err != nil {
-		return nil, err
-	}
 	return provider.ReadFileViaExec(ctx, owner, a.Workspace(), relativePath, a.Exec)
 }
 
@@ -59,7 +53,15 @@ func (a Adapter) Run(ctx context.Context, owner provider.Ownership, command prov
 	if len(command.Args) == 0 || command.Timeout <= 0 || command.Timeout > 24*time.Hour {
 		return provider.RunResult{}, fmt.Errorf("command requires arguments and a bounded positive timeout")
 	}
-	if err := a.Sandbox.AttestOwnership(ctx, owner); err != nil {
+	if err := validateOwnership(owner); err != nil {
+		return provider.RunResult{}, err
+	}
+	client, err := a.Sandbox.open(ctx)
+	if err != nil {
+		return provider.RunResult{}, err
+	}
+	defer client.Close()
+	if err := a.Sandbox.attestOwnership(ctx, client, owner); err != nil {
 		return provider.RunResult{}, err
 	}
 	// Incus has no native process deadline. GNU timeout owns the process group
@@ -79,7 +81,7 @@ func (a Adapter) Run(ctx context.Context, owner provider.Ownership, command prov
 	args = append(args, command.Args...)
 	ctx, cancel := context.WithTimeout(ctx, command.Timeout+2*time.Second)
 	defer cancel()
-	result, err := a.Sandbox.Exec(ctx, owner.SandboxID, command.Stdin, command.MaxOutputBytes, args...)
+	result, err := client.Exec(ctx, owner.SandboxID, command.Stdin, command.MaxOutputBytes, args...)
 	out := provider.RunResult{Result: result, Stopped: err == nil}
 	var stopped *commandStoppedError
 	if errors.As(err, &stopped) {

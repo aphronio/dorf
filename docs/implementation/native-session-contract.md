@@ -56,8 +56,9 @@ Unavailable or maintenance-held Sessions do not accept input for later delivery.
 
 ## Pinned Codex evidence
 
-Reviewed upstream tag `rust-v0.154.0`, commit `36eab01061df3cde5f95ec20a526777b430091ba`, matching
-the installed proof binary. A refreshed main checkout was used for discovery only; the statements
+Reviewed upstream tag `rust-v0.154.0` (tag object `36eab01061df3cde5f95ec20a526777b430091ba`,
+commit `6b9826e3aa83b1a5947db50f4332cb9c65f1b340`), matching the installed proof binary. A refreshed
+main checkout was used for discovery only; the statements
 below were checked against the pinned tag. This is not a claim that every existing deployment has
 the same version. Package selection remains in the [package manifest](../../scripts/sandbox/packages/packages.json).
 

@@ -32,6 +32,8 @@ type fakeClient struct {
 	instances      map[string]Instance
 	createErr      error
 	creates        []CreateInstanceRequest
+	inventories    int
+	closes         int
 	starts         int
 	deletes        int
 	execCalls      [][]string
@@ -54,6 +56,7 @@ func newFakeClient(instances ...Instance) *fakeClient {
 func (c *fakeClient) Instances(context.Context) ([]Instance, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.inventories++
 	result := make([]Instance, 0, len(c.instances))
 	for _, instance := range c.instances {
 		result = append(result, cloneInstance(instance))
@@ -148,7 +151,11 @@ func (c *fakeClient) OpenPortForward(ctx context.Context, _ string, address stri
 	return forward(ctx)
 }
 
-func (*fakeClient) Close() {}
+func (c *fakeClient) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closes++
+}
 
 func cloneInstance(instance Instance) Instance {
 	instance.Config = cloneStrings(instance.Config)
