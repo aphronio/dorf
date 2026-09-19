@@ -75,8 +75,15 @@ func (a Agent) ReadTurns(ctx context.Context, owner provider.Ownership, threadID
 	var turns []TurnOutcome
 	err := a.withServer(ctx, owner, func(protocol *protocol) error {
 		var err error
-		turns, err = protocol.readTurns(ctx, threadID)
-		return err
+		thread, err := protocol.readThread(ctx, threadID)
+		if err != nil {
+			return err
+		}
+		turns, err = protocol.parseReadTurns(threadID, thread)
+		if err != nil {
+			return err
+		}
+		return a.readUsage(ctx, owner, threadID, stringValue(thread["path"]), turns)
 	})
 	return core.HarnessHistory{Harness: Harness, ThreadID: threadID, Turns: turns}, err
 }
@@ -304,7 +311,7 @@ func (p *protocol) startThread(ctx context.Context, workspace, model, capability
 	return id, nil
 }
 
-func (p *protocol) readTurns(ctx context.Context, sessionID string) ([]TurnOutcome, error) {
+func (p *protocol) readThread(ctx context.Context, sessionID string) (map[string]any, error) {
 	result, err := p.call(ctx, "thread/read", map[string]any{"threadId": sessionID, "includeTurns": true})
 	if err != nil {
 		return nil, err
@@ -313,6 +320,18 @@ func (p *protocol) readTurns(ctx context.Context, sessionID string) ([]TurnOutco
 	if thread == nil || thread["id"] != sessionID {
 		return nil, fmt.Errorf("thread/read did not return the bound thread")
 	}
+	return thread, nil
+}
+
+func (p *protocol) readTurns(ctx context.Context, sessionID string) ([]TurnOutcome, error) {
+	thread, err := p.readThread(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return p.parseReadTurns(sessionID, thread)
+}
+
+func (p *protocol) parseReadTurns(sessionID string, thread map[string]any) ([]TurnOutcome, error) {
 	values, ok := thread["turns"].([]any)
 	if !ok {
 		return nil, fmt.Errorf("thread/read response is missing native turn identities")

@@ -96,6 +96,16 @@ history view returns bounded native conversation items. An explicit Turn selects
 selects the latest native Turn once. Unavailable, incomplete or oversized history fails honestly.
 A native Thread ID is a binding observed through a Session, not a caller-created Dorf resource.
 
+Turn listing also projects native token usage, execution settings and attributable response
+measurements when available. Detail counters are subsets of their parent counts; absent usage
+means unavailable, and null counters remain unknown. Values reflect what the Harness retained,
+including any normalization it applied to provider data. The Codex adapter reads persisted usage
+records from the exact rollout returned by `thread/read`; it uses native Turn aggregates rather
+than thread-total differences or notification accumulation. Repeated reads can recover measurements
+after disconnection or native process restart while that state remains available. Dorf does not
+retain a second usage ledger or calculate prices. Native provider names may be route aliases.
+Clients retain measurements before releasing the Session if they need them afterward.
+
 The existing SSE observation transport now watches a native Turn through Session events. It emits
 completed items and status, not token-by-token text. `turn.updated` and `turn.completed` are the
 payload types. Ordinary Turn observation reads remain available without SSE. Session watch remains

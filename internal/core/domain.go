@@ -231,10 +231,13 @@ type SandboxActionAuthorization struct {
 }
 
 type HarnessTurn struct {
-	ID        string   `json:"id"`
-	Status    string   `json:"status"`
-	ClientIDs []string `json:"client_ids,omitempty"`
-	Output    string   `json:"output,omitempty"`
+	ID           string            `json:"id"`
+	Status       string            `json:"status"`
+	ClientIDs    []string          `json:"client_ids,omitempty"`
+	Output       string            `json:"output,omitempty"`
+	Usage        *TokenUsage       `json:"usage,omitempty"`
+	Execution    *HarnessExecution `json:"execution,omitempty"`
+	RequestUsage []RequestUsage    `json:"request_usage_entries,omitempty"`
 }
 
 // Terminal reports whether the Harness has settled this Turn.

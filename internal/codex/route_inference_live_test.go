@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/core"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/coder/websocket"
 )
 
@@ -99,6 +100,48 @@ func TestLiveCodexRouteCompletesSyntheticInference(t *testing.T) {
 	if turn.Status != "completed" || !strings.Contains(turn.Output, "synthetic-route-reply") {
 		t.Fatalf("synthetic inference did not complete: %#v", turn)
 	}
+	// No subscription survives reconnect or process restart. Usage must come
+	// from native persisted history, including a second Turn in the same Thread.
+	second, err := p.startTurn(ctx, thread, home, "synthetic-followup", core.HarnessInput{Text: "Reply again."}, "synthetic-model", "low", "read-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for !terminal(second.Status) {
+		if err := p.pollTurn(ctx, thread, second.ID, &second); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = p.connection.CloseNow()
+	stop()
+	endpoint, stop = startOverrideServer(t, ctx, executable, home, nativeHome, mock.URL+"/v1")
+	defer stop()
+	for i := 0; i < 2; i++ {
+		recovered := connectOverrideServer(t, ctx, endpoint)
+		threadState, err := recovered.readThread(ctx, thread)
+		if err != nil {
+			t.Fatal(err)
+		}
+		turns, err := recovered.parseReadTurns(thread, threadState)
+		if err != nil {
+			t.Fatal(err)
+		}
+		agent := Agent{Sandbox: continuitySandbox{root: home}}
+		if err := agent.readUsage(ctx, provider.Ownership{}, thread, stringValue(threadState["path"]), turns); err != nil {
+			t.Fatal(err)
+		}
+		if len(turns) != 2 {
+			t.Fatalf("retained Turns=%d", len(turns))
+		}
+		for _, got := range turns {
+			if got.Usage == nil || *got.Usage.InputTokens != 1200 || *got.Usage.OutputTokens != 100 || *got.Usage.TotalTokens != 1300 || *got.Usage.InputTokensDetails.CachedTokens != 800 || *got.Usage.OutputTokensDetails.ReasoningTokens != 40 {
+				t.Fatalf("recovered usage=%+v", got.Usage)
+			}
+			if got.Execution == nil || got.Execution.Model != "synthetic-model" || got.Execution.Reasoning != "low" || len(got.RequestUsage) != 1 {
+				t.Fatalf("recovered execution=%+v requests=%d", got.Execution, len(got.RequestUsage))
+			}
+		}
+		_ = recovered.connection.CloseNow()
+	}
 	contents, err := os.ReadFile(configPath)
 	if err != nil || string(contents) != clientRouteConfig {
 		t.Fatal("client configuration changed during inference")
@@ -116,6 +159,6 @@ event: response.output_item.done
 data: {"type":"response.output_item.done","output_index":0,"item":{"id":"msg_synthetic","type":"message","role":"assistant","content":[{"type":"output_text","text":"synthetic-route-reply","annotations":[]}]}}
 
 event: response.completed
-data: {"type":"response.completed","response":{"id":"resp_synthetic","status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}
+data: {"type":"response.completed","response":{"id":"resp_synthetic","status":"completed","usage":{"input_tokens":1200,"input_tokens_details":{"cached_tokens":800},"output_tokens":100,"output_tokens_details":{"reasoning_tokens":40},"total_tokens":1300}}}
 
 `
