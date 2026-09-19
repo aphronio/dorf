@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -31,7 +32,9 @@ func TestCurrentBaselineInventory(t *testing.T) {
 			names = append(names, file.Name())
 		}
 	}
-	if !reflect.DeepEqual(names, dorfMigrations) {
+	inventory := slices.Clone(dorfMigrations)
+	slices.Sort(inventory)
+	if !reflect.DeepEqual(names, inventory) {
 		t.Fatalf("embedded migrations=%v execution order=%v", names, dorfMigrations)
 	}
 }
@@ -105,6 +108,15 @@ insert into dorf.job_messages(id,job_id,from_kind,from_id,sequence,input)
 values('message-queued','job-current','human','queued',2,'continue');
 insert into dorf.agent_runs(id,job_id,message_id,role,state,sandbox_id)
 values('run-queued','job-current','message-queued','direct','pending','sandbox-current')`); err != nil {
+		t.Fatal(err)
+	}
+	// Retired applications can leave workflow-authored input even after cleanup.
+	if _, err := tx.ExecContext(ctx, `
+insert into dorf.jobs(id,admission_key,workflow_name,workflow_revision,goal,sandbox_profile,provider_connection,model,reasoning_effort,admission_open,cleanup_state)
+values('closed-application','closed-application','coding-to-proposal','v1','historical input','current-profile','primary','gpt-5.6-sol','high',false,'complete');
+insert into dorf.job_messages(id,job_id,from_kind,from_id,sequence,input)
+values('application-initial','closed-application','human','dorf:initial',1,'historical input'),
+      ('application-continuation','closed-application','workflow','step',2,'historical continuation')`); err != nil {
 		t.Fatal(err)
 	}
 	for _, binding := range []struct{ harness, thread string }{{"codex", "other-thread"}, {"pi", "thread-current"}} {

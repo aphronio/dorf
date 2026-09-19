@@ -214,7 +214,9 @@ correctness.
 
 Published Dorf migrations are immutable and append-only. A retained deployment records each exact
 migration filename in `dorf.schema_migrations`; `dorf migrate` takes one PostgreSQL advisory lock and
-applies every missing known file in one transaction. A baseline is a historical starting point, not
+applies every missing known file in one transaction. The explicit runner orders repair 029 before
+the obsolete intermediary constraint in 026 so completed application records can reach input-table
+retirement; deployments already past that table retirement record the repair without changing data. A baseline is a historical starting point, not
 a mutable description that can silently drift after a release. Unsupported migration identities
 fail closed instead of guessing at schema state.
 
