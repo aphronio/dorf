@@ -1837,7 +1837,7 @@
             "description": "Execution timeout in seconds; zero or omission uses 30 seconds."
           }
         },
-        "description": "Run explicit argv without implicit shell interpretation. Combined argv and stdin must not exceed 64 KiB; arguments must not contain NUL and argv[0] must be nonempty."
+        "description": "Run explicit argv without implicit shell interpretation. Combined argv and stdin must not exceed 1 MiB; arguments must not contain NUL and argv[0] must be nonempty."
       },
       "SandboxCommandResult": {
         "type": "object",

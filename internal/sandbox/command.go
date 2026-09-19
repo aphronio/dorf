@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	MaxCommandBytes         = 64 << 10
+	MaxCommandBytes         = 1 << 20
 	MaxCommandOutputBytes   = 64 << 10
 	MaxCommandSeconds       = 120
 	DefaultCommandTimeout   = 30 * time.Second

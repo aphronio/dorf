@@ -55,7 +55,7 @@ func TestCommandsUseAuthenticatedSessionCustodyAndCleanupFence(t *testing.T) {
 	if executor.calls != 1 || !reflect.DeepEqual(executor.command, command) || executor.session != session || executor.sandbox != owned || store.fences != 1 {
 		t.Fatal("command lost exact argv, stdin, or custody")
 	}
-	for _, invalid := range []provider.Command{{}, {Argv: []string{"sleep", "1"}, TimeoutSeconds: 121}, {Argv: []string{"bad\x00argument"}}} {
+	for _, invalid := range []provider.Command{{}, {Argv: []string{"sleep", "1"}, TimeoutSeconds: 121}, {Argv: []string{"bad\x00argument"}}, {Argv: []string{"cat"}, Stdin: strings.Repeat("a", provider.MaxCommandBytes-2)}} {
 		if _, err := client.Exec(context.Background(), owned.ID, invalid); !errors.Is(err, ErrInvalidRequest) {
 			t.Fatalf("accepted invalid command: %v", err)
 		}

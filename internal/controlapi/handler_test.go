@@ -694,7 +694,7 @@ func TestSandboxExecReportsExitStatusAndDoesNotReplayUncertainCommands(t *testin
 	if response := execute("wrong", `{"argv":["true"]}`); response.Code != http.StatusUnauthorized || sessions.execCalls != 0 {
 		t.Fatal("unauthenticated command executed")
 	}
-	for _, body := range []string{`{"argv":[]}`, `{"argv":["sleep","1"],"timeout_seconds":121}`, `{"argv":["true"],"host":"elsewhere"}`} {
+	for _, body := range []string{`{"argv":[]}`, `{"argv":["sleep","1"],"timeout_seconds":121}`, `{"argv":["true"],"host":"elsewhere"}`, `{"argv":["cat"],"stdin":"` + strings.Repeat("a", provider.MaxCommandBytes-2) + `"}`} {
 		if response := execute(credential, body); response.Code < 400 || sessions.execCalls != 0 {
 			t.Fatal("invalid command executed")
 		}
