@@ -99,12 +99,15 @@ docker compose restart worker control-api
 docker compose logs --tail=200 worker control-api
 ```
 
-When upgrading from the Job API to the Session API, stop both old processes with
-`docker compose stop worker control-api` before running updated `dorf setup`. Setup applies the
-migration and starts the updated services. Update clients to the Session API in the same deployment;
-the old routes and CLI names are removed. Existing IDs, input, queue work, native conversations,
-and resource ownership are retained. Do not run old binaries against the renamed schema.
-See [D146](project/decisions/D146-name-the-execution-context-session.md).
+When upgrading to the native Session events API, finish outstanding user input and maintenance,
+then stop both old processes with `docker compose stop worker control-api` before running updated
+`dorf setup`. Setup applies the migration and starts the updated services. Update clients in the
+same deployment; old Job/Message routes and CLI names are removed. Session IDs, native conversations
+and resource ownership remain. The migration reattaches idle Sessions' sleeping lifecycle tasks to
+the Session queue; failed or unfinished lifecycle effects must be settled first. Old input records
+and pre-contract checkpoint references are retired. Remote backup objects are untouched.
+Do not run old binaries against the migrated schema. See the
+[native transition](implementation/native-session-contract.md#implementation-and-verification).
 
 Do not edit the generated `.env`; rerun setup to change and apply its source facts.
 

@@ -248,7 +248,7 @@ Go tests, lint, complexity and vet. The bounded checkpoint scan test now places 
 fixture so accumulated fixtures cannot displace it from the scan page.
 
 After slice 9, queue names, payload fields and wake/fence keys use Session names. The agreed
-transition assumes no outstanding old queue work; restart API and workers together. Opaque IDs and
+transition retires settled input and reattaches idle lifecycle tasks; restart API and workers together. Opaque IDs and
 provider ownership labels still identify retained compute. Changing those requires a resource
 transition, independent of queue retirement.
 

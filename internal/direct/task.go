@@ -10,12 +10,12 @@ import (
 )
 
 const (
-	TaskName                = "dorf-direct-job-v1"
+	TaskName                = "dorf-direct-session-v1"
 	activeAgentPollInterval = time.Second
 	idleMessagePollInterval = 30 * time.Second
 )
 
-func TaskKey(sessionID string) string { return "direct-job:v1:" + sessionID }
+func TaskKey(sessionID string) string { return "direct-session:v1:" + sessionID }
 
 type Execution interface {
 	core.SessionReconciliation
@@ -119,5 +119,5 @@ func wakeOptions(progress core.SessionReconciliationProgress, revision int64) (s
 	if progress == core.SessionReconciliationPending {
 		return fmt.Sprintf("dorf/direct-agent-wake/v2/%020d", revision), activeAgentPollInterval
 	}
-	return fmt.Sprintf("dorf/direct-job-wake/v2/%020d", revision), idleMessagePollInterval
+	return fmt.Sprintf("dorf/direct-session-wake/v2/%020d", revision), idleMessagePollInterval
 }

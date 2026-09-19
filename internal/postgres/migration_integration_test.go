@@ -162,6 +162,26 @@ savepoint recovery_in_progress`); err != nil {
 update dorf.sandbox_delivery_holds set released_at=clock_timestamp() where id='recovery-current'`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := tx.ExecContext(ctx, `
+select absurd.create_queue('dorf_jobs');
+insert into dorf.sessions(id,admission_key,sandbox_profile,sandbox_profile_revision,provider_connection,model,reasoning_effort,thread_id)
+select 'idle-session','idle-admission',sandbox_profile,sandbox_profile_revision,provider_connection,model,reasoning_effort,'idle-thread'
+from dorf.sessions where id='job-current';
+insert into dorf.session_tasks(session_id,sequence,task_id,task_name)
+select 'idle-session',1,task_id::text,'dorf-direct-job-v1' from absurd.spawn_task(
+    'dorf_jobs','dorf-direct-job-v1','{"job_id":"idle-session"}',
+    '{"idempotency_key":"migration-idle-proof","max_attempts":5}');
+update absurd.t_dorf_jobs set state='failed' where idempotency_key='migration-idle-proof';
+savepoint failed_lifecycle`); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateDorf(ctx, tx); err == nil || !strings.Contains(err.Error(), "settle Session lifecycle") {
+		t.Fatalf("migration reset failed lifecycle budget: %v", err)
+	}
+	if _, err := tx.ExecContext(ctx, `rollback to savepoint failed_lifecycle;
+update absurd.t_dorf_jobs set state='sleeping' where idempotency_key='migration-idle-proof'`); err != nil {
+		t.Fatal(err)
+	}
 	if err := migrateDorf(ctx, tx); err != nil {
 		t.Fatalf("baseline replay: %v", err)
 	}
@@ -196,6 +216,16 @@ update dorf.sandbox_delivery_holds set released_at=clock_timestamp() where id='r
 	var harness, thread string
 	if err := tx.QueryRowContext(ctx, `select p.harness,j.thread_id from dorf.sessions j join dorf.sandbox_profile_revisions p on p.name=j.sandbox_profile and p.definition_hash=j.sandbox_profile_revision where j.id='job-current'`).Scan(&harness, &thread); err != nil || harness != "codex" || thread != "thread-current" {
 		t.Fatalf("migrated Session Thread=%s/%s err=%v", harness, thread, err)
+	}
+	var lifecycleState, lifecycleName, lifecycleSession, oldState string
+	if err := tx.QueryRowContext(ctx, `
+select t.state,t.task_name,t.params->>'session_id',old.state
+from dorf.session_tasks a join absurd.t_dorf_sessions t on t.task_id::text=a.task_id
+cross join absurd.t_dorf_jobs old
+where a.session_id='idle-session' and old.idempotency_key='migration-idle-proof'`).Scan(
+		&lifecycleState, &lifecycleName, &lifecycleSession, &oldState); err != nil ||
+		lifecycleState != "pending" || lifecycleName != "dorf-direct-session-v1" || lifecycleSession != "idle-session" || oldState != "cancelled" {
+		t.Fatalf("lifecycle handoff=%s/%s/%s old=%s err=%v", lifecycleState, lifecycleName, lifecycleSession, oldState, err)
 	}
 	var migrationCount int
 	if err := tx.QueryRowContext(ctx, `select count(*) from dorf.schema_migrations`).Scan(&migrationCount); err != nil {

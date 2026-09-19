@@ -170,8 +170,8 @@ The old Message/AgentRun schema, delivery controller, queue wakes, multipart pay
 Follow/Steer selection and public aliases are removed. Published migrations remain intact.
 The cleanup also removes retired Pi input execution, Message-shaped consumer fixtures, obsolete
 Session execution states, and test adapters that reconstructed AgentRun-era bindings. Queue names,
-wake keys and payloads use Session vocabulary; this transition requires no outstanding old queue
-work and a coordinated worker restart. Existing provider ownership labels still identify retained
+wake keys and payloads use Session vocabulary; the one-time migration reattaches idle Sessions’ sleeping lifecycle tasks. Outstanding input and
+failed or unfinished lifecycle effects must settle before a coordinated worker restart. Existing provider ownership labels still identify retained
 compute and are not renamed by a queue transition.
 
 The lifecycle queue and provider transports remain; a scheduler rewrite or guest daemon is not a
