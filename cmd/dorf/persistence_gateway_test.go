@@ -79,11 +79,15 @@ func (d *livePersistenceGatewayRecovery) VerifyAndRenew(ctx context.Context, ses
 }
 
 func (d *livePersistenceGatewayRecovery) assertReplacementState(ctx context.Context, owner provider.Ownership) error {
-	script := `test ! -e /root/.codex/config.toml
+	script := `set -eu
+sha256sum --check --status /workspace/job/.dorf-proof/native-files.sha256
+test -s /root/.codex/config.toml
 test ! -e /root/.config/dorf/provider-route.key
 test ! -e /tmp/dorf/codex-app-server.pid`
 	if d.verifyAttempts > 1 {
-		script = `test -s /root/.codex/config.toml
+		script = `set -eu
+sha256sum --check --status /workspace/job/.dorf-proof/native-files.sha256
+test -s /root/.codex/config.toml
 test -s /root/.config/dorf/provider-route.key
 test -s /tmp/dorf/codex-app-server.pid`
 	}

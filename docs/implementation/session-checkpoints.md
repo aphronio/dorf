@@ -54,7 +54,8 @@ Sessions use the configured backup timeout instead.
   An idle timer alone is not evidence that native state was saved consistently. The guard combines
   saved-turn verification, file-change observation, and before/after metadata fingerprints. Matching
   content hashes alone can miss temporary changes read by a backup before the source reverts.
-  One native-file inventory owns selection and validation. Diagnostics retain bounded failure classes;
+  The Harness adapter owns native roots and exclusions; the same exclusions govern observation
+  and backup. The Sandbox adapter supplies its workspace through `Workspace()`. Diagnostics retain bounded failure classes;
   completed watcher control files are removed after process termination is confirmed.
 - Publication uses a short Session fence plus the admission transaction lock. There is no Session fence
   held across hashing, uploads, or remote cancellation. Accepted input, new activity, package
@@ -69,6 +70,44 @@ Sessions use the configured backup timeout instead.
   adapter-private PID files or maintain its own server-control protocol.
 - Package upgrades continue using provider snapshots for rollback. Replacing that mechanism is
   a separate change requiring equivalent failed-upgrade recovery evidence.
+
+## Backup scope and confidentiality
+
+The Codex adapter selects its whole native home, currently `/root/.codex`, alongside the workspace
+reported by the Sandbox adapter. The backup coordinator and restic transport do not enumerate
+Harness-specific paths. New native files are included automatically; operators do not maintain a
+second list of Codex files. A new adapter must supply and prove its own capture/restore contract;
+this boundary does not automatically qualify an untested Harness or provider for recovery.
+
+Codex history, SQLite databases and WAL files, instructions, skills, client `config.toml`, file-based
+`auth.json` and MCP credentials are included. The adapter excludes only these top-level operational
+entries: `log`, `logs_2.sqlite` and its WAL/SHM, `*.sqlite-shm`, and `shell_snapshots`. The exclusions
+are anchored to Codex home, so a similarly named workspace file is still backed up. Unknown files
+are included. Restic preserves symlinks without following their targets.
+
+This selection follows the pinned `rust-v0.154.0` source: [configuration](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/core/src/config/mod.rs)
+and [file-based auth](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/login/src/auth/storage.rs)
+live in Codex home, log storage and [shell snapshots](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/core/src/shell_snapshot.rs)
+are operational, and SQLite WAL belongs with its main database. Native app-server history/resume operations do not provide an atomic filesystem snapshot;
+the existing idle, settled-history and file-change checks remain required. Custom SQLite homes,
+keyring-backed credentials, other home directories (including `~/.agents/skills`), installed system
+packages and running processes are not implicitly covered. Use explicit `additional_paths` for
+other required directories or prepare them through the client. A backup is not a full machine image.
+
+Treat **all** protected contents as confidential. Repositories and conversations can contain secrets
+just as configuration files can; filename-based secret filtering cannot establish confidentiality.
+Dorf's managed model route files live outside these roots and are recreated with fresh authority
+on replacement. Client-owned credentials in the selected roots are restored as data; backup does
+not rotate, revoke, or extend their external validity.
+
+Encryption and custody use stock restic. The protected worker configuration holds the random
+`password_key` seed and parent R2 credential. Dorf derives a stable repository password for each
+logical Session/Sandbox; restic uses that password to unlock its random data-encryption keys. R2
+stores encrypted data and encrypted key files, not the password or seed. Restic receives only the
+selected repository password and temporary scoped R2 credentials inside the Sandbox. The worker
+operator and that Sandbox remain trusted with plaintext. Keep the worker configuration backed up
+separately and securely: losing the seed can make the stored backups unrecoverable. No extra key
+service or encryption implementation is introduced. Retention and deletion policy are unchanged.
 
 ## Operator configuration
 
@@ -92,7 +131,7 @@ outside the repository and back it up independently of sandbox disks. It contain
 | `access_key_id`, `secret_access_key` | Parent credential scoped to the selected bucket |
 | `password_key` | Base64 encoding of at least 32 random bytes; durable repository encryption custody |
 | `restic_path` | Optional exact executable path; defaults to the pinned workstation profile |
-| `additional_paths` | Optional disjoint absolute directories beyond the supported native inventory |
+| `additional_paths` | Optional disjoint absolute directories beyond the workspace and native home |
 | `idle_delay_seconds` | Defaults to five; supported range 1–300 |
 | `backup_timeout_seconds` | Defaults to 120; supported range 1–1800 |
 
@@ -146,6 +185,23 @@ operation releases its hold only at atomic completion or after admission closes 
 
 Keep public test data synthetic. Deployment configuration, identifiers, credentials, application
 content, and operational receipts belong outside this public repository.
+
+## Directory-scope verification
+
+The expanded directory selection passed the disposable E2B/R2 native replacement proof on
+2026-09-19. Exact hashes matched for client configuration, synthetic auth/MCP credential files
+and an unlisted client file. Native `config/read` loaded the restored disabled MCP entry and its
+synthetic environment value. Instructions, modified/untracked Git files, SQLite/WAL data, and the
+original Thread survived replacement. Operational marker files were excluded. Production route
+renewal and a lost-verification-acknowledgement retry preserved client files; same-Thread input
+continued after adoption. Three captures were cancelled by new native input without publishing.
+The proof confirmed deletion of both owned VMs. Native Codex, E2B, R2 and PostgreSQL were real;
+model responses and Gateway management were deterministic fixtures.
+
+The proof now records native acceptance latency instead of asserting the retired queued-admission
+sub-second threshold. Observed native acceptance was about 1.6–2.4 seconds without active backup
+and 1.5–2.0 seconds during cancellation. Three pairs are smoke evidence, not a performance guarantee.
+The local code and documentation gates passed. The selection remains scoped to the verified profile.
 
 ## Prototype verification
 

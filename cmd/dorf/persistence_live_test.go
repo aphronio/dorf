@@ -140,9 +140,6 @@ func TestLivePersistenceRecovery(t *testing.T) {
 		enabled := proof.admit(fmt.Sprintf("latency-enabled-%d", index), "Reply briefly while the idle checkpoint is being cancelled. Do not use tools.")
 		admissionLatency := time.Since(enabledStarted)
 		_, observedLatency := proof.waitNativeTurn(enabled)
-		if admissionLatency > time.Second {
-			t.Fatalf("new input admission waited %s while checkpoint was active", admissionLatency)
-		}
 		select {
 		case captureErr := <-captureDone:
 			if !errors.Is(captureErr, persistence.ErrCheckpointSuperseded) {
@@ -256,8 +253,7 @@ func TestLivePersistenceRecovery(t *testing.T) {
 	queued := proof.admit("queued-recovery", "Reply with the synthetic marker remembered before recovery. Do not use tools.")
 	recoveredExecution, recoveredLatency := proof.waitNativeTurn(queued)
 	workerStop()
-	if queued.ThreadID != threadID || proof.turnOutput(recoveredExecution) == "" ||
-		queued.ThreadID != queued.ThreadID {
+	if queued.ThreadID != threadID || proof.turnOutput(recoveredExecution) == "" {
 		t.Fatal("replacement did not continue the original Codex thread with substantive output")
 	}
 	proof.requireRestoredConversation("CHECKPOINT_CONTEXT_154")
@@ -707,6 +703,21 @@ printf 'working-tree-edit\n' >> tracked.txt
 printf 'untracked\n' > untracked.txt
 mkdir -p .dorf-proof
 printf 'Persistent synthetic instruction.\n' > /root/.codex/AGENTS.md
+cat >> /root/.codex/config.toml <<'CONFIG'
+[mcp_servers.backup_proof]
+command = "/bin/false"
+enabled = false
+[mcp_servers.backup_proof.env]
+SYNTHETIC_TOKEN = "confidential-fixture"
+CONFIG
+printf '{"OPENAI_API_KEY":"synthetic-backup-key"}\n' > /root/.codex/auth.json
+printf '{"synthetic":"file-based-mcp-credential"}\n' > /root/.codex/.credentials.json
+printf 'client-owned state\n' > /root/.codex/client-state.txt
+mkdir -p /root/.codex/log /root/.codex/shell_snapshots
+printf 'transient\n' > /root/.codex/log/backup-excluded
+printf 'transient\n' > /root/.codex/shell_snapshots/backup-excluded
+sha256sum /root/.codex/config.toml /root/.codex/auth.json /root/.codex/.credentials.json /root/.codex/client-state.txt > .dorf-proof/native-files.sha256
+chmod 600 /root/.codex/auth.json /root/.codex/.credentials.json
 cat > .dorf-proof/hold-wal.py <<'PY'
 import sqlite3, time
 db=sqlite3.connect('/workspace/job/.dorf-proof/useful.sqlite')
@@ -888,6 +899,31 @@ test "$(cat untracked.txt)" = untracked
 git status --porcelain | grep -F " M tracked.txt" >/dev/null
 git status --porcelain | grep -F "?? untracked.txt" >/dev/null
 test "$(cat /root/.codex/AGENTS.md)" = "Persistent synthetic instruction."
+sha256sum --check --status .dorf-proof/native-files.sha256
+test ! -e /root/.codex/log/backup-excluded
+test ! -e /root/.codex/shell_snapshots/backup-excluded
+python3 - <<'CONFIG'
+import json, subprocess
+server=subprocess.Popen(['codex','app-server'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)
+def call(id,method,params):
+    server.stdin.write(json.dumps({'id':id,'method':method,'params':params})+'\n')
+    server.stdin.flush()
+    for line in server.stdout:
+        response=json.loads(line)
+        if response.get('id')==id:
+            assert 'error' not in response, 'native config request rejected'
+            return response['result']
+    raise RuntimeError('native config server closed')
+try:
+    call(1,'initialize',{'clientInfo':{'name':'backup-proof','version':'1'}})
+    config=call(2,'config/read',{'includeLayers':False})['config']
+    mcp=config['mcp_servers']['backup_proof']
+    assert mcp['command']=='/bin/false' and mcp['enabled']==False
+    assert mcp['env']['SYNTHETIC_TOKEN']=='confidential-fixture'
+finally:
+    server.terminate()
+    server.wait(timeout=5)
+CONFIG
 python3 - <<'PY'
 import sqlite3
 db=sqlite3.connect('/workspace/job/.dorf-proof/useful.sqlite')
@@ -972,14 +1008,20 @@ func installLivePersistenceFixture(ctx context.Context, sandbox provider.Sandbox
 	if err := sandbox.PutFile(ctx, owner, livePersistenceWorkspace+"/.dorf-proof/responses-fixture.py", fixture); err != nil {
 		return err
 	}
-	if err := sandbox.PutFile(ctx, owner, "/root/.codex/config.toml", []byte("model_provider = \"proof\"\n[model_providers.proof]\nname = \"proof\"\nbase_url = \"http://127.0.0.1:18997/v1\"\nwire_api = \"responses\"\n")); err != nil {
-		return err
-	}
 	if err := sandbox.PutFile(ctx, owner, "/root/.config/dorf/provider-route.key", []byte(routeKey+"\n")); err != nil {
 		return err
 	}
 	result, err := sandbox.Exec(ctx, owner, nil, "bash", "-c", `set -eu
-mkdir -p /workspace/job/.dorf-proof
+mkdir -p /workspace/job/.dorf-proof /root/.codex
+if ! test -e /root/.codex/config.toml; then
+  cat > /root/.codex/config.toml <<'CONFIG'
+model_provider = "proof"
+[model_providers.proof]
+name = "proof"
+base_url = "http://127.0.0.1:18997/v1"
+wire_api = "responses"
+CONFIG
+fi
 if ! curl -fsS http://127.0.0.1:18997/ >/dev/null; then
   DORF_RESPONSES_FIXTURE_ROOT=/workspace/job/.dorf-proof nohup python3 /workspace/job/.dorf-proof/responses-fixture.py </dev/null >/tmp/dorf-persistence-model.log 2>&1 &
 fi

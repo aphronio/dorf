@@ -78,7 +78,7 @@ func testDriver(s provider.Sandbox) Driver {
 func TestResticSummaryAndFailedCapture(t *testing.T) {
 	s := &commandFixture{result: provider.RunResult{Stopped: true, Result: provider.Result{Stdout: fmt.Sprintf(`{"message_type":"summary","snapshot_id":%q,"data_added":4096,"data_added_packed":1024}`, strings.Repeat("a", 64))}}}
 	d := testDriver(s)
-	got, err := d.Backup(t.Context(), provider.Ownership{}, []string{"/workspace"})
+	got, err := d.Backup(t.Context(), provider.Ownership{}, []string{"/workspace"}, nil)
 	if err != nil || got.SnapshotID == "" || got.DataAdded != 4096 || got.DataAddedPacked != 1024 {
 		t.Fatalf("summary=%+v error=%v", got, err)
 	}
@@ -88,12 +88,12 @@ func TestResticSummaryAndFailedCapture(t *testing.T) {
 		}
 	}
 	s.result.ExitCode = 3
-	got, err = d.Backup(t.Context(), provider.Ownership{}, []string{"/workspace"})
+	got, err = d.Backup(t.Context(), provider.Ownership{}, []string{"/workspace"}, nil)
 	if err == nil || got.SnapshotID != "" {
 		t.Fatal("partial backup was published")
 	}
 	s.err = errors.New("synthetic private command diagnostics")
-	_, err = d.Backup(t.Context(), provider.Ownership{}, []string{"/workspace"})
+	_, err = d.Backup(t.Context(), provider.Ownership{}, []string{"/workspace"}, nil)
 	if err == nil || strings.Contains(err.Error(), "private command") {
 		t.Fatal("provider details leaked")
 	}

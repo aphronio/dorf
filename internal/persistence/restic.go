@@ -60,11 +60,16 @@ func (d Driver) InitializeRepository(ctx context.Context, owner provider.Ownersh
 	return nil
 }
 
-func (d Driver) Backup(ctx context.Context, owner provider.Ownership, paths []string) (Result, error) {
+func (d Driver) Backup(ctx context.Context, owner provider.Ownership, paths, excludes []string) (Result, error) {
 	if err := validateProtectedPaths(paths); err != nil {
 		return Result{}, err
 	}
-	observed, result, err := d.run(ctx, owner, RepositoryReadWrite, append([]string{"backup", "--json", "--no-scan", "--"}, paths...)...)
+	args := []string{"backup", "--json", "--no-scan"}
+	for _, pattern := range excludes {
+		args = append(args, "--exclude", pattern)
+	}
+	args = append(append(args, "--"), paths...)
+	observed, result, err := d.run(ctx, owner, RepositoryReadWrite, args...)
 	if err != nil {
 		return result, err
 	}

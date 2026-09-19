@@ -37,7 +37,7 @@ decision record. This proposal tracker is not a substitute for either.
 | 1. Separate review contracts | Verified | Ordinary execution needs no review methods or review controller; existing coding review uses explicit contracts. | Agreed scope and verification are recorded below. |
 | 2. Remove investigation | Verified | Retire the built-in investigation workflow; clients use direct Jobs for repository investigation. | Agreed scope is recorded below. |
 | 3. Remove coding application | Verified | Retire coding, review, and publication policy while keeping direct execution. | Discuss the smallest concrete removal; add client primitives only for a proven need. Settle further Session vocabulary and ownership changes in their implementing slices. |
-| 4. Client configuration continuity | Proposed, deferred | Decide configuration recovery and backup scope. | Discuss privacy, confidentiality, credential handling, custody, retention and configurable scope before selecting defaults or implementation. |
+| 4. Client configuration continuity | Verified | Back up workspace and native home as directories with adapter-owned transient exclusions. | Prove confidential config/credential preservation and same-Thread continuation after replacement; retain existing encryption and custody. |
 | 5. Job owns its Thread | Verified | Store the authoritative native conversation binding directly on the execution owner. | Prove uncertain initial acceptance and queued Follow recovery; define legacy binding conversion and conflict handling. Decide when public and internal Job naming changes. |
 | 5a. Session naming | Verified | Rename the existing execution context and its client contract; retain one primary Thread and derive Harness from the pinned profile. | Agreed scope is recorded below. |
 | 6. Separate delivery from Turn execution | Dropped | Withdraw the uncommitted shared-Turn schema and delivery refactor. | D148 assigns messages and Turns to the Harness; do not add another durable aggregate. |
@@ -56,7 +56,7 @@ Completed: audited leftover removal
 Completed: thin native boundary and capability review (slice 8)
 Withdrawn: shared Turn ownership (slice 6)
 Verified: native input/API/client replacement (slice 9), deployment and scoped provider proofs
-Deferred: client configuration continuity and backup scope (slice 4), pending privacy discussion
+Verified: directory backup and client configuration continuity (slice 4)
 
 Each arrow is a proposed dependency, not approval to start the next slice.
 ```
@@ -117,12 +117,11 @@ Each arrow is a proposed dependency, not approval to start the next slice.
 
 ### Slice 4: client configuration continuity
 
-- Status: deferred following the configuration review and backup-scope discussion. Current backup
-  behavior remains unchanged. Neither broader directory coverage nor adding configuration files
-  is agreed or authorized. The original configuration-revision/activation design is also deferred.
-- Before resuming: settle which private data and credentials may be backed up, who controls scope
-  and access, storage/key custody, retention/deletion, and restore-time credential handling. Encryption
-  alone does not settle those choices. Defaults and configuration authority remain open.
+- Status: implemented and verified after the privacy discussion. Workspace and
+  conversation already contain confidential data; include client configuration and file-based
+  credentials, protect the whole backup with the existing restic encryption/custody contract.
+  The [checkpoint contract](session-checkpoints.md#backup-scope-and-confidentiality) owns exact scope.
+  No new configuration revision, activation API, key service or retention automation is introduced.
 - Existing initial flow: create a Session, wait for compute readiness, prepare files/tools, then
   send the first event. Creation starts no model Turn. The client sequences its setup and first
   input; there is no demonstrated need for an additional activation resource in this flow.
@@ -133,20 +132,13 @@ Each arrow is a proposed dependency, not approval to start the next slice.
   [route lifecycle coverage](../../internal/codex/route_test.go) and the
   [isolated launch proof](../../internal/codex/route_override_live_test.go) check file preservation
   and effective override precedence. These checks do not establish checkpoint preservation.
-- Concrete gap: [native checkpoint inventory](../../internal/codex/persistence.go) omits
-  `/root/.codex/config.toml`, and extra backup paths cannot overlap Codex home. The
-  [capture test](../../internal/codex/persistence_test.go) explicitly expects that omission.
-  Replacement restores native history and renews Dorf routing but does not reconstruct the
-  client's home-level MCP configuration or preferences. Workspace configuration has separate
-  coverage through the workspace backup.
-- Options raised, not selected: extend the current inventory for client configuration, or back up
-  the workspace and native home as directories with narrowly justified exclusions. Configurable
-  additional directories and profile-level defaults were discussed, but their ownership and privacy
-  contract must be decided first. Configuration files may themselves contain application credentials.
-- Proposed acceptance proof: configure a synthetic native preference and harmless MCP entry,
-  capture and restore a disposable Session, check exact configuration bytes and effective native
-  settings, then continue the same Thread. Confirm route renewal/removal still preserves client
-  settings. Update existing capture/recovery fixtures to the new ownership boundary.
+- Implementation: replace the Codex file inventory with its native home directory and narrow
+  adapter-owned transient exclusions. Workspace remains supplied by the Sandbox adapter. The same
+  exclusions govern capture consistency and restic selection; unknown native files are included.
+- Verification: the disposable E2B/R2 proof passed exact configuration and synthetic credential
+  restoration, native `config/read` of the restored MCP settings, fresh route renewal and its lost
+  acknowledgement retry, and continuation of the same Thread. All three in-flight backups were
+  cancelled without publishing; both source and replacement resources were removed.
 - Client benefit: clients can rely on the admitted configuration recovery contract without
   resending a second configuration copy solely because compute was replaced. Application-specific
   setup and refresh policy stay in the client. Other home directories and installed packages are

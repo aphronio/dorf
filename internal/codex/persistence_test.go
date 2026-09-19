@@ -31,42 +31,18 @@ func TestPersistenceStartErrorHasStableSafeClass(t *testing.T) {
 	}
 }
 
-func TestPersistenceWatcherAcceptsUnchangedDurableStateAndOmitsCredentials(t *testing.T) {
+func TestPersistenceWatcherCapturesHomeAndIgnoresOnlyTransientState(t *testing.T) {
 	fixture := newPersistenceFixture(t, true)
 	defer fixture.stop(t)
 
-	paths := fixture.paths(t)
-	for _, want := range []string{
-		fixture.workspace,
-		fixture.extra,
-		filepath.Join(fixture.codexHome, "sessions"),
-		filepath.Join(fixture.codexHome, "state_5.sqlite"),
-		filepath.Join(fixture.codexHome, "state_5.sqlite-wal"),
-		filepath.Join(fixture.codexHome, "AGENTS.md"),
-		filepath.Join(fixture.codexHome, "skills"),
-	} {
-		if !slices.Contains(paths, want) {
-			t.Fatalf("protected paths omit %s: %v", want, paths)
-		}
+	if paths := fixture.paths(t); !slices.Equal(paths, []string{fixture.workspace, fixture.extra, fixture.codexHome}) {
+		t.Fatalf("protected roots=%v", paths)
 	}
-	for _, omitted := range []string{
-		filepath.Join(fixture.codexHome, "auth.json"),
-		filepath.Join(fixture.codexHome, "config.toml"),
-		filepath.Join(fixture.codexHome, "state_5.sqlite-shm"),
-		filepath.Join(fixture.codexHome, "logs_2.sqlite"),
-		filepath.Join(fixture.codexHome, "log"),
-	} {
-		if slices.Contains(paths, omitted) {
-			t.Fatalf("protected paths include private or transient state %s", omitted)
+	for _, name := range []string{"state_5.sqlite-shm", "logs_2.sqlite", "logs_2.sqlite-wal", "log/operational.log", "shell_snapshots/new.sh"} {
+		path := filepath.Join(fixture.codexHome, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
 		}
-	}
-	for _, path := range []string{
-		filepath.Join(fixture.codexHome, "auth.json"),
-		filepath.Join(fixture.codexHome, "state_5.sqlite-shm"),
-		filepath.Join(fixture.codexHome, "logs_2.sqlite"),
-		filepath.Join(fixture.codexHome, "logs_2.sqlite-wal"),
-		filepath.Join(fixture.codexHome, "log", "operational.log"),
-	} {
 		if err := os.WriteFile(path, []byte("changed operational state"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -97,14 +73,24 @@ func TestPersistenceWatcherRejectsWorkspaceAndRecursiveMutations(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-		{"new protected native file", func(t *testing.T, fixture *persistenceFixture) {
-			if err := os.WriteFile(filepath.Join(fixture.codexHome, "history.jsonl"), []byte("durable"), 0o600); err != nil {
+		{"new unlisted native file", func(t *testing.T, fixture *persistenceFixture) {
+			if err := os.WriteFile(filepath.Join(fixture.codexHome, "client-state.json"), []byte("durable"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"configuration", func(t *testing.T, fixture *persistenceFixture) {
+			if err := os.WriteFile(filepath.Join(fixture.codexHome, "config.toml"), []byte("changed config"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"credentials", func(t *testing.T, fixture *persistenceFixture) {
+			if err := os.WriteFile(filepath.Join(fixture.codexHome, "auth.json"), []byte("synthetic changed auth"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}},
 	} {
 		t.Run(mutate.name, func(t *testing.T) {
-			fixture := newPersistenceFixture(t, false)
+			fixture := newPersistenceFixture(t, true)
 			defer fixture.stop(t)
 			mutate.run(t, fixture)
 			fixture.finish(t)
@@ -113,6 +99,28 @@ func TestPersistenceWatcherRejectsWorkspaceAndRecursiveMutations(t *testing.T) {
 			}
 
 		})
+	}
+}
+
+func TestPersistenceWatcherRejectsIndirectSQLiteState(t *testing.T) {
+	fixture := newPersistenceFixture(t, false)
+	fixture.stop(t)
+	wal := filepath.Join(fixture.codexHome, "state_5.sqlite-wal")
+	if err := os.Remove(wal); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(fixture.workspace, "work.txt"), wal); err != nil {
+		t.Fatal(err)
+	}
+	state := t.TempDir()
+	command := exec.Command("python3", "-c", persistenceWatcher, state, fixture.workspace, fixture.codexHome,
+		persistenceExclusionsJSON(t), "[]", persistenceWatchSeconds, "1")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("watcher: %v: %s", err, output)
+	}
+	failure, err := os.ReadFile(filepath.Join(state, "error"))
+	if err != nil || string(failure) != PersistenceNativeMissingState+"\n" {
+		t.Fatalf("indirect native state was not rejected: %q %v", failure, err)
 	}
 }
 
@@ -258,7 +266,7 @@ func TestWorkspaceOnlyCaptureObservesCodexHomeCreation(t *testing.T) {
 		}
 	}
 	fixture.command = exec.Command("python3", "-c", persistenceWatcher, fixture.state, fixture.workspace, fixture.codexHome,
-		persistenceInventoryJSON(t), "[]", persistenceWatchSeconds, "0")
+		persistenceExclusionsJSON(t), "[]", persistenceWatchSeconds, "0")
 	if err := fixture.command.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -324,9 +332,9 @@ func TestPersistenceExtraPathsAreBoundedAndDisjoint(t *testing.T) {
 	}
 }
 
-func persistenceInventoryJSON(t *testing.T) string {
+func persistenceExclusionsJSON(t *testing.T) string {
 	t.Helper()
-	encoded, err := json.Marshal(nativePersistenceNames)
+	encoded, err := json.Marshal(nativePersistenceExclusions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +406,7 @@ db.close()`, database)
 		t.Fatal(err)
 	}
 	fixture.command = exec.Command("python3", "-c", persistenceWatcher, fixture.state, fixture.workspace, fixture.codexHome,
-		persistenceInventoryJSON(t), string(extras), persistenceWatchSeconds, "1")
+		persistenceExclusionsJSON(t), string(extras), persistenceWatchSeconds, "1")
 	if output, err := fixture.command.StdoutPipe(); err != nil || output == nil {
 		t.Fatalf("watcher stdout: %v", err)
 	}

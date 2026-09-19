@@ -108,14 +108,14 @@ func TestLiveResticDriverAgainstScopedR2(t *testing.T) {
 	if err := os.WriteFile(statePath, []byte("first\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	receipt.Initial, err = driver.Backup(t.Context(), owner, []string{source})
+	receipt.Initial, err = driver.Backup(t.Context(), owner, []string{source}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(statePath, []byte("second\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	receipt.Incremental, err = driver.Backup(t.Context(), owner, []string{source})
+	receipt.Incremental, err = driver.Backup(t.Context(), owner, []string{source}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestLiveResticDriverAgainstScopedR2(t *testing.T) {
 	cancelDone := make(chan error, 1)
 	go func() {
 		var backupErr error
-		receipt.Cancelled, backupErr = cancelDriver.Backup(cancelCtx, owner, []string{cancelSource})
+		receipt.Cancelled, backupErr = cancelDriver.Backup(cancelCtx, owner, []string{cancelSource}, nil)
 		cancelDone <- backupErr
 	}()
 	select {
@@ -158,7 +158,7 @@ func TestLiveResticDriverAgainstScopedR2(t *testing.T) {
 
 	// Cancellation may leave an ordinary append lock. A later backup must work
 	// without a custom unlock or retention-policy lifecycle.
-	if _, err := driver.Backup(t.Context(), owner, []string{source}); err != nil {
+	if _, err := driver.Backup(t.Context(), owner, []string{source}, nil); err != nil {
 		t.Fatal(err)
 	}
 	receipt.BackupAfterCancel = true

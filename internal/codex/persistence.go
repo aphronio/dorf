@@ -41,17 +41,18 @@ const (
 )
 
 // PersistenceCapture is the guest-side proof interval for one external backup.
-// Paths contains only durable workspace and Codex state; credentials, route
-// configuration, operational logs, caches, and live SQLite shared-memory files
-// are omitted.
+// Paths contains the provider workspace, explicit extra directories and Codex
+// home, including client configuration and file-based credentials. Excludes is
+// the adapter-owned selection shared by the native guard and backup transport.
 type PersistenceCapture struct {
-	ID    string
-	Paths []string
+	ID       string
+	Paths    []string
+	Excludes []string
 }
 
 // BeginPersistenceCapture proves the retained native Turns are settled and
 // starts observing every mutation below the workspace, configured paths, and
-// exact durable Codex inventory before it returns paths to the backup driver.
+// Codex home before it returns paths and exclusions to the backup driver.
 // The app-server remains running.
 //
 // This guard does not close the durable admission-versus-publication race. The
@@ -80,8 +81,8 @@ func (a Agent) BeginPersistenceCapture(ctx context.Context, owner provider.Owner
 	if err != nil {
 		return PersistenceCapture{}, err
 	}
-	// One inventory owns both guest selection and returned-path validation.
-	nativeJSON, err := json.Marshal(nativePersistenceNames)
+	// One adapter-owned exclusion list governs observation and backup.
+	nativeJSON, err := json.Marshal(nativePersistenceExclusions)
 	if err != nil {
 		return PersistenceCapture{}, err
 	}
@@ -117,7 +118,11 @@ func (a Agent) BeginPersistenceCapture(ctx context.Context, owner provider.Owner
 		a.cancelPersistenceStart(ctx, owner, id)
 		return PersistenceCapture{}, fmt.Errorf("verify Codex persistence readiness: %w", err)
 	}
-	return PersistenceCapture{ID: id, Paths: paths}, nil
+	excludes := make([]string, 0, len(nativePersistenceExclusions))
+	for _, name := range nativePersistenceExclusions {
+		excludes = append(excludes, persistenceCodexHome+"/"+name)
+	}
+	return PersistenceCapture{ID: id, Paths: paths, Excludes: excludes}, nil
 }
 
 func (a Agent) verifyPersistedTurns(ctx context.Context, owner provider.Ownership, runs []retainedTurn) error {
@@ -265,53 +270,26 @@ func validatePersistencePaths(workspace string, extras, paths []string, nativeRe
 	if !filepath.IsAbs(cleanWorkspace) || cleanWorkspace == "/" || len(paths) < len(extras)+1 || paths[0] != cleanWorkspace {
 		return fmt.Errorf("Codex persistence guard returned invalid protected paths")
 	}
-	seen := map[string]bool{cleanWorkspace: true}
-	if err := validateReturnedExtras(extras, paths, seen); err != nil {
-		return err
-	}
-	for _, path := range paths[len(extras)+1:] {
-		if err := validateNativePersistencePath(path, seen); err != nil {
-			return err
-		}
-	}
-	if nativeRequired && (!seen[persistenceCodexHome+"/sessions"] || !seen[persistenceCodexHome+"/state_5.sqlite"]) {
-		return fmt.Errorf("Codex persistence guard omitted mandatory native state")
-	}
-	return nil
-}
-
-func validateReturnedExtras(extras, paths []string, seen map[string]bool) error {
 	for index, extra := range extras {
-		if paths[index+1] != extra || seen[extra] {
+		if paths[index+1] != extra {
 			return fmt.Errorf("Codex persistence guard returned invalid protected paths")
 		}
-		seen[extra] = true
+	}
+	native := paths[len(extras)+1:]
+	if len(native) == 0 && !nativeRequired {
+		return nil
+	}
+	if len(native) != 1 || native[0] != persistenceCodexHome {
+		return fmt.Errorf("Codex persistence guard omitted native home")
 	}
 	return nil
 }
 
-func validateNativePersistencePath(path string, seen map[string]bool) error {
-	clean := filepath.Clean(path)
-	if path != clean || !strings.HasPrefix(clean, persistenceCodexHome+"/") || seen[clean] {
-		return fmt.Errorf("Codex persistence guard returned invalid protected paths")
-	}
-	base := filepath.Base(clean)
-	if filepath.Dir(clean) != persistenceCodexHome || !nativePersistenceNames[base] {
-		return fmt.Errorf("Codex persistence guard included private or transient state")
-	}
-	seen[clean] = true
-	return nil
-}
-
-var nativePersistenceNames = map[string]bool{
-	"sessions": true, "archived_sessions": true, "history.jsonl": true,
-	"AGENTS.md": true, "AGENTS.override.md": true, "skills": true, "rules": true,
-	"prompts": true, "hooks": true, "plugins": true, "memories": true,
-	"state_5.sqlite": true, "state_5.sqlite-wal": true,
-	"goals_1.sqlite": true, "goals_1.sqlite-wal": true,
-	"memories_1.sqlite": true, "memories_1.sqlite-wal": true,
-	"queue_1.sqlite": true, "queue_1.sqlite-wal": true,
-	"thread_history_1.sqlite": true, "thread_history_1.sqlite-wal": true,
+// Top-level basenames only: the guard matches these names and restic receives
+// the same patterns anchored to Codex home. WAL files remain protected.
+var nativePersistenceExclusions = []string{
+	"log", "logs_2.sqlite", "logs_2.sqlite-wal",
+	"*.sqlite-shm", "shell_snapshots",
 }
 
 const startPersistenceWatcher = `set -eu
@@ -319,7 +297,7 @@ state=$1
 workspace=$2
 codex_home=$3
 watcher=$4
-inventory=$5
+exclusions=$5
 version=$6
 extras=$7
 watch_seconds=$8
@@ -336,7 +314,7 @@ umask 077
 install -d -m 700 "` + persistenceRoot + `"
 test ! -e "$state"
 mkdir -m 700 "$state"
-nohup python3 -c "$watcher" "$state" "$workspace" "$codex_home" "$inventory" "$extras" "$watch_seconds" "$native_required" </dev/null >"$state/stdout" 2>"$state/stderr" &
+nohup python3 -c "$watcher" "$state" "$workspace" "$codex_home" "$exclusions" "$extras" "$watch_seconds" "$native_required" </dev/null >"$state/stdout" 2>"$state/stderr" &
 report_error() {
   class=` + PersistenceWatcherUnavailable + `
   if IFS= read -r observed < "$state/error"; then
@@ -471,13 +449,13 @@ for thread,turns in expected.items():
 // files elsewhere in Codex home are ignored because they are not restored.
 // It intentionally hashes metadata rather than file contents: a real write
 // changes ctime and is also reported by inotify, while restic owns content I/O.
-const persistenceWatcher = `import ctypes, hashlib, json, os, select, struct, sys, time
+const persistenceWatcher = `import ctypes, fnmatch, hashlib, json, os, select, struct, sys, time
 from pathlib import Path
 
 state=Path(sys.argv[1])
 workspace=os.path.normpath(sys.argv[2])
 codex_home=os.path.normpath(sys.argv[3])
-protected=set(json.loads(sys.argv[4]))
+exclusions=json.loads(sys.argv[4])
 extras=json.loads(sys.argv[5])
 watch_seconds=float(sys.argv[6])
 native_required=sys.argv[7]=='1'
@@ -527,23 +505,14 @@ def add_record(digest,label,root,path,st):
     digest.update(json.dumps(record,separators=(',',':'),ensure_ascii=False).encode('utf-8','surrogateescape'))
     digest.update(b'\n')
 
-def inventory(digest):
-    for name in sorted(protected,key=os.fsencode):
-        path=os.path.join(codex_home,name)
-        try:
-            st=os.lstat(path)
-            record=['native-inventory',name,True,st.st_mode,st.st_dev,st.st_ino,st.st_nlink,st.st_size,st.st_mtime_ns,st.st_ctime_ns]
-        except FileNotFoundError:
-            record=['native-inventory',name,False]
-        digest.update(json.dumps(record,separators=(',',':')).encode())
-        digest.update(b'\n')
+def excluded(name):
+    return any(fnmatch.fnmatchcase(name,pattern) for pattern in exclusions)
 
-def fingerprint(roots,native_paths,install,abortable=False):
+def fingerprint(roots,codex_exists,install,abortable=False):
     digest=hashlib.sha256()
-    inventory(digest)
     described=[('workspace',roots[0],'workspace')]
     described.extend(('additional-'+str(index),root,'additional') for index,root in enumerate(roots[1:]))
-    described.extend(('native-'+name,path,'native') for name,path in native_paths)
+    if codex_exists: described.append(('native',codex_home,'native'))
     for label,root,scope in described:
         stack=[root]
         while stack:
@@ -556,12 +525,17 @@ def fingerprint(roots,native_paths,install,abortable=False):
                 digest.update(b'\n')
                 continue
             if install and not os.path.islink(path) and (path==root or os.path.isdir(path)):
-                add_watch(path,scope)
-            add_record(digest,label,root,path,st)
+                add_watch(path,'native-parent' if path==codex_home else scope)
+            if path==codex_home:
+                # Excluded child creation changes directory timestamps and size.
+                # Preserve root identity/mode; events and enumeration cover children.
+                digest.update(json.dumps([label,st.st_mode,st.st_dev,st.st_ino]).encode())
+            else:
+                add_record(digest,label,root,path,st)
             if os.path.isdir(path) and not os.path.islink(path):
                 entries=sorted(os.scandir(path),key=lambda entry:os.fsencode(entry.name),reverse=True)
                 if abortable and (state/'cancel').exists(): raise KeyboardInterrupt()
-                stack.extend(entry.path for entry in entries)
+                stack.extend(entry.path for entry in entries if path!=codex_home or not excluded(entry.name))
     return digest.hexdigest()
 
 def changed_events(timeout):
@@ -585,23 +559,12 @@ def changed_events(timeout):
             scope=watches.get(wd,'watcher')
             if scope=='native-parent':
                 name=os.fsdecode(raw_name)
-                if name not in protected: continue
+                if name and excluded(name): continue
             elif scope=='codex-home-parent':
-                if os.fsdecode(raw_name)!='.codex': continue
+                if raw_name and os.fsdecode(raw_name)!=os.path.basename(codex_home): continue
             changed=True
         readable,_,_=select.select([fd],[],[],0)
     return changed
-
-def native_paths():
-    found=[]
-    for name in sorted(protected):
-        path=os.path.join(codex_home,name)
-        if os.path.lexists(path):
-            if os.path.islink(path): raise RuntimeError('invalid_native_state')
-            if (name.endswith('.sqlite') or name.endswith('.sqlite-wal')) and not os.path.isfile(path):
-                raise RuntimeError('invalid_native_state')
-            found.append((name,path))
-    return found
 
 try:
     roots=[canonical_root(workspace)]+[canonical_root(path) for path in extras]
@@ -619,19 +582,23 @@ try:
     codex_exists=os.path.isdir(codex_home) and os.path.realpath(codex_home)==codex_home
     if codex_present and not codex_exists: raise RuntimeError('invalid_native_state')
     if native_required and not codex_exists: raise RuntimeError('missing_native_state')
-    paths_found=native_paths() if codex_exists else []
-    path_names={name for name,_ in paths_found}
-    if native_required and ('sessions' not in path_names or 'state_5.sqlite' not in path_names):
-        raise RuntimeError('missing_native_state')
-    if codex_exists: add_watch(codex_home,'native-parent')
-    else: add_watch(os.path.dirname(codex_home),'codex-home-parent')
-    first=fingerprint(roots,paths_found,True,True)
+    if codex_exists:
+        for entry in os.scandir(codex_home):
+            if not excluded(entry.name) and entry.name.endswith(('.sqlite','.sqlite-wal')) and not entry.is_file(follow_symlinks=False):
+                raise RuntimeError('invalid_native_state')
+    if native_required:
+        sessions=os.path.join(codex_home,'sessions')
+        database=os.path.join(codex_home,'state_5.sqlite')
+        if not os.path.isdir(sessions) or os.path.islink(sessions) or not os.path.isfile(database) or os.path.islink(database):
+            raise RuntimeError('missing_native_state')
+    if not codex_exists: add_watch(os.path.dirname(codex_home),'codex-home-parent')
+    first=fingerprint(roots,codex_exists,True,True)
     changed=changed_events(0)
-    baseline=fingerprint(roots,paths_found,False,True)
+    baseline=fingerprint(roots,codex_exists,False,True)
     if changed_events(0) or changed or baseline!=first:
         raise RuntimeError('changed_during_setup')
     paths=[workspace]+extras
-    paths.extend(path for _,path in paths_found)
+    if codex_exists: paths.append(codex_home)
     atomic('paths.json',json.dumps(paths,separators=(',',':'))+'\n')
     atomic('ready','ready\n')
     dirty=False
@@ -642,7 +609,7 @@ try:
             atomic('status','canceled\n')
             break
         if (state/'finish').exists():
-            final=fingerprint(roots,paths_found,False,True)
+            final=fingerprint(roots,codex_exists,False,True)
             dirty=changed_events(0) or dirty or final!=baseline
             atomic('status',('dirty' if dirty else 'clean')+'\n')
             break

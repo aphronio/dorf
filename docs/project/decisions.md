@@ -138,6 +138,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D136: Shared images install Codex through pinned Nix](decisions/D136-shared-images-install-codex-through-pinned-nix.md) (`partial`). Building guest images or changing how persistent Sandboxes obtain Codex packages.
 - [D137: Provider images share one Nix workstation](decisions/D137-provider-images-share-one-nix-workstation.md) (`current`). Changing shared guest tools, browser installation, or package parity between Incus and E2B.
 - [D138: Session checkpoints use stock restic and scoped object storage](decisions/D138-session-checkpoints-use-stock-restic.md) (`current`). Changing session checkpoint storage, capture, or recovery.
+- [D149: Adapters own directory backup selection](decisions/D149-adapter-owned-directory-backups.md) (`current`). Changing checkpoint file selection, client configuration continuity, or backup privacy.
 
 ## Harnesses
 
@@ -170,6 +171,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D145: Direct Job owns its Thread](decisions/D145-direct-job-owns-its-thread.md) (`partial`). Changing conversation continuity, native acceptance recovery, or Thread migration.
 - [D146: Name the execution context Session](decisions/D146-name-the-execution-context-session.md) (`current`). Changing execution resource names, Thread ownership, or upgrading clients.
 - [D148: Thin native Session control plane](decisions/D148-thin-native-session-control-plane.md) (`current`). Changing input custody, native observation, Session storage, or the Harness adapter.
+- [D149: Adapters own directory backup selection](decisions/D149-adapter-owned-directory-backups.md) (`current`). Changing checkpoint file selection, client configuration continuity, or backup privacy.
 
 ## Model access
 

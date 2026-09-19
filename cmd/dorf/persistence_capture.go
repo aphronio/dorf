@@ -122,7 +122,7 @@ func (c checkpointCapture) captureOwned(ctx context.Context, b persistence.Captu
 		defer cancel()
 		_ = c.agent.CancelPersistenceCapture(cleanupCtx, owner, guard)
 	}()
-	result, err := driver.Backup(ctx, owner, guard.Paths)
+	result, err := driver.Backup(ctx, owner, guard.Paths, guard.Excludes)
 	c.record(b, result)
 	if err != nil {
 		return persistence.Reference{}, err
