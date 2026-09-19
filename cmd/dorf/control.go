@@ -967,7 +967,7 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 	}
 	server := controlapi.NewServer(controlapi.Discovery{
 		Product: "dorf", Version: version.Version,
-		Capabilities: []string{"direct_sessions", "session_list", "profile_list", "session_watch", "session_history", "session_events", "native_turns", "session_retry", "sandbox_files", "sandbox_exec", "sandbox_status"},
+		Capabilities: []string{"direct_sessions", "session_list", "profile_list", "session_watch", "session_history", "session_events", "native_turns", "session_retry", "sandbox_files", "sandbox_exec", "sandbox_status", "workspace_persistence"},
 	}, auth, sessions, controlAPIProfiles{store: store})
 	serverCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -1000,7 +1000,8 @@ func configuredControlReader(cfg config.Config, store postgres.Store, runtimes c
 		// development. Compose always supplies the isolated HTTP capability.
 		return controlreader.Service{
 			Store: store, Runtimes: runtimes,
-			Provider: configuredProviderGateway(cfg),
+			Workspace: (profileRuntimeResolver{cfg: cfg, store: store}).workspace,
+			Provider:  configuredProviderGateway(cfg),
 		}, nil
 	}
 	if origin == "" || token == "" {

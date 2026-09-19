@@ -57,6 +57,7 @@ func newHandlerContext(discovery Discovery, auth Auth, sessions Sessions, profil
 	h.mux.HandleFunc("/v1/sessions", h.authenticate(h.sessionsRoute))
 	h.mux.HandleFunc("/v1/sessions/{session}/history", h.authenticate(h.timelineRoute))
 	h.mux.HandleFunc("/v1/sessions/{session}/events", h.authenticate(h.eventsRoute))
+	h.mux.HandleFunc("/v1/sessions/{session}/workspace", h.authenticate(h.workspaceRoute))
 	h.mux.HandleFunc("/v1/sessions/{session}/turns", h.authenticate(h.turnsRoute))
 	h.mux.HandleFunc("/v1/sessions/{session}/watch", h.authenticate(h.watchRoute))
 	h.mux.HandleFunc("/v1/sessions/{session}/turns/{turn}", h.authenticate(h.turnObservationRoute))

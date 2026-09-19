@@ -220,3 +220,10 @@ current upgrade attention. Native input is unavailable while held; clients retai
 
 Package admission is currently operator-only through `dorf upgrade request`. API clients can inspect
 progress but cannot install packages. `dorf upgrade show SESSION` includes the detailed retained receipt.
+
+## Workspace persistence inspection
+
+The workspace read exposes current configured backup coverage and the last published checkpoint
+through the existing worker observation boundary. It performs no native execution or capture.
+The [checkpoint contract](implementation/session-checkpoints.md#workspace-inspection) owns the
+coverage and freshness semantics; OpenAPI owns the response fields.

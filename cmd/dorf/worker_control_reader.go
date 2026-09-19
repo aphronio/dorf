@@ -25,6 +25,7 @@ type workerControlReader struct {
 
 func controlReaderService(store postgres.Store, tasks *absurd.Client, cfg config.Config) controlreader.Service {
 	return controlreader.Service{
+		Workspace: (profileRuntimeResolver{cfg: cfg, store: store, client: tasks}).workspace,
 		ObservationAttention: func(ctx context.Context, session core.Session) (string, error) {
 			task, err := fetchTaskResult(ctx, tasks, session.CurrentTaskID)
 			if err != nil {

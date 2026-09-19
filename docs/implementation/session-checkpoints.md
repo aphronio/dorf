@@ -109,6 +109,23 @@ operator and that Sandbox remain trusted with plaintext. Keep the worker configu
 separately and securely: losing the seed can make the stored backups unrecoverable. No extra key
 service or encryption implementation is introduced. Retention and deletion policy are unchanged.
 
+## Workspace inspection
+
+Authenticated clients can read `GET /v1/sessions/{session}/workspace` for workspace-level
+coverage without accessing storage credentials or native runtime directories. The existing
+private worker reader consults current configuration and the latest published checkpoint.
+The Sandbox adapter owns the workspace path. No provider operation, activity update,
+checkpoint capture, or native thread read occurs, so an active turn can inspect coverage.
+
+The response separates configured backup coverage from a successful checkpoint. A null
+checkpoint time means none has been published; an old checkpoint can remain after coverage
+is disabled. The timestamp describes the latest publication for the logical workspace,
+including before resource replacement, and does not prove that current files were backed up.
+Configuration and checkpoint reads are an observation, not a single transactional snapshot.
+Failure to inspect configuration returns an error rather than disabled coverage. Workspace
+coverage includes directory contents and Git history; symlinks do not include their targets.
+Paths outside that workspace are outside this report, even if separately protected.
+
 ## Operator configuration
 
 This is opt-in for one named direct Codex 0.154.0 E2B profile. Its pinned image must include upstream

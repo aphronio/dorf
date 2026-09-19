@@ -886,6 +886,35 @@
         "operationId": "listNativeTurns",
         "summary": "Read bounded native Turn history"
       }
+    },
+    "/v1/sessions/{session}/workspace": {
+      "get": {
+        "tags": [
+          "Sessions"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SessionID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Native response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workspace"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "operationId": "getSessionWorkspace",
+        "summary": "Read current workspace backup coverage and last published checkpoint"
+      }
     }
   },
   "components": {
@@ -2220,6 +2249,45 @@
           "response_id",
           "usage"
         ]
+      },
+      "Workspace": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "observed_at",
+          "path",
+          "backup_enabled",
+          "idle_delay_seconds",
+          "last_successful_checkpoint_at"
+        ],
+        "properties": {
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "path": {
+            "type": "string"
+          },
+          "backup_enabled": {
+            "type": "boolean",
+            "description": "Configured coverage for this profile; not evidence of a completed backup."
+          },
+          "idle_delay_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Idle debounce before capture attempts; new activity can postpone backup."
+          },
+          "last_successful_checkpoint_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Publication time of the newest retained checkpoint for this logical workspace, including before replacement. Null means none published; does not attest to current files."
+          }
+        }
       }
     }
   }

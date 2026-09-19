@@ -20,6 +20,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/codex"
 	"github.com/aphronio/dorf/internal/core"
+	"github.com/aphronio/dorf/internal/persistence"
 	"github.com/aphronio/dorf/internal/postgres"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
@@ -69,6 +70,7 @@ type AdmissionProvider interface {
 // Service owns provider-facing reads. It accepts only durable Dorf identities
 // and one already-validated Sandbox file path.
 type Service struct {
+	Workspace            func(context.Context, core.Session) (persistence.Workspace, error)
 	ObservationAttention func(context.Context, core.Session) (string, error)
 	Replies              *codex.ReplyFeed
 	Store                Store
@@ -272,6 +274,9 @@ func NewHandler(token string, service Service) (http.Handler, error) {
 	}
 	fileTransfers := make(chan struct{}, provider.MaxConcurrentFileReads)
 	routes := map[string]http.HandlerFunc{
+		WorkspacePath: jsonEndpoint(MaxRequestBytes, func(ctx context.Context, input observationRequest) (persistence.Workspace, error) {
+			return service.ReadWorkspace(ctx, input.SessionID)
+		}),
 		NativeEventPath: jsonEndpoint(MaxRequestBytes, func(ctx context.Context, input nativeEventRequest) (core.NativeAcknowledgement, error) {
 			return service.SubmitEvent(ctx, input.SessionID, input.Event)
 		}),

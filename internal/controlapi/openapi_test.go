@@ -51,6 +51,7 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 		"/v1/sessions/{session}":               {"get"},
 		"/v1/sessions/{session}/events":        {"post"},
 		"/v1/sessions/{session}/events/stream": {"get"},
+		"/v1/sessions/{session}/workspace":     {"get"},
 		"/v1/sessions/{session}/turns":         {"get"},
 		"/v1/sessions/{session}/turns/{turn}":  {"get"},
 		"/v1/sessions/{session}/history":       {"get"},
