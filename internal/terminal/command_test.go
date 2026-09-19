@@ -41,7 +41,7 @@ func TestSandboxCommandUsesCancellationRunnerAndOnlyConfirmsStoppedTimeout(t *te
 		{name: "cancelled-observation", stopped: true, err: context.Canceled, wantErr: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			sandbox := &cancellableSandbox{result: provider.RunResult{Result: provider.Result{Stdout: "out", Stderr: "stage"}, Stopped: test.stopped}, err: test.err}
+			sandbox := &cancellableSandbox{result: provider.RunResult{Result: provider.Result{Stdout: "out", Stderr: "stage", Truncated: true}, Stopped: test.stopped}, err: test.err}
 			result, err := (Externals{Sandbox: sandbox}).ExecSandbox(t.Context(), session, owned, command)
 			if (err != nil) != test.wantErr || result.ExitCode != test.wantCode {
 				t.Fatalf("exit=%d error=%v", result.ExitCode, err)
@@ -49,10 +49,10 @@ func TestSandboxCommandUsesCancellationRunnerAndOnlyConfirmsStoppedTimeout(t *te
 			if test.wantErr && !errors.Is(err, test.err) {
 				t.Fatalf("lost failure identity: %v", err)
 			}
-			if !reflect.DeepEqual(sandbox.request.Args, command.Argv) || string(sandbox.request.Stdin) != command.Stdin || sandbox.request.Timeout != 10*time.Second || sandbox.owner != ownershipMetadata(owned) {
+			if !reflect.DeepEqual(sandbox.request.Args, command.Argv) || string(sandbox.request.Stdin) != command.Stdin || sandbox.request.Timeout != 10*time.Second || sandbox.request.MaxOutputBytes != provider.MaxCommandOutputBytes || sandbox.owner != ownershipMetadata(owned) {
 				t.Fatal("command input, process identity, deadline, or custody changed")
 			}
-			if !test.wantErr && (result.Stdout != "out" || result.Stderr != "stage") {
+			if !test.wantErr && (result.Stdout != "out" || result.Stderr != "stage" || !result.Truncated) {
 				t.Fatal("lost process output")
 			}
 		})

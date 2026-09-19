@@ -79,7 +79,7 @@ func (a Adapter) Run(ctx context.Context, owner provider.Ownership, command prov
 	args = append(args, command.Args...)
 	ctx, cancel := context.WithTimeout(ctx, command.Timeout+2*time.Second)
 	defer cancel()
-	result, err := a.Sandbox.Exec(ctx, owner.SandboxID, command.Stdin, args...)
+	result, err := a.Sandbox.Exec(ctx, owner.SandboxID, command.Stdin, command.MaxOutputBytes, args...)
 	out := provider.RunResult{Result: result, Stopped: err == nil}
 	var stopped *commandStoppedError
 	if errors.As(err, &stopped) {

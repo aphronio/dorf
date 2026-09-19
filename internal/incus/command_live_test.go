@@ -29,6 +29,20 @@ func TestLiveCommandCancellation(t *testing.T) {
 	if err != nil || !result.Stopped || !strings.Contains(result.Stdout, "literal stdin") || !strings.Contains(result.Stdout, "literal environment") {
 		t.Fatalf("stdin/env execution failed: stopped=%t error=%v", result.Stopped, err)
 	}
+	for _, limit := range []int{provider.MaxCommandOutputBytes, 0} {
+		noisy, err := adapter.Run(ctx, owner, provider.RunRequest{
+			Args:    []string{"python3", "-c", "import sys; sys.stdout.buffer.write(b'x'*1048576); sys.stderr.buffer.write(b'y'*1048576); sys.exit(17)"},
+			Timeout: 15 * time.Second, MaxOutputBytes: limit,
+		})
+		wantBytes := 1048576
+		if limit > 0 {
+			wantBytes = limit
+		}
+		if err != nil || !noisy.Stopped || noisy.ExitCode != 17 || noisy.Truncated != (limit > 0) || noisy.Stdout != strings.Repeat("x", wantBytes) || noisy.Stderr != strings.Repeat("y", wantBytes) {
+			t.Fatalf("output capture: limit=%d stdout=%d stderr=%d truncated=%t exit=%d stopped=%t err=%v", limit, len(noisy.Stdout), len(noisy.Stderr), noisy.Truncated, noisy.ExitCode, noisy.Stopped, err)
+		}
+	}
+
 	result, err = adapter.Run(ctx, owner, provider.RunRequest{Args: []string{"sleep", "10"}, Timeout: time.Second})
 	if !errors.Is(err, provider.ErrCommandTimeout) || !result.Stopped {
 		t.Fatalf("timeout was not confirmed: stopped=%t error=%v", result.Stopped, err)

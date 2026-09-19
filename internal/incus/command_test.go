@@ -74,7 +74,7 @@ func TestExecCancellationSignalsThenWaitsForObservedExit(t *testing.T) {
 	defer cancel()
 	result := make(chan error, 1)
 	go func() {
-		_, err := (&sdkClient{server: sdk}).Exec(ctx, "synthetic-vm", nil, "sleep", "60")
+		_, err := (&sdkClient{server: sdk}).Exec(ctx, "synthetic-vm", nil, 0, "sleep", "60")
 		result <- err
 	}()
 	<-sdk.started

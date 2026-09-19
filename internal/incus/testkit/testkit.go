@@ -140,7 +140,7 @@ func (c client) DeleteInstance(ctx context.Context, name string, _ map[string]st
 	return nil
 }
 
-func (c client) Exec(ctx context.Context, name string, input []byte, args ...string) (incus.Result, error) {
+func (c client) Exec(ctx context.Context, name string, input []byte, maxOutputBytes int, args ...string) (incus.Result, error) {
 	incusArgs := []string{"exec", name, "--"}
 	incusArgs = append(incusArgs, args...)
 	return c.run(ctx, input, incusArgs...)

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/gorilla/websocket"
 	incusclient "github.com/lxc/incus/v7/client"
 	"github.com/lxc/incus/v7/shared/api"
@@ -272,7 +273,7 @@ type commandStoppedError struct{ error }
 
 func (e *commandStoppedError) Unwrap() error { return e.error }
 
-func (c *sdkClient) Exec(ctx context.Context, name string, input []byte, command ...string) (Result, error) {
+func (c *sdkClient) Exec(ctx context.Context, name string, input []byte, maxOutputBytes int, command ...string) (Result, error) {
 	if len(command) == 0 {
 		return Result{}, fmt.Errorf("Incus exec command is required")
 	}
@@ -301,7 +302,8 @@ func (c *sdkClient) Exec(ctx context.Context, name string, input []byte, command
 		case <-done:
 		}
 	}()
-	var stdout, stderr bytes.Buffer
+	stdout := provider.OutputBuffer{Limit: maxOutputBytes}
+	stderr := provider.OutputBuffer{Limit: maxOutputBytes}
 	dataDone := make(chan bool)
 	op, err := c.serverFor(execCtx).ExecInstance(name, api.InstanceExecPost{Command: command, WaitForWS: true}, &incusclient.InstanceExecArgs{
 		Stdin: bytes.NewReader(input), Stdout: &stdout, Stderr: &stderr, DataDone: dataDone,
@@ -332,7 +334,7 @@ func (c *sdkClient) Exec(ctx context.Context, name string, input []byte, command
 	case <-ctx.Done():
 		return Result{ExitCode: exitCode}, &commandStoppedError{ctx.Err()}
 	}
-	return Result{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: exitCode}, nil
+	return Result{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: exitCode, Truncated: stdout.Truncated || stderr.Truncated}, nil
 }
 
 // waitCommandExit distinguishes a signal request from an observed remote exit.

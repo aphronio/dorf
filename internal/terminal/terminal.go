@@ -140,6 +140,7 @@ func (e Externals) ExecSandbox(ctx context.Context, session core.Session, owned 
 	// Start the actual command through the provider's cancellation-aware runner.
 	observed, err := e.Sandbox.Run(ctx, ownershipMetadata(owned), provider.RunRequest{
 		Args: command.Argv, Stdin: []byte(command.Stdin), Timeout: command.Timeout(),
+		MaxOutputBytes: provider.MaxCommandOutputBytes,
 	})
 	result := observed.Result
 	if errors.Is(err, provider.ErrCommandTimeout) && observed.Stopped && ctx.Err() == nil {
@@ -149,16 +150,9 @@ func (e Externals) ExecSandbox(ctx context.Context, session core.Session, owned 
 	if err != nil {
 		return provider.CommandResult{}, err
 	}
-	output := provider.CommandResult{ExitCode: result.ExitCode, Stdout: result.Stdout, Stderr: result.Stderr}
-	if len(output.Stdout) > provider.MaxCommandOutputBytes {
-		output.Stdout = output.Stdout[:provider.MaxCommandOutputBytes]
-		output.Truncated = true
-	}
-	if len(output.Stderr) > provider.MaxCommandOutputBytes {
-		output.Stderr = output.Stderr[:provider.MaxCommandOutputBytes]
-		output.Truncated = true
-	}
-	return output, nil
+	return provider.CommandResult{
+		ExitCode: result.ExitCode, Stdout: result.Stdout, Stderr: result.Stderr, Truncated: result.Truncated,
+	}, nil
 }
 
 func (e Externals) SandboxPause(ctx context.Context, session core.Session, owned core.Sandbox) error {

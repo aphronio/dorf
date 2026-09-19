@@ -111,7 +111,7 @@ func (s Sandbox) ReconcileOwnedCreate(ctx context.Context, metadata OwnershipMet
 
 	deadline := time.Now().Add(90 * time.Second)
 	for {
-		ready, readyErr := client.Exec(ctx, metadata.SandboxID, nil, "true")
+		ready, readyErr := client.Exec(ctx, metadata.SandboxID, nil, 0, "true")
 		if readyErr == nil && ready.ExitCode == 0 {
 			break
 		}
@@ -120,14 +120,14 @@ func (s Sandbox) ReconcileOwnedCreate(ctx context.Context, metadata OwnershipMet
 		}
 		s.sleep(250 * time.Millisecond)
 	}
-	credentialCheck, err := client.Exec(ctx, metadata.SandboxID, nil, "bash", "-lc", "test ! -e /root/.codex/auth.json && test ! -e /root/.pi/agent/auth.json && test ! -e /root/.config/dorf/provider-route.key && test ! -e /root/.codex/config.toml && test ! -e /root/.pi/agent/models.json")
+	credentialCheck, err := client.Exec(ctx, metadata.SandboxID, nil, 0, "bash", "-lc", "test ! -e /root/.codex/auth.json && test ! -e /root/.pi/agent/auth.json && test ! -e /root/.config/dorf/provider-route.key && test ! -e /root/.codex/config.toml && test ! -e /root/.pi/agent/models.json")
 	if err != nil {
 		return err
 	}
 	if credentialCheck.ExitCode != 0 {
 		return fmt.Errorf("Sandbox is not credential-free before its scoped route")
 	}
-	workspace, err := client.Exec(ctx, metadata.SandboxID, nil, "mkdir", "-p", s.Config.Workspace)
+	workspace, err := client.Exec(ctx, metadata.SandboxID, nil, 0, "mkdir", "-p", s.Config.Workspace)
 	if err != nil {
 		return err
 	}
@@ -278,7 +278,7 @@ func (s Sandbox) PrivateIPv4(ctx context.Context, name string) (string, error) {
 		return "", err
 	}
 	defer client.Close()
-	result, err := client.Exec(ctx, name, nil, "ip", "-4", "route", "get", "1.1.1.1")
+	result, err := client.Exec(ctx, name, nil, 0, "ip", "-4", "route", "get", "1.1.1.1")
 	if err != nil {
 		return "", err
 	}
@@ -298,13 +298,13 @@ func (s Sandbox) PrivateIPv4(ctx context.Context, name string) (string, error) {
 	return "", fmt.Errorf("Sandbox default route did not report an IPv4 source address")
 }
 
-func (s Sandbox) Exec(ctx context.Context, name string, input []byte, args ...string) (Result, error) {
+func (s Sandbox) Exec(ctx context.Context, name string, input []byte, maxOutputBytes int, args ...string) (Result, error) {
 	client, err := s.open(ctx)
 	if err != nil {
 		return Result{}, err
 	}
 	defer client.Close()
-	return client.Exec(ctx, name, input, args...)
+	return client.Exec(ctx, name, input, maxOutputBytes, args...)
 }
 
 func (s Sandbox) PortForwardEndpoint(ctx context.Context, metadata OwnershipMetadata, port int) (provider.Endpoint, error) {

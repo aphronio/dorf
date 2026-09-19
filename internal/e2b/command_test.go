@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,5 +108,19 @@ func TestConvenienceExecUsesSameStopConfirmation(t *testing.T) {
 	_, err := scope.Exec(t.Context(), provider.Ownership{}, nil, "sleep", "30")
 	if !errors.Is(err, context.Canceled) || rpc.signalPID != 42 || rpc.lists != 2 {
 		t.Fatalf("convenience execution bypassed stop confirmation: %v", err)
+	}
+}
+
+func TestRunDrainsCappedOutputThroughNonzeroExit(t *testing.T) {
+	payload := []byte(strings.Repeat("x", provider.MaxCommandOutputBytes+1))
+	rpc := &fakeProcessClient{stream: &fakeStartStream{messages: []*process.StartResponse{
+		startEvent(42), stdoutEvent(payload), stderrEvent(payload), stdoutEvent([]byte("tail")), endEvent(17, true, "exited", ""),
+	}}}
+	result, err := (&Executor{process: rpc}).Run(t.Context(), provider.RunRequest{
+		Args: []string{"noisy"}, Timeout: time.Second, MaxOutputBytes: provider.MaxCommandOutputBytes,
+	})
+	want := string(payload[:provider.MaxCommandOutputBytes])
+	if err != nil || !result.Stopped || result.ExitCode != 17 || !result.Truncated || result.Stdout != want || result.Stderr != want {
+		t.Fatalf("capped output lost exit or bounds: stdout=%d stderr=%d truncated=%t stopped=%t exit=%d err=%v", len(result.Stdout), len(result.Stderr), result.Truncated, result.Stopped, result.ExitCode, err)
 	}
 }

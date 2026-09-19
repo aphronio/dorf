@@ -47,7 +47,7 @@ type Client interface {
 	PatchInstanceConfig(context.Context, string, map[string]string, map[string]string) error
 	StartInstance(context.Context, string) error
 	DeleteInstance(context.Context, string, map[string]string) error
-	Exec(context.Context, string, []byte, ...string) (Result, error)
+	Exec(context.Context, string, []byte, int, ...string) (Result, error)
 	NetworkIPv4(context.Context, string) (string, error)
 	OpenPortForward(context.Context, string, string, int) (net.Conn, error)
 	Close()

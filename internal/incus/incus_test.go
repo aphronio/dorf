@@ -125,7 +125,7 @@ func (c *fakeClient) DeleteInstance(_ context.Context, name string, required map
 	return nil
 }
 
-func (c *fakeClient) Exec(_ context.Context, _ string, _ []byte, args ...string) (Result, error) {
+func (c *fakeClient) Exec(_ context.Context, _ string, _ []byte, _ int, args ...string) (Result, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.execCalls = append(c.execCalls, append([]string(nil), args...))

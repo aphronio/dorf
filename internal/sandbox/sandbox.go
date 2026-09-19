@@ -22,9 +22,10 @@ type Ownership struct {
 // Result preserves the bounded command observation used by common consumers.
 // A nonzero process exit is represented in ExitCode, not as a transport error.
 type Result struct {
-	Stdout   string
-	Stderr   string
-	ExitCode int
+	Stdout    string
+	Stderr    string
+	ExitCode  int
+	Truncated bool
 }
 
 // CommandRunner executes a bounded command and attempts remote termination on
@@ -44,6 +45,8 @@ type RunRequest struct {
 	Stdin   []byte
 	Env     map[string]string
 	Timeout time.Duration
+	// MaxOutputBytes caps each captured stream; zero keeps internal exec unrestricted.
+	MaxOutputBytes int
 }
 
 type RunResult struct {

@@ -280,6 +280,23 @@ Each arrow is a proposed dependency, not approval to start the next slice.
 - A bounded-controller rewrite remains a separate proposal. The remaining responsibilities do
   not by themselves justify a second scheduling mechanism.
 
+### Public exec output capture
+
+The separately agreed output-memory fix is implemented. Public exec passes its existing per-stream
+limit to [Incus](../../internal/incus/sdk.go) and [E2B](../../internal/e2b/command.go). One shared
+[capture writer](../../internal/sandbox/output.go) retains only the prefix, drains excess output,
+and reports truncation. The API returns that observation directly instead of trimming after capture.
+Internal exec and file transports retain their existing byte requirements. No new public options,
+streaming protocol, process registry, or storage are introduced.
+
+Verification: the full `mise run check` gate passes. A focused overflow test verifies retained
+capture stays bounded while consuming excess output; the E2B transport test preserves nonzero exit
+after truncation. A disposable Incus VM produced one MiB on each stream: capped execution retained
+the existing limit and uncapped internal execution returned the full bytes, both with exit code 17.
+The same live proof verified stdin, environment, timeout, cancellation and process absence, then
+removed the VM and project. The corresponding E2B live case is added but was not run because its
+credentials and template were unavailable. No whole-worker memory or latency benchmark is claimed.
+
 ## Client API review
 
 Apply [Build a small thing that composes](../project/principles.md#build-a-small-thing-that-composes):

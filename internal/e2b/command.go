@@ -1,7 +1,6 @@
 package e2b
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -40,10 +39,12 @@ func (e *Executor) Run(ctx context.Context, command provider.RunRequest) (provid
 	if err := ctx.Err(); err != nil {
 		return provider.RunResult{Stopped: true}, err
 	}
-	var stdout, stderr bytes.Buffer
+	stdout := provider.OutputBuffer{Limit: command.MaxOutputBytes}
+	stderr := provider.OutputBuffer{Limit: command.MaxOutputBytes}
 	observed, err := e.Exec(ctx, ExecRequest{Argv: command.Args, Stdin: command.Stdin, Env: command.Env,
 		ProcessTimeout: command.Timeout, Stdout: &stdout, Stderr: &stderr})
 	result, execErr := providerExecResult(observed, stdout.String(), stderr.String(), err)
+	result.Truncated = stdout.Truncated || stderr.Truncated
 	out := provider.RunResult{Result: result}
 	var exit *ExitError
 	if err == nil || errors.As(err, &exit) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,6 +76,20 @@ func TestLiveEnvdExecPreservesProcessSemantics(t *testing.T) {
 	}
 	if !bytes.Equal(stdout.Bytes(), input) || !bytes.Equal(stderr.Bytes(), []byte{'e', 'r', 'r', 0}) {
 		t.Fatalf("raw stdout=%v stderr=%v", stdout.Bytes(), stderr.Bytes())
+	}
+
+	for _, limit := range []int{provider.MaxCommandOutputBytes, 0} {
+		noisy, err := executor.Run(ctx, provider.RunRequest{
+			Args:    []string{"python3", "-c", "import sys; sys.stdout.buffer.write(b'x'*1048576); sys.stderr.buffer.write(b'y'*1048576); sys.exit(17)"},
+			Timeout: 15 * time.Second, MaxOutputBytes: limit,
+		})
+		wantBytes := 1048576
+		if limit > 0 {
+			wantBytes = limit
+		}
+		if err != nil || !noisy.Stopped || noisy.ExitCode != 17 || noisy.Truncated != (limit > 0) || noisy.Stdout != strings.Repeat("x", wantBytes) || noisy.Stderr != strings.Repeat("y", wantBytes) {
+			t.Fatalf("output capture: limit=%d stdout=%d stderr=%d truncated=%t exit=%d stopped=%t err=%v", limit, len(noisy.Stdout), len(noisy.Stderr), noisy.Truncated, noisy.ExitCode, noisy.Stopped, err)
+		}
 	}
 
 	timeoutStarted := time.Now()
