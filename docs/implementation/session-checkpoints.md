@@ -5,10 +5,10 @@ Codex 0.154.0 E2B profile. Disposable native replacement, cancellation and clean
 pass. Activation is opt-in. The v0.17.0 shared image recipe includes stock restic;
 deployment requires an image built from the clean release source, not a disposable proof image.
 
-The provider proofs above predate native Session events. Slice 9 changes the execution cutoff to
-a native mutation revision and adds a workspace continuity manifest. Local PostgreSQL/filesystem
-checks cover this boundary; live replacement proofs have not yet been rerun. See the
-[native implementation record](native-session-contract.md#implementation-and-verification).
+The native Session contract uses a native mutation revision and workspace continuity manifest.
+Live operator-requested E2B replacement, restored file/history checks and same-Thread continuation
+passed after that change. The [native implementation record](native-session-contract.md#implementation-and-verification)
+owns the current verification scope and distinguishes it from the earlier fault proofs below.
 
 ## Contract
 
@@ -114,9 +114,11 @@ select the full snapshot ID from that output and run:
 dorf checkpoint recover SESSION --id UNIQUE_REQUEST_ID --repository REPOSITORY_ID --snapshot FULL_SNAPSHOT_ID
 ```
 
-The worker performs recovery under a retained delivery hold. Repeating the same request reconciles
-the same operation. A checkpoint that predates accepted or ambiguous native execution is rejected;
-an operator must investigate that gap. Cleanup closes admission, so a cleaned-up Session is not reopened
+The command admits recovery intent; the worker checks safety under a retained delivery hold before
+restoring. Repeating the same request reconciles the same operation. A checkpoint that predates
+accepted or ambiguous native execution cannot restore: the worker reports attention and retains
+the hold and current resource. An operator must investigate that gap. Command acceptance alone
+does not prove recovery is safe or complete. Cleanup closes admission, so a cleaned-up Session is not reopened
 by this command. Investigation of retained cleanup state requires an isolated restore procedure;
 the disposable cleanup proof verifies this procedure without reopening the Session.
 

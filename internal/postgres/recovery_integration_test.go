@@ -92,9 +92,6 @@ values($1,$2,'workspace_upgrade',clock_timestamp())`, upgradeID, sandboxID); err
 	if _, err := store.RequestCheckpointRecovery(ctx, client.QueueName(), changed); err == nil {
 		t.Fatal("changed request reused recovery identity")
 	}
-	if err := store.ReleaseSandboxDelivery(ctx, client.QueueName(), session.ID, sandboxID, request.ID); err == nil {
-		t.Fatal("generic release bypassed recovery verification")
-	}
 
 	if _, err := store.BeginNativeMutation(ctx, session.ID, session.ThreadID, "held-input", ""); err == nil {
 		t.Fatal("recovery hold admitted native mutation")
@@ -218,10 +215,10 @@ func TestCheckpointRecoveryHoldsForPostBoundaryNativeSubmission(t *testing.T) {
 	}
 }
 
-// Distinct recoveries and upgrades race for one owner. An existing manual hold
-// also blocks recovery. Losing requests must not leave a resource or hold.
+// Distinct recoveries and upgrades race for one owner.
+// Losing requests must not leave a resource or hold.
 func TestCheckpointRecoveryExcludesConcurrentMaintenance(t *testing.T) {
-	for _, competing := range []string{"recovery", "upgrade", "hold"} {
+	for _, competing := range []string{"recovery", "upgrade"} {
 		t.Run(competing, func(t *testing.T) {
 			_, store, client := testDatabase(t)
 			ctx := context.Background()
@@ -244,30 +241,21 @@ func TestCheckpointRecoveryExcludesConcurrentMaintenance(t *testing.T) {
 					r.ID = id
 					_, err := store.RequestCheckpointRecovery(ctx, client.QueueName(), r)
 					return err
-				case "upgrade":
+				default:
 					_, err := store.RequestSandboxUpgrade(ctx, client.QueueName(), upgrade.Request{
 						ID: id, SessionID: session.ID, SandboxID: sandboxID,
 						PackagePath: "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-runner-0.155.0", Version: "0.155.0",
 					})
 					return err
-				default:
-					_, err := store.HoldSandboxDelivery(ctx, client.QueueName(), session.ID, sandboxID, id)
-					return err
 				}
 			}
-			var first, second error
-			if competing == "hold" {
-				// Manual holds can coexist; recovery must respect a pre-existing one.
-				first, second = other(), recover()
-			} else {
-				start := make(chan struct{})
-				results := make(chan error, 2)
-				for _, request := range []func() error{recover, other} {
-					go func() { <-start; results <- request() }()
-				}
-				close(start)
-				first, second = <-results, <-results
+			start := make(chan struct{})
+			results := make(chan error, 2)
+			for _, request := range []func() error{recover, other} {
+				go func() { <-start; results <- request() }()
 			}
+			close(start)
+			first, second := <-results, <-results
 			if (first == nil) == (second == nil) {
 				t.Fatalf("expected exactly one maintenance owner: %v / %v", first, second)
 			}

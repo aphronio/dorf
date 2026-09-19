@@ -13,8 +13,8 @@ import (
 
 // spawnSessionTaskTx uses Absurd's public SQL API because its Go client owns a
 // separate connection. Task eligibility and Dorf attachment commit together.
-func spawnSessionTaskTx(ctx context.Context, tx *sql.Tx, queue, sessionID, previousTaskID, name, key string) (string, error) {
-	params, err := json.Marshal(core.SessionTaskParams{SessionID: sessionID, PreviousTaskID: previousTaskID})
+func spawnSessionTaskTx(ctx context.Context, tx *sql.Tx, queue, sessionID, name, key string) (string, error) {
+	params, err := json.Marshal(core.SessionTaskParams{SessionID: sessionID})
 	if err != nil {
 		return "", err
 	}
@@ -50,7 +50,7 @@ func scheduleSessionTaskTx(ctx context.Context, tx *sql.Tx, queue, sessionID, na
 	if !current.AdmissionOpen || current.CleanupState != core.CleanupPending {
 		return fmt.Errorf("Session %s cannot schedule ordinary work after cleanup begins", sessionID)
 	}
-	taskID, err := spawnSessionTaskTx(ctx, tx, queue, sessionID, current.TaskID, name, key)
+	taskID, err := spawnSessionTaskTx(ctx, tx, queue, sessionID, name, key)
 	if err != nil {
 		return err
 	}
@@ -84,7 +84,7 @@ func (s Store) ScheduleCleanup(ctx context.Context, queue, sessionID, callerTask
 			return fmt.Errorf("cancel attached Absurd task: %w", err)
 		}
 	}
-	taskID, err := spawnSessionTaskTx(ctx, tx, queue, sessionID, current.TaskID, core.CleanupTaskName, "cleanup:v3:"+sessionID)
+	taskID, err := spawnSessionTaskTx(ctx, tx, queue, sessionID, core.CleanupTaskName, "cleanup:v3:"+sessionID)
 	if err != nil {
 		return err
 	}

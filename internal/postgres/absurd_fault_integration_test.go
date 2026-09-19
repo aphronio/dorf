@@ -35,7 +35,7 @@ func TestRetryFailedSessionSchedulesOneMoreAttemptOnSameTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AttachSessionTask(ctx, session.ID, session.CurrentTaskID, spawned.TaskID, taskName); err != nil {
+	if err := attachTaskFixture(store, ctx, session.ID, spawned.TaskID, taskName); err != nil {
 		t.Fatal(err)
 	}
 	session, err = store.Session(ctx, session.ID)
@@ -94,7 +94,7 @@ func TestRetryFailedSessionTargetsAttachedCleanupTask(t *testing.T) {
 
 	session := admitFaultSession(t, store, fmt.Sprintf("cleanup-retry-%d", time.Now().UnixNano()))
 	mainTaskID := "main-task-" + session.ID
-	if err := store.AttachSessionTask(ctx, session.ID, "", mainTaskID, "dorf-main-proof-v1"); err != nil {
+	if err := attachTaskFixture(store, ctx, session.ID, mainTaskID, "dorf-main-proof-v1"); err != nil {
 		t.Fatal(err)
 	}
 	session, err := store.Session(ctx, session.ID)
@@ -108,7 +108,7 @@ func TestRetryFailedSessionTargetsAttachedCleanupTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AttachCleanupTask(ctx, session.ID, session.CurrentTaskID, spawned.TaskID, taskName); err != nil {
+	if err := attachTaskFixture(store, ctx, session.ID, spawned.TaskID, taskName); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "cleanup-retry-proof-first", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
@@ -324,7 +324,7 @@ func TestAbsurdCancellationCannotRecordLateActionSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AttachSessionTask(context.Background(), session.ID, "", spawned.TaskID, taskName); err != nil {
+	if err := attachTaskFixture(store, context.Background(), session.ID, spawned.TaskID, taskName); err != nil {
 		t.Fatal(err)
 	}
 
@@ -403,7 +403,7 @@ func TestAbsurdClaimExpirySandboxEffectFenceSerializesCleanupWithoutLateReceipt(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AttachSessionTask(context.Background(), session.ID, "", spawned.TaskID, taskName); err != nil {
+	if err := attachTaskFixture(store, context.Background(), session.ID, spawned.TaskID, taskName); err != nil {
 		t.Fatal(err)
 	}
 

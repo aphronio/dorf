@@ -78,7 +78,7 @@ func TestControlAPIProjectsPersistedSandboxCreationFailure(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := store.AttachSessionTask(ctx, session.ID, session.CurrentTaskID, failed.TaskID, taskName); err != nil {
+			if _, err := store.DB.ExecContext(ctx, `insert into dorf.session_tasks(session_id,sequence,task_id,task_name) values($1,2,$2,$3)`, session.ID, failed.TaskID, taskName); err != nil {
 				t.Fatal(err)
 			}
 			if err := tasks.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "failure-proof", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {

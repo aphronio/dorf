@@ -820,7 +820,7 @@ func TestSandboxActionAttentionPersistsAcrossRetryAndClearsOnSuccess(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AttachSessionTask(ctx, session.ID, "", spawned.TaskID, taskName); err != nil {
+	if err := attachTaskFixture(store, ctx, session.ID, spawned.TaskID, taskName); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "action-attention-first", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
@@ -887,7 +887,7 @@ func TestSandboxCleanupRequiresRouteRevoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AttachSessionTask(ctx, session.ID, "", spawned.TaskID, taskName); err != nil {
+	if err := attachTaskFixture(store, ctx, session.ID, spawned.TaskID, taskName); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "authority-proof", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
@@ -906,11 +906,11 @@ func TestSandboxCleanupRequiresRouteRevoke(t *testing.T) {
 		}
 		return core.TaskResultV1{SessionID: session.ID, Outcome: "provider-reconciled"}, nil
 	}, absurd.TaskOptions{DefaultMaxAttempts: 1}))
-	recoveryTask, err := client.Spawn(ctx, recoveryTaskName, core.SessionTaskParams{SessionID: session.ID, PreviousTaskID: spawned.TaskID}, absurd.SpawnOptions{IdempotencyKey: recoveryTaskName + ":" + session.ID, MaxAttempts: 1})
+	recoveryTask, err := client.Spawn(ctx, recoveryTaskName, core.SessionTaskParams{SessionID: session.ID}, absurd.SpawnOptions{IdempotencyKey: recoveryTaskName + ":" + session.ID, MaxAttempts: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AttachSessionTask(ctx, session.ID, spawned.TaskID, recoveryTask.TaskID, recoveryTaskName); err != nil {
+	if err := attachTaskFixture(store, ctx, session.ID, recoveryTask.TaskID, recoveryTaskName); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "lost-provider-receipt", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
@@ -963,7 +963,7 @@ func TestSandboxDeleteBeforeRevokeHasZeroProviderEffects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AttachCleanupTask(ctx, session.ID, "", spawned.TaskID, core.CleanupTaskName); err != nil {
+	if err := attachTaskFixture(store, ctx, session.ID, spawned.TaskID, core.CleanupTaskName); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "delete-before-revoke", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
@@ -1089,7 +1089,7 @@ func TestCleanupCompletesWithExplanatoryExecutionAttention(t *testing.T) {
 	if err := requestCleanupFixture(ctx, store, session.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AttachCleanupTask(ctx, session.ID, session.CurrentTaskID, "cleanup-task-"+session.ID, core.CleanupTaskName); err != nil {
+	if err := attachTaskFixture(store, ctx, session.ID, "cleanup-task-"+session.ID, core.CleanupTaskName); err != nil {
 		t.Fatal(err)
 	}
 	sandboxID := core.MainSandboxName(session.ID)

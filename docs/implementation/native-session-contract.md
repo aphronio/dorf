@@ -162,9 +162,26 @@ Verification covers:
 - The isolated real Codex probe above was rerun on 2026-09-19 and passed, including start-or-steer,
   repeated correlation IDs, completed-history restart and the acknowledged-but-unpersisted case.
 
-Live Incus/E2B pause, upgrade and checkpoint replacement proofs have **not** been rerun for this
-slice. Existing provider verification does not establish this changed native recovery boundary.
-No live deployment was migrated. Deployment verification remains separate from local code checks.
+Live verification on 2026-09-19 exercised the native Session boundary:
+
+- The coordinated 0.18.1 migration preserved retained Session identity, Thread binding and resource
+  custody while moving lifecycle execution to the Session queue.
+- Disposable Incus and E2B Sessions accepted file and native image attachments, exposed completed-item
+  SSE, continued the same Thread, and completed cleanup. E2B idle pause and resume also passed.
+- `integration:upgrade-worker` passed on Incus and E2B: activation, deliberately failed verification,
+  rollback, original conversation context, substantive replies, and resource/checkpoint cleanup.
+  The E2B rollback adopted a different provider VM. These coordinator proofs used a deterministic
+  model fixture and real native Harnesses and providers.
+- The deployed E2B checkpoint path published a backup, restored onto a different VM, verified native
+  history, deleted the source, and continued the same Thread through the real model route. The
+  restored workspace file matched exactly. After a newer input, recovery from the older checkpoint
+  reported attention before creating or verifying a destination. Cleanup completed for the successful
+  replacement and for the held stale-recovery request.
+
+The current checkpoint proof exercises operator-requested replacement with its source initially
+available. Source loss, lost verification acknowledgements, storage cancellation and cross-session
+storage isolation were covered by earlier prototype proofs and were not rerun in this pass.
+Deployment-specific identities and receipts remain private.
 
 The old Message/AgentRun schema, delivery controller, queue wakes, multipart payload store,
 Follow/Steer selection and public aliases are removed. Published migrations remain intact.

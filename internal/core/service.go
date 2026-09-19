@@ -13,7 +13,6 @@ type ExecutionStore interface {
 	SandboxActivityStore
 	SandboxIdleFor(context.Context, string, time.Duration) (bool, error)
 	Session(context.Context, string) (Session, error)
-	SessionTasks(context.Context, string) ([]SessionTask, error)
 	Sandboxes(context.Context, string) ([]Sandbox, error)
 	NativeState(context.Context, string) (NativeState, error)
 	FinishNativeMutation(context.Context, string, int64) error

@@ -17,7 +17,7 @@ type cleanupTarget struct {
 // RegisterCleanup installs the Core-owned resource cleanup task.
 func (a Application) RegisterCleanup() {
 	a.Tasks.MustRegister(absurd.Task(CleanupTaskName, func(ctx context.Context, params SessionTaskParams) (TaskResultV1, error) {
-		if err := a.VerifyAttachedTask(ctx, params.SessionID, CleanupTaskName, params.PreviousTaskID); err != nil {
+		if err := a.VerifyAttachedTask(ctx, params.SessionID, CleanupTaskName); err != nil {
 			return TaskResultV1{}, err
 		}
 		session, err := a.Store.Session(ctx, params.SessionID)

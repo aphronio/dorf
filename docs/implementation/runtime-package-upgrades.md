@@ -5,9 +5,10 @@ Status: the scoped Codex upgrade and shared workstation slices shipped in v0.16.
 [D132](../project/decisions/D132-profile-revisions-separate-promotion-from-job-custody.md).
 The sections below preserve implementation decisions and intermediate verification evidence.
 The release verification section records the final artifacts; earlier candidates are historical.
-Those live proofs predate native Session events. The current guard uses native quiescence and a
-continuity manifest; live upgrade/rollback proofs must be rerun for this boundary. See the
-[native contract](native-session-contract.md#implementation-and-verification).
+The current guard uses native quiescence and a continuity manifest. The retained-worker
+activation and forced-rollback proofs passed on Incus and E2B after the native Session refactor.
+The [native contract](native-session-contract.md#implementation-and-verification) records the
+current verification scope; the older evidence below describes its original boundary.
 
 ## Goal and scope
 

@@ -40,14 +40,14 @@ in its owner and replace the other copies with links or stable summaries.
 ## Active implementation
 
 - [Native Session contract](implementation/native-session-contract.md): accepted thin control-plane
-  direction, pinned Codex capability evidence and remaining proof for the API replacement. The
+  direction, pinned Codex capability evidence and verification for the API replacement. The
   native events API replaces queued Message custody.
 
 - [Session checkpoints](implementation/session-checkpoints.md): provider-independent native state
   recovery, currently under implementation and verification.
 
-- [Package upgrades in persistent Sandboxes](implementation/runtime-package-upgrades.md): agreed
-  implementation after the profile-revision slice; planned scope, not current supported behavior.
+- [Package upgrades in persistent Sandboxes](implementation/runtime-package-upgrades.md): shipped
+  upgrade contract, provider boundaries, and verification evidence.
 
 ## Archived and non-normative material
 

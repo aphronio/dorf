@@ -162,6 +162,7 @@ type Session struct {
 	AdmissionOpen            bool         `json:"admission_open"`
 	CleanupState             CleanupState `json:"cleanup_state"`
 	CurrentTaskID            string       `json:"current_task_id,omitempty"`
+	CurrentTaskName          string       `json:"-"`
 	ExecutionAttention       string       `json:"execution_attention,omitempty"`
 	ExecutionAttentionSource string       `json:"execution_attention_source,omitempty"`
 	ExecutionAttentionAt     time.Time    `json:"execution_attention_at,omitempty"`

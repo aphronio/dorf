@@ -4,6 +4,7 @@ select coalesce(j.created_by_client_id,'') as created_by_client_id, coalesce(cre
        j.id,j.admission_key,j.agents_md,
        j.sandbox_profile,j.sandbox_profile_revision,j.provider_connection,j.model,j.reasoning_effort,j.keep_running,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
+       coalesce(current_task.task_name,'') as current_task_name,
        coalesce(j.execution_attention,'') as execution_attention,
        coalesce(j.execution_attention_source,'') as execution_attention_source,
        j.execution_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
@@ -12,7 +13,7 @@ from dorf.sessions j
 join dorf.sandbox_profile_revisions p on p.name=j.sandbox_profile and p.definition_hash=j.sandbox_profile_revision
 left join dorf.control_clients creator on creator.id=j.created_by_client_id
 left join lateral (
-    select task_id from dorf.session_tasks where session_id=j.id order by sequence desc limit 1
+    select task_id,task_name from dorf.session_tasks where session_id=j.id order by sequence desc limit 1
 ) current_task on true
 where j.id=sqlc.arg(session_id);
 

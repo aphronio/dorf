@@ -50,6 +50,10 @@ Absurd's public SQL API. Input waits on resource readiness at the caller. The na
 and binds a Thread before dispatch. Only a binding with no previously authorized input may be replaced
 when an empty native Thread disappears after restart.
 
+Task startup validates the committed current task ID, name and lifecycle state under the Session
+fence. It cannot attach itself or repair scheduling. Creation and cleanup scheduling own atomic
+spawn and attachment; explicit retries retain the same task identity.
+
 One authenticated native connection covers configuration and input, then transfers observation to
 the worker. Native `turn/start` selects start versus steer. Cancellation captures the current Turn
 once and calls exact native interrupt without retargeting. Neither path retries a native mutation.

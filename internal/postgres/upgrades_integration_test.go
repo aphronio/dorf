@@ -116,9 +116,6 @@ func TestSandboxUpgradeRecoveryKeepsCustodyAndQueuedInput(t *testing.T) {
 			if _, err := store.RequestSandboxUpgrade(ctx, client.QueueName(), changed); err == nil {
 				t.Fatal("changed request accepted")
 			}
-			if err := store.ReleaseSandboxDelivery(ctx, client.QueueName(), session.ID, owned.ID, request.ID); err == nil {
-				t.Fatal("generic release bypassed verification")
-			}
 			if err := store.FinishSandboxUpgrade(ctx, client.QueueName(), receipt); err == nil {
 				t.Fatal("unverified release accepted")
 			}

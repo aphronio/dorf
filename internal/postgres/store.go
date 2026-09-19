@@ -185,7 +185,7 @@ func (s Store) Session(ctx context.Context, id string) (core.Session, error) {
 		Harness: row.Harness, ThreadID: row.ThreadID,
 		SandboxProfile: row.SandboxProfile, SandboxProfileRevision: row.SandboxProfileRevision, ProviderConnection: row.ProviderConnection,
 		KeepRunning: row.KeepRunning, Model: row.Model, ReasoningEffort: row.ReasoningEffort, AdmissionOpen: row.AdmissionOpen, CleanupState: core.CleanupState(row.CleanupState),
-		CurrentTaskID:      row.CurrentTaskID,
+		CurrentTaskID: row.CurrentTaskID, CurrentTaskName: row.CurrentTaskName,
 		ExecutionAttention: row.ExecutionAttention, ExecutionAttentionSource: row.ExecutionAttentionSource,
 		ExecutionAttentionAt: timeValue(row.ExecutionAttentionAt), CleanupAttention: row.CleanupAttention,
 		AdmittedAt: row.AdmittedAt, CleanedAt: timeValue(row.CleanedAt),
@@ -244,12 +244,6 @@ func acquireSessionFenceTx(ctx context.Context, tx *sql.Tx, sessionID string) er
 	return nil
 }
 
-// AttachSessionTask appends one exact Absurd task handoff. The deterministic Absurd
-// idempotency key supplies task identity; Dorf records only ordered attachment.
-func (s Store) AttachSessionTask(ctx context.Context, sessionID, expectedCurrentTaskID, taskID, taskName string) error {
-	return s.attachSessionTask(ctx, sessionID, expectedCurrentTaskID, taskID, taskName, false)
-}
-
 func actionFromValues(id, sessionID string, kind core.ActionKind, state core.ActionState, scope string, createdAt time.Time, settledAt sql.NullTime) core.Action {
 	return core.Action{ID: id, SessionID: sessionID, Kind: kind, State: state, Scope: scope, CreatedAt: createdAt, SettledAt: timeValue(settledAt)}
 }
@@ -267,32 +261,6 @@ func timeValue(value sql.NullTime) time.Time {
 		return time.Time{}
 	}
 	return value.Time
-}
-
-func (s Store) AttachCleanupTask(ctx context.Context, sessionID, expectedCurrentTaskID, taskID, taskName string) error {
-	return s.attachSessionTask(ctx, sessionID, expectedCurrentTaskID, taskID, taskName, true)
-}
-
-func (s Store) attachSessionTask(ctx context.Context, sessionID, expectedCurrentTaskID, taskID, taskName string, cleanup bool) error {
-	sessionID = strings.TrimSpace(sessionID)
-	expectedCurrentTaskID = strings.TrimSpace(expectedCurrentTaskID)
-	taskID = strings.TrimSpace(taskID)
-	taskName = strings.TrimSpace(taskName)
-	if sessionID == "" || taskID == "" || taskName == "" {
-		return fmt.Errorf("Session task attachment requires exact Session, task, and task-name identities")
-	}
-	if cleanup && taskName != core.CleanupTaskName {
-		return fmt.Errorf("Session cleanup task must use Core task name %s", core.CleanupTaskName)
-	}
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if err := attachSessionTaskTx(ctx, dbsql.New(tx), sessionID, expectedCurrentTaskID, taskID, taskName, cleanup); err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 
 func attachSessionTaskTx(ctx context.Context, queries *dbsql.Queries, sessionID, expectedCurrentTaskID, taskID, taskName string, cleanup bool) error {

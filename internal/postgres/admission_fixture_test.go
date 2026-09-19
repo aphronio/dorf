@@ -26,6 +26,7 @@ func admitDirectFixture(t *testing.T, store postgres.Store, ctx context.Context,
 		t.Fatal(err)
 	}
 	session.CurrentTaskID = ""
+	session.CurrentTaskName = ""
 	return session, created, nil
 }
 
@@ -34,4 +35,25 @@ func admitDirectFixture(t *testing.T, store postgres.Store, ctx context.Context,
 func requestCleanupFixture(ctx context.Context, store postgres.Store, sessionID string) error {
 	_, err := store.DB.ExecContext(ctx, `update dorf.sessions set admission_open=false,cleanup_state='requested' where id=$1 and cleanup_state='pending'`, sessionID)
 	return err
+}
+
+// attachTaskFixture supplies the synthetic task identity used by custody and
+// fault tests. Production scheduling commits spawn and attachment together.
+func attachTaskFixture(store postgres.Store, ctx context.Context, sessionID, taskID, taskName string) error {
+	tx, err := store.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `insert into dorf.session_tasks(session_id,sequence,task_id,task_name)
+select $1,coalesce(max(sequence),0)+1,$2,$3 from dorf.session_tasks where session_id=$1`, sessionID, taskID, taskName)
+	if err != nil {
+		return err
+	}
+	if taskName == core.CleanupTaskName {
+		if _, err := tx.ExecContext(ctx, `update dorf.sessions set cleanup_state='scheduled' where id=$1`, sessionID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }

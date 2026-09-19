@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/direct"
 	"github.com/aphronio/dorf/internal/postgres"
@@ -58,18 +57,10 @@ func TestAtomicAdmissionRollsBackSessionAndUnattachedTask(t *testing.T) {
 	if exists, err := store.SessionExists(ctx, sessionID); err != nil || exists {
 		t.Fatalf("failed admission left Session: exists=%t err=%v", exists, err)
 	}
-	// Public Spawn must create a fresh task: a failed admission retained neither
-	// a runnable task nor its idempotency key inside Absurd.
-	spawned, err := client.Spawn(ctx, direct.TaskName, core.SessionTaskParams{SessionID: sessionID}, absurd.SpawnOptions{
-		QueueName: client.QueueName(), IdempotencyKey: direct.TaskKey(sessionID),
-	})
-	if err != nil || !spawned.Created {
-		t.Fatalf("failed admission retained Absurd task: %#v err=%v", spawned, err)
-	}
+	assertTaskSpawnRolledBack(t, store, ctx, client.QueueName(), direct.TaskName, direct.TaskKey(sessionID))
 	remove()
-	// The probe also models an older writer that spawned before attaching.
 	session, created, err := store.AdmitDirect(ctx, input, client.QueueName())
-	if err != nil || !created || session.CurrentTaskID != spawned.TaskID {
+	if err != nil || !created || session.CurrentTaskID == "" {
 		t.Fatalf("atomic admission=%#v created=%t err=%v", session, created, err)
 	}
 }
@@ -91,7 +82,7 @@ func TestConcurrentAtomicAdmissionIsAttachedBeforeWorkerCanRun(t *testing.T) {
 		if err != nil {
 			return core.TaskResultV1{}, err
 		}
-		if session.CurrentTaskID != task.TaskID() || len(history) != 1 || history[0].TaskID != task.TaskID() || params.PreviousTaskID != "" {
+		if session.CurrentTaskID != task.TaskID() || len(history) != 1 || history[0].TaskID != task.TaskID() {
 			return core.TaskResultV1{}, fmt.Errorf("worker observed incomplete admission: Session=%#v history=%#v", session, history)
 		}
 		return core.TaskResultV1{SessionID: session.ID, Outcome: "attached"}, nil
@@ -196,14 +187,8 @@ func TestAtomicCleanupRollsBackCancellationAndAppendsOneTask(t *testing.T) {
 	if err != nil || task == nil || task.State != before.State {
 		t.Fatalf("failed cleanup cancelled task: %#v err=%v", task, err)
 	}
-	spawned, err := client.Spawn(ctx, core.CleanupTaskName, core.SessionTaskParams{SessionID: session.ID, PreviousTaskID: session.CurrentTaskID},
-		absurdruntime.TaskSpawnOptions(client.QueueName(), "cleanup:v3:"+session.ID))
-	if err != nil || !spawned.Created {
-		t.Fatalf("failed cleanup retained Absurd task: %#v err=%v", spawned, err)
-	}
+	assertTaskSpawnRolledBack(t, store, ctx, client.QueueName(), core.CleanupTaskName, "cleanup:v3:"+session.ID)
 	remove()
-	// Retain the probe as an older writer's unattached cleanup task, then race
-	// requests that must reuse it without cancelling the winner.
 	results := make(chan error, 2)
 	for range 2 {
 		go func() { results <- store.ScheduleCleanup(ctx, client.QueueName(), session.ID, "") }()
@@ -214,14 +199,14 @@ func TestAtomicCleanupRollsBackCancellationAndAppendsOneTask(t *testing.T) {
 		}
 	}
 	history, err := store.SessionTasks(ctx, session.ID)
-	if err != nil || len(history) != 2 || history[0].TaskID != session.CurrentTaskID || history[1].TaskName != core.CleanupTaskName || history[1].TaskID != spawned.TaskID {
+	if err != nil || len(history) != 2 || history[0].TaskID != session.CurrentTaskID || history[1].TaskName != core.CleanupTaskName {
 		t.Fatalf("cleanup history=%#v err=%v", history, err)
 	}
 	task, err = client.FetchTaskResult(ctx, client.QueueName(), session.CurrentTaskID)
 	if err != nil || task == nil || task.State != absurd.TaskCancelled {
 		t.Fatalf("predecessor=%#v err=%v", task, err)
 	}
-	task, err = client.FetchTaskResult(ctx, client.QueueName(), spawned.TaskID)
+	task, err = client.FetchTaskResult(ctx, client.QueueName(), history[1].TaskID)
 	if err != nil || task == nil || task.State != absurd.TaskPending {
 		t.Fatalf("winning cleanup=%#v err=%v", task, err)
 	}
@@ -239,7 +224,7 @@ func TestExecutingTaskCanRequestAtomicCleanupWithoutCancellingItself(t *testing.
 		if err := handle.RequestCleanup(ctx); err != nil {
 			return core.TaskResultV1{}, err
 		}
-		if err := application.VerifyAttachedTask(ctx, params.SessionID, direct.TaskName, params.PreviousTaskID); err == nil {
+		if err := application.VerifyAttachedTask(ctx, params.SessionID, direct.TaskName); err == nil {
 			return core.TaskResultV1{}, fmt.Errorf("old task retained execution authority after requesting cleanup")
 		}
 		return core.TaskResultV1{SessionID: params.SessionID, Outcome: "cleanup-requested"}, nil
@@ -260,5 +245,20 @@ func TestExecutingTaskCanRequestAtomicCleanupWithoutCancellingItself(t *testing.
 	current, err := store.Session(ctx, session.ID)
 	if err != nil || current.AdmissionOpen || current.CleanupState != core.CleanupScheduled || current.CurrentTaskID == session.CurrentTaskID {
 		t.Fatalf("self cleanup did not commit: %#v err=%v", current, err)
+	}
+}
+
+// Probe the public spawn boundary in a rolled-back transaction so the assertion
+// itself leaves no task or idempotency key for the successful retry to adopt.
+func assertTaskSpawnRolledBack(t *testing.T, store postgres.Store, ctx context.Context, queue, name, key string) {
+	t.Helper()
+	tx, err := store.DB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	var created bool
+	if err := tx.QueryRowContext(ctx, `select created from absurd.spawn_task($1,$2,'{}'::jsonb,jsonb_build_object('idempotency_key',$3::text))`, queue, name, key).Scan(&created); err != nil || !created {
+		t.Fatalf("failed scheduling retained Absurd task: created=%t err=%v", created, err)
 	}
 }

@@ -40,7 +40,7 @@ type Store interface {
 // native observation and recovery.
 func Register(application core.Application, store Store, runtimes RuntimeResolver) {
 	application.Tasks.MustRegister(absurd.Task(TaskName, func(ctx context.Context, params core.SessionTaskParams) (core.TaskResultV1, error) {
-		if err := application.VerifyAttachedTask(ctx, params.SessionID, TaskName, params.PreviousTaskID); err != nil {
+		if err := application.VerifyAttachedTask(ctx, params.SessionID, TaskName); err != nil {
 			return core.TaskResultV1{}, err
 		}
 		custody, err := application.OpenSession(ctx, params.SessionID)

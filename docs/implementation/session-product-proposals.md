@@ -2,7 +2,8 @@
 
 Status: iterative tracker. Slices 1–3, 5, and 5a are complete. Slice 6 is withdrawn. Slice 8
 records the agreed thin native boundary and completed capability review; the runtime replacement
-in slice 9 is implemented with local verification; live provider proofs remain. Each implementation slice is discussed before it starts.
+in slice 9 is deployed and verified within its recorded provider scope. Slice 10 completes the
+lifecycle cleanup. Each implementation slice is discussed before it starts.
 
 This tracker explores a smaller product centered on one durable Session, with application goals,
 evaluation, and external application effects owned by clients. The current
@@ -36,13 +37,14 @@ decision record. This proposal tracker is not a substitute for either.
 | 1. Separate review contracts | Verified | Ordinary execution needs no review methods or review controller; existing coding review uses explicit contracts. | Agreed scope and verification are recorded below. |
 | 2. Remove investigation | Verified | Retire the built-in investigation workflow; clients use direct Jobs for repository investigation. | Agreed scope is recorded below. |
 | 3. Remove coding application | Verified | Retire coding, review, and publication policy while keeping direct execution. | Discuss the smallest concrete removal; add client primitives only for a proven need. Settle further Session vocabulary and ownership changes in their implementing slices. |
-| 4. Dependable setup and activation | Proposed | Hold native delivery until an exact configuration revision is ready; validate provider and harness options in their selected adapters. | Define lifetime-pinned versus changeable settings, profile/package compatibility, field ownership, quiescent updates, and uncertain setup-command outcomes. |
+| 4. Client configuration continuity | Proposed, deferred | Decide configuration recovery and backup scope. | Discuss privacy, confidentiality, credential handling, custody, retention and configurable scope before selecting defaults or implementation. |
 | 5. Job owns its Thread | Verified | Store the authoritative native conversation binding directly on the execution owner. | Prove uncertain initial acceptance and queued Follow recovery; define legacy binding conversion and conflict handling. Decide when public and internal Job naming changes. |
 | 5a. Session naming | Verified | Rename the existing execution context and its client contract; retain one primary Thread and derive Harness from the pinned profile. | Agreed scope is recorded below. |
 | 6. Separate delivery from Turn execution | Dropped | Withdraw the uncommitted shared-Turn schema and delivery refactor. | D148 assigns messages and Turns to the Harness; do not add another durable aggregate. |
 | 7. Finish application removal | Dropped | Application evidence and application-only tables are removed with coding. | Remaining Message/AgentRun removal belongs to the native API replacement. |
 | 8. Native boundary and capability proof | Verified | Record the thin control-plane contract, inspect Codex and client use, and remove the abandoned shared-Turn patch. | Source and isolated-server evidence are recorded below; runtime behavior is unchanged. |
-| 9. Replace queued Messages with native input and observation | Implementing | One ready-Session send path, native history and controls, coordinated client replacement, and deletion of the old input pipeline. | Resolve exact event shapes and the capability review's input, uncertainty, observation, maintenance and recovery proofs; no new streaming capability is required. |
+| 9. Replace queued Messages with native input and observation | Verified | One ready-Session send path, native history and controls, coordinated client replacement, and deletion of the old input pipeline. | Resolve exact event shapes and the capability review's input, uncertainty, observation, maintenance and recovery proofs; no new streaming capability is required. |
+| 10. Remove obsolete lifecycle attachment repair | Verified | Make running-task validation read-only; delete unused orchestration entry points. | Keep atomic scheduling, exact current-task checks, effect fences, retry receipts and wake semantics. The agreed deletions are recorded below. |
 
 ```text
 Completed: separate review contracts -> remove investigation -> remove coding
@@ -52,8 +54,8 @@ Completed: Session naming (slice 5a)
 Completed: audited leftover removal
 Completed: thin native boundary and capability review (slice 8)
 Withdrawn: shared Turn ownership (slice 6)
-Implemented: native input/API/client replacement (slice 9); provider proofs outstanding
-Deferred: setup/activation, pending what the native surface already provides
+Verified: native input/API/client replacement (slice 9), deployment and scoped provider proofs
+Deferred: client configuration continuity and backup scope (slice 4), pending privacy discussion
 
 Each arrow is a proposed dependency, not approval to start the next slice.
 ```
@@ -112,14 +114,46 @@ Each arrow is a proposed dependency, not approval to start the next slice.
 - Direct provider and native protocol behavior is retained. Live provider proofs were not rerun;
   the migration was applied only to the disposable test database. No deployment was changed.
 
-### Slice 4: setup and activation
+### Slice 4: client configuration continuity
 
-- Agreed scope: pending discussion.
-- Implementation and verification: pending.
-- Baseline to preserve: Codex route installation/removal already uses separate managed files;
-  client configuration preservation is covered by
-  [route lifecycle tests](../../internal/codex/route_test.go). Activation needs its own proof beyond
-  that existing behavior.
+- Status: deferred following the configuration review and backup-scope discussion. Current backup
+  behavior remains unchanged. Neither broader directory coverage nor adding configuration files
+  is agreed or authorized. The original configuration-revision/activation design is also deferred.
+- Before resuming: settle which private data and credentials may be backed up, who controls scope
+  and access, storage/key custody, retention/deletion, and restore-time credential handling. Encryption
+  alone does not settle those choices. Defaults and configuration authority remain open.
+- Existing initial flow: create a Session, wait for compute readiness, prepare files/tools, then
+  send the first event. Creation starts no model Turn. The client sequences its setup and first
+  input; there is no demonstrated need for an additional activation resource in this flow.
+- Ownership: the client owns native `config.toml`, workspace instructions, skills and application
+  tool configuration. Dorf owns the admitted model/connection selection, route credentials and
+  launch overrides. The Harness owns loading those settings and its supported refresh semantics.
+- Existing route install/removal preserves client configuration using separate managed files;
+  [route lifecycle coverage](../../internal/codex/route_test.go) and the
+  [isolated launch proof](../../internal/codex/route_override_live_test.go) check file preservation
+  and effective override precedence. These checks do not establish checkpoint preservation.
+- Concrete gap: [native checkpoint inventory](../../internal/codex/persistence.go) omits
+  `/root/.codex/config.toml`, and extra backup paths cannot overlap Codex home. The
+  [capture test](../../internal/codex/persistence_test.go) explicitly expects that omission.
+  Replacement restores native history and renews Dorf routing but does not reconstruct the
+  client's home-level MCP configuration or preferences. Workspace configuration has separate
+  coverage through the workspace backup.
+- Options raised, not selected: extend the current inventory for client configuration, or back up
+  the workspace and native home as directories with narrowly justified exclusions. Configurable
+  additional directories and profile-level defaults were discussed, but their ownership and privacy
+  contract must be decided first. Configuration files may themselves contain application credentials.
+- Proposed acceptance proof: configure a synthetic native preference and harmless MCP entry,
+  capture and restore a disposable Session, check exact configuration bytes and effective native
+  settings, then continue the same Thread. Confirm route renewal/removal still preserves client
+  settings. Update existing capture/recovery fixtures to the new ownership boundary.
+- Client benefit: clients can rely on the admitted configuration recovery contract without
+  resending a second configuration copy solely because compute was replaced. Application-specific
+  setup and refresh policy stay in the client. Other home directories and installed packages are
+  not implicitly covered; retain explicit backup paths or client preparation where needed.
+- Reload is a separate question: [official app-server documentation](https://developers.openai.com/codex/app-server)
+  exposes native configuration read/write and MCP reload operations. Dorf currently forwards skill
+  refresh, not MCP reload. A write or reconnect must not be described as universal live activation;
+  verify the pinned Harness before proposing a new control for an actual client need.
 
 ### Slice 5: conversation ownership
 
@@ -211,8 +245,40 @@ Each arrow is a proposed dependency, not approval to start the next slice.
   coordinated consumer replacement; deletion of old Message/AgentRun storage and transport.
 - Verification: PostgreSQL and protocol tests plus the isolated real Codex input/restart probe.
   [Implementation evidence](native-session-contract.md#implementation-and-verification) records the
-  limits. Live provider pause, upgrade and recovery proofs remain outstanding; no deployment was
-  migrated. Native lifecycle scheduling and guest transport replacement remain separate.
+  limits. Coordinated deployment, native attachment/SSE/continuation, E2B pause/resume, Incus/E2B
+  upgrade/rollback and E2B checkpoint replacement/stale-recovery guards passed. Proof resources
+  were cleaned up. Native lifecycle scheduling and guest transport replacement remain separate.
+
+### Slice 10: lifecycle cleanup after native input removal
+
+- Status: all three removals agreed, implemented and verified on 2026-09-19.
+- The lifetime task still provisions resources, advances package upgrades/checkpoint recovery,
+  reconciles unresolved native mutations and observes idleness for pause. Native input does not
+  pass through this task. Cleanup has its own task; backup capture has its own queue capacity.
+- Task startup now validates the committed current task ID/name and Session lifecycle state under
+  the existing fence. The Session read derives both task fields from the latest attachment. Removed
+  startup self-attachment repair, standalone attachment entry points, the predecessor payload/check
+  and full-history authority scans. Scheduling retains atomic spawn/attachment, attachment history
+  and its transactional compare-and-set. No new scheduler or task table was introduced.
+- Removed unused `RunFactStep` and its serialization-only test, generic application/store wake
+  wrappers, and standalone manual hold/release methods. Typed upgrade/recovery operations retain
+  shared hold transactions, queries and readers. Synthetic task setup is local to fault tests;
+  wake tests exercise native notifications, and maintenance races use typed operations.
+- Revisioned wake events, atomic emission, exact retry receipts and effect fences remain. Rollback
+  probes now roll back their own test transactions rather than retain synthetic orphan tasks.
+- Possible later optimization: active reconciliation polls every second and also calls idle
+  reconciliation, which can recheck native state once the grace period expires. Native observations
+  often satisfy those checks from cache. Measure actual query/provider cost before changing cadence
+  or deduplicating checks; a previous idle observation cannot authorize a later pause without its
+  current fenced check. No performance benefit is claimed by this review.
+- Verification: `mise run check` and `mise run docs:check` passed, including SQL consistency,
+  PostgreSQL atomic scheduling, concurrent admission, retry/fence and wake-race coverage. The
+  complexity baseline lost one exception after the startup simplification. A disposable Incus VM
+  with real Codex and a synthetic model fixture passed initial input, worker restart, package
+  activation, forced rollback, conversation continuation and resource/checkpoint cleanup.
+  Production deployments were not changed by this slice.
+- A bounded-controller rewrite remains a separate proposal. The remaining responsibilities do
+  not by themselves justify a second scheduling mechanism.
 
 ## Client API review
 

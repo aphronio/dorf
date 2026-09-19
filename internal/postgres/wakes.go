@@ -21,24 +21,6 @@ func (s Store) SessionExecutionWakeRevision(ctx context.Context, sessionID strin
 	return revision, err
 }
 
-// SignalSessionExecutionWake serializes one idempotent cause under the Session's
-// dedicated revision row and emits its immutable Absurd event atomically.
-func (s Store) SignalSessionExecutionWake(ctx context.Context, queue, sessionID, causeKey string) (int64, error) {
-	if err := validSessionExecutionWakeInput(sessionID, causeKey); err != nil {
-		return 0, err
-	}
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
-	revision, err := signalSessionExecutionWakeTx(ctx, tx, queue, sessionID, causeKey)
-	if err != nil {
-		return 0, err
-	}
-	return revision, tx.Commit()
-}
-
 // SignalNativeTerminalWake validates the observer's exact durable ownership
 // when present. A very fast accepted Turn may signal before Thread/Turn binding
 // commits; any later nonempty binding must match exactly.
@@ -107,16 +89,6 @@ func signalSessionExecutionWakeTx(ctx context.Context, tx *sql.Tx, queue, sessio
 		return 0, fmt.Errorf("emit Session %s execution wake revision %d: %w", sessionID, revision, err)
 	}
 	return revision, nil
-}
-
-func validSessionExecutionWakeInput(sessionID, causeKey string) error {
-	if sessionID == "" || sessionID != strings.TrimSpace(sessionID) || len(sessionID) > 256 {
-		return fmt.Errorf("Session execution wake requires a bounded exact Session ID")
-	}
-	if causeKey == "" || causeKey != strings.TrimSpace(causeKey) || len(causeKey) > 512 {
-		return fmt.Errorf("Session execution wake requires a bounded cause key")
-	}
-	return nil
 }
 
 func validNativeTerminalWakeTarget(target core.NativeTerminalWakeTarget) error {

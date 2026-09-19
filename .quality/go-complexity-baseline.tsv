@@ -25,7 +25,6 @@ internal/controlapi	(*handler).sessionListRoute	18
 internal/controlapi	(*handler).watchRoute	30
 internal/controlclient	(*Client).watchSessionOnce	32
 internal/controlreader	NewClient	21
-internal/core	(Application).VerifyAttachedTask	19
 internal/core	(ExecutionService).executeSandboxAction	25
 internal/deployment	(Incus).Validate	33
 internal/deployment	commitDeploymentEntry	22

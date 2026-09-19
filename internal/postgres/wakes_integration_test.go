@@ -3,7 +3,6 @@ package postgres_test
 import (
 	"context"
 	"fmt"
-	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -27,19 +26,17 @@ func TestSessionExecutionWakeSerializesDeduplicatesAndRollsBackEmitFailure(t *te
 	}
 
 	const signals = 12
-	revisions := make(chan int64, signals)
 	errors := make(chan error, signals)
 	var group sync.WaitGroup
 	for index := range signals {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			revision, err := store.SignalSessionExecutionWake(ctx, client.QueueName(), session.ID, fmt.Sprintf("message:concurrent-%02d", index))
+			_, err := store.SignalNativeTerminalWake(ctx, client.QueueName(), core.NativeTerminalWakeTarget{SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), ThreadID: "thread", TurnID: fmt.Sprintf("concurrent-%02d", index)})
 			if err != nil {
 				errors <- err
 				return
 			}
-			revisions <- revision
 		}()
 	}
 	group.Wait()
@@ -47,23 +44,15 @@ func TestSessionExecutionWakeSerializesDeduplicatesAndRollsBackEmitFailure(t *te
 	for err := range errors {
 		t.Fatal(err)
 	}
-	close(revisions)
-	var got []int
-	for revision := range revisions {
-		got = append(got, int(revision))
-	}
-	sort.Ints(got)
-	for index, revision := range got {
-		if revision != index+1 {
-			t.Fatalf("serialized revisions=%v", got)
-		}
-	}
-	replayed, err := store.SignalSessionExecutionWake(ctx, client.QueueName(), session.ID, "message:concurrent-00")
-	if err != nil || replayed < 1 || replayed > signals {
-		t.Fatalf("duplicate wake revision=%d err=%v", replayed, err)
+	if signaled, err := store.SignalNativeTerminalWake(ctx, client.QueueName(), core.NativeTerminalWakeTarget{SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), ThreadID: "thread", TurnID: "concurrent-00"}); err != nil || !signaled {
+		t.Fatalf("duplicate wake signaled=%t err=%v", signaled, err)
 	}
 	if revision, err := store.SessionExecutionWakeRevision(ctx, session.ID); err != nil || revision != signals {
 		t.Fatalf("deduplicated wake revision=%d err=%v", revision, err)
+	}
+	var contiguous bool
+	if err := store.DB.QueryRowContext(ctx, `select min(revision)=1 and max(revision)=$2 and count(distinct revision)=$2 from dorf.session_execution_wake_causes where session_id=$1`, session.ID, signals).Scan(&contiguous); err != nil || !contiguous {
+		t.Fatalf("wake revisions are not contiguous: %v", err)
 	}
 	var causes int
 	if err := store.DB.QueryRowContext(ctx, `select count(*) from dorf.session_execution_wake_causes where session_id=$1`, session.ID).Scan(&causes); err != nil || causes != signals {
@@ -77,7 +66,7 @@ func TestSessionExecutionWakeSerializesDeduplicatesAndRollsBackEmitFailure(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SignalSessionExecutionWake(ctx, "missing_wake_queue", rollbackSession.ID, "message:rollback"); err == nil {
+	if _, err := store.SignalNativeTerminalWake(ctx, "missing_wake_queue", core.NativeTerminalWakeTarget{SessionID: rollbackSession.ID, SandboxID: core.MainSandboxName(rollbackSession.ID), ThreadID: "thread", TurnID: "rollback"}); err == nil {
 		t.Fatal("wake signal unexpectedly succeeded without an Absurd queue")
 	}
 	if revision, err := store.SessionExecutionWakeRevision(ctx, rollbackSession.ID); err != nil || revision != 0 {
@@ -118,8 +107,8 @@ func TestSessionExecutionWakeIsDurableBeforeWaitAndTimeoutReloads(t *testing.T) 
 			t.Fatal(err)
 		}
 		if test.signal {
-			if revision, err := store.SignalSessionExecutionWake(ctx, client.QueueName(), session.ID, "message:before-wait"); err != nil || revision != test.revision {
-				t.Fatalf("signal revision=%d err=%v", revision, err)
+			if signaled, err := store.SignalNativeTerminalWake(ctx, client.QueueName(), core.NativeTerminalWakeTarget{SessionID: session.ID, SandboxID: core.MainSandboxName(session.ID), ThreadID: "thread", TurnID: "before-wait"}); err != nil || !signaled {
+				t.Fatalf("signal=%t err=%v", signaled, err)
 			}
 		}
 		workerCtx, stopWorker := context.WithCancel(ctx)

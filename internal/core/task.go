@@ -32,10 +32,6 @@ type sessionExecutionWakeRevisionStore interface {
 	SessionExecutionWakeRevision(context.Context, string) (int64, error)
 }
 
-type sessionExecutionWakeSignalStore interface {
-	SignalSessionExecutionWake(context.Context, string, string, string) (int64, error)
-}
-
 type nativeTerminalWakeStore interface {
 	SignalNativeTerminalWake(context.Context, string, NativeTerminalWakeTarget) (bool, error)
 }
@@ -57,14 +53,6 @@ func (a Application) SessionExecutionWakeRevision(ctx context.Context, sessionID
 		return 0, fmt.Errorf("Session %s execution wake revision cannot advance", sessionID)
 	}
 	return revision, nil
-}
-
-func (a Application) signalSessionExecutionWake(ctx context.Context, sessionID, causeKey string) (int64, error) {
-	wakes, ok := a.Store.(sessionExecutionWakeSignalStore)
-	if !ok || a.Tasks == nil {
-		return 0, fmt.Errorf("Session execution wake is not configured")
-	}
-	return wakes.SignalSessionExecutionWake(ctx, a.Tasks.QueueName(), sessionID, causeKey)
 }
 
 // SignalNativeTerminalWake turns one exact observer binding into a wake hint.
