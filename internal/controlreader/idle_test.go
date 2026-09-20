@@ -27,7 +27,7 @@ func (e *idleReaderExecution) ReconcileIdleSandboxes(_ context.Context, sessionI
 }
 
 func TestFileReadReconcilesIdleAfterFenceWithoutLosingResult(t *testing.T) {
-	session := core.Session{ID: "job-1", SandboxProfile: "profile-1", AdmissionOpen: true, CleanupState: core.CleanupPending}
+	session := core.Session{ID: "session-1", SandboxProfile: "profile-1", AdmissionOpen: true, CleanupState: core.CleanupPending}
 	owned := core.Sandbox{ID: "sandbox-1", SessionID: session.ID, OwnershipNonce: strings.Repeat("a", 64)}
 	store := &readerTestStore{session: session, sandbox: owned}
 	execution := &idleReaderExecution{store: store}

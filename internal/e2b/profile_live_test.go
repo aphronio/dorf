@@ -134,8 +134,8 @@ test "$ID" = debian
 test "$VERSION_ID" = 13
 test "$(uname -m)" = x86_64
 test "$(id -u)" = 0
-test "$(pwd)" = /workspace/job
-test -w /workspace/job
+test "$(pwd)" = /workspace
+test -w /workspace
 codex --version
 pi --version
 nix --version

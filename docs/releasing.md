@@ -130,6 +130,13 @@ against the same daemon. No GitHub or registry publication credentials are neede
 
 ## Shared guest packages
 
+The Session naming cleanup changes the workspace root and provider ownership metadata. Before
+upgrading an existing deployment from the Job-era layout, release its retained Sessions with the
+old version and wait for verified cleanup. Then install the new release, verify fresh provider
+images and admit new Sessions. Preserve client-owned history separately; old workspace checkpoints
+are not a migration to the new layout. Historical admission IDs and database migrations remain
+unchanged.
+
 Both builders consume the shared Debian guest recipe and
 [`scripts/sandbox/packages`](../scripts/sandbox/packages). That directory pins Nix, Nixpkgs, and
 the official prebuilt Codex archives. Preserve the complete upstream platform directory, including

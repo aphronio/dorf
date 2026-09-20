@@ -30,7 +30,7 @@ func TestExecPreservesArgvStdinRawOutputAndTerminalStatus(t *testing.T) {
 	result, err := executor.Exec(context.Background(), ExecRequest{
 		Argv:           []string{"command", "literal arg", "*.go", "$HOME"},
 		Stdin:          stdin,
-		Cwd:            "/workspace/job",
+		Cwd:            "/workspace",
 		Env:            map[string]string{"EXACT": "a b"},
 		ProcessTimeout: 1500 * time.Millisecond,
 		Stdout:         &stdout,
@@ -49,7 +49,7 @@ func TestExecPreservesArgvStdinRawOutputAndTerminalStatus(t *testing.T) {
 	if request.Process.Cmd != "command" || strings.Join(request.Process.Args, "|") != "literal arg|*.go|$HOME" {
 		t.Fatalf("process argv = %#v", request.Process)
 	}
-	if request.Process.GetCwd() != "/workspace/job" || request.Process.Envs["EXACT"] != "a b" || request.Stdin == nil || !request.GetStdin() {
+	if request.Process.GetCwd() != "/workspace" || request.Process.Envs["EXACT"] != "a b" || request.Stdin == nil || !request.GetStdin() {
 		t.Fatalf("process config = %#v", request)
 	}
 	if rpc.startRequest.Header().Get("Connect-Timeout-Ms") != "1500" || rpc.startRequest.Header().Get("Keepalive-Ping-Interval") != "50" {

@@ -8,12 +8,12 @@ import (
 
 func TestAdapterExecAttestsExactOwnershipBeforeExecution(t *testing.T) {
 	accepted := OwnershipMetadata{
-		SessionID:      "job-accepted",
+		SessionID:      "session-accepted",
 		SandboxID:      "sandbox-1",
 		OwnershipNonce: strings.Repeat("a", 64),
 	}
 	foreign := accepted
-	foreign.SessionID = "job-foreign"
+	foreign.SessionID = "session-foreign"
 	client := newFakeClient(ownedInstance(accepted))
 	factory := &fakeFactory{client: client}
 	adapter := Adapter{Sandbox: Sandbox{Config: Config{Workspace: "/workspace"}, ClientFactory: factory}}

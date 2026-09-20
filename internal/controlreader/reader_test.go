@@ -18,7 +18,7 @@ import (
 )
 
 func TestAuthenticatedClientReadsExactOwnedFile(t *testing.T) {
-	session := core.Session{ID: "job-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
+	session := core.Session{ID: "session-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
 	owned := core.Sandbox{ID: "sandbox-1", SessionID: session.ID, OwnershipNonce: strings.Repeat("a", 64)}
 	store := &readerTestStore{session: session, sandbox: owned}
 	files := &readerTestFiles{contents: []byte{0, 1, 255, '\n'}}
@@ -54,7 +54,7 @@ func TestAuthenticatedClientReadsExactOwnedFile(t *testing.T) {
 }
 
 func TestAuthenticatedClientPreservesWholeFileAtReadLimit(t *testing.T) {
-	session := core.Session{ID: "job-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
+	session := core.Session{ID: "session-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
 	owned := core.Sandbox{ID: "sandbox-1", SessionID: session.ID, OwnershipNonce: strings.Repeat("a", 64)}
 	want := bytes.Repeat([]byte{0xa5}, provider.MaxFileReadBytes)
 	handler, err := NewHandler(strings.Repeat("b", 64), Service{
@@ -75,7 +75,7 @@ func TestAuthenticatedClientPreservesWholeFileAtReadLimit(t *testing.T) {
 }
 
 func TestFileReadEnforcesPathOwnershipAndCleanup(t *testing.T) {
-	session := core.Session{ID: "job-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
+	session := core.Session{ID: "session-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
 	owned := core.Sandbox{ID: "sandbox-1", SessionID: session.ID, OwnershipNonce: strings.Repeat("a", 64)}
 
 	t.Run("safe relative path", func(t *testing.T) {
@@ -104,7 +104,7 @@ func TestFileReadEnforcesPathOwnershipAndCleanup(t *testing.T) {
 
 	t.Run("ownership changes under fence", func(t *testing.T) {
 		foreign := owned
-		foreign.SessionID = "job-foreign"
+		foreign.SessionID = "session-foreign"
 		files := &readerTestFiles{contents: []byte("unused")}
 		store := &readerTestStore{session: session, sandbox: owned, sandboxInsideFence: &foreign}
 		service := Service{Store: store, Runtimes: readerTestRuntimes{profile: session.SandboxProfile, files: files}}
@@ -420,7 +420,7 @@ func (r *readerTestFiles) WriteSandboxFile(_ context.Context, session core.Sessi
 }
 
 func TestFileWritesUseAuthenticatedOwnershipAndCleanupFence(t *testing.T) {
-	session := core.Session{ID: "job-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
+	session := core.Session{ID: "session-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
 	owned := core.Sandbox{ID: "sandbox-1", SessionID: session.ID, OwnershipNonce: strings.Repeat("a", 64)}
 	files := &readerTestFiles{}
 	store := &readerTestStore{session: session, sandbox: owned}

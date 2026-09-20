@@ -67,7 +67,7 @@ func TestProtocolRecoversCompleteFinalRepliesWithoutResubmission(t *testing.T) {
 		case "initialize":
 			return map[string]any{}, false
 		case "thread/list":
-			requireProtocolParams(t, method, params, map[string]any{"cwd": "/workspace/job"})
+			requireProtocolParams(t, method, params, map[string]any{"cwd": "/workspace"})
 			return map[string]any{"data": []any{map[string]any{"id": "thread-final"}}}, false
 		case "thread/read":
 			requireProtocolParams(t, method, params, map[string]any{"threadId": "thread-final", "includeTurns": true})

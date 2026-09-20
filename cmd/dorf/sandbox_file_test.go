@@ -9,7 +9,7 @@ import (
 )
 
 func TestDownloadSandboxFileWritesExactBytesToExplicitOutput(t *testing.T) {
-	const sandboxID = "job-cli-file--review"
+	const sandboxID = "session-cli-file--review"
 	want := []byte{0, 1, '\n', 255}
 	read := func(context.Context, string) ([]byte, error) { return want, nil }
 	directory := t.TempDir()
@@ -36,7 +36,7 @@ func TestDownloadSandboxFileWritesExactBytesToExplicitOutput(t *testing.T) {
 	if _, _, _, err := parseSandboxFileGet([]string{"", "result.bin", "--output=-"}); err == nil {
 		t.Fatal("empty Sandbox identity was accepted")
 	}
-	for _, path := range []string{"/workspace/job/result.bin", "~/.config/agent0/access.json", "nested/file"} {
+	for _, path := range []string{"/workspace/result.bin", "~/.config/agent0/access.json", "nested/file"} {
 		if _, got, _, err := parseSandboxFileGet([]string{sandboxID, path, "--output=-"}); err != nil || got != path {
 			t.Fatalf("Sandbox path %q = %q, %v", path, got, err)
 		}

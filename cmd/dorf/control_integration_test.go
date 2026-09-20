@@ -58,7 +58,7 @@ func TestControlAPISessionListKeepsKeysetContinuity(t *testing.T) {
 		t.Fatalf("redeem pagination Client: created=%t err=%v", created, err)
 	}
 
-	base := fmt.Sprintf("job-page-%d", time.Now().UnixNano())
+	base := fmt.Sprintf("session-page-%d", time.Now().UnixNano())
 	tiedAt := time.Now().UTC().AddDate(100, 0, 0).Truncate(time.Microsecond)
 	type listedFixture struct {
 		id string

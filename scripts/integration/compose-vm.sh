@@ -18,7 +18,7 @@ readonly MAX_EVIDENCE_TOTAL_BYTES=4194304
 readonly -a REMOTE_EVIDENCE_FILES=(
 	setup.log compose-images.txt provider-status.json
 	compose-status.json compose-status-after-worker-restart.json compose-status-after-api-restart.json
-	compose-runtime.txt job-admission.json job-inspect-before-worker-restart.json job-inspect.json
+	compose-runtime.txt session-admission.json session-inspect-before-worker-restart.json session-inspect.json
 	cleanup-request.json cleanup-inspect.json incus-after-cleanup.json
 	failure-compose-status.json failure-api.log failure-worker.log failure-inspect.json failure-incus.json
 )

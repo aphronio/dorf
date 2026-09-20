@@ -299,6 +299,39 @@ func TestPostgresDirectAdmissionReplayRecoversTaskAttachment(t *testing.T) {
 
 }
 
+func TestPostgresAdmissionReplayRetainsPersistedIdentity(t *testing.T) {
+	db, store, client := testDatabase(t)
+	ctx := context.Background()
+	input := directSessionInput(fmt.Sprintf("persisted-identity-%d", time.Now().UnixNano()))
+	seed, _, err := admitDirectFixture(t, store, ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.AdmissionKey += "-replay"
+	persistedID := "opaque-" + seed.ID
+	_, err = db.ExecContext(ctx, `insert into dorf.sessions(
+		id,admission_key,agents_md,sandbox_profile,sandbox_profile_revision,
+		provider_connection,model,reasoning_effort,keep_running)
+		select $1,$2,agents_md,sandbox_profile,sandbox_profile_revision,
+		provider_connection,model,reasoning_effort,keep_running from dorf.sessions where id=$3`,
+		persistedID, input.AdmissionKey, seed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, created, err := store.AdmitDirect(ctx, input, client.QueueName())
+	if err != nil || created || recovered.ID != persistedID || recovered.CurrentTaskID == "" {
+		t.Fatalf("persisted admission replay session=%#v created=%t err=%v", recovered, created, err)
+	}
+	replayed, created, err := store.AdmitDirect(ctx, input, client.QueueName())
+	if err != nil || created || replayed.ID != persistedID || replayed.CurrentTaskID != recovered.CurrentTaskID {
+		t.Fatalf("repeated admission session=%#v created=%t err=%v", replayed, created, err)
+	}
+	input.Model = "different-model"
+	if _, _, err := store.AdmitDirect(ctx, input, client.QueueName()); !errors.Is(err, direct.ErrAdmissionConflict) {
+		t.Fatalf("changed configuration must still conflict: %v", err)
+	}
+}
+
 func requestCleanupIntegration(t *testing.T, application core.Application, sessionID string) core.Session {
 	t.Helper()
 	handle, err := application.OpenSession(context.Background(), sessionID)
@@ -1059,11 +1092,11 @@ func TestPostgresSessionFenceSerializesOverlappingClaims(t *testing.T) {
 	secondEntered := make(chan struct{})
 	errs := make(chan error, 2)
 	go func() {
-		errs <- store.WithSessionFence(ctx, "job-fence-integration", func() error { close(firstEntered); <-release; return nil })
+		errs <- store.WithSessionFence(ctx, "session-fence-integration", func() error { close(firstEntered); <-release; return nil })
 	}()
 	<-firstEntered
 	go func() {
-		errs <- store.WithSessionFence(ctx, "job-fence-integration", func() error { close(secondEntered); return nil })
+		errs <- store.WithSessionFence(ctx, "session-fence-integration", func() error { close(secondEntered); return nil })
 	}()
 	select {
 	case <-secondEntered:

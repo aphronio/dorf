@@ -25,7 +25,7 @@ func testSandbox(runner incustest.Runner, owner provider.Ownership) incus.Adapte
 }
 
 func testOwner(sandboxID string) provider.Ownership {
-	return provider.Ownership{SessionID: "job-" + sandboxID, SandboxID: sandboxID, OwnershipNonce: strings.Repeat("a", 64)}
+	return provider.Ownership{SessionID: "session-" + sandboxID, SandboxID: sandboxID, OwnershipNonce: strings.Repeat("a", 64)}
 }
 
 type probeRunner struct {
@@ -328,7 +328,7 @@ func requireProtocolParams(t *testing.T, method string, params map[string]any, w
 func requireStrictResumeParams(t *testing.T, params map[string]any, sessionID string) {
 	t.Helper()
 	requireProtocolParams(t, "thread/resume", params, map[string]any{
-		"threadId": sessionID, "cwd": "/workspace/job",
+		"threadId": sessionID, "cwd": "/workspace",
 		"approvalPolicy": "never", "sandbox": "read-only",
 	})
 	if len(params) != 4 {
@@ -351,7 +351,7 @@ func TestProtocolBindsResumeStartAndSteerToExactIdentity(t *testing.T) {
 				return map[string]any{"thread": map[string]any{"id": sessionID}}, false
 			case "turn/start":
 				requireProtocolParams(t, method, params, map[string]any{
-					"threadId": sessionID, "clientUserMessageId": messageID, "cwd": "/workspace/job",
+					"threadId": sessionID, "clientUserMessageId": messageID, "cwd": "/workspace",
 					"model": "gpt-5.6-sol", "effort": "high", "approvalPolicy": "never",
 					"sandboxPolicy": map[string]any{"type": "dangerFullAccess"},
 				})
@@ -361,7 +361,7 @@ func TestProtocolBindsResumeStartAndSteerToExactIdentity(t *testing.T) {
 			}
 		})
 		defer server.Close()
-		outcome, err := dialTestProtocol(t, server).resumeFixture(context.Background(), sessionID, "/workspace/job", messageID, core.HarnessInput{Text: "input"}, "gpt-5.6-sol", "high", "danger-full-access")
+		outcome, err := dialTestProtocol(t, server).resumeFixture(context.Background(), sessionID, "/workspace", messageID, core.HarnessInput{Text: "input"}, "gpt-5.6-sol", "high", "danger-full-access")
 		if err != nil || outcome.ID != turnID {
 			t.Fatalf("resume and start outcome=%#v err=%v", outcome, err)
 		}
@@ -380,7 +380,7 @@ func TestProtocolBindsResumeStartAndSteerToExactIdentity(t *testing.T) {
 			return nil, true
 		})
 		defer server.Close()
-		_, err := dialTestProtocol(t, server).resumeFixture(context.Background(), sessionID, "/workspace/job", messageID, core.HarnessInput{Text: "input"}, "gpt-5.6-sol", "high", "danger-full-access")
+		_, err := dialTestProtocol(t, server).resumeFixture(context.Background(), sessionID, "/workspace", messageID, core.HarnessInput{Text: "input"}, "gpt-5.6-sol", "high", "danger-full-access")
 		var definite interface{ DefiniteNoSubmit() bool }
 		if !errors.As(err, &definite) || !definite.DefiniteNoSubmit() {
 			t.Fatalf("substitute resume error=%T %v", err, err)

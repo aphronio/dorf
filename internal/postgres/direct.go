@@ -14,7 +14,7 @@ func (s Store) AdmitDirect(ctx context.Context, input core.SessionAdmission, que
 	if err != nil {
 		return core.Session{}, false, err
 	}
-	session, created, err := admitSession(ctx, s, normalized, queueName, direct.TaskName, direct.TaskKey(core.SessionID(normalized.AdmissionKey)))
+	session, created, err := admitSession(ctx, s, normalized, queueName, direct.TaskName, direct.TaskKey)
 	if errors.Is(err, ErrAdmissionConflict) {
 		err = fmt.Errorf("%w: %w", direct.ErrAdmissionConflict, err)
 	}

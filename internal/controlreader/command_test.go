@@ -27,7 +27,7 @@ func (e *readerCommandExecutor) ExecSandbox(_ context.Context, session core.Sess
 }
 
 func TestCommandsUseAuthenticatedSessionCustodyAndCleanupFence(t *testing.T) {
-	session := core.Session{ID: "job-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
+	session := core.Session{ID: "session-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
 	owned := core.Sandbox{ID: "sandbox-1", SessionID: session.ID, OwnershipNonce: strings.Repeat("a", 64)}
 	store := &readerTestStore{session: session, sandbox: owned}
 	executor := &readerCommandExecutor{stdout: "installed\n"}

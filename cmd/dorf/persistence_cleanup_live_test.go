@@ -85,7 +85,7 @@ func TestLivePersistenceCleanup(t *testing.T) {
 		t.Fatal("source turn omitted its retained thread or substantive output")
 	}
 	proof.prepareUsefulState()
-	proof.exec("printf 'latest-unmanaged-cleanup-edit\\n' > /workspace/job/cleanup-latest.txt")
+	proof.exec("printf 'latest-unmanaged-cleanup-edit\\n' > /workspace/cleanup-latest.txt")
 	workerStop()
 
 	publishedBeforeRoute := &atomic.Bool{}
@@ -290,7 +290,7 @@ func liveInspectionCleanup(t *testing.T, sandbox provider.Sandbox, owner provide
 func assertLiveCleanupRestore(t *testing.T, ctx context.Context, sandbox provider.Sandbox, owner provider.Ownership) {
 	t.Helper()
 	result, err := sandbox.Exec(ctx, owner, nil, "bash", "-c", `set -eu
-cd /workspace/job
+cd /workspace
 test "$(cat cleanup-latest.txt)" = latest-unmanaged-cleanup-edit
 test "$(cat tracked.txt)" = "committed
 working-tree-edit"
@@ -301,7 +301,7 @@ test ! -e /root/.codex/config.toml
 test ! -e /root/.config/dorf/provider-route.key
 python3 - <<'PY'
 import sqlite3
-db=sqlite3.connect('/workspace/job/.dorf-proof/useful.sqlite')
+db=sqlite3.connect('/workspace/.dorf-proof/useful.sqlite')
 assert db.execute('pragma integrity_check').fetchone()[0]=='ok'
 assert db.execute('select value from evidence').fetchone()[0]=='retained-wal-row'
 PY`)

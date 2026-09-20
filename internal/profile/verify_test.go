@@ -105,7 +105,7 @@ type verificationSandbox struct {
 	execErr             error
 }
 
-func (s *verificationSandbox) Workspace() string { return "/workspace/job" }
+func (s *verificationSandbox) Workspace() string { return "/workspace" }
 func (s *verificationSandbox) ReconcileOwnedCreate(context.Context, provider.Ownership) error {
 	s.createCall++
 	s.present = true

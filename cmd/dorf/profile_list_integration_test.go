@@ -94,7 +94,7 @@ func TestControlAPIProfileDiscoveryAndSelection(t *testing.T) {
 	if !profiles[cloudName].Verified {
 		t.Fatal("completed verification did not become visible")
 	}
-	key := fmt.Sprintf("profile-discovery-job-%d", time.Now().UnixNano())
+	key := fmt.Sprintf("profile-discovery-session-%d", time.Now().UnixNano())
 	response := controlTestRequest(t, handler, http.MethodPost, "/v1/sessions", credential, key, controlapi.CreateSessionRequest{
 		Profile: profiles[cloudName].Name, AIConnection: "primary", Model: "model-test",
 	})

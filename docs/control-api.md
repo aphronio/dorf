@@ -79,9 +79,10 @@ not promise completion. Observe that Turn afterward. A new cancel request can ta
 do not retry an ambiguous cancel or treat it as an idempotent stop handle.
 
 Attachments travel inline by value as base64 bytes. The server validates bounded filenames, bytes
-and supported image decoding, then writes disposable workspace files and passes supported images
-natively. Files and native history follow workspace retention; Dorf does not retain attachment blobs
-for replay after cleanup.
+and supported image decoding, then writes files under the visible workspace-relative path
+`attachments/<unique-id>/<ordinal>/<filename>`, includes their local paths in the input, and passes
+supported images natively. Files and native history follow workspace retention; Dorf does not
+retain attachment blobs for replay after cleanup.
 
 `developer_instructions` and `refresh_skills` are per-request native adapter options. Instructions
 are injected before that input; skill refresh uses the native catalog reload. Neither creates a
@@ -119,6 +120,10 @@ There is no durable Dorf event log or promise to replay every missed notificatio
 outlive HTTP clients; disconnecting does not stop accepted native work.
 
 ### Lifecycle and workspace access
+
+New Sessions use `/workspace` as their working directory. Attachments are visible beneath that
+root. Session IDs are opaque: newly admitted identities use the `session-` prefix, while replay
+returns the identity already retained for that admission key.
 
 Session inspection reports resource preparation, attention, maintenance and cleanup receipts.
 Its resource-ready `idle` state is not a native Turn completion claim; inspect native Turns for work.

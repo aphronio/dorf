@@ -50,7 +50,7 @@ func (c client) run(ctx context.Context, input []byte, args ...string) (incus.Re
 func (c client) Instances(ctx context.Context) ([]incus.Instance, error) {
 	if c.owner != nil {
 		return []incus.Instance{{Name: c.owner.SandboxID, Running: true, Config: map[string]string{
-			"user.dorf.owner": "sandbox", "user.dorf.job": c.owner.SessionID, "user.dorf.sandbox": c.owner.SandboxID,
+			"user.dorf.owner": "sandbox", "user.dorf.session": c.owner.SessionID, "user.dorf.sandbox": c.owner.SandboxID,
 			"user.dorf.ownership_nonce": c.owner.OwnershipNonce,
 		}}}, nil
 	}

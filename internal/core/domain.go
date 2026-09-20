@@ -251,9 +251,9 @@ type HarnessHistory struct {
 	Turns    []HarnessTurn `json:"turns"`
 }
 
-// SessionID preserves existing opaque admission identities.
+// SessionID generates an opaque identity for a new admission.
 func SessionID(admissionKey string) string {
-	return "job-" + digest(admissionKey, 20)
+	return "session-" + digest(admissionKey, 20)
 }
 
 const DefaultSandbox = "default"

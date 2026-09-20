@@ -63,7 +63,7 @@ func (e Externals) nativeInput(ctx context.Context, owner provider.Ownership, ev
 	var index strings.Builder
 	index.WriteString("\n\nAttached files (original name and local path):\n")
 	for i, attachment := range event.Attachments {
-		name := path.Join(e.Sandbox.Workspace(), ".dorf", "attachments", directory, fmt.Sprintf("%02d", i+1), attachmentBasename(attachment.Filename))
+		name := path.Join(e.Sandbox.Workspace(), "attachments", directory, fmt.Sprintf("%02d", i+1), attachmentBasename(attachment.Filename))
 		if err := provider.WriteFileViaExec(ctx, owner, e.Sandbox.Workspace(), name, attachment.Contents, false, e.Sandbox.Exec); err != nil {
 			return core.HarnessInput{}, err
 		}

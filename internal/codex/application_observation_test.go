@@ -23,7 +23,7 @@ func TestApplicationObservationNativeSubmissionAndColdAttribution(t *testing.T) 
 	})
 	defer server.Close()
 	p := dialTestProtocol(t, server)
-	result, err := p.resumeFixture(context.Background(), "thread", "/workspace/job", "delivery-1", core.HarnessInput{Text: "Task finished", Observation: true}, "model", "high", "danger-full-access")
+	result, err := p.resumeFixture(context.Background(), "thread", "/workspace", "delivery-1", core.HarnessInput{Text: "Task finished", Observation: true}, "model", "high", "danger-full-access")
 	if err != nil || result.ID != "observed-turn" {
 		t.Fatalf("submit: %+v %v", result, err)
 	}

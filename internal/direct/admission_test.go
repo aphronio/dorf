@@ -82,7 +82,7 @@ func (p *admissionServiceProvider) Check(_ context.Context, connection string) e
 
 func TestAdmissionServiceCreateRaceReplaysDurableAdmission(t *testing.T) {
 	session := core.Session{
-		ID: "job-direct-request", AdmissionKey: "direct-request", AgentsMD: "preserve exact goal",
+		ID: "session-direct-request", AdmissionKey: "direct-request", AgentsMD: "preserve exact goal",
 		SandboxProfile: "cloud", ProviderConnection: "primary", Model: "gpt-5.6-sol",
 		ReasoningEffort: "high", AdmissionOpen: true,
 	}
@@ -102,7 +102,7 @@ func TestAdmissionServiceCreateRaceReplaysDurableAdmission(t *testing.T) {
 func TestAdmissionServiceReplaySkipsVolatileAuthority(t *testing.T) {
 	authorityErr := errors.New("volatile authority must be skipped")
 	session := core.Session{
-		ID: "job-replay", AdmissionKey: "replay", AgentsMD: "goal", SandboxProfile: "cloud",
+		ID: "session-replay", AdmissionKey: "replay", AgentsMD: "goal", SandboxProfile: "cloud",
 		ProviderConnection: "primary", Model: "model", ReasoningEffort: "high", AdmissionOpen: true,
 	}
 	store := &admissionServiceStore{exists: true, session: session, profileErr: authorityErr}
@@ -117,7 +117,7 @@ func TestAdmissionServiceReplaySkipsVolatileAuthority(t *testing.T) {
 
 func TestAdmissionServiceRejectsConflictingReplay(t *testing.T) {
 	session := core.Session{
-		ID: "job-replay", AdmissionKey: "replay", AgentsMD: "goal", SandboxProfile: "cloud",
+		ID: "session-replay", AdmissionKey: "replay", AgentsMD: "goal", SandboxProfile: "cloud",
 		ProviderConnection: "primary", Model: "model", ReasoningEffort: "high", AdmissionOpen: true,
 	}
 	tests := map[string]struct {
@@ -159,7 +159,7 @@ func TestAdmissionServiceValidatesBeforeMutableAuthority(t *testing.T) {
 
 func TestAdmissionServiceExplicitConnectionUsesItsDefaultModel(t *testing.T) {
 	defaultErr := errors.New("DefaultConnection must be skipped")
-	session := core.Session{ID: "job-explicit", AdmissionOpen: true}
+	session := core.Session{ID: "session-explicit", AdmissionOpen: true}
 	store := &admissionServiceStore{session: session, profile: verifiedAdmissionProfile("explicit-profile"), created: true}
 	provider := &admissionServiceProvider{defaultErr: defaultErr}
 	request := AdmissionRequest{
@@ -177,7 +177,7 @@ func TestAdmissionServiceExplicitConnectionUsesItsDefaultModel(t *testing.T) {
 }
 
 func TestAdmissionServiceExplicitModelBypassesConnectionDefault(t *testing.T) {
-	session := core.Session{ID: "job-explicit-model", AdmissionOpen: true}
+	session := core.Session{ID: "session-explicit-model", AdmissionOpen: true}
 	store := &admissionServiceStore{session: session, profile: verifiedAdmissionProfile("profile"), created: true}
 	provider := &admissionServiceProvider{defaultModelErr: errors.New("DefaultModel must be skipped")}
 	request := AdmissionRequest{AdmissionKey: "explicit-model", AgentsMD: "goal", Model: " model "}

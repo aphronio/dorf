@@ -39,7 +39,7 @@ func TestReadOnlyLatencyDiagnostic(t *testing.T) {
 		t.Fatal("invalid diagnostic input")
 	}
 	client := diagnosticHTTP{client: &http.Client{Timeout: 30 * time.Second}}
-	adapter := e2b.Adapter{Client: e2b.Client{APIKey: cfg.APIKey, HTTPClient: client}, Config: e2b.AdapterConfig{Workspace: "/workspace/job", SandboxTimeout: 10 * time.Minute, ProcessTimeout: 30 * time.Second}}
+	adapter := e2b.Adapter{Client: e2b.Client{APIKey: cfg.APIKey, HTTPClient: client}, Config: e2b.AdapterConfig{Workspace: "/workspace", SandboxTimeout: 10 * time.Minute, ProcessTimeout: 30 * time.Second}}
 	agent := Agent{Sandbox: adapter, Port: 4500, Timeout: 30 * time.Second}
 	ctx := context.Background()
 	var historyDigest [32]byte

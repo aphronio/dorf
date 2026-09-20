@@ -31,15 +31,15 @@ func TestInstructionBatchPreservesValidationAndMissingFileSemantics(t *testing.T
 		sandbox := &instructionSandbox{files: map[string]string{"SOUL.md": contents}}
 		separate := Agent{Sandbox: sandbox}
 		batched := Agent{Sandbox: batchInstructionSandbox{sandbox}}
-		want, wantErr := separate.readWorkspaceInstructions(context.Background(), testOwner("batch"), "/workspace/job")
-		got, err := batched.readWorkspaceInstructions(context.Background(), testOwner("batch"), "/workspace/job")
+		want, wantErr := separate.readWorkspaceInstructions(context.Background(), testOwner("batch"), "/workspace")
+		got, err := batched.readWorkspaceInstructions(context.Background(), testOwner("batch"), "/workspace")
 		if (err != nil) != (wantErr != nil) || err == nil && *got != *want {
 			t.Fatal("batch changed instruction validation or missing-file semantics")
 		}
 	}
 	failure := errors.New("provider unavailable")
 	agent := Agent{Sandbox: batchInstructionSandbox{&instructionSandbox{readErr: failure}}}
-	if _, err := agent.readWorkspaceInstructions(context.Background(), testOwner("batch"), "/workspace/job"); !errors.Is(err, failure) {
+	if _, err := agent.readWorkspaceInstructions(context.Background(), testOwner("batch"), "/workspace"); !errors.Is(err, failure) {
 		t.Fatalf("lost provider error: %v", err)
 	}
 }

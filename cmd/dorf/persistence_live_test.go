@@ -32,7 +32,7 @@ import (
 )
 
 const (
-	livePersistenceWorkspace = "/workspace/job"
+	livePersistenceWorkspace = "/workspace"
 	livePersistencePort      = 8755
 	livePersistenceTimeout   = 10 * time.Minute
 )
@@ -692,7 +692,7 @@ PY`))
 
 func (p *livePersistenceProof) prepareUsefulState() {
 	p.exec(`set -eu
-cd /workspace/job
+cd /workspace
 git init -q
 git config user.name "Synthetic Proof"
 git config user.email "proof@example.invalid"
@@ -720,13 +720,13 @@ sha256sum /root/.codex/config.toml /root/.codex/auth.json /root/.codex/.credenti
 chmod 600 /root/.codex/auth.json /root/.codex/.credentials.json
 cat > .dorf-proof/hold-wal.py <<'PY'
 import sqlite3, time
-db=sqlite3.connect('/workspace/job/.dorf-proof/useful.sqlite')
+db=sqlite3.connect('/workspace/.dorf-proof/useful.sqlite')
 db.execute('pragma journal_mode=wal')
 db.execute('pragma wal_autocheckpoint=0')
 db.execute('create table evidence(value text)')
 db.execute("insert into evidence values ('retained-wal-row')")
 db.commit()
-open('/workspace/job/.dorf-proof/wal-ready','w').write('ready\n')
+open('/workspace/.dorf-proof/wal-ready','w').write('ready\n')
 time.sleep(600)
 PY
 nohup python3 .dorf-proof/hold-wal.py </dev/null >/tmp/dorf-persistence-wal.log 2>&1 &
@@ -766,11 +766,11 @@ func (p *livePersistenceProof) preflightNativeCapture(additionalPaths []string) 
 }
 
 func (p *livePersistenceProof) createSlowCaptureInput(index int) {
-	p.exec("dd if=/dev/urandom of=/workspace/job/.dorf-proof/cancel-input-$1.bin bs=1M count=192 status=none", strconv.Itoa(index))
+	p.exec("dd if=/dev/urandom of=/workspace/.dorf-proof/cancel-input-$1.bin bs=1M count=192 status=none", strconv.Itoa(index))
 }
 
 func (p *livePersistenceProof) removeSlowCaptureInput(index int) {
-	p.exec("rm -f /workspace/job/.dorf-proof/cancel-input-$1.bin", strconv.Itoa(index))
+	p.exec("rm -f /workspace/.dorf-proof/cancel-input-$1.bin", strconv.Itoa(index))
 }
 
 func (p *livePersistenceProof) waitIdle() {
@@ -891,7 +891,7 @@ test "$(/nix/var/nix/profiles/dorf-tools/bin/restic version | awk '{print $1}')"
 
 func (p *livePersistenceProof) verifyRestoredUsefulState() {
 	p.exec(`set -eu
-cd /workspace/job
+cd /workspace
 git fsck --no-dangling >/dev/null
 test "$(cat tracked.txt)" = "committed
 working-tree-edit"
@@ -926,7 +926,7 @@ finally:
 CONFIG
 python3 - <<'PY'
 import sqlite3
-db=sqlite3.connect('/workspace/job/.dorf-proof/useful.sqlite')
+db=sqlite3.connect('/workspace/.dorf-proof/useful.sqlite')
 assert db.execute('pragma integrity_check').fetchone()[0]=='ok'
 assert db.execute('select value from evidence').fetchone()[0]=='retained-wal-row'
 PY`)
@@ -934,7 +934,7 @@ PY`)
 
 func (p *livePersistenceProof) requireRestoredConversation(marker string) {
 	p.t.Helper()
-	contents := p.exec("cat /workspace/job/.dorf-proof/requests.jsonl")
+	contents := p.exec("cat /workspace/.dorf-proof/requests.jsonl")
 	if !strings.Contains(contents, marker) || len(strings.Split(strings.TrimSpace(contents), "\n")) < 4 {
 		p.t.Fatal("restored native request did not contain the original conversation context")
 	}
@@ -1012,7 +1012,7 @@ func installLivePersistenceFixture(ctx context.Context, sandbox provider.Sandbox
 		return err
 	}
 	result, err := sandbox.Exec(ctx, owner, nil, "bash", "-c", `set -eu
-mkdir -p /workspace/job/.dorf-proof /root/.codex
+mkdir -p /workspace/.dorf-proof /root/.codex
 if ! test -e /root/.codex/config.toml; then
   cat > /root/.codex/config.toml <<'CONFIG'
 model_provider = "proof"
@@ -1023,7 +1023,7 @@ wire_api = "responses"
 CONFIG
 fi
 if ! curl -fsS http://127.0.0.1:18997/ >/dev/null; then
-  DORF_RESPONSES_FIXTURE_ROOT=/workspace/job/.dorf-proof nohup python3 /workspace/job/.dorf-proof/responses-fixture.py </dev/null >/tmp/dorf-persistence-model.log 2>&1 &
+  DORF_RESPONSES_FIXTURE_ROOT=/workspace/.dorf-proof nohup python3 /workspace/.dorf-proof/responses-fixture.py </dev/null >/tmp/dorf-persistence-model.log 2>&1 &
 fi
 for i in $(seq 1 400); do curl -fsS http://127.0.0.1:18997/ >/dev/null && exit 0; sleep .05; done
 exit 1`)

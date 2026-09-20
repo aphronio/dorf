@@ -63,7 +63,7 @@ async function main() {
     .runCmd(provision, { user: "root" })
     .remove("/tmp/provision-dorf-guest.sh", { force: true, user: "root" })
     .setUser("root")
-    .setWorkdir("/workspace/job");
+    .setWorkdir("/workspace");
 
   const built = await Template.build(template, templateName, {
     cpuCount: 4,
@@ -91,7 +91,7 @@ async function main() {
       recipe_sha256: recipeSHA256,
       package_inputs: packages,
       metadata_path: "/usr/local/share/dorf/image.json",
-      workspace: "/workspace/job",
+      workspace: "/workspace",
       default_user: "root",
     },
     source_commit: sourceCommit,

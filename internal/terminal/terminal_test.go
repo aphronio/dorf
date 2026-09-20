@@ -13,7 +13,7 @@ import (
 )
 
 func TestSandboxPreparationInstallsInstructionsBeforeItCanSucceed(t *testing.T) {
-	session := core.Session{ID: "job-instructions", AgentsMD: "Keep replies brief.\n"}
+	session := core.Session{ID: "session-instructions", AgentsMD: "Keep replies brief.\n"}
 	owned := core.Sandbox{ID: "sandbox-instructions", SessionID: session.ID, OwnershipNonce: "owned"}
 	sandbox := &instructionsSandbox{writeErr: errors.New("temporary file transport failure")}
 	externals := Externals{Sandbox: sandbox}
@@ -24,7 +24,7 @@ func TestSandboxPreparationInstallsInstructionsBeforeItCanSucceed(t *testing.T) 
 	if _, err := externals.SandboxCreate(context.Background(), session, owned); err != nil {
 		t.Fatal(err)
 	}
-	if sandbox.path != "/workspace/job/AGENTS.md" || sandbox.contents != session.AgentsMD || sandbox.owner != ownershipMetadata(owned) {
+	if sandbox.path != "/workspace/AGENTS.md" || sandbox.contents != session.AgentsMD || sandbox.owner != ownershipMetadata(owned) {
 		t.Fatalf("instructions were not installed in the exact owned workspace: %#v", sandbox)
 	}
 }
@@ -37,7 +37,7 @@ type instructionsSandbox struct {
 	created        bool
 }
 
-func (*instructionsSandbox) Workspace() string { return "/workspace/job" }
+func (*instructionsSandbox) Workspace() string { return "/workspace" }
 func (*instructionsSandbox) ObserveOwned(_ context.Context, owner provider.Ownership) (provider.Status, error) {
 	return provider.Status{Provider: "test", State: "running", ProviderID: owner.SandboxID}, nil
 }

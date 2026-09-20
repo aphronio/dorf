@@ -45,7 +45,7 @@ func TestLiveMemoryPausePreservesProcessAcrossTwoResumes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter := Adapter{Client: client, Config: AdapterConfig{Workspace: "/workspace/job", SandboxTimeout: 10 * time.Minute, ProcessTimeout: 30 * time.Second}}
+	adapter := Adapter{Client: client, Config: AdapterConfig{Workspace: "/workspace", SandboxTimeout: 10 * time.Minute, ProcessTimeout: 30 * time.Second}}
 	owned := provider.Ownership{SessionID: owner.SessionID, SandboxID: owner.SandboxID, OwnershipNonce: owner.OwnershipNonce}
 	// An in-memory random nonce is exposed over a Unix socket. It is never saved
 	// to a file, so a restarted process cannot produce the same proof.

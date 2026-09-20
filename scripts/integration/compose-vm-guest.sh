@@ -423,8 +423,8 @@ proof_nonce() {
 wait_for_session_completion() {
 	local attempts=${DORF_PROOF_WAIT_ATTEMPTS:-180}
 	local delay=${DORF_PROOF_POLL_SECONDS:-2}
-	local snapshot="$EVIDENCE_DIR/job-inspect.json"
-	local before_restart="$EVIDENCE_DIR/job-inspect-before-worker-restart.json"
+	local snapshot="$EVIDENCE_DIR/session-inspect.json"
+	local before_restart="$EVIDENCE_DIR/session-inspect-before-worker-restart.json"
 	local restarted=0 attempt current active_run_id worker_container worker_started_before worker_started_after
 	for ((attempt = 1; attempt <= attempts; attempt++)); do
 		capture "$snapshot" "$DORF_BIN" inspect --json "$SESSION_ID"
@@ -521,10 +521,10 @@ prove() {
 	chmod 0600 "$expected"
 	goal_file="$WORK_ROOT/goal.txt"
 	printf '%s\n' \
-		"Create /workspace/job/PROOF.txt with exactly this one line, including its trailing newline:" \
+		"Create /workspace/PROOF.txt with exactly this one line, including its trailing newline:" \
 		"$nonce" \
 		"Do not modify the line. Finish after reading the file back and confirming it." >"$goal_file"
-	admission="$EVIDENCE_DIR/job-admission.json"
+	admission="$EVIDENCE_DIR/session-admission.json"
 	capture "$admission" "$DORF_BIN" run \
 		--key "compose-vm-proof-$nonce" \
 		--goal-file "$goal_file" \

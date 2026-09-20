@@ -40,7 +40,7 @@ func TestLiveE2BScopedGatewayCompletesCodexTurn(t *testing.T) {
 	owner := e2bEndpointOwnership(t)
 	client := e2b.Client{APIKey: apiKey}
 	sandbox := e2b.Adapter{Client: client, Config: e2b.AdapterConfig{
-		Template: template, Workspace: "/workspace/job", SandboxTimeout: 10 * time.Minute,
+		Template: template, Workspace: "/workspace", SandboxTimeout: 10 * time.Minute,
 		ProcessTimeout: 2 * time.Minute, ProviderGatewayURL: publicGatewayURL,
 	}}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)

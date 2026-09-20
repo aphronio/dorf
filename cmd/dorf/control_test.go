@@ -182,9 +182,9 @@ func TestPublicSessionStatesKeepCleanupTruthSeparateFromExecution(t *testing.T) 
 				inputAttention = &controlapi.Attention{Code: "agent_attention", Detail: "safe detail"}
 			}
 			view, err := publicSession(core.Session{
-				ID: "job-1", CleanupState: test.cleanup, CleanupAttention: privateMarker,
+				ID: "session-1", CleanupState: test.cleanup, CleanupAttention: privateMarker,
 			}, test.execution, inputAttention, taskResultView{State: test.task, failure: test.failure},
-				[]core.Sandbox{{ID: "sandbox-1", SessionID: "job-1", Name: "default"}})
+				[]core.Sandbox{{ID: "sandbox-1", SessionID: "session-1", Name: "default"}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -233,9 +233,9 @@ func TestAdmissionRetryUsesHTTPFailureClass(t *testing.T) {
 
 func TestRemoteSessionWatchWritesOneSnapshotPerJSONLLine(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	body := &cancelAtEOF{reader: strings.NewReader("event: snapshot\nid: snapshot-1\ndata: {\"id\":\"job-watch\"}\n\n"), cancel: cancel}
+	body := &cancelAtEOF{reader: strings.NewReader("event: snapshot\nid: snapshot-1\ndata: {\"id\":\"session-watch\"}\n\n"), cancel: cancel}
 	client, err := controlclient.New("https://dorf.example.test", "credential", roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		if request.URL.Path != "/v1/sessions/job-watch/watch" || request.Header.Get("Accept") != "text/event-stream" {
+		if request.URL.Path != "/v1/sessions/session-watch/watch" || request.Header.Get("Accept") != "text/event-stream" {
 			t.Fatalf("watch request path=%q accept=%q", request.URL.Path, request.Header.Get("Accept"))
 		}
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: body}, nil
@@ -244,11 +244,11 @@ func TestRemoteSessionWatchWritesOneSnapshotPerJSONLLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr strings.Builder
-	if err := remoteSessionWatch(ctx, client, []string{"--output", "jsonl", "job-watch"}, &stdout, &stderr); err != nil {
+	if err := remoteSessionWatch(ctx, client, []string{"--output", "jsonl", "session-watch"}, &stdout, &stderr); err != nil {
 		t.Fatalf("watch: %v stderr=%s", err, stderr.String())
 	}
 	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
-	if len(lines) != 1 || !strings.Contains(lines[0], `"id":"job-watch"`) {
+	if len(lines) != 1 || !strings.Contains(lines[0], `"id":"session-watch"`) {
 		t.Fatalf("JSONL output=%q", stdout.String())
 	}
 }

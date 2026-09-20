@@ -103,7 +103,7 @@ func Load() (Config, error) {
 		PersistenceFile:       optionalPersistenceFile(paths.ConfigDir),
 		GatewayStatePath:      filepath.Join(paths.DataDir, "provider-gateway"),
 		GatewayInternalOrigin: strings.TrimSpace(os.Getenv("DORF_PROVIDER_GATEWAY_INTERNAL_ORIGIN")),
-		Workspace:             "/workspace/job",
+		Workspace:             "/workspace",
 		AppServerPort:         4500,
 		TurnTimeout:           45 * time.Minute,
 		E2BAPIKey:             strings.TrimSpace(os.Getenv("E2B_API_KEY")),

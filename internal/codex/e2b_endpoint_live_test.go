@@ -27,7 +27,7 @@ func TestLiveE2BAuthenticatedEndpointRecoversCodexThread(t *testing.T) {
 	owner := e2bEndpointOwnership(t)
 	client := e2b.Client{APIKey: apiKey}
 	sandbox := e2b.Adapter{Client: client, Config: e2b.AdapterConfig{
-		Template: template, Workspace: "/workspace/job", SandboxTimeout: 10 * time.Minute, ProcessTimeout: 30 * time.Second,
+		Template: template, Workspace: "/workspace", SandboxTimeout: 10 * time.Minute, ProcessTimeout: 30 * time.Second,
 	}}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -55,11 +55,11 @@ func TestLiveE2BAuthenticatedEndpointRecoversCodexThread(t *testing.T) {
 	var turn TurnOutcome
 	if err := agent.withServer(ctx, owner, func(first *protocol) error {
 		var err error
-		threadID, err = first.startThread(ctx, "/workspace/job", "gpt-5.6-sol", "danger-full-access")
+		threadID, err = first.startThread(ctx, "/workspace", "gpt-5.6-sol", "danger-full-access")
 		if err != nil {
 			return err
 		}
-		turn, err = first.startTurn(ctx, threadID, "/workspace/job", "endpoint-proof-message", core.HarnessInput{Text: "persist this endpoint proof"}, "gpt-5.6-sol", "low", "danger-full-access")
+		turn, err = first.startTurn(ctx, threadID, "/workspace", "endpoint-proof-message", core.HarnessInput{Text: "persist this endpoint proof"}, "gpt-5.6-sol", "low", "danger-full-access")
 		first.connection.CloseNow()
 		return err
 	}); err != nil {

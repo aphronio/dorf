@@ -32,7 +32,7 @@ async function cleanup() {
     await writeFile(resolve(evidence, 'custody.json'), JSON.stringify(custody), { mode: 0o600 });
   }
   if (custody.provider === 'e2b') {
-    const owned = Sandbox.list({ query: { metadata: { 'dorf.job': id, 'dorf.sandbox': id } } });
+    const owned = Sandbox.list({ query: { metadata: { 'dorf.session': id, 'dorf.sandbox': id } } });
     while (owned.hasNext) {
       for (const item of await owned.nextItems()) {
         if (![custody.owner.ownership_nonce, custody.destination.ownership_nonce].includes(item.metadata['dorf.ownership_nonce'])) {

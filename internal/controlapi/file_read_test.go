@@ -20,7 +20,7 @@ import (
 func TestPublicFileReadRejectsOversizedSessionsResult(t *testing.T) {
 	const credential = "dcr_file-bound"
 	sessions := &fileBudgetSessions{
-		fakeSessions: &fakeSessions{session: controlapi.Session{ID: "job-1", Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1"}}}},
+		fakeSessions: &fakeSessions{session: controlapi.Session{ID: "session-1", Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1"}}}},
 		contents:     bytes.Repeat([]byte{'x'}, provider.MaxFileReadBytes+1),
 	}
 	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, sessions, nil).Handler
@@ -35,7 +35,7 @@ func TestPublicFileReadRejectsOversizedSessionsResult(t *testing.T) {
 func TestPublicFileTooLargeRetainsProblemAndTypedClientError(t *testing.T) {
 	const credential = "dcr_file-too-large"
 	sessions := &fileBudgetSessions{
-		fakeSessions: &fakeSessions{session: controlapi.Session{ID: "job-1", Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1"}}}},
+		fakeSessions: &fakeSessions{session: controlapi.Session{ID: "session-1", Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1"}}}},
 		err:          controlapi.ErrFileTooLarge,
 	}
 	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, sessions, nil).Handler
@@ -53,7 +53,7 @@ func TestPublicFileTooLargeRetainsProblemAndTypedClientError(t *testing.T) {
 func TestPublicFileReadTransferBudgetIncludesSlowWrite(t *testing.T) {
 	const credential = "dcr_file-budget"
 	sessions := &fileBudgetSessions{
-		fakeSessions: &fakeSessions{session: controlapi.Session{ID: "job-1", Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1"}}}},
+		fakeSessions: &fakeSessions{session: controlapi.Session{ID: "session-1", Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1"}}}},
 		contents:     []byte("exact"), entered: make(chan struct{}, 16),
 	}
 	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, sessions, nil).Handler

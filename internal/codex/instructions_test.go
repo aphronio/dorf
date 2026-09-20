@@ -286,7 +286,7 @@ func (f *instructionFixture) requireInjection(t *testing.T, s *instructionSessio
 	if strings.Contains(injected, "was updated") != notice || strings.Contains(injected, "<SOUL.md>") != soul {
 		t.Fatalf("wrong changed-file delivery: %q", injected)
 	}
-	if notice && !strings.Contains(injected, "/workspace/job/AGENTS.md") {
+	if notice && !strings.Contains(injected, "/workspace/AGENTS.md") {
 		t.Fatal("missing exact AGENTS path")
 	}
 	if soul && !strings.Contains(injected, "<SOUL.md>\n"+f.sandbox.files["SOUL.md"]+"\n</SOUL.md>") {
@@ -448,4 +448,4 @@ func (s *instructionSandbox) Exec(_ context.Context, _ provider.Ownership, _ []b
 	return provider.Result{Stdout: "1\n1\nscoped-test-capability\n"}, nil
 }
 
-func (s *instructionSandbox) Workspace() string { return "/workspace/job" }
+func (s *instructionSandbox) Workspace() string { return "/workspace" }

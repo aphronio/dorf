@@ -37,7 +37,7 @@ pi --version
 browser-use skill install --target codex --no-install
 browser-use recordings enable
 
-install -d -m 0755 /usr/local/share/dorf /workspace/job
+install -d -m 0755 /usr/local/share/dorf /workspace
 jq \
   --arg base_reference "$DORF_BASE_IMAGE" \
   --arg base_fingerprint "$DORF_BASE_FINGERPRINT" \

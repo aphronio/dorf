@@ -55,7 +55,7 @@ func TestSandboxForIncusProfileRequiresAndUsesExactDeploymentAuthority(t *testin
 		IncusDiskSize: "40GiB", IncusGatewayURL: "http://10.44.0.1:8317/v1",
 	}
 
-	resolved, err := sandboxForProfile(config.Config{Workspace: "/workspace/job", Incus: &authority}, profile)
+	resolved, err := sandboxForProfile(config.Config{Workspace: "/workspace", Incus: &authority}, profile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,11 +69,11 @@ func TestSandboxForIncusProfileRequiresAndUsesExactDeploymentAuthority(t *testin
 		t.Fatalf("Incus runtime does not preserve endpoint/profile custody: %#v", adapter.Config)
 	}
 
-	if _, err := sandboxForProfile(config.Config{Workspace: "/workspace/job"}, profile); err == nil || !strings.Contains(err.Error(), "not configured") {
+	if _, err := sandboxForProfile(config.Config{Workspace: "/workspace"}, profile); err == nil || !strings.Contains(err.Error(), "not configured") {
 		t.Fatalf("missing Incus authority error = %v", err)
 	}
 	profile.IncusEndpointAuthorityHash = strings.Repeat("b", 64)
-	if _, err := sandboxForProfile(config.Config{Workspace: "/workspace/job", Incus: &authority}, profile); err == nil || !strings.Contains(err.Error(), "does not match") {
+	if _, err := sandboxForProfile(config.Config{Workspace: "/workspace", Incus: &authority}, profile); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("mismatched Incus authority error = %v", err)
 	}
 }

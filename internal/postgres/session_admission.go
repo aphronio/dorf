@@ -29,7 +29,7 @@ func normalizeCoreAdmission(input core.SessionAdmission) (core.SessionAdmission,
 	return input, nil
 }
 
-func admitSession(ctx context.Context, store Store, coreInput core.SessionAdmission, queueName, taskName, taskKey string) (core.Session, bool, error) {
+func admitSession(ctx context.Context, store Store, coreInput core.SessionAdmission, queueName, taskName string, taskKey func(string) string) (core.Session, bool, error) {
 	id := core.SessionID(coreInput.AdmissionKey)
 	tx, err := store.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -66,14 +66,16 @@ func admitSession(ctx context.Context, store Store, coreInput core.SessionAdmiss
 	// A replay may come from another Client; only the first admission records its creator.
 	comparison := coreInput
 	comparison.CreatedByClientID = ""
-	if storedRow.ID != id || storedCore != comparison {
+	if storedCore != comparison {
 		return core.Session{}, false, fmt.Errorf("%w: %q", ErrAdmissionConflict, coreInput.AdmissionKey)
 	}
+	// The persisted admission owns its identity, including after naming changes.
+	id = storedRow.ID
 	sandboxID := core.MainSandboxName(id)
 	if err := reserveAdmittedSandbox(ctx, queries, id, sandboxID); err != nil {
 		return core.Session{}, false, err
 	}
-	if err := scheduleSessionTaskTx(ctx, tx, queueName, id, taskName, taskKey); err != nil {
+	if err := scheduleSessionTaskTx(ctx, tx, queueName, id, taskName, taskKey(id)); err != nil {
 		return core.Session{}, false, err
 	}
 	if err := tx.Commit(); err != nil {

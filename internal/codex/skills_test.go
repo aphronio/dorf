@@ -12,7 +12,7 @@ import (
 )
 
 func TestRequestedNewTurnsReloadSkillsInRetainedThread(t *testing.T) {
-	const workspace = "/workspace/job"
+	const workspace = "/workspace"
 	const threadID = "retained-thread"
 	var catalog atomic.Value
 	catalog.Store("initial skill")
@@ -90,7 +90,7 @@ func TestSkillReloadFailurePreventsSubmission(t *testing.T) {
 			if name == "connection lost" {
 				_ = p.connection.CloseNow()
 			}
-			turn, err := p.startTurn(context.Background(), "thread", "/workspace/job", "run", core.HarnessInput{Text: "input"}, "model", "high", "danger-full-access")
+			turn, err := p.startTurn(context.Background(), "thread", "/workspace", "run", core.HarnessInput{Text: "input"}, "model", "high", "danger-full-access")
 			var definite interface{ DefiniteNoSubmit() bool }
 			if !errors.As(err, &definite) || !definite.DefiniteNoSubmit() || turn.ID != "" {
 				t.Fatalf("turn=%#v err=%T %v", turn, err, err)
@@ -125,7 +125,7 @@ func TestOrdinaryTurnDoesNotReloadSkills(t *testing.T) {
 		}
 	})
 	defer server.Close()
-	turn, err := dialTestProtocol(t, server).resumeFixture(context.Background(), "thread", "/workspace/job", "run", core.HarnessInput{Text: "input"}, "model", "high", "danger-full-access")
+	turn, err := dialTestProtocol(t, server).resumeFixture(context.Background(), "thread", "/workspace", "run", core.HarnessInput{Text: "input"}, "model", "high", "danger-full-access")
 	if err != nil || turn.ID != "turn" {
 		t.Fatalf("turn=%+v err=%v", turn, err)
 	}

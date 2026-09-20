@@ -26,7 +26,7 @@ func TestHandlerBoundary(t *testing.T) {
 	credential := "dcr_client-secret-never-returned"
 	enrollment := "enr_AAAAAAAAAAAAAAAAAAAAAA.enrollment-secret-never-returned"
 	auth := &fakeAuth{credential: credential, client: controlauth.Client{ID: "client-1", Name: "laptop"}}
-	sessions := &fakeSessions{session: controlapi.Session{ID: "job-1"}}
+	sessions := &fakeSessions{session: controlapi.Session{ID: "session-1"}}
 	server := controlapi.NewServer(controlapi.Discovery{
 		Product: "dorf", Version: "1.2.3", Capabilities: []string{"direct_sessions"},
 	}, auth, sessions, nil)
@@ -57,15 +57,15 @@ func TestHandlerBoundary(t *testing.T) {
 		body   io.Reader
 	}{
 		{http.MethodDelete, "/v1/sessions", nil},
-		{http.MethodGet, "/v1/sessions/job-1", nil},
-		{http.MethodDelete, "/v1/sessions/job-1", nil},
-		{http.MethodGet, "/v1/sessions/job-1/watch", nil},
+		{http.MethodGet, "/v1/sessions/session-1", nil},
+		{http.MethodDelete, "/v1/sessions/session-1", nil},
+		{http.MethodGet, "/v1/sessions/session-1/watch", nil},
 		{http.MethodGet, "/v1/sessions?limit=1", nil},
-		{http.MethodPost, "/v1/sessions/job-1/events", strings.NewReader(`{}`)},
-		{http.MethodGet, "/v1/sessions/job-1/turns/turn", nil},
-		{http.MethodPut, "/v1/sessions/job-1/events", nil},
-		{http.MethodPost, "/v1/sessions/job-1/retries", nil},
-		{http.MethodPut, "/v1/sessions/job-1/cleanup", nil},
+		{http.MethodPost, "/v1/sessions/session-1/events", strings.NewReader(`{}`)},
+		{http.MethodGet, "/v1/sessions/session-1/turns/turn", nil},
+		{http.MethodPut, "/v1/sessions/session-1/events", nil},
+		{http.MethodPost, "/v1/sessions/session-1/retries", nil},
+		{http.MethodPut, "/v1/sessions/session-1/cleanup", nil},
 		{http.MethodGet, "/v1/sandboxes/sandbox-1/files?path=REPORT.md", nil},
 	} {
 		requireProblem(t, do(route.method, route.path, "", "", route.body), http.StatusUnauthorized, "unauthenticated")
@@ -101,7 +101,7 @@ func TestHandlerBoundary(t *testing.T) {
 	if sessions.gotInput.AgentsMD != expandedGoal {
 		t.Fatal("JSON escaping changed the exact 1 MiB goal")
 	}
-	wrongMethod := do(http.MethodDelete, "/v1/sessions/job-1", credential, "", nil)
+	wrongMethod := do(http.MethodDelete, "/v1/sessions/session-1", credential, "", nil)
 	requireProblem(t, wrongMethod, http.StatusMethodNotAllowed, "method_not_allowed")
 	sessionsWrongMethod := do(http.MethodDelete, "/v1/sessions", credential, "", nil)
 	requireProblem(t, sessionsWrongMethod, http.StatusMethodNotAllowed, "method_not_allowed")
@@ -117,7 +117,7 @@ func TestHandlerBoundary(t *testing.T) {
 
 func TestAdmissionsAcceptExplicitAIConnectionAndOmittedModel(t *testing.T) {
 	credential := "dcr_admission-connection"
-	base := controlapi.Session{ID: "job-1"}
+	base := controlapi.Session{ID: "session-1"}
 	tests := []struct {
 		name     string
 		target   string
@@ -191,11 +191,11 @@ func TestEnrollmentRedemptionUsesDeploymentWideRateLimit(t *testing.T) {
 }
 
 func TestSessionListUsesStrictBoundedQueryAndExplicitEmptyCollection(t *testing.T) {
-	credential := "dcr_job-list"
+	credential := "dcr_session-list"
 	next := "next-page"
 	admittedAt := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	sessions := &fakeSessions{list: controlapi.SessionList{
-		Sessions:   []controlapi.SessionSummary{{ID: "job-2", AdmittedAt: admittedAt}},
+		Sessions:   []controlapi.SessionSummary{{ID: "session-2", AdmittedAt: admittedAt}},
 		NextCursor: &next,
 	}}
 	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, sessions, nil).Handler
@@ -211,7 +211,7 @@ func TestSessionListUsesStrictBoundedQueryAndExplicitEmptyCollection(t *testing.
 	requireStatusType(t, response, http.StatusOK, "application/json")
 	var page controlapi.SessionList
 	decode(t, response, &page)
-	if sessions.listLimit != 2 || sessions.listCursor != "page-one" || len(page.Sessions) != 1 || page.Sessions[0].ID != "job-2" || page.NextCursor == nil || *page.NextCursor != next {
+	if sessions.listLimit != 2 || sessions.listCursor != "page-one" || len(page.Sessions) != 1 || page.Sessions[0].ID != "session-2" || page.NextCursor == nil || *page.NextCursor != next {
 		t.Fatalf("request limit/cursor=%d/%q page=%#v", sessions.listLimit, sessions.listCursor, page)
 	}
 
@@ -254,13 +254,13 @@ func TestSandboxFileResponseContract(t *testing.T) {
 
 func TestSessionWatchEmitsChangedSnapshotsAndStopsOnServerShutdown(t *testing.T) {
 	credential := "dcr_control-client"
-	sessions := &fakeSessions{session: controlapi.Session{ID: "job-1", Model: "first", Sandboxes: []controlapi.Sandbox{}}}
+	sessions := &fakeSessions{session: controlapi.Session{ID: "session-1", Model: "first", Sandboxes: []controlapi.Sandbox{}}}
 	api := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, sessions, nil)
 
 	open := func(lastID string) (*streamResponse, context.CancelFunc, <-chan struct{}) {
 		t.Helper()
 		ctx, cancel := context.WithCancel(context.Background())
-		request := httptest.NewRequest(http.MethodGet, "/v1/sessions/job-1/watch", nil).WithContext(ctx)
+		request := httptest.NewRequest(http.MethodGet, "/v1/sessions/session-1/watch", nil).WithContext(ctx)
 		request.Header.Set("Authorization", "Bearer "+credential)
 		request.Header.Set("Accept", "text/event-stream")
 		if lastID != "" {
@@ -321,9 +321,9 @@ func TestSessionWatchEmitsChangedSnapshotsAndStopsOnServerShutdown(t *testing.T)
 func TestSessionWatchReauthenticatesNoLaterThanCredentialExpiry(t *testing.T) {
 	credential := "dcr_expiring-client"
 	auth := &fakeAuth{credential: credential, client: controlauth.Client{CredentialExpiresAt: time.Now().Add(100 * time.Millisecond)}}
-	sessions := &fakeSessions{session: controlapi.Session{ID: "job-1", Sandboxes: []controlapi.Sandbox{}}}
+	sessions := &fakeSessions{session: controlapi.Session{ID: "session-1", Sandboxes: []controlapi.Sandbox{}}}
 	api := controlapi.NewServer(controlapi.Discovery{}, auth, sessions, nil)
-	request := httptest.NewRequest(http.MethodGet, "/v1/sessions/job-1/watch", nil)
+	request := httptest.NewRequest(http.MethodGet, "/v1/sessions/session-1/watch", nil)
 	request.Header.Set("Authorization", "Bearer "+credential)
 	request.Header.Set("Accept", "text/event-stream")
 	response := newStreamResponse()
@@ -340,7 +340,7 @@ func TestSessionWatchReauthenticatesNoLaterThanCredentialExpiry(t *testing.T) {
 	}
 
 	auth.credential = "revoked"
-	reconnect := httptest.NewRequest(http.MethodGet, "/v1/sessions/job-1/watch", nil)
+	reconnect := httptest.NewRequest(http.MethodGet, "/v1/sessions/session-1/watch", nil)
 	reconnect.Header.Set("Authorization", "Bearer "+credential)
 	reconnect.Header.Set("Accept", "text/event-stream")
 	rejected := httptest.NewRecorder()
@@ -351,8 +351,8 @@ func TestSessionWatchReauthenticatesNoLaterThanCredentialExpiry(t *testing.T) {
 func TestSessionWatchReturnsAuthenticationProblemWhenCredentialExpiresBeforeStreaming(t *testing.T) {
 	credential := "dcr_expiring-before-stream"
 	auth := &fakeAuth{credential: credential, client: controlauth.Client{CredentialExpiresAt: time.Now().Add(25 * time.Millisecond)}}
-	sessions := &fakeSessions{session: controlapi.Session{ID: "job-1"}, waitForGetContext: true}
-	request := httptest.NewRequest(http.MethodGet, "/v1/sessions/job-1/watch", nil)
+	sessions := &fakeSessions{session: controlapi.Session{ID: "session-1"}, waitForGetContext: true}
+	request := httptest.NewRequest(http.MethodGet, "/v1/sessions/session-1/watch", nil)
 	request.Header.Set("Authorization", "Bearer "+credential)
 	request.Header.Set("Accept", "text/event-stream")
 	response := httptest.NewRecorder()
@@ -618,7 +618,7 @@ func TestNonExpiringClientWatchStillHasAuthenticationDeadline(t *testing.T) {
 	credential := "dcr_non-expiring-client"
 	auth := &fakeAuth{credential: credential, client: controlauth.Client{}}
 	sessions := &watchDeadlineSessions{fakeSessions: &fakeSessions{}}
-	request := httptest.NewRequest(http.MethodGet, "/v1/sessions/job-1/watch", nil)
+	request := httptest.NewRequest(http.MethodGet, "/v1/sessions/session-1/watch", nil)
 	request.Header.Set("Authorization", "Bearer "+credential)
 	request.Header.Set("Accept", "text/event-stream")
 	before := time.Now()

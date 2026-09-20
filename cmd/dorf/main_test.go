@@ -1165,18 +1165,18 @@ func TestSandboxForProfileSelectsOneConcreteAdapter(t *testing.T) {
 		Name: "managed", Provider: core.SandboxProviderE2B, Artifact: "dorf:exact-build",
 		E2BGatewayURL: "https://gateway.example/v1", E2BSandboxTimeout: 55 * time.Minute,
 	}
-	managed, err := sandboxForProfile(config.Config{E2BAPIKey: "test-key", Workspace: "/workspace/job", TurnTimeout: 45 * time.Minute}, managedProfile)
+	managed, err := sandboxForProfile(config.Config{E2BAPIKey: "test-key", Workspace: "/workspace", TurnTimeout: 45 * time.Minute}, managedProfile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := managed.(e2b.Adapter); !ok {
 		t.Fatalf("managed adapter = %T", managed)
 	}
-	if _, err := sandboxForProfile(config.Config{Workspace: "/workspace/job"}, managedProfile); err == nil || !strings.Contains(err.Error(), "E2B_API_KEY") {
+	if _, err := sandboxForProfile(config.Config{Workspace: "/workspace"}, managedProfile); err == nil || !strings.Contains(err.Error(), "E2B_API_KEY") {
 		t.Fatalf("missing E2B API key error = %v", err)
 	}
 	managedProfile.E2BGatewayURL = "http://gateway.example/v1"
-	if _, err := sandboxForProfile(config.Config{E2BAPIKey: "test-key", Workspace: "/workspace/job"}, managedProfile); err == nil {
+	if _, err := sandboxForProfile(config.Config{E2BAPIKey: "test-key", Workspace: "/workspace"}, managedProfile); err == nil {
 		t.Fatal("invalid remote Gateway URL was admitted")
 	}
 }

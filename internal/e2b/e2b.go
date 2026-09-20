@@ -25,7 +25,7 @@ const (
 
 const (
 	metadataOwner          = "dorf.owner"
-	metadataSession        = "dorf.job"
+	metadataSession        = "dorf.session"
 	metadataSandbox        = "dorf.sandbox"
 	metadataOwnershipNonce = "dorf.ownership_nonce"
 )

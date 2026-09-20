@@ -22,7 +22,7 @@ func TestLiveCommandCancellation(t *testing.T) {
 	owner := provider.Ownership{SessionID: "command-proof", SandboxID: name, OwnershipNonce: strings.Repeat("1", 64)}
 	connection := DefaultConnectionConfig()
 	connection.Project = project
-	adapter := Adapter{Sandbox: Sandbox{Config: Config{Workspace: "/workspace/job", Connection: connection}}}
+	adapter := Adapter{Sandbox: Sandbox{Config: Config{Workspace: "/workspace", Connection: connection}}}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 	result, err := adapter.Run(ctx, owner, provider.RunRequest{Args: []string{"python3", "-c", "import os,sys; print(os.environ['DORF_PROBE']); sys.stdout.buffer.write(sys.stdin.buffer.read())"}, Stdin: []byte("literal stdin"), Env: map[string]string{"DORF_PROBE": "literal environment"}, Timeout: 5 * time.Second})

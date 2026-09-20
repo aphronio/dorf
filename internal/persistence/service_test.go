@@ -48,7 +48,7 @@ func (f captureFunc) Capture(ctx context.Context, b CaptureBoundary) (Reference,
 	return f(ctx, b)
 }
 func captureServiceFixture(driver Capturer) (Service, *captureStoreFixture) {
-	store := &captureStoreFixture{boundary: CaptureBoundary{SessionID: "job-test", SandboxID: "sandbox-test", ResourceID: "resource-test", NativeRevision: 1, Eligible: true, LastActivityAt: time.Now().Add(-time.Minute)}}
+	store := &captureStoreFixture{boundary: CaptureBoundary{SessionID: "session-test", SandboxID: "sandbox-test", ResourceID: "resource-test", NativeRevision: 1, Eligible: true, LastActivityAt: time.Now().Add(-time.Minute)}}
 	return Service{Store: store, Driver: driver, Claim: func(context.Context) error { return nil }}, store
 }
 

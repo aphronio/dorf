@@ -145,7 +145,7 @@ func missingImage(err error) bool {
 func ownershipConfig(metadata OwnershipMetadata) map[string]string {
 	return map[string]string{
 		"user.dorf.owner":           "sandbox",
-		"user.dorf.job":             metadata.SessionID,
+		"user.dorf.session":         metadata.SessionID,
 		"user.dorf.sandbox":         metadata.SandboxID,
 		"user.dorf.ownership_nonce": metadata.OwnershipNonce,
 	}
@@ -187,7 +187,7 @@ func attestOwnershipIn(instances []Instance, metadata OwnershipMetadata) error {
 	for _, instance := range instances {
 		if instance.Config["user.dorf.sandbox"] == metadata.SandboxID {
 			matches++
-			if instance.Name != metadata.SandboxID || instance.Config["user.dorf.owner"] != "sandbox" || instance.Config["user.dorf.job"] != metadata.SessionID || instance.Config["user.dorf.ownership_nonce"] != metadata.OwnershipNonce {
+			if instance.Name != metadata.SandboxID || instance.Config["user.dorf.owner"] != "sandbox" || instance.Config["user.dorf.session"] != metadata.SessionID || instance.Config["user.dorf.ownership_nonce"] != metadata.OwnershipNonce {
 				return ownershipErrorf("Sandbox metadata does not match its durable owner")
 			}
 		}

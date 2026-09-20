@@ -262,7 +262,7 @@ func newReleaseSignal() *releaseSignal { return &releaseSignal{ch: make(chan str
 func (s *releaseSignal) close()        { s.once.Do(func() { close(s.ch) }) }
 
 func boundedReaderAuthority() (core.Session, core.Sandbox) {
-	session := core.Session{ID: "job-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
+	session := core.Session{ID: "session-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
 	return session, core.Sandbox{ID: "sandbox-1", SessionID: session.ID, OwnershipNonce: strings.Repeat("a", 64)}
 }
 

@@ -7,7 +7,7 @@ import (
 )
 
 func TestSnapshotProjectsDirectExecutionIndependently(t *testing.T) {
-	sessionID := "job-direct"
+	sessionID := "session-direct"
 	main := core.Sandbox{ID: core.MainSandboxName(sessionID), SessionID: sessionID, Name: core.DefaultSandbox}
 	succeeded := func(kind core.ActionKind) core.Action {
 		return core.Action{SessionID: sessionID, Kind: kind, Scope: main.ID, State: core.ActionSucceeded}

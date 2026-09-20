@@ -22,7 +22,7 @@ func testSandbox(runner incustest.Runner, owner provider.Ownership) incus.Adapte
 }
 
 func testOwner(sandboxID string) provider.Ownership {
-	return provider.Ownership{SessionID: "job-" + sandboxID, SandboxID: sandboxID, OwnershipNonce: strings.Repeat("a", 64)}
+	return provider.Ownership{SessionID: "session-" + sandboxID, SandboxID: sandboxID, OwnershipNonce: strings.Repeat("a", 64)}
 }
 func (r *recordingRunner) Run(_ context.Context, _ string, input []byte, args ...string) (incus.Result, error) {
 	r.calls++

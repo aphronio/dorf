@@ -311,7 +311,7 @@ func TestPersistenceWatcherCancellationDoesNotRequireARescan(t *testing.T) {
 }
 
 func TestPersistenceExtraPathsAreBoundedAndDisjoint(t *testing.T) {
-	workspace := "/workspace/job"
+	workspace := "/workspace"
 	valid, err := normalizePersistenceExtraPaths(workspace, []string{"/var/lib/project-state", "/opt/project-data"})
 	if err != nil || len(valid) != 2 {
 		t.Fatalf("valid extras=%v err=%v", valid, err)

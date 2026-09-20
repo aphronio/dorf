@@ -81,7 +81,7 @@ func TestReadFilesViaExecRejectsTruncatedOrUnboundedTransportOutput(t *testing.T
 		runner := func(context.Context, Ownership, []byte, ...string) (Result, error) {
 			return Result{Stdout: output}, nil
 		}
-		if _, err := ReadFilesViaExec(context.Background(), Ownership{}, "/workspace/job", []string{"file"}, 4, runner); err == nil {
+		if _, err := ReadFilesViaExec(context.Background(), Ownership{}, "/workspace", []string{"file"}, 4, runner); err == nil {
 			t.Fatal("accepted malformed or unbounded response")
 		}
 	}

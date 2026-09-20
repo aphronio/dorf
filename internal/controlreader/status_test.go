@@ -24,7 +24,7 @@ func (r *readerStatus) ReadSandboxStatus(_ context.Context, session core.Session
 }
 
 func TestStatusUsesCustodyWithoutIdleReconciliation(t *testing.T) {
-	session := core.Session{ID: "job-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
+	session := core.Session{ID: "session-1", SandboxProfile: "profile-1", CleanupState: core.CleanupPending}
 	owned := core.Sandbox{ID: "sandbox-1", SessionID: session.ID, OwnershipNonce: strings.Repeat("a", 64)}
 	store := &readerTestStore{session: session, sandbox: owned}
 	execution := &idleReaderExecution{store: store}

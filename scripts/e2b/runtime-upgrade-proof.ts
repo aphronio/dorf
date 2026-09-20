@@ -90,7 +90,7 @@ async function create() {
     if (!process.env.E2B_API_KEY) throw new Error('E2B_API_KEY is required');
     const manifest = JSON.parse(await readFile(templatePath, 'utf8'));
     sandbox = await Sandbox.create(manifest.template.reference, {
-      timeoutMs: 3_600_000, metadata: { 'dorf.owner': 'sandbox', 'dorf.job': id, 'dorf.sandbox': id,
+      timeoutMs: 3_600_000, metadata: { 'dorf.owner': 'sandbox', 'dorf.session': id, 'dorf.sandbox': id,
         'dorf.ownership_nonce': sourceOwner.ownership_nonce, 'dorf.upgrade.proof': id }, allowInternetAccess: true,
     });
     providerID = sandbox.sandboxId;
@@ -111,7 +111,7 @@ async function create() {
   instanceCreated = true;
   await incus('launch', manifest.image_fingerprint, id, '--vm', '--network', 'incusbr0', '--storage', 'default',
     '-d', 'root,size=50GiB', '-c', 'limits.memory=4GiB', '-c', 'limits.cpu=2', '-c', `user.dorf.proof.run=${id}`,
-    '-c', 'user.dorf.owner=sandbox', '-c', `user.dorf.job=${id}`, '-c', `user.dorf.sandbox=${id}`,
+    '-c', 'user.dorf.owner=sandbox', '-c', `user.dorf.session=${id}`, '-c', `user.dorf.sandbox=${id}`,
     '-c', `user.dorf.ownership_nonce=${sourceOwner.ownership_nonce}`);
   await ready();
 }
@@ -217,7 +217,7 @@ try {
         }
       }
       if (provider === 'e2b') {
-        const owned = Sandbox.list({ query: { metadata: { 'dorf.job': id, 'dorf.sandbox': id } } });
+        const owned = Sandbox.list({ query: { metadata: { 'dorf.session': id, 'dorf.sandbox': id } } });
         while (owned.hasNext) {
           for (const item of await owned.nextItems()) {
             if (![sourceOwner.ownership_nonce, destinationOwner.ownership_nonce].includes(item.metadata['dorf.ownership_nonce'])) throw new Error('refusing cleanup of unowned E2B VM');

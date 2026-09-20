@@ -79,7 +79,7 @@ func TestLoopbackClientCannotLeakBearerToProxyRedirectOrAlternateOrigin(t *testi
 func TestProblemsRedirectsAndOversizedResponsesDoNotLeakCredential(t *testing.T) {
 	const credential = "never-print-this-credential"
 	escapedGoal := strings.Repeat("\x00", 1<<20)
-	escapedSession, err := json.Marshal(controlapi.Session{ID: "job-1", Attention: &controlapi.Attention{Code: "session_attention", Detail: escapedGoal}})
+	escapedSession, err := json.Marshal(controlapi.Session{ID: "session-1", Attention: &controlapi.Attention{Code: "session_attention", Detail: escapedGoal}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestProblemsRedirectsAndOversizedResponsesDoNotLeakCredential(t *testing.T)
 	if !IsServiceError(err) || !errors.As(err, &problem) || problem.Problem.Code != "invalid_client" || strings.Contains(err.Error(), credential) {
 		t.Fatalf("problem=%#v err=%v", problem, err)
 	}
-	session, err := client.Session(context.Background(), "job-1")
+	session, err := client.Session(context.Background(), "session-1")
 	if err != nil || session.Attention.Detail != escapedGoal {
 		t.Fatalf("escaped Session goal length=%d err=%v", len(session.Model), err)
 	}
@@ -147,7 +147,7 @@ func TestWatchSessionReconnectsWithoutOrdinaryRequestTimeout(t *testing.T) {
 	requests := 0
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		requests++
-		if request.Method != http.MethodGet || request.URL.Path != "/v1/sessions/job-1/watch" || request.Header.Get("Accept") != "text/event-stream" || request.Header.Get("Authorization") != "Bearer "+credential {
+		if request.Method != http.MethodGet || request.URL.Path != "/v1/sessions/session-1/watch" || request.Header.Get("Accept") != "text/event-stream" || request.Header.Get("Authorization") != "Bearer "+credential {
 			t.Fatalf("watch request %d = %s %s accept=%q auth=%q", requests, request.Method, request.URL, request.Header.Get("Accept"), request.Header.Get("Authorization"))
 		}
 		if _, deadline := request.Context().Deadline(); deadline {
@@ -160,12 +160,12 @@ func TestWatchSessionReconnectsWithoutOrdinaryRequestTimeout(t *testing.T) {
 			if request.Header.Get("Last-Event-ID") != "" {
 				t.Fatalf("initial Last-Event-ID=%q", request.Header.Get("Last-Event-ID"))
 			}
-			response.Body = io.NopCloser(strings.NewReader(": connected\nretry: 0\nevent: snapshot\nid: snapshot-1\ndata: {\"id\":\"job-1\",\"model\":\"first\"}\n\n"))
+			response.Body = io.NopCloser(strings.NewReader(": connected\nretry: 0\nevent: snapshot\nid: snapshot-1\ndata: {\"id\":\"session-1\",\"model\":\"first\"}\n\n"))
 		case 2:
 			if request.Header.Get("Last-Event-ID") != "snapshot-1" {
 				t.Fatalf("reconnect Last-Event-ID=%q", request.Header.Get("Last-Event-ID"))
 			}
-			response.Body = io.NopCloser(strings.NewReader("event: snapshot\nid: snapshot-2\ndata: {\"id\":\"job-1\",\"model\":\"second\"}\n\n"))
+			response.Body = io.NopCloser(strings.NewReader("event: snapshot\nid: snapshot-2\ndata: {\"id\":\"session-1\",\"model\":\"second\"}\n\n"))
 		default:
 			t.Fatalf("unexpected watch reconnect %d", requests)
 		}
@@ -176,7 +176,7 @@ func TestWatchSessionReconnectsWithoutOrdinaryRequestTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	var goals []string
-	err = client.WatchSession(context.Background(), "job-1", func(session controlapi.Session) error {
+	err = client.WatchSession(context.Background(), "session-1", func(session controlapi.Session) error {
 		goals = append(goals, session.Model)
 		if len(goals) == 2 {
 			return stop
@@ -196,14 +196,14 @@ func TestListSessionsEncodesOneOpaquePageRequest(t *testing.T) {
 			request.Header.Get("Authorization") != "Bearer "+credential {
 			t.Fatalf("list request=%s %s auth=%q", request.Method, request.URL, request.Header.Get("Authorization"))
 		}
-		return jsonResponse(http.StatusOK, `{"sessions":[{"id":"job-2","admitted_at":"2026-08-26T12:00:00Z"}],"next_cursor":"next-page"}`), nil
+		return jsonResponse(http.StatusOK, `{"sessions":[{"id":"session-2","admitted_at":"2026-08-26T12:00:00Z"}],"next_cursor":"next-page"}`), nil
 	})
 	client, err := New("https://dorf.example.test", credential, transport)
 	if err != nil {
 		t.Fatal(err)
 	}
 	page, err := client.ListSessions(context.Background(), 2, "opaque+/cursor")
-	if err != nil || len(page.Sessions) != 1 || page.Sessions[0].ID != "job-2" || page.NextCursor == nil || *page.NextCursor != "next-page" {
+	if err != nil || len(page.Sessions) != 1 || page.Sessions[0].ID != "session-2" || page.NextCursor == nil || *page.NextCursor != "next-page" {
 		t.Fatalf("Session page=%#v err=%v", page, err)
 	}
 	if _, err := client.ListSessions(context.Background(), 101, ""); err == nil {

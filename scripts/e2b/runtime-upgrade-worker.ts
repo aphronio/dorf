@@ -1,7 +1,7 @@
 // Bun loads the local development .env into this child without printing keys.
 const [provider, operation, session] = process.argv.slice(2);
 if (!['incus', 'e2b'].includes(provider)) throw new Error('provider must be incus or e2b');
-if (operation && (!['probe', 'cleanup-unstarted'].includes(operation) || !/^job-[a-f0-9]{20}$/.test(session ?? ''))) {
+if (operation && (!['probe', 'cleanup-unstarted'].includes(operation) || !/^session-[a-f0-9]{20}$/.test(session ?? ''))) {
   throw new Error('optional operation: probe SESSION | cleanup-unstarted SESSION');
 }
 const child = Bun.spawn(['mise', 'exec', '--', 'go', 'test', './internal/postgres',

@@ -82,7 +82,7 @@ func TestBackupQueueDoesNotConsumeOneSlotForegroundCapacity(t *testing.T) {
 	foreground := persistenceTestQueue(t, db, fmt.Sprintf("checkpoint_foreground_%d", suffix))
 	backup := persistenceTestQueue(t, db, fmt.Sprintf("checkpoint_backup_%d", suffix))
 	boundary := CaptureBoundary{
-		SessionID: "job-backup-capacity", SandboxID: "sandbox-backup-capacity", ResourceID: "resource-backup-capacity",
+		SessionID: "session-backup-capacity", SandboxID: "sandbox-backup-capacity", ResourceID: "resource-backup-capacity",
 		ProfileName: "codex-e2b", ProfileRevision: fmt.Sprintf("%064x", suffix),
 		LastActivityAt: time.Now().Add(-time.Minute), NativeRevision: 1, Eligible: true,
 	}

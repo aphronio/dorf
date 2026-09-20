@@ -46,9 +46,9 @@ func TestNativeStartAndSteerSendOrderedInlineImages(t *testing.T) {
 			var err error
 			switch route {
 			case "initial":
-				_, _, err = protocol.initialFixture(context.Background(), "/workspace/job", "run", input, "model", "high", "danger-full-access")
+				_, _, err = protocol.initialFixture(context.Background(), "/workspace", "run", input, "model", "high", "danger-full-access")
 			case "follow":
-				_, err = protocol.resumeFixture(context.Background(), "thread", "/workspace/job", "run", input, "model", "high", "danger-full-access")
+				_, err = protocol.resumeFixture(context.Background(), "thread", "/workspace", "run", input, "model", "high", "danger-full-access")
 			}
 			if err != nil || submissions.Load() != 1 {
 				t.Fatalf("native submissions=%d, error=%v", submissions.Load(), err)
