@@ -31,7 +31,7 @@ import (
 const (
 	guidedIncusNetwork  = "incusbr0"
 	guidedIncusDiskSize = "40GiB"
-	guidedE2BTemplate   = "dorf/standard:8ebc87c0-82da-432d-bdfa-f8e479d9c24a"
+	guidedE2BTemplate   = "dorf/standard:bd736ce7-5c87-404f-8922-32445dfff93e"
 )
 
 type guidedProfilePlan struct {
