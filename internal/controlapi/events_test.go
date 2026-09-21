@@ -1,14 +1,19 @@
 package controlapi_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/core"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
 type nativeSessions struct {
@@ -54,4 +59,54 @@ func TestEventsAcknowledgeNativeInputAndExposeUncertainty(t *testing.T) {
 		t.Fatal("uncertain native mutation was retried")
 	}
 	requireProblem(t, send(`{"type":"input.message","text":"missing correlation"}`), http.StatusUnprocessableEntity, "invalid_input")
+}
+
+func TestNativeEventAttachmentBoundaries(t *testing.T) {
+	service := &nativeSessions{fakeSessions: &fakeSessions{}}
+	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: "dcr_native"}, service, nil).Handler
+	send := func(event core.NativeEvent, knownLength bool) *httptest.ResponseRecorder {
+		t.Helper()
+		body, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest(http.MethodPost, "/v1/sessions/session/events", bytes.NewReader(body))
+		if !knownLength {
+			r.ContentLength = -1
+		}
+		r.Header.Set("Authorization", "Bearer dcr_native")
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	event := core.NativeEvent{Type: core.InputMessage, ClientID: "ten-files"}
+	for i := range 10 {
+		event.Attachments = append(event.Attachments, core.NativeAttachment{Filename: fmt.Sprintf("file-%02d.txt", i), Contents: []byte(fmt.Sprintf("contents %d", i))})
+	}
+	// Attachment-only input preserves every filename, byte and ordinal.
+	requireStatusType(t, send(event, true), http.StatusOK, "application/json")
+	if service.calls != 1 || !reflect.DeepEqual(service.event, event) {
+		t.Fatal("ten-file event did not reach the service unchanged")
+	}
+	event.Attachments = append(event.Attachments, core.NativeAttachment{Filename: "eleven.txt"})
+	requireProblem(t, send(event, true), http.StatusUnprocessableEntity, "invalid_input")
+	event.Attachments = event.Attachments[:10]
+	event.Attachments[9].Contents = make([]byte, provider.MaxFileWriteBytes+1)
+	requireProblem(t, send(event, true), http.StatusUnprocessableEntity, "invalid_input")
+	event.Attachments[9].Contents = make([]byte, provider.MaxFileWriteBytes)
+	requireStatusType(t, send(event, true), http.StatusOK, "application/json")
+	if !reflect.DeepEqual(service.event, event) {
+		t.Fatal("maximum-sized file changed in transit")
+	}
+	// Individually valid files must still fit the unchanged 46 MiB body budget.
+	for i := range event.Attachments {
+		event.Attachments[i].Contents = make([]byte, 4<<20)
+	}
+	for _, knownLength := range []bool{true, false} {
+		requireProblem(t, send(event, knownLength), http.StatusRequestEntityTooLarge, "body_too_large")
+	}
+	if service.calls != 2 {
+		t.Fatalf("rejected input reached the service: calls=%d", service.calls)
+	}
 }

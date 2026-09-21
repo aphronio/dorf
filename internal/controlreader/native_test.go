@@ -1,8 +1,13 @@
 package controlreader
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/aphronio/dorf/internal/core"
@@ -13,6 +18,7 @@ type nativeFixture struct {
 	state   core.NativeState
 	history core.HarnessHistory
 	calls   int
+	event   core.NativeEvent
 	lost    bool
 }
 
@@ -48,6 +54,7 @@ func (f *nativeFixture) ResolveSandbox(_ context.Context, profile core.SandboxPr
 }
 func (f *nativeFixture) SubmitEvent(ctx context.Context, _ core.Session, _ core.Sandbox, e core.NativeEvent, m core.NativeMutation) (core.NativeAcknowledgement, error) {
 	f.calls++
+	f.event = e
 	if err := m.Bind(ctx, "thread"); err != nil {
 		return core.NativeAcknowledgement{}, err
 	}
@@ -85,5 +92,37 @@ func TestNativeLostAcknowledgementRequiresExactPositiveEvidence(t *testing.T) {
 	f.deliveryHeld = true
 	if _, err := service.SubmitEvent(ctx, "session", event); !errors.Is(err, core.ErrNativeUnavailable) || f.calls != 2 {
 		t.Fatalf("held dispatch: %v", err)
+	}
+}
+
+func TestNativeAttachmentTransportPreservesTenAndRejectsEleven(t *testing.T) {
+	f := &nativeFixture{readerTestStore: &readerTestStore{session: core.Session{ID: "session", Harness: "codex", AdmissionOpen: true, CleanupState: core.CleanupPending}, sandbox: core.Sandbox{ID: core.MainSandboxName("session"), SessionID: "session", OwnershipNonce: "nonce"}}}
+	token := strings.Repeat("b", 64)
+	handler, err := NewHandler(token, Service{Store: f, Runtimes: f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient("http://control-reader.test:8756", token, &http.Client{Transport: readerHandlerTransport{handler: handler}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := core.NativeEvent{Type: core.InputMessage, ClientID: "ten-files"}
+	for i := range 10 {
+		event.Attachments = append(event.Attachments, core.NativeAttachment{Filename: fmt.Sprintf("file-%02d.bin", i), Contents: bytes.Repeat([]byte{byte(i)}, 1<<20)})
+	}
+	ack, err := client.SubmitEvent(context.Background(), "session", event)
+	if err != nil || ack.Type != "input.accepted" || f.calls != 1 || !reflect.DeepEqual(f.event, event) || f.state.Pending() {
+		t.Fatalf("ten-file transport: ack=%+v calls=%d pending=%v err=%v", ack, f.calls, f.state.Pending(), err)
+	}
+	event.Attachments = append(event.Attachments, core.NativeAttachment{Filename: "eleven.bin"})
+	if _, err := client.SubmitEvent(context.Background(), "session", event); err == nil || f.calls != 1 {
+		t.Fatalf("eleven-file transport: calls=%d err=%v", f.calls, err)
+	}
+	event.Attachments = event.Attachments[:10]
+	for i := range event.Attachments {
+		event.Attachments[i].Contents = make([]byte, 4<<20)
+	}
+	if _, err := client.SubmitEvent(context.Background(), "session", event); err == nil || f.calls != 1 {
+		t.Fatalf("oversized transport: calls=%d err=%v", f.calls, err)
 	}
 }
