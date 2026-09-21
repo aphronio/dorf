@@ -27,7 +27,10 @@ func TestMessageCLIForwardsImageAndFileToAnotherSession(t *testing.T) {
 	sessions := &attachmentCLISessions{}
 	client := attachmentCLIClient(t, sessions)
 	cfg := clientconfig.Config{DeploymentURL: "https://dorf.example.test"}
-	parentArgs := []string{"--key", "parent-message", "--attach", files[0], "--attach", files[1], "--output", "json"}
+	parentArgs := []string{"--key", "parent-message", "--output", "json"}
+	for i := range 10 {
+		parentArgs = append(parentArgs, "--attach", files[i%len(files)])
+	}
 	if err := remoteRun(context.Background(), client, cfg, parentArgs, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -35,14 +38,14 @@ func TestMessageCLIForwardsImageAndFileToAnotherSession(t *testing.T) {
 		t.Fatalf("attachment-only initial message=%+v", sessions.messages)
 	}
 	parentInput := sessions.messages[0].input
-	if len(parentInput.Attachments) != 2 {
+	if len(parentInput.Attachments) != 10 {
 		t.Fatalf("initial message attachment count=%d", len(parentInput.Attachments))
 	}
 	workspace := t.TempDir()
 	forwardArgs := []string{"--client-id", "forward-to-worker", "--refresh-skills"}
 	for ordinal, received := range parentInput.Attachments {
-		original, err := os.ReadFile(files[ordinal])
-		if err != nil || received.Filename != filepath.Base(files[ordinal]) || !bytes.Equal(original, received.Contents) {
+		original, err := os.ReadFile(files[ordinal%len(files)])
+		if err != nil || received.Filename != filepath.Base(files[ordinal%len(files)]) || !bytes.Equal(original, received.Contents) {
 			t.Fatalf("initial CLI upload changed attachment %d: %v", ordinal, err)
 		}
 		localPath := filepath.Join(workspace, received.Filename)
@@ -87,7 +90,9 @@ func TestAttachmentCLIRejectsInvalidLocalInputBeforeRemoteEffects(t *testing.T) 
 		"directory":    {"--attach", t.TempDir()},
 		"oversize":     {"--attach", oversize},
 		"invalid text": {"--attach", files[0], "--input-file", nulInput},
-		"too many":     {"--attach", files[0], "--attach", files[0], "--attach", files[0], "--attach", files[0], "--attach", files[0]},
+	}
+	for range 11 {
+		invalidArgs["too many"] = append(invalidArgs["too many"], "--attach", files[0])
 	}
 	for name, args := range invalidArgs {
 		t.Run(name, func(t *testing.T) {

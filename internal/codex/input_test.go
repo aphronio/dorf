@@ -16,6 +16,9 @@ func TestNativeStartAndSteerSendOrderedInlineImages(t *testing.T) {
 		{MediaType: "image/png", Bytes: []byte{137, 'P', 'N', 'G', '\r', '\n', 0, 255}},
 		{MediaType: "image/webp", Bytes: []byte("RIFF\x00\x00\x00\x00WEBP")},
 	}}
+	for i := 2; i < 10; i++ {
+		input.Images = append(input.Images, core.HarnessImage{MediaType: "image/png", Bytes: []byte{137, byte(i), 255}})
+	}
 	for _, route := range []string{"initial", "follow"} {
 		t.Run(route, func(t *testing.T) {
 			var submissions atomic.Int32
