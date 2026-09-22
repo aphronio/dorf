@@ -46,3 +46,19 @@ func (c Client) ReadNativeTurns(ctx context.Context, sessionID string) (core.Har
 	err = decodeJSONResponse(response, &result, MaxObservationBytes, "native turns")
 	return result, err
 }
+
+const InputCapabilitiesPath = "/v1/sessions/input-capabilities"
+
+func (c Client) InputCapabilities(ctx context.Context, sessionID string) (core.InputCapabilities, error) {
+	response, err := c.request(ctx, InputCapabilitiesPath, observationRequest{SessionID: sessionID})
+	if err != nil {
+		return core.InputCapabilities{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return core.InputCapabilities{}, decodeProblem(response)
+	}
+	var result core.InputCapabilities
+	err = decodeJSONResponse(response, &result, MaxRequestBytes, "input capabilities")
+	return result, err
+}

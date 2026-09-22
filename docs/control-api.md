@@ -81,8 +81,18 @@ do not retry an ambiguous cancel or treat it as an idempotent stop handle.
 Attachments travel inline by value as base64 bytes. The server validates bounded filenames, bytes
 and supported image decoding, then writes files under the visible workspace-relative path
 `attachments/<unique-id>/<ordinal>/<filename>`, includes their local paths in the input, and passes
-supported images natively. Files and native history follow workspace retention; Dorf does not
+supported images natively. An explicit attachment `kind: "audio"` selects native audio and is
+validated against the selected model, detected media type, and byte limit before file writes or
+native submission. An ordinary file is not promoted to audio. Files and native history follow workspace retention; Dorf does not
 retain attachment blobs for replay after cleanup.
+
+`GET /v1/sessions/{session}/input-capabilities` returns the exact Session model, effective
+`audio_media_types`, and `max_audio_bytes`. Codex derives these from the selected model's explicit
+`model/list.inputModalities` and the pinned adapter's supported formats, bounded by the existing
+attachment limit. Unknown models or absent audio metadata return no audio support. Native catalog
+caching remains Harness-owned; Dorf adds no separate catalog or capability storage. Runtime
+unavailability is an error, not evidence of absent model support. Clients can choose transcription
+outside Dorf when native audio is unsupported. Audio support does not promise music recognition.
 
 `developer_instructions` and `refresh_skills` are per-request native adapter options. Instructions
 are injected before that input; skill refresh uses the native catalog reload. Neither creates a

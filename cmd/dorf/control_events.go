@@ -7,6 +7,7 @@ import (
 )
 
 type nativeSessionReader interface {
+	InputCapabilities(context.Context, string) (core.InputCapabilities, error)
 	SubmitEvent(context.Context, string, core.NativeEvent) (core.NativeAcknowledgement, error)
 	ReadNativeTurns(context.Context, string) (core.HarnessHistory, error)
 }
@@ -34,4 +35,15 @@ func (a controlAPISessions) ReadNativeTurns(ctx context.Context, sessionID strin
 		return core.HarnessHistory{}, core.ErrNativeUnavailable
 	}
 	return reader.ReadNativeTurns(ctx, sessionID)
+}
+
+func (a controlAPISessions) InputCapabilities(ctx context.Context, sessionID string) (core.InputCapabilities, error) {
+	if _, err := a.loadSession(ctx, sessionID); err != nil {
+		return core.InputCapabilities{}, err
+	}
+	reader, ok := a.reader.(nativeSessionReader)
+	if !ok {
+		return core.InputCapabilities{}, core.ErrNativeUnavailable
+	}
+	return reader.InputCapabilities(ctx, sessionID)
 }

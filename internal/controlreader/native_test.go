@@ -87,3 +87,7 @@ func TestNativeLostAcknowledgementRequiresExactPositiveEvidence(t *testing.T) {
 		t.Fatalf("held dispatch: %v", err)
 	}
 }
+
+func (f *nativeFixture) InputCapabilities(context.Context, core.Session, core.Sandbox) (core.InputCapabilities, error) {
+	return core.InputCapabilities{Model: "model", AudioMediaTypes: []string{}}, nil
+}

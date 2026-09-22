@@ -165,3 +165,7 @@ func (j *attachmentCLISessions) Get(context.Context, string) (controlapi.Session
 func (j *attachmentCLISessions) ReadNativeTurns(context.Context, string) (core.HarnessHistory, error) {
 	return core.HarnessHistory{}, nil
 }
+
+func (j *attachmentCLISessions) InputCapabilities(context.Context, string) (core.InputCapabilities, error) {
+	return core.InputCapabilities{Model: "model", AudioMediaTypes: []string{}}, nil
+}

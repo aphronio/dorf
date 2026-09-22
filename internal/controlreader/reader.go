@@ -274,6 +274,9 @@ func NewHandler(token string, service Service) (http.Handler, error) {
 	}
 	fileTransfers := make(chan struct{}, provider.MaxConcurrentFileReads)
 	routes := map[string]http.HandlerFunc{
+		InputCapabilitiesPath: jsonEndpoint(MaxRequestBytes, func(ctx context.Context, input observationRequest) (core.InputCapabilities, error) {
+			return service.InputCapabilities(ctx, input.SessionID)
+		}),
 		WorkspacePath: jsonEndpoint(MaxRequestBytes, func(ctx context.Context, input observationRequest) (persistence.Workspace, error) {
 			return service.ReadWorkspace(ctx, input.SessionID)
 		}),

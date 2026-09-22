@@ -7,7 +7,7 @@ import (
 )
 
 func nativeUserInput(input core.HarnessInput) []map[string]string {
-	content := make([]map[string]string, 0, 1+len(input.Images))
+	content := make([]map[string]string, 0, 1+len(input.Images)+len(input.Audio))
 	if input.Text != "" {
 		content = append(content, map[string]string{"type": "text", "text": input.Text})
 	}
@@ -15,6 +15,12 @@ func nativeUserInput(input core.HarnessInput) []map[string]string {
 		content = append(content, map[string]string{
 			"type": "image",
 			"url":  "data:" + image.MediaType + ";base64," + base64.StdEncoding.EncodeToString(image.Bytes),
+		})
+	}
+	for _, audio := range input.Audio {
+		content = append(content, map[string]string{
+			"type": "audio",
+			"url":  "data:" + audio.MediaType + ";base64," + base64.StdEncoding.EncodeToString(audio.Bytes),
 		})
 	}
 	return content

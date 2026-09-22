@@ -200,3 +200,18 @@ prerequisite for native input.
 [native-input]: https://github.com/openai/codex/blob/36eab01061df3cde5f95ec20a526777b430091ba/codex-rs/core/src/session/turn_input.rs
 [protocol]: https://github.com/openai/codex/blob/36eab01061df3cde5f95ec20a526777b430091ba/codex-rs/app-server-protocol/src/protocol/common.rs
 [queue-processor]: https://github.com/openai/codex/blob/36eab01061df3cde5f95ec20a526777b430091ba/codex-rs/app-server/src/request_processors/thread_queue_processor.rs
+
+## Native audio transport proof
+
+The pinned Codex 0.154.0 ordinary `turn/start` input union accepts `audio` data URLs and
+`localAudio` paths. The adapter sends explicit audio attachments as data URLs. Session capability
+reads paginate native `model/list`, match the exact admitted model, and require `audio` in its
+`inputModalities`; protocol support alone does not enable it. The existing native catalog cache
+owns freshness. Current bundled model entries do not advertise audio input.
+
+Run `python3 scripts/codex/input-contract.py --codex /path/to/codex --audio` for the isolated
+transport proof. It uses a synthetic audio-capable catalog, generated silence, the real pinned
+app-server, and a local synthetic Responses server. The 2026-09-22 proof verified catalog discovery,
+unchanged audio bytes in `input_audio`, and completed native history. It makes no live-provider
+speech, music understanding, or song identification claim. Adapter tests cover unsupported models,
+media and byte limits, rejection before mutation, and ordinary file behavior.

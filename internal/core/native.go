@@ -36,6 +36,7 @@ type NativeEvent struct {
 type NativeAttachment struct {
 	Filename string `json:"filename"`
 	Contents []byte `json:"contents"`
+	Kind     string `json:"kind,omitempty"`
 }
 
 type NativeAcknowledgement struct {
@@ -63,6 +64,7 @@ type NativeMutation struct {
 }
 
 type NativeSession interface {
+	InputCapabilities(context.Context, Session, Sandbox) (InputCapabilities, error)
 	SubmitEvent(context.Context, Session, Sandbox, NativeEvent, NativeMutation) (NativeAcknowledgement, error)
 	ReadNativeTurns(context.Context, Session, Sandbox) (HarnessHistory, error)
 	NativeIdle(context.Context, Session, Sandbox) (bool, error)
@@ -85,7 +87,7 @@ func (e NativeEvent) Validate() error {
 		return ErrInvalidEvent
 	}
 	for _, a := range e.Attachments {
-		if !ValidAttachmentFilename(a.Filename) || len(a.Contents) > provider.MaxFileWriteBytes {
+		if !ValidAttachmentFilename(a.Filename) || len(a.Contents) > provider.MaxFileWriteBytes || (a.Kind != "" && a.Kind != "audio") {
 			return ErrInvalidEvent
 		}
 	}

@@ -6,6 +6,9 @@ Run with the Codex version being considered for a supported profile.
 """
 
 import argparse
+import base64
+import io
+import wave
 import json
 import os
 from pathlib import Path
@@ -18,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 class Native:
-    def __init__(self, binary, root, endpoint):
+    def __init__(self, binary, root, endpoint, catalog=None):
         self.events = []
         self.incoming = queue.Queue()
         self.sequence = 0
@@ -27,7 +30,8 @@ class Native:
             [binary, 'app-server', '--listen', 'stdio://',
              '-c', 'model_provider="proof"', '-c', 'model="gpt-6-astra"',
              '-c', f'model_providers.proof={{name="proof",base_url="{endpoint}",wire_api="responses"}}',
-             '-c', 'features.shell_tool=false', '-c', 'web_search="disabled"'],
+             '-c', 'features.shell_tool=false', '-c', 'web_search="disabled"',
+             *(['-c', f'model_catalog_json="{catalog}"'] if catalog else [])],
             cwd=root,
             env={'PATH': os.environ['PATH'], 'CODEX_HOME': str(root / 'codex-home')},
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr, text=True,
@@ -83,6 +87,7 @@ class Native:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--codex', default='codex')
+    parser.add_argument('--audio', action='store_true', help='Prove native audio with a synthetic audio-capable catalog')
     args = parser.parse_args()
     gate = threading.Event()
     arrived = threading.Event()
@@ -128,7 +133,20 @@ def main():
         with tempfile.TemporaryDirectory(prefix='dorf-native-input-') as temporary:
             root = Path(temporary)
             (root / 'codex-home').mkdir()
-            native = Native(args.codex, root, endpoint)
+            catalog = None
+            if args.audio:
+                catalog = root / 'catalog.json'
+                catalog.write_text(json.dumps({'models': [{
+                    'slug': 'gpt-6-astra', 'display_name': 'Synthetic audio model',
+                    'supported_reasoning_levels': [], 'shell_type': 'unified_exec',
+                    'visibility': 'list', 'supported_in_api': True, 'priority': 0,
+                    'support_verbosity': False,
+                    'truncation_policy': {'mode': 'tokens', 'limit': 10000},
+                    'experimental_supported_tools': [],
+                    'input_modalities': ['text', 'image', 'audio'],
+                    'base_instructions': 'Reply briefly.', 'context_window': 128000,
+                }]}))
+            native = Native(args.codex, root, endpoint, catalog)
             thread = native.call('thread/start', {'cwd': temporary, 'approvalPolicy': 'never',
                                                  'sandbox': 'read-only'})['thread']['id']
 
@@ -138,6 +156,38 @@ def main():
 
             def history():
                 return native.call('thread/read', {'threadId': thread, 'includeTurns': True})
+
+            if args.audio:
+                models = native.call('model/list', {'includeHidden': True})['data']
+                selected = next(m for m in models if m['model'] == 'gpt-6-astra')
+                assert 'audio' in selected['inputModalities'], selected
+                buffer = io.BytesIO()
+                with wave.open(buffer, 'wb') as wav:
+                    wav.setnchannels(1)
+                    wav.setsampwidth(2)
+                    wav.setframerate(16000)
+                    wav.writeframes(b'\0\0' * 1600)
+                audio_url = 'data:audio/wav;base64,' + base64.b64encode(buffer.getvalue()).decode()
+                turn = native.call('turn/start', {
+                    'threadId': thread, 'clientUserMessageId': 'synthetic-audio',
+                    'input': [{'type': 'text', 'text': 'Describe this synthetic audio'},
+                              {'type': 'audio', 'url': audio_url}],
+                })['turn']['id']
+                assert arrived.wait(15), 'synthetic model was not called'
+                inputs = [content for item in calls[0]['input']
+                          if item.get('role') == 'user' for content in item.get('content', [])]
+                assert {'type': 'input_audio', 'audio_url': audio_url} in inputs, inputs
+                gate.set()
+                native.complete(turn)
+                assert 'synthetic-audio' in json.dumps(history())
+                print(json.dumps({
+                    'version': subprocess.check_output([args.codex, '--version'], text=True).strip(),
+                    'synthetic_catalog_reports_audio': True,
+                    'native_audio_reaches_responses_unchanged': True,
+                    'turn_completed': True,
+                    'real_audio_model_recognition_tested': False,
+                }, indent=2))
+                return
 
             first = send('proof-first', 'Synthetic initial input')
             assert arrived.wait(15), 'synthetic model was not called'

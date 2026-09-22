@@ -55,3 +55,30 @@ func TestEventsAcknowledgeNativeInputAndExposeUncertainty(t *testing.T) {
 	}
 	requireProblem(t, send(`{"type":"input.message","text":"missing correlation"}`), http.StatusUnprocessableEntity, "invalid_input")
 }
+
+func (s *nativeSessions) InputCapabilities(context.Context, string) (core.InputCapabilities, error) {
+	return core.InputCapabilities{Model: "model", AudioMediaTypes: []string{}}, nil
+}
+
+func TestInputCapabilitiesRequireAuthentication(t *testing.T) {
+	service := &nativeSessions{fakeSessions: &fakeSessions{}}
+	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: "dcr_native"}, service, nil).Handler
+	for _, authenticated := range []bool{false, true} {
+		request := httptest.NewRequest(http.MethodGet, "/v1/sessions/session/input-capabilities", nil)
+		if authenticated {
+			request.Header.Set("Authorization", "Bearer dcr_native")
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if !authenticated {
+			if response.Code != http.StatusUnauthorized {
+				t.Fatal(response.Code)
+			}
+			continue
+		}
+		requireStatusType(t, response, http.StatusOK, "application/json")
+		if !strings.Contains(response.Body.String(), `"audio_media_types":[]`) || !strings.Contains(response.Body.String(), `"model":"model"`) {
+			t.Fatal(response.Body.String())
+		}
+	}
+}

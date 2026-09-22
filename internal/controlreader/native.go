@@ -126,3 +126,22 @@ func submitNativeEvent(ctx context.Context, store nativeStore, native core.Nativ
 	}
 	return ack, nil
 }
+
+func (s Service) InputCapabilities(ctx context.Context, sessionID string) (core.InputCapabilities, error) {
+	if !validIdentity(sessionID) {
+		return core.InputCapabilities{}, ErrSessionNotFound
+	}
+	var result core.InputCapabilities
+	err := s.accessSandbox(ctx, core.MainSandboxName(sessionID), false, func(runtime core.SandboxRuntime, session core.Session, owned core.Sandbox) error {
+		if runtime.Native == nil {
+			return core.ErrNativeUnavailable
+		}
+		var err error
+		result, err = runtime.Native.InputCapabilities(ctx, session, owned)
+		return err
+	})
+	if errors.Is(err, ErrUnavailable) {
+		err = core.ErrNativeUnavailable
+	}
+	return result, err
+}

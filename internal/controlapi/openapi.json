@@ -915,6 +915,35 @@
         "operationId": "getSessionWorkspace",
         "summary": "Read current workspace backup coverage and last published checkpoint"
       }
+    },
+    "/v1/sessions/{session}/input-capabilities": {
+      "get": {
+        "tags": [
+          "Sessions"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SessionID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Native response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InputCapabilities"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "operationId": "getInputCapabilities",
+        "summary": "Discover native audio input supported by the exact Session model and adapter"
+      }
     }
   },
   "components": {
@@ -1903,6 +1932,13 @@
             "type": "string",
             "contentEncoding": "base64",
             "description": "Bounded attachment bytes encoded as base64."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "audio"
+            ],
+            "description": "Explicit native audio input. Omit for ordinary file/image behavior. Unsupported native audio is rejected before submission; it is never silently treated as a file."
           }
         },
         "required": [
@@ -2286,6 +2322,33 @@
             ],
             "format": "date-time",
             "description": "Publication time of the newest retained checkpoint for this logical workspace, including before replacement. Null means none published; does not attest to current files."
+          }
+        }
+      },
+      "InputCapabilities": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "model",
+          "audio_media_types",
+          "max_audio_bytes"
+        ],
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "Exact admitted Session model used for native catalog lookup."
+          },
+          "audio_media_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Native audio MIME types supported by both model and adapter. Empty when unsupported or model metadata is unknown."
+          },
+          "max_audio_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Maximum bytes per native audio attachment; zero when unsupported."
           }
         }
       }

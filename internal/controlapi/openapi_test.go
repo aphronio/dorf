@@ -42,6 +42,7 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 	}
 
 	wantOperations := map[string][]string{
+		"/v1/sessions/{session}/input-capabilities": {"get"},
 		"/v1":                                  {"get"},
 		"/v1/openapi.json":                     {"get"},
 		"/v1/auth/enrollments/redeem":          {"post"},
