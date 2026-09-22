@@ -9,7 +9,7 @@ import (
 const (
 	MaxClientReferenceLength    = 255
 	MaxInputBytes               = 1 << 20
-	MaxAttachments              = 4
+	MaxAttachments              = 10
 	MaxAttachmentFilenameLength = 255
 	// MaxImagePixels bounds decoder memory before Dorf fully decodes an
 	// accepted raster image. Compressed byte limits alone do not bound that use.

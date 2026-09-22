@@ -1973,7 +1973,7 @@
           },
           "attachments": {
             "type": "array",
-            "maxItems": 4,
+            "maxItems": 10,
             "items": {
               "$ref": "#/components/schemas/NativeAttachment"
             }

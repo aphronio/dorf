@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/aphronio/dorf/internal/controlapi"
+	"github.com/aphronio/dorf/internal/core"
 )
 
 func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
@@ -147,6 +148,9 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 		t.Fatal("published Problem catalog diverges from runtime catalog")
 	}
 
+	if got := objectAt(t, document, "components", "schemas", "NativeEvent", "properties", "attachments")["maxItems"]; got != float64(core.MaxAttachments) {
+		t.Fatalf("published attachment count=%v, want %d", got, core.MaxAttachments)
+	}
 	walkJSON(t, document, document)
 	contents[0] = 'x'
 	if controlapi.OpenAPIDocument()[0] != '{' {
