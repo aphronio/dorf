@@ -42,4 +42,8 @@ func (a Agent) RemoveRoute(ctx context.Context, owner provider.Ownership) error 
 // Older workspaces have the provider in native config but no options file.
 // Preserve that launch path until their next route installation. Reading the
 // options as one quoted argument avoids evaluating guest file contents as shell.
-const loadRouteOptions = `route_options=(); if test -e ` + routeOptionsPath + `; then IFS= read -r route_option < ` + routeOptionsPath + `; test -n "$route_option"; route_options=(-c 'model_provider="dorf"' -c "$route_option"); fi; `
+const loadRouteOptions = `route_options=(); if test -e ` + routeOptionsPath + `; then IFS= read -r route_option < ` + routeOptionsPath + `; test -n "$route_option"; route_options=(-c 'model_provider="dorf"' -c "$route_option"); ` + loadRouteSDKEnvironment + `fi; `
+
+// SDK-based tools inherit the same revocable route as native inference. Parse
+// the existing options as data; never copy upstream auth or put keys in argv.
+const loadRouteSDKEnvironment = `OPENAI_BASE_URL=$(python3 -c 'import sys,tomllib; print(tomllib.load(sys.stdin.buffer)["model_providers"]["dorf"]["base_url"])' < ` + routeOptionsPath + `); export OPENAI_BASE_URL; export OPENAI_API_KEY="$DORF_PROVIDER_ROUTE_KEY"; `

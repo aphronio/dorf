@@ -36,6 +36,14 @@ workspaces without separate route settings continue to launch using their retain
 configuration until the next route installation. Legacy configuration is left untouched, including
 on removal; retained provider settings do not grant access after the scoped credential is revoked.
 
+At app-server launch, Codex also receives `OPENAI_BASE_URL` and `OPENAI_API_KEY` for SDK-based
+tools, derived from the same route options and scoped credential. The API-key variable contains a
+revocable Gateway credential, not an upstream OpenAI key. Native shell-environment restrictions
+still apply. This supports existing API clients, including Codex's bundled image-generation script,
+when the selected connection provides the requested endpoint/model. It does not enable Codex's
+separately gated native image tool, alter bundled skills, or authorize additional spending. Older
+workspaces without route options gain these settings after route installation and app-server restart.
+
 ## Network boundary
 
 Every Sandbox Profile names one exact guest-reachable Gateway URL. Profile verification proves that

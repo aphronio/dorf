@@ -18,7 +18,7 @@ import (
 )
 
 // Exercises stock Codex and the production launcher, not real Gateway routing
-// or a model. The synthetic Responses stream deliberately contains no tool calls.
+// or a model. A synthetic shell call proves SDK tools inherit the installed route.
 func TestLiveCodexRouteCompletesSyntheticInference(t *testing.T) {
 	if os.Getenv("DORF_CODEX_ROUTE_OVERRIDE_LIVE") != "1" {
 		t.Skip("set DORF_CODEX_ROUTE_OVERRIDE_LIVE=1 to run isolated local Codex")
@@ -52,12 +52,56 @@ func TestLiveCodexRouteCompletesSyntheticInference(t *testing.T) {
 			return
 		}
 		var request struct {
-			Type  string `json:"type"`
-			Model string `json:"model"`
+			Type     string `json:"type"`
+			Model    string `json:"model"`
+			Generate *bool  `json:"generate"`
 		}
 		if err := json.Unmarshal(payload, &request); err != nil || request.Type != "response.create" || request.Model != "synthetic-model" {
 			t.Errorf("unexpected request type=%q model=%q decode=%v", request.Type, request.Model, err)
 			return
+		}
+		// Native connection warmup is not a model turn and must not call a tool.
+		if request.Generate != nil && !*request.Generate {
+			if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"resp_warmup","status":"completed"}}`)); err != nil {
+				t.Error(err)
+				return
+			}
+			if _, _, err := conn.Read(ctx); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+		arguments, _ := json.Marshal(map[string]any{"cmd": `test "$OPENAI_BASE_URL" = 'http://` + r.Host + `/v1' && test -n "$OPENAI_API_KEY" && test "$OPENAI_API_KEY" = "$DORF_PROVIDER_ROUTE_KEY" && printf sdk-route-ready`, "login": false})
+		toolCall, _ := json.Marshal(map[string]any{
+			"type": "response.output_item.done",
+			"item": map[string]any{"type": "function_call", "call_id": "sdk-env", "name": "exec_command", "arguments": string(arguments)},
+		})
+		for _, event := range [][]byte{toolCall, []byte(`{"type":"response.completed","response":{"id":"resp_tool","status":"completed"}}`)} {
+			if err := conn.Write(ctx, websocket.MessageText, event); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+		_, payload, err = conn.Read(ctx)
+		if err != nil {
+			t.Errorf("read shell result: %v", err)
+			return
+		}
+		var followup struct {
+			Input []struct{ Type, Output string } `json:"input"`
+		}
+		if err := json.Unmarshal(payload, &followup); err != nil {
+			t.Error(err)
+			return
+		}
+		found := false
+		for _, item := range followup.Input {
+			if item.Type == "function_call_output" && strings.Contains(item.Output, "sdk-route-ready") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("native shell did not inherit SDK route environment: %+v", followup.Input)
 		}
 		for _, line := range strings.Split(syntheticRouteResponse, "\n") {
 			if strings.HasPrefix(line, "data: ") {
