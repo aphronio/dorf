@@ -98,10 +98,17 @@ func (d Driver) Backup(ctx context.Context, owner provider.Ownership, paths, exc
 }
 
 func (d Driver) Restore(ctx context.Context, owner provider.Ownership, snapshot, target string) (Result, error) {
+	return d.RestoreFrom(ctx, owner, owner, snapshot, target)
+}
+
+// RestoreFrom executes in destination but grants restic read-only access to the
+// source repository. A branch never receives source write authority, and its
+// later backups continue to use its own repository identity.
+func (d Driver) RestoreFrom(ctx context.Context, destination, source provider.Ownership, snapshot, target string) (Result, error) {
 	if !snapshotPattern.MatchString(snapshot) || !path.IsAbs(target) || path.Clean(target) != target {
 		return Result{}, fmt.Errorf("restore requires an exact snapshot ID and absolute target")
 	}
-	observed, result, err := d.run(ctx, owner, RepositoryReadOnly, "restore", snapshot, "--no-lock", "--target", target)
+	observed, result, err := d.runWithRepositoryOwner(ctx, destination, source, RepositoryReadOnly, "restore", snapshot, "--no-lock", "--target", target)
 	if err != nil {
 		return result, err
 	}
@@ -112,6 +119,10 @@ func (d Driver) Restore(ctx context.Context, owner provider.Ownership, snapshot,
 }
 
 func (d Driver) run(ctx context.Context, owner provider.Ownership, access RepositoryAccess, args ...string) (provider.RunResult, Result, error) {
+	return d.runWithRepositoryOwner(ctx, owner, owner, access, args...)
+}
+
+func (d Driver) runWithRepositoryOwner(ctx context.Context, destination, repositoryOwner provider.Ownership, access RepositoryAccess, args ...string) (provider.RunResult, Result, error) {
 	timeout := d.OperationTimeout
 	if timeout == 0 {
 		timeout = defaultOperation
@@ -132,7 +143,7 @@ func (d Driver) run(ctx context.Context, owner provider.Ownership, access Reposi
 	if issue == nil {
 		issue = d.Repository.credentials
 	}
-	credentials, err := issue(ctx, owner, access)
+	credentials, err := issue(ctx, repositoryOwner, access)
 	if err != nil {
 		return provider.RunResult{}, Result{}, err
 	}
@@ -150,7 +161,7 @@ func (d Driver) run(ctx context.Context, owner provider.Ownership, access Reposi
 	command := []string{"/usr/bin/flock", "--nonblock", "--no-fork", "/var/tmp/dorf-restic.lock", "/usr/bin/nice", "-n", "10", executable,
 		"--cache-dir", fmt.Sprintf("/var/tmp/dorf-restic-cache/%x", digest)}
 	started := time.Now()
-	observed, err := d.Sandbox.Run(ctx, owner, provider.RunRequest{Args: append(command, args...), Env: environment, Timeout: timeout})
+	observed, err := d.Sandbox.Run(ctx, destination, provider.RunRequest{Args: append(command, args...), Env: environment, Timeout: timeout})
 	result := Result{Duration: time.Since(started), Cancelled: ctx.Err() != nil, RemoteStopped: observed.Stopped, RemoteStopDuration: observed.StopDuration}
 	if err != nil {
 		return observed, result, fmt.Errorf("restic command failed: remote_stopped=%t: %w", observed.Stopped, commandFailure(ctx))

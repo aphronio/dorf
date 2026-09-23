@@ -62,12 +62,14 @@ func (s localPersistenceSandbox) Run(ctx context.Context, _ provider.Ownership, 
 type commandFixture struct {
 	provider.Sandbox
 	commands []provider.RunRequest
+	owners   []provider.Ownership
 	result   provider.RunResult
 	err      error
 }
 
-func (s *commandFixture) Run(_ context.Context, _ provider.Ownership, c provider.RunRequest) (provider.RunResult, error) {
+func (s *commandFixture) Run(_ context.Context, owner provider.Ownership, c provider.RunRequest) (provider.RunResult, error) {
 	s.commands = append(s.commands, c)
+	s.owners = append(s.owners, owner)
 	return s.result, s.err
 }
 func testDriver(s provider.Sandbox) Driver {
@@ -108,6 +110,39 @@ func TestResticInitOnlyOnMissingRepository(t *testing.T) {
 	_ = testDriver(s).InitializeRepository(t.Context(), provider.Ownership{})
 	if len(s.commands) != 2 || s.commands[1].Args[len(s.commands[1].Args)-1] != "init" {
 		t.Fatal("missing repository not initialized")
+	}
+}
+
+func TestRestoreFromUsesSourceReadOnlyAuthorityInDestination(t *testing.T) {
+	source := provider.Ownership{SessionID: "source", SandboxID: "source-sandbox", OwnershipNonce: "source-nonce"}
+	destination := provider.Ownership{SessionID: "destination", SandboxID: "destination-sandbox", OwnershipNonce: "destination-nonce"}
+	sandbox := &commandFixture{result: provider.RunResult{Stopped: true}}
+	driver := testDriver(sandbox)
+	var grants []struct {
+		owner  provider.Ownership
+		access RepositoryAccess
+	}
+	driver.credentials = func(_ context.Context, owner provider.Ownership, access RepositoryAccess) (repositoryCredentials, error) {
+		grants = append(grants, struct {
+			owner  provider.Ownership
+			access RepositoryAccess
+		}{owner, access})
+		return repositoryCredentials{Repository: owner.SessionID, Password: "synthetic", ExpiresAt: time.Now().Add(time.Hour)}, nil
+	}
+	if _, err := driver.RestoreFrom(t.Context(), destination, source, strings.Repeat("a", 64), "/"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := driver.Backup(t.Context(), destination, []string{"/workspace"}, nil); err == nil {
+		// This fixture omits restic's JSON summary, but it still records the
+		// command authority selected for the next destination backup.
+		t.Fatal("synthetic backup unexpectedly published")
+	}
+	if len(grants) != 2 || grants[0].owner != source || grants[0].access != RepositoryReadOnly ||
+		grants[1].owner != destination || grants[1].access != RepositoryReadWrite ||
+		len(sandbox.owners) != 2 || sandbox.owners[0] != destination || sandbox.owners[1] != destination ||
+		sandbox.commands[0].Env["RESTIC_REPOSITORY"] != source.SessionID ||
+		sandbox.commands[1].Env["RESTIC_REPOSITORY"] != destination.SessionID {
+		t.Fatal("branch restore or following backup crossed repository authority")
 	}
 }
 func testAttempt(t *testing.T, prefix string) string {

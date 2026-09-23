@@ -52,7 +52,7 @@ func (s Service) ReadTimeline(ctx context.Context, sessionID, turnID string) (co
 		if err != nil {
 			return err
 		}
-		runtime, session, err := s.sandboxAuthority(ctx, owned)
+		runtime, session, err := s.sandboxAuthority(ctx, owned, false)
 		if err != nil || runtime.Timeline == nil {
 			return core.ErrTimelineUnavailable
 		}

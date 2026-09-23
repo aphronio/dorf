@@ -312,6 +312,7 @@ func TestClientRequiresExactProblemResponse(t *testing.T) {
 
 type readerTestStore struct {
 	deliveryHeld       bool
+	preparationAllowed bool
 	activityStarts     int
 	activityFinishes   int
 	session            core.Session
@@ -471,4 +472,32 @@ func (s *readerTestStore) FinishSandboxActivity(ctx context.Context, sessionID s
 
 func (s *readerTestStore) SandboxDeliveryHeld(context.Context, string) (bool, error) {
 	return s.deliveryHeld, nil
+}
+
+func (s *readerTestStore) CheckpointBranchFilePreparationAllowed(context.Context, string) (bool, error) {
+	return s.preparationAllowed, nil
+}
+
+func TestHeldBranchAllowsOnlyPreparedFileAccess(t *testing.T) {
+	session := core.Session{ID: "session-branch", SandboxProfile: "profile-1", CleanupState: core.CleanupPending, AdmissionOpen: true}
+	owned := core.Sandbox{ID: core.MainSandboxName(session.ID), SessionID: session.ID, OwnershipNonce: strings.Repeat("a", 64)}
+	files := &readerTestFiles{contents: []byte("synthetic")}
+	store := &readerTestStore{session: session, sandbox: owned, deliveryHeld: true}
+	service := Service{Store: store, Runtimes: readerTestRuntimes{profile: session.SandboxProfile, files: files}}
+	if _, err := service.ReadFile(context.Background(), owned.ID, "state.txt"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("file read before restore: %v", err)
+	}
+	store.preparationAllowed = true
+	if got, err := service.ReadFile(context.Background(), owned.ID, "state.txt"); err != nil || !bytes.Equal(got, []byte("synthetic")) {
+		t.Fatalf("prepared file read: %q / %v", got, err)
+	}
+	if err := service.WriteFile(context.Background(), owned.ID, "config.json", []byte(`{}`), false); err != nil {
+		t.Fatalf("prepared file write: %v", err)
+	}
+	if _, err := service.Exec(context.Background(), owned.ID, provider.Command{Argv: []string{"true"}}); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("held branch command: %v", err)
+	}
+	if _, err := service.ReadNativeTurns(context.Background(), session.ID); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("held branch native read: %v", err)
+	}
 }

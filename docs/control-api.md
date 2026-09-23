@@ -140,9 +140,11 @@ Its resource-ready `idle` state is not a native Turn completion claim; inspect n
 Resource history preserves exact reservations, provider locators and deletion receipts without
 exposing ownership tokens. A missing locator or receipt does not prove provider absence.
 
-Maintenance gates native mutation, file, command and native-history access. Passive Session and
-resource inspection remain available. New input stays with the client. Recovery and package upgrade
-receipts identify their exact resource and checkpoint; success never synthesizes native output.
+Maintenance gates native mutation, file, command and native-history access. A restored checkpoint
+branch permits bounded file reads and writes while held so the client can prepare its environment;
+commands and native access stay gated until release and verification. Passive Session and resource
+inspection remain available. New input stays with the client. Recovery and package upgrade receipts
+identify their exact resource and checkpoint; success never synthesizes native output.
 
 The default idle policy can pause supported E2B compute after the grace period when native work is
 settled and no mutation remains uncertain. `keep_running` preserves background compute between

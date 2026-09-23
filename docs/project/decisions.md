@@ -55,6 +55,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D129: Controls reuse native resources and exact target validation](decisions/D129-controls-reuse-native-resources-and-exact-target-validation.md) (`current`). Changing Steer connection ownership or exact native interruption recovery.
 - [D130: Exact file reads have source and transfer bounds](decisions/D130-exact-file-reads-have-source-and-transfer-bounds.md) (`current`). Changing Sandbox file capture, HTTP file transport, or cleanup protection.
 - [D148: Thin native Session control plane](decisions/D148-thin-native-session-control-plane.md) (`current`). Changing input custody, native observation, Session storage, or the Harness adapter.
+- [D152: Checkpoint branches own new Sessions](decisions/D152-checkpoint-branches-own-new-sessions.md) (`current`). Changing checkpoint restore ownership, branch admission, preparation holds, or destination cleanup.
 
 ## Workflows
 
@@ -141,6 +142,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D137: Provider images share one Nix workstation](decisions/D137-provider-images-share-one-nix-workstation.md) (`current`). Changing shared guest tools, browser installation, or package parity between Incus and E2B.
 - [D138: Session checkpoints use stock restic and scoped object storage](decisions/D138-session-checkpoints-use-stock-restic.md) (`current`). Changing session checkpoint storage, capture, or recovery.
 - [D149: Adapters own directory backup selection](decisions/D149-adapter-owned-directory-backups.md) (`current`). Changing checkpoint file selection, client configuration continuity, or backup privacy.
+- [D152: Checkpoint branches own new Sessions](decisions/D152-checkpoint-branches-own-new-sessions.md) (`current`). Changing checkpoint restore ownership, branch admission, preparation holds, or destination cleanup.
 
 ## Harnesses
 
@@ -224,6 +226,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D148: Thin native Session control plane](decisions/D148-thin-native-session-control-plane.md) (`current`). Changing input custody, native observation, Session storage, or the Harness adapter.
 - [D150: Completed commentary joins the conversation projection](decisions/D150-completed-commentary-joins-conversation-projection.md) (`partial`). Changing native assistant message visibility or completed Turn observations.
 - [D151: Preserve native assistant phase at the client boundary](decisions/D151-preserve-native-assistant-phase-at-client-boundary.md) (`current`). Changing completed assistant items, native phase handling, or client presentation responsibility.
+- [D152: Checkpoint branches own new Sessions](decisions/D152-checkpoint-branches-own-new-sessions.md) (`current`). Changing checkpoint restore ownership, branch admission, preparation holds, or destination cleanup.
 
 ## Deployment and setup
 

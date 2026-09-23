@@ -186,11 +186,76 @@ func TestLiveCodexRouteCompletesSyntheticInference(t *testing.T) {
 		}
 		_ = recovered.connection.CloseNow()
 	}
+	stop()
+	// Copy only the synthetic native home and workspace marker into another
+	// isolated home. The original Thread ID must resume there without edits to
+	// opaque history, and subsequent native Turns must diverge independently.
+	sourceMarker := filepath.Join(home, "synthetic-state.txt")
+	if err := os.WriteFile(sourceMarker, []byte("checkpoint-state"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	branchHome := t.TempDir()
+	branchNativeHome := filepath.Join(branchHome, ".codex")
+	if err := os.Mkdir(branchNativeHome, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command("cp", "-a", nativeHome+"/.", branchNativeHome).CombinedOutput(); err != nil {
+		t.Fatalf("copy isolated native home: %v: %s", err, output)
+	}
+	branchMarker := filepath.Join(branchHome, "synthetic-state.txt")
+	if err := os.WriteFile(branchMarker, []byte("checkpoint-state"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourceMarker, []byte("source-after-branch"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(branchMarker, []byte("branch-after-branch"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	branchEndpoint, stopBranch := startOverrideServer(t, ctx, executable, branchHome, branchNativeHome, mock.URL+"/v1")
+	defer stopBranch()
+	branched := connectOverrideServer(t, ctx, branchEndpoint)
+	if err := branched.resumeThread(ctx, thread); err != nil {
+		t.Fatalf("native Thread did not resume in independent home: %v", err)
+	}
+	branchTurns, err := branched.readTurns(ctx, thread)
+	if err != nil || len(branchTurns) != 2 {
+		t.Fatalf("independent home did not retain source Turns: %d / %v", len(branchTurns), err)
+	}
+	continuation, err := branched.startTurn(ctx, thread, branchHome, "synthetic-branch-continuation",
+		core.HarnessInput{Text: "Continue the synthetic Thread."}, "synthetic-model", "low", "read-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for !terminal(continuation.Status) {
+		if err := branched.pollTurn(ctx, thread, continuation.ID, &continuation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	branchTurns, err = branched.readTurns(ctx, thread)
+	if err != nil || len(branchTurns) != 3 || continuation.Status != "completed" {
+		t.Fatalf("independent native continuation: turns=%d status=%q err=%v", len(branchTurns), continuation.Status, err)
+	}
+	_ = branched.connection.CloseNow()
+	sourceEndpoint, stopSource := startOverrideServer(t, ctx, executable, home, nativeHome, mock.URL+"/v1")
+	defer stopSource()
+	sourceAgain := connectOverrideServer(t, ctx, sourceEndpoint)
+	sourceTurns, err := sourceAgain.readTurns(ctx, thread)
+	_ = sourceAgain.connection.CloseNow()
+	if err != nil || len(sourceTurns) != 2 {
+		t.Fatalf("destination continuation changed source native history: %d / %v", len(sourceTurns), err)
+	}
+	if sourceBytes, err := os.ReadFile(sourceMarker); err != nil || string(sourceBytes) != "source-after-branch" {
+		t.Fatalf("destination changed source workspace marker: %v", err)
+	}
+	if branchBytes, err := os.ReadFile(branchMarker); err != nil || string(branchBytes) != "branch-after-branch" {
+		t.Fatalf("source changed destination workspace marker: %v", err)
+	}
 	contents, err := os.ReadFile(configPath)
 	if err != nil || string(contents) != clientRouteConfig {
 		t.Fatal("client configuration changed during inference")
 	}
-	t.Log("stock Codex completed a turn through the installed route with the scoped credential; client configuration unchanged")
+	t.Log("stock Codex completed native Turns through the scoped route, then resumed the same Thread in an independent home with divergent history and files")
 }
 
 const syntheticRouteResponse = `event: response.output_item.added

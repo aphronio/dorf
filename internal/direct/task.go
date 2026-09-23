@@ -22,6 +22,13 @@ type Execution interface {
 	core.SandboxExecution
 }
 
+// BranchExecution is implemented only by a runtime that supports restoring a
+// checkpoint into a newly admitted Session. The durable branch hold survives
+// worker restarts while the client prepares files and requests release.
+type BranchExecution interface {
+	ReconcileBranch(context.Context, string) (held bool, err error)
+}
+
 type Runtime struct {
 	SandboxProfile core.SandboxProfileRef
 	Execution      Execution
@@ -51,18 +58,9 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 		if err != nil {
 			return core.TaskResultV1{}, err
 		}
-		if runtimes == nil {
-			return core.TaskResultV1{}, fmt.Errorf("Sandbox runtime resolution is not configured")
-		}
-		runtime, err := runtimes.ResolveDirect(ctx, session.ProfileRef())
+		runtime, err := resolveDirectRuntime(ctx, store, runtimes, session)
 		if err != nil {
-			return core.TaskResultV1{}, fmt.Errorf("resolve Sandbox profile %q: %w", session.SandboxProfile, err)
-		}
-		if runtime.SandboxProfile != session.ProfileRef() {
-			return core.TaskResultV1{}, fmt.Errorf("Session requires Sandbox profile %q, but this worker resolved %q", session.SandboxProfile, runtime.SandboxProfile)
-		}
-		if runtime.Execution == nil {
-			return core.TaskResultV1{}, fmt.Errorf("direct Agent runtime is not configured")
+			return core.TaskResultV1{}, err
 		}
 
 		mainSandboxID := core.MainSandboxName(session.ID)
@@ -76,6 +74,9 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 		}
 		if mainSandbox.ID() != mainSandboxID {
 			return core.TaskResultV1{}, fmt.Errorf("ensured Sandbox %s changed selected identity %s", mainSandbox.ID(), mainSandboxID)
+		}
+		if err := awaitBranchRelease(ctx, application, runtime.Execution, session.ID); err != nil {
+			return core.TaskResultV1{}, err
 		}
 		if err := runtime.Execution.ExecuteSandboxAction(ctx, session.ID, mainSandbox.ID(), core.ActionRouteCreate); err != nil {
 			source := core.ScopedActionID(session.ID, core.ActionRouteCreate, mainSandbox.ID())
@@ -104,6 +105,56 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 			}
 		}
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
+}
+
+func resolveDirectRuntime(ctx context.Context, store Store, runtimes RuntimeResolver, session core.Session) (Runtime, error) {
+	if runtimes == nil {
+		return Runtime{}, fmt.Errorf("Sandbox runtime resolution is not configured")
+	}
+	runtime, err := runtimes.ResolveDirect(ctx, session.ProfileRef())
+	if err != nil {
+		return Runtime{}, fmt.Errorf("resolve Sandbox profile %q: %w", session.SandboxProfile, err)
+	}
+	if runtime.SandboxProfile != session.ProfileRef() || runtime.Execution == nil {
+		return Runtime{}, fmt.Errorf("direct Session runtime does not match its admitted profile")
+	}
+	if branchStore, ok := store.(interface {
+		HasCheckpointBranch(context.Context, string) (bool, error)
+	}); ok {
+		branched, err := branchStore.HasCheckpointBranch(ctx, session.ID)
+		if err != nil {
+			return Runtime{}, err
+		}
+		if branched {
+			if _, supported := runtime.Execution.(BranchExecution); !supported {
+				return Runtime{}, fmt.Errorf("checkpoint branch runtime is unavailable")
+			}
+		}
+	}
+	return runtime, nil
+}
+
+func awaitBranchRelease(ctx context.Context, application core.Application, execution Execution, sessionID string) error {
+	branch, ok := execution.(BranchExecution)
+	if !ok {
+		return nil
+	}
+	for {
+		// Observe the wake generation before reconciliation so a release
+		// committed during reconciliation cannot be lost until the next poll.
+		revision, err := application.SessionExecutionWakeRevision(ctx, sessionID)
+		if err != nil {
+			return err
+		}
+		held, err := branch.ReconcileBranch(ctx, sessionID)
+		if err != nil || !held {
+			return err
+		}
+		if err := application.AwaitSessionExecutionWake(ctx, sessionID, revision+1,
+			fmt.Sprintf("dorf/checkpoint-branch-wake/v1/%020d", revision+1), idleMessagePollInterval); err != nil {
+			return err
+		}
+	}
 }
 
 func reconcileAtWakeRevision(ctx context.Context, application core.Application, execution core.SessionReconciliation, sessionID string) (int64, core.SessionReconciliationProgress, error) {

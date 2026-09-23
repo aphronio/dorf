@@ -31,7 +31,7 @@ internal/deployment	commitDeploymentEntry	22
 internal/deployment	loadDeployment	25
 internal/deployment	openDeploymentDirectory	25
 internal/deployment	saveDeployment	28
-internal/direct	Register	18
+internal/direct	Register	16
 internal/doctor	Run	18
 internal/e2b	(*Executor).Exec	41
 internal/gateway	(Gateway).ComposeState	19

@@ -531,7 +531,10 @@ type livePersistenceRuntime struct {
 	execution interface {
 		core.Execution
 		direct.Execution
+		core.CleanupExecution
 	}
+	files    core.SandboxFileReader
+	commands core.SandboxCommandExecutor
 }
 
 func (r livePersistenceRuntime) ResolveDirect(_ context.Context, ref core.SandboxProfileRef) (direct.Runtime, error) {
@@ -545,7 +548,14 @@ func (r livePersistenceRuntime) ResolveSandbox(_ context.Context, ref core.Sandb
 	if ref != r.ref {
 		return core.SandboxRuntime{}, fmt.Errorf("unexpected live persistence profile")
 	}
-	return core.SandboxRuntime{SandboxProfile: ref, Execution: r.execution, Native: r.native}, nil
+	return core.SandboxRuntime{SandboxProfile: ref, Execution: r.execution, Native: r.native, Files: r.files, Commands: r.commands}, nil
+}
+
+func (r livePersistenceRuntime) ResolveCleanup(_ context.Context, ref core.SandboxProfileRef) (core.CleanupRuntime, error) {
+	if ref != r.ref {
+		return core.CleanupRuntime{}, fmt.Errorf("unexpected live persistence profile")
+	}
+	return core.CleanupRuntime{SandboxProfile: ref, Execution: r.execution}, nil
 }
 
 type livePersistenceExternals struct {

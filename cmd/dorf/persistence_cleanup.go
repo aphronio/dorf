@@ -27,6 +27,15 @@ func (e checkpointExecution) PrepareCleanup(ctx context.Context, sessionID strin
 	if err := recovery.PrepareCleanup(ctx, sessionID); err != nil {
 		return session, sandboxes, err
 	}
+	branch, branched, err := e.resolver.store.SessionCheckpointBranch(ctx, sessionID)
+	if err != nil {
+		return session, sandboxes, err
+	}
+	if branched && branch.ReadyAt.IsZero() {
+		// A held branch has accepted no native input. Cleanup owns only its
+		// destination resources and releases the hold at completion.
+		return session, sandboxes, nil
+	}
 	for _, owned := range sandboxes {
 		if err := e.captureBeforeCleanup(ctx, session, owned); err != nil {
 			detail := "checkpoint before cleanup failed; source resource remains retained"

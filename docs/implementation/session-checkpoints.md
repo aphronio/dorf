@@ -10,6 +10,14 @@ Live operator-requested E2B replacement, restored file/history checks and same-T
 passed after that change. The [native implementation record](native-session-contract.md#implementation-and-verification)
 owns the current verification scope and distinguishes it from the earlier fault proofs below.
 
+Independent checkpoint branches are implemented as an experimental operator command for the same
+configured Codex/E2B base-package profile. A bounded live proof passed through the operator command,
+worker, pinned Codex 0.154.0, two E2B VMs, and direct R2/restic checkpoints. It restored the same
+native Thread into a held new Session, replaced synthetic credentials before release, continued a
+native Turn, produced an independent checkpoint, and cleaned up only the destination. Model inference
+used a deterministic local Responses fixture; a production model continuation is unproved. The
+branch contract and current limits are below.
+
 ## Contract
 
 An explicitly configured direct Codex profile can preserve native session files and its workspace
@@ -177,6 +185,56 @@ the hold and current resource. An operator must investigate that gap. Command ac
 does not prove recovery is safe or complete. Cleanup closes admission, so a cleaned-up Session is not reopened
 by this command. Investigation of retained cleanup state requires an isolated restore procedure;
 the disposable cleanup proof verifies this procedure without reopening the Session.
+
+### Restore into a new Session
+
+An operator can select an exact published checkpoint and stable request identity through the local
+`dorf` command. This slice does not add an authenticated client branch HTTP endpoint:
+
+```bash
+dorf checkpoint branch SOURCE_SESSION --id UNIQUE_BRANCH_ID --repository REPOSITORY_ID --snapshot FULL_SNAPSHOT_ID
+dorf checkpoint branch-status UNIQUE_BRANCH_ID
+```
+
+The request atomically admits a new Session with its own Sandbox resource, storage namespace, native
+revision, and durable hold. Repeating the same request returns the same destination; a changed
+reference under that ID is rejected. The source Session can continue after the chosen checkpoint
+and is never held, replaced, or deleted by branching. Restic runs in the destination with temporary
+read-only access to the source repository. Later backups use the destination repository.
+
+The worker restores native home and workspace files before installing a model route or starting
+the Harness. When `restored_at` appears, the client may use the ordinary bounded Sandbox file read
+and write operations to replace application credentials and prepare its environment. Native input,
+native history, and arbitrary Sandbox commands remain held. The checkpoint can include client
+credentials and service configuration; the caller must replace or neutralize authority that should
+not enter the branch before requesting release. File preparation does not run the Harness.
+
+```bash
+dorf checkpoint release-branch UNIQUE_BRANCH_ID
+dorf checkpoint branch-status UNIQUE_BRANCH_ID
+```
+
+Release closes file preparation, installs a new destination-scoped model route, resumes and verifies
+the restored native Thread, and only then removes the hold. `ready_at` is the native-access gate;
+the release command's receipt is a request, not completion evidence. Unknown or interrupted provider
+effects reconcile against the same destination reservation. Ordinary Session release cleans up only
+the destination's route and resources; a branch closed before readiness needs no new checkpoint.
+
+The current branch operation requires a retained native Thread and the exact configured profile
+revision. A checkpoint with an activated package generation is rejected because that source-owned
+upgrade receipt cannot describe future destination checkpoints: checkpoint provenance is bound to
+an upgrade of the same Sandbox. Branching an upgraded Session therefore requires a later package
+provenance design. Process memory, external service state, and arbitrary historical-turn rewind are
+outside checkpoint scope. The isolated-home native proof does not exercise the configured provider,
+object storage, or destination cleanup; the separate E2B/R2 lifecycle proof above does.
+
+The opt-in `TestLiveCheckpointBranch` passed on 2026-09-23 in 123.57 seconds. It used a clean
+Codex 0.154.0 E2B image with stock restic, two concurrent VMs, direct R2 storage, and a local
+synthetic Responses server. The real worker crossed restore, held file preparation, restart/replay,
+route issuance, native continuation, destination checkpoint, and Core cleanup. The source stayed
+open and present after destination deletion; both owned VMs were confirmed absent at test cleanup.
+Gateway management and model inference were controlled fixtures, so this does not establish real
+model-provider behavior or application credential isolation beyond the exercised file replacement.
 
 Only one unfinished maintenance operation may own a Sandbox. Recovery and package-upgrade requests
 preserve exact same-request replay but reject a distinct request while delivery is held. A typed

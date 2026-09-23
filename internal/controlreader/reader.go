@@ -83,7 +83,7 @@ func (s Service) ReadFile(ctx context.Context, sandboxID, relativePath string) (
 		return nil, ErrInvalidFilePath
 	}
 	var contents []byte
-	err := s.withSandbox(ctx, sandboxID, func(runtime core.SandboxRuntime, session core.Session, owned core.Sandbox) error {
+	err := s.withFileSandbox(ctx, sandboxID, func(runtime core.SandboxRuntime, session core.Session, owned core.Sandbox) error {
 		if runtime.Files == nil {
 			return ErrUnavailable
 		}
@@ -105,7 +105,15 @@ func (s Service) withSandbox(ctx context.Context, sandboxID string, call func(co
 	return s.accessSandbox(ctx, sandboxID, true, call)
 }
 
+func (s Service) withFileSandbox(ctx context.Context, sandboxID string, call func(core.SandboxRuntime, core.Session, core.Sandbox) error) error {
+	return s.accessSandboxMode(ctx, sandboxID, true, true, call)
+}
+
 func (s Service) accessSandbox(ctx context.Context, sandboxID string, reconcileIdle bool, call func(core.SandboxRuntime, core.Session, core.Sandbox) error) error {
+	return s.accessSandboxMode(ctx, sandboxID, reconcileIdle, false, call)
+}
+
+func (s Service) accessSandboxMode(ctx context.Context, sandboxID string, reconcileIdle, allowBranchFiles bool, call func(core.SandboxRuntime, core.Session, core.Sandbox) error) error {
 	if !validIdentity(sandboxID) {
 		return ErrSandboxNotFound
 	}
@@ -130,7 +138,7 @@ func (s Service) accessSandbox(ctx context.Context, sandboxID string, reconcileI
 		}
 	}()
 	err = s.Store.WithSessionFence(ctx, owned.SessionID, func() error {
-		runtime, session, err := s.sandboxAuthority(ctx, owned)
+		runtime, session, err := s.sandboxAuthority(ctx, owned, allowBranchFiles)
 		if err != nil {
 			return err
 		}
@@ -154,7 +162,7 @@ func (s Service) accessSandbox(ctx context.Context, sandboxID string, reconcileI
 	return err
 }
 
-func (s Service) sandboxAuthority(ctx context.Context, owned core.Sandbox) (core.SandboxRuntime, core.Session, error) {
+func (s Service) sandboxAuthority(ctx context.Context, owned core.Sandbox, allowBranchFiles bool) (core.SandboxRuntime, core.Session, error) {
 	session, err := s.Store.Session(ctx, owned.SessionID)
 	if errors.Is(err, postgres.ErrNotFound) {
 		return core.SandboxRuntime{}, core.Session{}, ErrUnavailable
@@ -180,7 +188,9 @@ func (s Service) sandboxAuthority(ctx context.Context, owned core.Sandbox) (core
 		return core.SandboxRuntime{}, core.Session{}, err
 	}
 	if held {
-		return core.SandboxRuntime{}, core.Session{}, ErrUnavailable
+		if err := s.authorizeHeldFilePreparation(ctx, owned.ID, allowBranchFiles); err != nil {
+			return core.SandboxRuntime{}, core.Session{}, err
+		}
 	}
 	runtime, err := s.Runtimes.ResolveSandbox(ctx, session.ProfileRef())
 	if err != nil {
@@ -190,6 +200,26 @@ func (s Service) sandboxAuthority(ctx context.Context, owned core.Sandbox) (core
 		return core.SandboxRuntime{}, core.Session{}, fmt.Errorf("resolved Sandbox runtime has a different profile")
 	}
 	return runtime, session, nil
+}
+
+func (s Service) authorizeHeldFilePreparation(ctx context.Context, sandboxID string, allow bool) error {
+	if !allow {
+		return ErrUnavailable
+	}
+	preparer, ok := s.Store.(interface {
+		CheckpointBranchFilePreparationAllowed(context.Context, string) (bool, error)
+	})
+	if !ok {
+		return ErrUnavailable
+	}
+	allowed, err := preparer.CheckpointBranchFilePreparationAllowed(ctx, sandboxID)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return ErrUnavailable
+	}
+	return nil
 }
 
 func (s Service) DefaultConnection() (string, error) {

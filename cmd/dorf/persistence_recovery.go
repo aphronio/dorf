@@ -19,39 +19,58 @@ type checkpointRecovery struct {
 }
 
 func (r profileRuntimeResolver) checkpointRecovery(ctx context.Context, ref core.SandboxProfileRef) (persistence.RecoveryService, error) {
-	cfg, err := readCheckpointConfig(r.cfg.PersistenceFile)
+	driver, err := r.checkpointDriver(ctx, ref)
 	if err != nil {
 		return persistence.RecoveryService{}, err
 	}
+	return persistence.RecoveryService{Store: r.store, Driver: driver, Queue: r.client.QueueName(), Claim: absurdruntime.RequireClaim}, nil
+}
+
+func (r profileRuntimeResolver) checkpointDriver(ctx context.Context, ref core.SandboxProfileRef) (checkpointRecovery, error) {
+	cfg, err := readCheckpointConfig(r.cfg.PersistenceFile)
+	if err != nil {
+		return checkpointRecovery{}, err
+	}
 	if cfg == nil || !cfg.enabled(ref) {
-		return persistence.RecoveryService{}, fmt.Errorf("checkpoint recovery profile is not configured")
+		return checkpointRecovery{}, fmt.Errorf("checkpoint recovery profile is not configured")
 	}
 	profile, err := r.store.SandboxProfileRevision(ctx, ref)
 	if err != nil {
-		return persistence.RecoveryService{}, err
+		return checkpointRecovery{}, err
 	}
 	if profile.Harness != codex.Harness || profile.Provider != core.SandboxProviderE2B {
-		return persistence.RecoveryService{}, fmt.Errorf("checkpoint recovery requires the configured Codex E2B profile")
+		return checkpointRecovery{}, fmt.Errorf("checkpoint recovery requires the configured Codex E2B profile")
 	}
 	sandbox, err := sandboxForProfile(r.cfg, profile)
 	if err != nil {
-		return persistence.RecoveryService{}, err
+		return checkpointRecovery{}, err
 	}
 	agent := codex.Agent{Sandbox: sandbox, Port: r.cfg.AppServerPort, Timeout: r.cfg.TurnTimeout, Observations: r.observations}
 	driver := checkpointRecovery{capture: checkpointCapture{config: *cfg, store: r.store, sandbox: sandbox, agent: agent, emit: r.emit},
 		externals: terminal.Externals{Sandbox: sandbox, Agent: agent, Gateway: configuredProviderGateway(r.cfg)}}
-	return persistence.RecoveryService{Store: r.store, Driver: driver, Queue: r.client.QueueName(), Claim: absurdruntime.RequireClaim}, nil
+	return driver, nil
 }
 
 func (d checkpointRecovery) Restore(ctx context.Context, session core.Session, destination core.Sandbox, checkpoint persistence.Checkpoint) (string, error) {
 	if checkpoint.Repository != d.capture.config.ID || checkpoint.SessionID != session.ID || checkpoint.SandboxID != destination.ID {
 		return "", fmt.Errorf("recovery checkpoint differs from configured repository or owner")
 	}
+	return d.restoreInto(ctx, destination, destination, checkpoint)
+}
+
+// restoreInto is the provider effect shared by source replacement and a new
+// Session branch. Only the repository owner varies; the resource being created
+// and written always belongs to destination.
+func (d checkpointRecovery) restoreInto(ctx context.Context, source, destination core.Sandbox, checkpoint persistence.Checkpoint) (string, error) {
+	if checkpoint.Repository != d.capture.config.ID || checkpoint.SessionID != source.SessionID || checkpoint.SandboxID != source.ID ||
+		checkpoint.ProfileName == "" || destination.SessionID == "" || source.OwnershipNonce == "" {
+		return "", fmt.Errorf("checkpoint restore custody differs")
+	}
 	owner := checkpointOwner(destination)
 	if err := d.capture.sandbox.ReconcileOwnedCreate(ctx, owner); err != nil {
 		return "", err
 	}
-	if _, err := d.capture.restic().Restore(ctx, owner, checkpoint.SnapshotID, "/"); err != nil {
+	if _, err := d.capture.restic().RestoreFrom(ctx, owner, checkpointOwner(source), checkpoint.SnapshotID, "/"); err != nil {
 		return "", err
 	}
 	observer, ok := d.capture.sandbox.(provider.StatusObserver)
