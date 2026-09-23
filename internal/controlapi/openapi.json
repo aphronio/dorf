@@ -2080,7 +2080,18 @@
             "type": "string"
           },
           "kind": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "input",
+              "assistant_message"
+            ]
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "commentary",
+              "final_answer"
+            ]
           },
           "text": {
             "type": "string"

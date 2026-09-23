@@ -27,7 +27,7 @@ func TestCompletedConversationKeepsCommentaryAndFinalRepliesAcrossColdReads(t *t
 	if len(items) != 7 {
 		t.Fatalf("items=%+v", items)
 	}
-	if items[0].Kind != "input" || items[0].ClientID != "run-1" || items[1].Kind != "reply" || items[1].Text != "Working" || items[2].Text != "[Report](sandbox:/report.pdf)" || items[3].ClientID != "run-2" || items[4].Text != "Confirmed" || items[5].Text != "onetwo" || items[6].Text != "Confirmed" {
+	if items[0].Kind != "input" || items[0].ClientID != "run-1" || items[1].Kind != "assistant_message" || items[1].Phase != "commentary" || items[1].Text != "Working" || items[2].Phase != "final_answer" || items[2].Text != "[Report](sandbox:/report.pdf)" || items[3].ClientID != "run-2" || items[4].Text != "Confirmed" || items[5].Phase != "" || items[5].Text != "onetwo" || items[6].Text != "Confirmed" {
 		t.Fatalf("items=%+v", items)
 	}
 	cold := make([]json.RawMessage, len(active))
@@ -93,7 +93,7 @@ func TestCompletedConversationProtocolMatchesNativeActiveAndColdSnapshots(t *tes
 				results[state] = result.CompletedItems
 			}
 			active, terminal, cold := results["active"], results["terminal"], results["reconnect"]
-			if len(active) != 2 || len(terminal) != 5 || len(cold) != 5 || active[1].Kind != "reply" || !strings.Contains(active[1].Text, "FIRST_REPLY") || !strings.Contains(cold[4].Text, "SECOND_REPLY") {
+			if len(active) != 2 || len(terminal) != 5 || len(cold) != 5 || active[1].Kind != "assistant_message" || !strings.Contains(active[1].Text, "FIRST_REPLY") || !strings.Contains(cold[4].Text, "SECOND_REPLY") {
 				t.Fatalf("entry counts=%d/%d/%d", len(active), len(terminal), len(cold))
 			}
 			for i := range cold {
@@ -165,7 +165,7 @@ func TestCompletedConversationPublishesCommentaryWhenFinalIsEmpty(t *testing.T) 
 		json.RawMessage(`{"id":"internal","type":"agentMessage","phase":"future_internal","text":"hidden"}`),
 	}
 	items, err := completedConversationItems(native)
-	if err != nil || len(items) != 2 || items[0].ClientID != "timed-task" || items[1].Kind != "reply" || items[1].Text != "Check the oven now." {
+	if err != nil || len(items) != 2 || items[0].ClientID != "timed-task" || items[1].Kind != "assistant_message" || items[1].Phase != "commentary" || items[1].Text != "Check the oven now." {
 		t.Fatalf("items=%+v err=%v", items, err)
 	}
 }

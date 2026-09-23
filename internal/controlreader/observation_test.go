@@ -31,11 +31,11 @@ func TestNativeObservationRetainsCursorAndTerminalPrefix(t *testing.T) {
 	if err != nil || early.State == "complete" {
 		t.Fatalf("native completion without settled prefix=%+v err=%v", early, err)
 	}
-	items = append(items, core.HarnessConversationItem{Index: 1, NativeItemID: "reply", Kind: "reply", Text: "done"})
+	items = append(items, core.HarnessConversationItem{Index: 1, NativeItemID: "reply", Kind: "assistant_message", Phase: "final_answer", Text: "done"})
 	feed.Seed(binding, items, true)
 	feed.Status(binding, "completed")
 	done, _, err := service.turnObservation(context.Background(), request, false)
-	if err != nil || done.State != "complete" || done.CompletionWatermark == nil || *done.CompletionWatermark != 2 || len(done.Items) != 1 {
+	if err != nil || done.State != "complete" || done.CompletionWatermark == nil || *done.CompletionWatermark != 2 || len(done.Items) != 1 || done.Items[0].Phase != "final_answer" {
 		t.Fatalf("done=%+v err=%v", done, err)
 	}
 	// Cache loss is explicit, and rewritten history cannot silently advance a cursor.

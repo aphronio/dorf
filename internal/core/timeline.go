@@ -15,6 +15,7 @@ type HarnessConversationItem struct {
 	Index        int    `json:"index"`
 	NativeItemID string `json:"native_item_id"`
 	Kind         string `json:"kind"`
+	Phase        string `json:"phase,omitempty"`
 	Text         string `json:"text,omitempty"`
 	ClientID     string `json:"client_id,omitempty"`
 }

@@ -191,7 +191,7 @@ func completedConversationItems(native []json.RawMessage) ([]core.HarnessConvers
 		var fields struct {
 			ID       string  `json:"id"`
 			Type     string  `json:"type"`
-			Phase    *string `json:"phase"`
+			Phase    string  `json:"phase"`
 			ClientID string  `json:"clientId"`
 			Text     *string `json:"text"`
 			Content  []*struct {
@@ -220,14 +220,14 @@ func completedConversationItems(native []json.RawMessage) ([]core.HarnessConvers
 				continue
 			}
 		case "agentMessage":
-			if fields.Phase != nil && *fields.Phase != "final_answer" && *fields.Phase != "commentary" {
+			if fields.Phase != "" && fields.Phase != "final_answer" && fields.Phase != "commentary" {
 				continue
 			}
 			var item map[string]any
 			if err := json.Unmarshal(raw, &item); err != nil {
 				return nil, core.ErrTimelineUnavailable
 			}
-			entry.Kind, entry.Text = "reply", agentMessageText(item)
+			entry.Kind, entry.Phase, entry.Text = "assistant_message", fields.Phase, agentMessageText(item)
 			if entry.Text == "" {
 				continue
 			}

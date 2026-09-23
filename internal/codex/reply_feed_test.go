@@ -31,7 +31,7 @@ func TestReplyFeedBuffersCompletedItemsInNativeStartOrder(t *testing.T) {
 	}
 	event("item/completed", "first", "commentary", "progress")
 	snapshot, _, _ = observations.Replies.Read(binding)
-	if len(snapshot.Items) != 2 || snapshot.Items[0].NativeItemID != "first" || snapshot.Items[0].Text != "progress" || snapshot.Items[1].Index != 1 {
+	if len(snapshot.Items) != 2 || snapshot.Items[0].NativeItemID != "first" || snapshot.Items[0].Phase != "commentary" || snapshot.Items[0].Text != "progress" || snapshot.Items[1].Index != 1 || snapshot.Items[1].Phase != "final_answer" {
 		t.Fatalf("wrong prefix: %+v", snapshot)
 	}
 	event("item/completed", "first", "commentary", "different")
@@ -45,12 +45,12 @@ func TestReplyFeedRequiresRecoverySeedAndIgnoresChangedDiagnosticIDs(t *testing.
 	feed := NewReplyFeed()
 	binding := ReplyBinding{SessionID: "session", ThreadID: "thread", TurnID: "turn"}
 	feed.Begin(binding, false)
-	feed.Append(binding, core.HarnessConversationItem{NativeItemID: "late", Kind: "reply", Text: "late"})
+	feed.Append(binding, core.HarnessConversationItem{NativeItemID: "late", Kind: "assistant_message", Text: "late"})
 	snapshot, _, _ := feed.Read(binding)
 	if !snapshot.Gap || len(snapshot.Items) != 0 {
 		t.Fatal("recovery appended without authoritative prefix")
 	}
-	items := []core.HarnessConversationItem{{Index: 0, NativeItemID: "old", Kind: "reply", Text: "answer"}}
+	items := []core.HarnessConversationItem{{Index: 0, NativeItemID: "old", Kind: "assistant_message", Text: "answer"}}
 	feed.Seed(binding, items, false)
 	items[0].NativeItemID = "new"
 	feed.Seed(binding, items, true)
@@ -70,7 +70,7 @@ func TestReplyFeedGlobalBoundEvictionWakesOldReader(t *testing.T) {
 	feed := NewReplyFeed()
 	first := ReplyBinding{SessionID: "first"}
 	second := ReplyBinding{SessionID: "second"}
-	items := []core.HarnessConversationItem{{NativeItemID: "reply", Kind: "reply", Text: strings.Repeat("x", replyFeedMaxBytes/2+1)}}
+	items := []core.HarnessConversationItem{{NativeItemID: "reply", Kind: "assistant_message", Text: strings.Repeat("x", replyFeedMaxBytes/2+1)}}
 	feed.Seed(first, items, true)
 	_, changed, _ := feed.Read(first)
 	feed.Seed(second, items, true)
@@ -100,7 +100,7 @@ func TestRecoveredCompletionKeepsCachedPrefixReadableUntilReconciled(t *testing.
 	observations := NewObservations(context.Background(), nil)
 	p := &protocol{observations: observations, observed: &observedTurn{threadID: "thread", turnID: "turn"}}
 	binding := p.replyBinding()
-	observations.Replies.Seed(binding, []core.HarnessConversationItem{{Index: 0, NativeItemID: "old", Kind: "reply", Text: "answer"}}, false)
+	observations.Replies.Seed(binding, []core.HarnessConversationItem{{Index: 0, NativeItemID: "old", Kind: "assistant_message", Text: "answer"}}, false)
 	p.observeReply("item/completed", map[string]any{"item": map[string]any{"id": "new", "type": "agentMessage", "phase": "final_answer", "text": "next"}})
 	snapshot, _, _ := observations.Replies.Read(binding)
 	if !p.observed.replyRefresh || snapshot.Gap || len(snapshot.Items) != 1 {
@@ -161,7 +161,7 @@ func TestRecoveredReplyEventsReconcileOnSameConnectionAndPreserveInflightNotific
 	p.observations = NewObservations(context.Background(), nil)
 	p.execution = telemetry.NativeExecution{ID: "run"}
 	p.observed = &observedTurn{threadID: "thread", turnID: "turn"}
-	p.observations.Replies.Seed(p.replyBinding(), []core.HarnessConversationItem{{Index: 0, NativeItemID: "live-old", Kind: "reply", Text: "old reply"}}, false)
+	p.observations.Replies.Seed(p.replyBinding(), []core.HarnessConversationItem{{Index: 0, NativeItemID: "live-old", Kind: "assistant_message", Phase: "final_answer", Text: "old reply"}}, false)
 	if !p.refreshReplyPrefix() || !p.observed.replyRefresh {
 		t.Fatal("completion during snapshot was lost")
 	}

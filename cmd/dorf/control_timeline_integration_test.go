@@ -49,7 +49,7 @@ func (r *timelineControlRuntime) ReadTimeline(ctx context.Context, session core.
 	if turnID == "" {
 		turnID = "latest-native-turn"
 	}
-	return core.HarnessTimeline{Harness: "codex", ThreadID: threadID, TurnID: turnID, Status: "inProgress", CompletedItems: []core.HarnessConversationItem{{Index: 0, NativeItemID: "native-input", Kind: "input", ClientID: r.sourceRun}, {Index: 1, NativeItemID: "native-final", Kind: "reply", Text: "[PDF](sandbox:/report.pdf)"}}, Items: []json.RawMessage{json.RawMessage(`{"type":"agentMessage","id":"native-item","phase":"commentary","text":"Still working"}`)}}, nil
+	return core.HarnessTimeline{Harness: "codex", ThreadID: threadID, TurnID: turnID, Status: "inProgress", CompletedItems: []core.HarnessConversationItem{{Index: 0, NativeItemID: "native-input", Kind: "input", ClientID: r.sourceRun}, {Index: 1, NativeItemID: "native-final", Kind: "assistant_message", Phase: "final_answer", Text: "[PDF](sandbox:/report.pdf)"}}, Items: []json.RawMessage{json.RawMessage(`{"type":"agentMessage","id":"native-item","phase":"commentary","text":"Still working"}`)}}, nil
 }
 
 func TestControlTimelineUsesPostgresCustodyAndCleanupFence(t *testing.T) {

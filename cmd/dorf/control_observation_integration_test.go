@@ -121,13 +121,13 @@ func TestControlObservationStreamsAcrossPrivateHTTPWithDurableCustody(t *testing
 	if len(initial.Items) != 0 || initial.NextIndex != 1 {
 		t.Fatalf("initial=%+v", initial)
 	}
-	item := core.HarnessConversationItem{Index: 1, NativeItemID: "reply-1", Kind: "reply", Text: "completed reply"}
+	item := core.HarnessConversationItem{Index: 1, NativeItemID: "reply-1", Kind: "assistant_message", Phase: "commentary", Text: "completed reply"}
 	runtime.mu.Lock()
 	runtime.items = append(runtime.items, item)
 	runtime.mu.Unlock()
 	feed.Append(binding, item)
 	reply := stream.next(t)
-	if len(reply.Items) != 1 || reply.Items[0].Text != "completed reply" || reply.FromIndex != 1 || reply.NextIndex != 2 || reply.Cursor == nil {
+	if len(reply.Items) != 1 || reply.Items[0].Kind != "assistant_message" || reply.Items[0].Phase != "commentary" || reply.Items[0].Text != "completed reply" || reply.FromIndex != 1 || reply.NextIndex != 2 || reply.Cursor == nil {
 		t.Fatalf("reply=%+v", reply)
 	}
 	stream.close(t)

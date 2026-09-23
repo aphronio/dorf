@@ -103,7 +103,8 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D129: Controls reuse native resources and exact target validation](decisions/D129-controls-reuse-native-resources-and-exact-target-validation.md) (`current`). Changing Steer connection ownership or exact native interruption recovery.
 - [D130: Exact file reads have source and transfer bounds](decisions/D130-exact-file-reads-have-source-and-transfer-bounds.md) (`current`). Changing Sandbox file capture, HTTP file transport, or cleanup protection.
 - [D131: Application observations reuse automatic delivery](decisions/D131-application-observations-reuse-automatic-delivery.md) (`current`). Delivering application updates into active work or recovering native start-or-steer races.
-- [D150: Completed commentary joins the conversation projection](decisions/D150-completed-commentary-joins-conversation-projection.md) (`current`). Changing native assistant message visibility or completed Turn observations.
+- [D150: Completed commentary joins the conversation projection](decisions/D150-completed-commentary-joins-conversation-projection.md) (`partial`). Changing native assistant message visibility or completed Turn observations.
+- [D151: Preserve native assistant phase at the client boundary](decisions/D151-preserve-native-assistant-phase-at-client-boundary.md) (`current`). Changing completed assistant items, native phase handling, or client presentation responsibility.
 
 ## Sandboxes and profiles
 
@@ -173,7 +174,8 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D146: Name the execution context Session](decisions/D146-name-the-execution-context-session.md) (`current`). Changing execution resource names, Thread ownership, or upgrading clients.
 - [D148: Thin native Session control plane](decisions/D148-thin-native-session-control-plane.md) (`current`). Changing input custody, native observation, Session storage, or the Harness adapter.
 - [D149: Adapters own directory backup selection](decisions/D149-adapter-owned-directory-backups.md) (`current`). Changing checkpoint file selection, client configuration continuity, or backup privacy.
-- [D150: Completed commentary joins the conversation projection](decisions/D150-completed-commentary-joins-conversation-projection.md) (`current`). Changing native assistant message visibility or completed Turn observations.
+- [D150: Completed commentary joins the conversation projection](decisions/D150-completed-commentary-joins-conversation-projection.md) (`partial`). Changing native assistant message visibility or completed Turn observations.
+- [D151: Preserve native assistant phase at the client boundary](decisions/D151-preserve-native-assistant-phase-at-client-boundary.md) (`current`). Changing completed assistant items, native phase handling, or client presentation responsibility.
 
 ## Model access
 
@@ -220,7 +222,8 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D146: Name the execution context Session](decisions/D146-name-the-execution-context-session.md) (`current`). Changing execution resource names, Thread ownership, or upgrading clients.
 - [D147: Remove residual application machinery](decisions/D147-remove-residual-application-machinery.md) (`partial`). Changing Session execution facts, scheduling, or retained application machinery.
 - [D148: Thin native Session control plane](decisions/D148-thin-native-session-control-plane.md) (`current`). Changing input custody, native observation, Session storage, or the Harness adapter.
-- [D150: Completed commentary joins the conversation projection](decisions/D150-completed-commentary-joins-conversation-projection.md) (`current`). Changing native assistant message visibility or completed Turn observations.
+- [D150: Completed commentary joins the conversation projection](decisions/D150-completed-commentary-joins-conversation-projection.md) (`partial`). Changing native assistant message visibility or completed Turn observations.
+- [D151: Preserve native assistant phase at the client boundary](decisions/D151-preserve-native-assistant-phase-at-client-boundary.md) (`current`). Changing completed assistant items, native phase handling, or client presentation responsibility.
 
 ## Deployment and setup
 

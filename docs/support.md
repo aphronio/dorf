@@ -14,7 +14,7 @@ slice. An unsupported full-turn read returns `timeline_unavailable`.
 
 Completed native Turn timelines are verified with Codex 0.154.0 in legacy, paginated, and default
 history modes. A completed assistant item can be read before its Turn settles. The adapter includes
-completed commentary and final answers, but excludes unfinished assistant items and unknown phases. Missing or null phases remain eligible for legacy
+completed commentary and final answers with their original phase, but excludes unfinished assistant items and unknown phases. Missing or null phases remain eligible for legacy
 history. Entry order survives a cold read within the same retained history mode; raw native item
 IDs may change. The [API contract](control-api.md) defines input attribution and client identity.
 
