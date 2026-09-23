@@ -37,7 +37,7 @@ type BranchReceipt struct {
 	Checkpoint           Checkpoint `json:"checkpoint"`
 	ThreadID             string     `json:"thread_id"`
 	RequestedAt          time.Time  `json:"requested_at"`
-	RestoredAt           time.Time  `json:"restored_at,omitempty"`
-	ReleaseRequestedAt   time.Time  `json:"release_requested_at,omitempty"`
-	ReadyAt              time.Time  `json:"ready_at,omitempty"`
+	RestoredAt           time.Time  `json:"restored_at,omitzero"`
+	ReleaseRequestedAt   time.Time  `json:"release_requested_at,omitzero"`
+	ReadyAt              time.Time  `json:"ready_at,omitzero"`
 }

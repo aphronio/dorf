@@ -192,9 +192,19 @@ An operator can select an exact published checkpoint and stable request identity
 `dorf` command. This slice does not add an authenticated client branch HTTP endpoint:
 
 ```bash
+dorf checkpoint boundary SOURCE_SESSION
 dorf checkpoint branch SOURCE_SESSION --id UNIQUE_BRANCH_ID --repository REPOSITORY_ID --snapshot FULL_SNAPSHOT_ID
 dorf checkpoint branch-status UNIQUE_BRANCH_ID
 ```
+
+`checkpoint boundary` is a read-only, single-Session observation under the Session fence. It
+returns admission state, retained native Thread and mutation revision, pending native input/Turn
+IDs, and the capture boundary/eligibility from that same fenced observation. It does not call the
+Harness or read native history. A client composing its own application snapshot may compare this
+with an exact published checkpoint before and after its separately fenced application export;
+Dorf does not claim that the client's database was captured atomically with the native checkpoint.
+Branch receipt JSON omits `restored_at`, `release_requested_at`, and `ready_at` until each milestone
+is actually reached; clients must not treat a zero time as completion.
 
 The request atomically admits a new Session with its own Sandbox resource, storage namespace, native
 revision, and durable hold. Repeating the same request returns the same destination; a changed

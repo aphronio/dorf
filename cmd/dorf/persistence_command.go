@@ -17,7 +17,7 @@ import (
 // exact snapshot; storage order or an object-store alias never chooses it.
 func checkpointCommand(ctx context.Context, store postgres.Store, tasks *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
 	if len(args) < 2 {
-		return fmt.Errorf("checkpoint requires show, recover, branch, branch-status, or release-branch")
+		return fmt.Errorf("checkpoint requires show, boundary, recover, branch, branch-status, or release-branch")
 	}
 	if args[0] == "branch-status" || args[0] == "release-branch" {
 		return branchStatusCommand(ctx, store, tasks, args, stdout)
@@ -27,6 +27,8 @@ func checkpointCommand(ctx context.Context, store postgres.Store, tasks *absurd.
 		return err
 	}
 	switch args[0] {
+	case "boundary":
+		return checkpointBoundaryCommand(ctx, store, session, args, stdout)
 	case "show":
 		if len(args) != 2 {
 			return fmt.Errorf("checkpoint show requires exactly one Session")
@@ -50,6 +52,47 @@ func checkpointCommand(ctx context.Context, store postgres.Store, tasks *absurd.
 	default:
 		return fmt.Errorf("unknown checkpoint operation")
 	}
+}
+
+func checkpointBoundaryCommand(ctx context.Context, store postgres.Store, session core.Session, args []string, stdout io.Writer) error {
+	if len(args) != 2 {
+		return fmt.Errorf("checkpoint boundary requires exactly one Session")
+	}
+	var observation struct {
+		SessionID      string                      `json:"session_id"`
+		ThreadID       string                      `json:"thread_id"`
+		AdmissionOpen  bool                        `json:"admission_open"`
+		NativeRevision int64                       `json:"native_revision"`
+		PendingInputID string                      `json:"pending_input_id"`
+		PendingTurnID  string                      `json:"pending_turn_id"`
+		Boundary       persistence.CaptureBoundary `json:"boundary"`
+	}
+	err := store.WithSessionFence(ctx, session.ID, func() error {
+		current, err := store.Session(ctx, session.ID)
+		if err != nil {
+			return err
+		}
+		boundary, err := store.Boundary(ctx, core.MainSandboxName(session.ID), false)
+		if err != nil {
+			return err
+		}
+		native, err := store.NativeState(ctx, session.ID)
+		if err != nil {
+			return err
+		}
+		observation.SessionID = current.ID
+		observation.ThreadID = current.ThreadID
+		observation.AdmissionOpen = current.AdmissionOpen
+		observation.NativeRevision = native.Revision
+		observation.PendingInputID = native.PendingInputID
+		observation.PendingTurnID = native.PendingTurnID
+		observation.Boundary = boundary
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, observation)
 }
 
 func branchStatusCommand(ctx context.Context, store postgres.Store, tasks *absurd.Client, args []string, stdout io.Writer) error {
