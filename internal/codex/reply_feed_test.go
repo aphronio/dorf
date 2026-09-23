@@ -19,22 +19,22 @@ func TestReplyFeedBuffersCompletedItemsInNativeStartOrder(t *testing.T) {
 	p := &protocol{observations: observations, owner: provider.Ownership{SessionID: "session", SandboxID: "sandbox", OwnershipNonce: "nonce"}, observed: &observedTurn{threadID: "thread", turnID: "turn", subscribed: true}}
 	binding := p.replyBinding()
 	observations.Replies.Begin(binding, true)
-	event := func(method, id, text string) {
-		p.observeReply(method, map[string]any{"item": map[string]any{"id": id, "type": "agentMessage", "phase": "final_answer", "text": text}})
+	event := func(method, id, phase, text string) {
+		p.observeReply(method, map[string]any{"item": map[string]any{"id": id, "type": "agentMessage", "phase": phase, "text": text}})
 	}
-	event("item/started", "first", "")
-	event("item/started", "second", "")
-	event("item/completed", "second", "same answer")
+	event("item/started", "first", "commentary", "")
+	event("item/started", "second", "final_answer", "")
+	event("item/completed", "second", "final_answer", "same answer")
 	snapshot, _, _ := observations.Replies.Read(binding)
 	if len(snapshot.Items) != 0 {
 		t.Fatal("published second reply before its native predecessor")
 	}
-	event("item/completed", "first", "same answer")
+	event("item/completed", "first", "commentary", "progress")
 	snapshot, _, _ = observations.Replies.Read(binding)
-	if len(snapshot.Items) != 2 || snapshot.Items[0].NativeItemID != "first" || snapshot.Items[1].Index != 1 {
+	if len(snapshot.Items) != 2 || snapshot.Items[0].NativeItemID != "first" || snapshot.Items[0].Text != "progress" || snapshot.Items[1].Index != 1 {
 		t.Fatalf("wrong prefix: %+v", snapshot)
 	}
-	event("item/completed", "first", "different")
+	event("item/completed", "first", "commentary", "different")
 	snapshot, _, _ = observations.Replies.Read(binding)
 	if !snapshot.Gap {
 		t.Fatal("conflicting duplicate completion was ignored")

@@ -96,13 +96,14 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D098: Remote direct Job control exposes the existing interaction loop](decisions/D098-remote-direct-job-control-exposes-the-existing-interaction-loop.md) (`current`). Changing remote Job observation, messaging, retry, files, or Evidence access.
 - [D103: Every ordinary CLI Job operation uses the authenticated control API](decisions/D103-every-ordinary-cli-job-operation-uses-the-authenticated-control-api.md) (`partial`). Changing how CLI Job operations reach deployment authority.
 - [D119: Native timeline reads preserve Harness history](decisions/D119-native-timeline-reads-preserve-harness-history.md) (`partial`). Changing native conversation reads, public native references, or transcript custody.
-- [D123: Message timelines project completed native replies](decisions/D123-message-timelines-project-completed-native-replies.md) (`current`). Changing live assistant reply delivery, retained item identity, or input attribution.
+- [D123: Message timelines project completed native replies](decisions/D123-message-timelines-project-completed-native-replies.md) (`partial`). Changing live assistant reply delivery, retained item identity, or input attribution.
 - [D125: Messages distinguish application observations](decisions/D125-messages-distinguish-application-observations.md) (`partial`). Delivering asynchronous application updates without impersonating human input.
 - [D127: Message observations deliver completed prefix deltas](decisions/D127-message-observations-deliver-completed-prefix-deltas.md) (`current`). Changing Message observation, native connection reuse, stream replay, or idle behavior.
 - [D128: Execution changes wake the attached task](decisions/D128-execution-changes-wake-the-attached-task.md) (`current`). Changing execution wake hints, native completion delivery, or durable wait ordering.
 - [D129: Controls reuse native resources and exact target validation](decisions/D129-controls-reuse-native-resources-and-exact-target-validation.md) (`current`). Changing Steer connection ownership or exact native interruption recovery.
 - [D130: Exact file reads have source and transfer bounds](decisions/D130-exact-file-reads-have-source-and-transfer-bounds.md) (`current`). Changing Sandbox file capture, HTTP file transport, or cleanup protection.
 - [D131: Application observations reuse automatic delivery](decisions/D131-application-observations-reuse-automatic-delivery.md) (`current`). Delivering application updates into active work or recovering native start-or-steer races.
+- [D150: Completed commentary joins the conversation projection](decisions/D150-completed-commentary-joins-conversation-projection.md) (`current`). Changing native assistant message visibility or completed Turn observations.
 
 ## Sandboxes and profiles
 
@@ -160,7 +161,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D117: Clients request skill refresh at fresh Turn boundaries](decisions/D117-client-requested-skill-refresh-at-fresh-turn-boundaries.md) (`current`). Changing skill discovery after client-managed Sandbox updates.
 - [D118: Messages retain ordered input attachments and immutable bytes](decisions/D118-messages-retain-ordered-input-attachments-and-immutable-bytes.md) (`current`). Changing Message attachments, input blob custody, native image delivery, or attachment replay.
 - [D119: Native timeline reads preserve Harness history](decisions/D119-native-timeline-reads-preserve-harness-history.md) (`partial`). Changing native conversation reads, public native references, or transcript custody.
-- [D123: Message timelines project completed native replies](decisions/D123-message-timelines-project-completed-native-replies.md) (`current`). Changing live assistant reply delivery, retained item identity, or input attribution.
+- [D123: Message timelines project completed native replies](decisions/D123-message-timelines-project-completed-native-replies.md) (`partial`). Changing live assistant reply delivery, retained item identity, or input attribution.
 - [D125: Messages distinguish application observations](decisions/D125-messages-distinguish-application-observations.md) (`partial`). Delivering asynchronous application updates without impersonating human input.
 - [D127: Message observations deliver completed prefix deltas](decisions/D127-message-observations-deliver-completed-prefix-deltas.md) (`current`). Changing Message observation, native connection reuse, stream replay, or idle behavior.
 - [D131: Application observations reuse automatic delivery](decisions/D131-application-observations-reuse-automatic-delivery.md) (`current`). Delivering application updates into active work or recovering native start-or-steer races.
@@ -172,6 +173,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D146: Name the execution context Session](decisions/D146-name-the-execution-context-session.md) (`current`). Changing execution resource names, Thread ownership, or upgrading clients.
 - [D148: Thin native Session control plane](decisions/D148-thin-native-session-control-plane.md) (`current`). Changing input custody, native observation, Session storage, or the Harness adapter.
 - [D149: Adapters own directory backup selection](decisions/D149-adapter-owned-directory-backups.md) (`current`). Changing checkpoint file selection, client configuration continuity, or backup privacy.
+- [D150: Completed commentary joins the conversation projection](decisions/D150-completed-commentary-joins-conversation-projection.md) (`current`). Changing native assistant message visibility or completed Turn observations.
 
 ## Model access
 
@@ -208,7 +210,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D120: Default idle pause with an admitted keep-running override](decisions/D120-default-idle-pause-with-an-admitted-keep-running-override.md) (`partial`). Changing Sandbox idle policy, E2B retention, or admission defaults.
 - [D121: Messages retain application developer instructions](decisions/D121-messages-retain-application-developer-instructions.md) (`current`). Changing application instruction custody or Harness prompt authority.
 - [D122: Sandbox activity delays idle pause](decisions/D122-sandbox-activity-delays-idle-pause.md) (`current`). Changing idle pause timing, managed Sandbox access, or cancellation fences.
-- [D123: Message timelines project completed native replies](decisions/D123-message-timelines-project-completed-native-replies.md) (`current`). Changing live assistant reply delivery, retained item identity, or input attribution.
+- [D123: Message timelines project completed native replies](decisions/D123-message-timelines-project-completed-native-replies.md) (`partial`). Changing live assistant reply delivery, retained item identity, or input attribution.
 - [D125: Messages distinguish application observations](decisions/D125-messages-distinguish-application-observations.md) (`partial`). Delivering asynchronous application updates without impersonating human input.
 - [D126: Automatic messages preserve eventual delivery](decisions/D126-automatic-messages-preserve-eventual-delivery.md) (`partial`). Changing automatic message resolution, steer reconciliation, or message replay.
 - [D127: Message observations deliver completed prefix deltas](decisions/D127-message-observations-deliver-completed-prefix-deltas.md) (`current`). Changing Message observation, native connection reuse, stream replay, or idle behavior.
@@ -218,6 +220,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D146: Name the execution context Session](decisions/D146-name-the-execution-context-session.md) (`current`). Changing execution resource names, Thread ownership, or upgrading clients.
 - [D147: Remove residual application machinery](decisions/D147-remove-residual-application-machinery.md) (`partial`). Changing Session execution facts, scheduling, or retained application machinery.
 - [D148: Thin native Session control plane](decisions/D148-thin-native-session-control-plane.md) (`current`). Changing input custody, native observation, Session storage, or the Harness adapter.
+- [D150: Completed commentary joins the conversation projection](decisions/D150-completed-commentary-joins-conversation-projection.md) (`current`). Changing native assistant message visibility or completed Turn observations.
 
 ## Deployment and setup
 

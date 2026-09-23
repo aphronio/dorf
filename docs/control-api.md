@@ -118,7 +118,7 @@ retain a second usage ledger or calculate prices. Native provider names may be r
 Clients retain measurements before releasing the Session if they need them afterward.
 
 The existing SSE observation transport now watches a native Turn through Session events. It emits
-completed items and status, not token-by-token text. `turn.updated` and `turn.completed` are the
+completed commentary and final assistant items in native order, plus status, not token-by-token text. `turn.updated` and `turn.completed` are the
 payload types. Ordinary Turn observation reads remain available without SSE. Session watch remains
 a separate stream of resource snapshots.
 

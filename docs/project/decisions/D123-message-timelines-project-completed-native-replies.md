@@ -1,9 +1,9 @@
 # D123: Message timelines project completed native replies
 
-- **Applicability:** current
+- **Applicability:** partial
 - **Areas:** client-api, harnesses, interaction
 - **Read when:** Changing live assistant reply delivery, retained item identity, or input attribution.
-- **Decision history:** Accepted completed Message timeline projection, 2026-09-13
+- **Decision history:** Accepted completed Message timeline projection, 2026-09-13. D150 expands the completed-item projection to include commentary.
 - **Decision:** A client addresses one admitted Message to read completed inputs and final assistant
   replies from its exact native Turn. Core resolves the stored AgentRun and owned Sandbox under the
   cleanup fence. The Harness adapter selects completed native conversation items and returns their

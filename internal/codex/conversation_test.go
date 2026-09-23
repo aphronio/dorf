@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestCompletedConversationKeepsFinalRepliesAndInputOrderAcrossColdReads(t *testing.T) {
+func TestCompletedConversationKeepsCommentaryAndFinalRepliesAcrossColdReads(t *testing.T) {
 	active := []json.RawMessage{
 		json.RawMessage(`{"id":"item-1","type":"userMessage","clientId":"run-1"}`),
 		json.RawMessage(`{"id":"item-2","type":"agentMessage","phase":"commentary","text":"Working"}`),
@@ -24,10 +24,10 @@ func TestCompletedConversationKeepsFinalRepliesAndInputOrderAcrossColdReads(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 6 {
+	if len(items) != 7 {
 		t.Fatalf("items=%+v", items)
 	}
-	if items[0].Kind != "input" || items[0].ClientID != "run-1" || items[1].Text != "[Report](sandbox:/report.pdf)" || items[2].ClientID != "run-2" || items[3].Text != "Confirmed" || items[4].Text != "onetwo" || items[5].Text != "Confirmed" {
+	if items[0].Kind != "input" || items[0].ClientID != "run-1" || items[1].Kind != "reply" || items[1].Text != "Working" || items[2].Text != "[Report](sandbox:/report.pdf)" || items[3].ClientID != "run-2" || items[4].Text != "Confirmed" || items[5].Text != "onetwo" || items[6].Text != "Confirmed" {
 		t.Fatalf("items=%+v", items)
 	}
 	cold := make([]json.RawMessage, len(active))
@@ -93,7 +93,7 @@ func TestCompletedConversationProtocolMatchesNativeActiveAndColdSnapshots(t *tes
 				results[state] = result.CompletedItems
 			}
 			active, terminal, cold := results["active"], results["terminal"], results["reconnect"]
-			if len(active) != 2 || len(terminal) != 4 || len(cold) != 4 || active[1].Kind != "reply" || !strings.Contains(active[1].Text, "FIRST_REPLY") || !strings.Contains(cold[3].Text, "SECOND_REPLY") {
+			if len(active) != 2 || len(terminal) != 5 || len(cold) != 5 || active[1].Kind != "reply" || !strings.Contains(active[1].Text, "FIRST_REPLY") || !strings.Contains(cold[4].Text, "SECOND_REPLY") {
 				t.Fatalf("entry counts=%d/%d/%d", len(active), len(terminal), len(cold))
 			}
 			for i := range cold {
@@ -154,5 +154,18 @@ func TestCompletedConversationSkipsEmptyRepliesAndKeepsWhitespace(t *testing.T) 
 	}
 	if items[0].Index != 0 || items[0].Kind != "input" || items[0].ClientID != "" || items[1].Index != 1 || items[1].Text != " " || items[2].Index != 2 || items[2].Text != "onetwo" {
 		t.Fatalf("items=%+v", items)
+	}
+}
+
+func TestCompletedConversationPublishesCommentaryWhenFinalIsEmpty(t *testing.T) {
+	native := []json.RawMessage{
+		json.RawMessage(`{"id":"input","type":"userMessage","clientId":"timed-task"}`),
+		json.RawMessage(`{"id":"progress","type":"agentMessage","phase":"commentary","text":"Check the oven now."}`),
+		json.RawMessage(`{"id":"empty-final","type":"agentMessage","phase":"final_answer","text":""}`),
+		json.RawMessage(`{"id":"internal","type":"agentMessage","phase":"future_internal","text":"hidden"}`),
+	}
+	items, err := completedConversationItems(native)
+	if err != nil || len(items) != 2 || items[0].ClientID != "timed-task" || items[1].Kind != "reply" || items[1].Text != "Check the oven now." {
+		t.Fatalf("items=%+v err=%v", items, err)
 	}
 }

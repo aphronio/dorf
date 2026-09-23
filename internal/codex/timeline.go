@@ -220,7 +220,7 @@ func completedConversationItems(native []json.RawMessage) ([]core.HarnessConvers
 				continue
 			}
 		case "agentMessage":
-			if fields.Phase != nil && *fields.Phase != "final_answer" {
+			if fields.Phase != nil && *fields.Phase != "final_answer" && *fields.Phase != "commentary" {
 				continue
 			}
 			var item map[string]any
