@@ -15,6 +15,10 @@ const (
 	BranchObservePath      = "/v1/checkpoints/branch-observation"
 )
 
+type checkpointStartRequest struct {
+	SessionID string `json:"session_id"`
+	ID        string `json:"id"`
+}
 type captureRequest struct {
 	ID     string `json:"id"`
 	Action string `json:"action"`
@@ -39,8 +43,8 @@ func checkpointRoutes(operations persistence.Operations) map[string]http.Handler
 		CheckpointBoundaryPath: checkpointEndpoint(operations, func(ctx context.Context, input observationRequest) (persistence.BoundaryObservation, error) {
 			return operations.CheckpointBoundary(ctx, input.SessionID)
 		}),
-		CaptureStartPath: checkpointEndpoint(operations, func(ctx context.Context, input observationRequest) (persistence.CaptureAttempt, error) {
-			return operations.StartCapture(ctx, input.SessionID)
+		CaptureStartPath: checkpointEndpoint(operations, func(ctx context.Context, input checkpointStartRequest) (persistence.CaptureAttempt, error) {
+			return operations.StartCapture(ctx, input.SessionID, input.ID)
 		}),
 		CaptureObservePath: checkpointEndpoint(operations, func(ctx context.Context, input captureRequest) (persistence.CaptureAttempt, error) {
 			return operations.ObserveCapture(ctx, input.ID, input.Action)
@@ -70,8 +74,8 @@ func checkpointResponse[T any](ctx context.Context, c Client, path string, input
 func (c Client) CheckpointBoundary(ctx context.Context, id string) (persistence.BoundaryObservation, error) {
 	return checkpointResponse[persistence.BoundaryObservation](ctx, c, CheckpointBoundaryPath, observationRequest{SessionID: id})
 }
-func (c Client) StartCapture(ctx context.Context, id string) (persistence.CaptureAttempt, error) {
-	return checkpointResponse[persistence.CaptureAttempt](ctx, c, CaptureStartPath, observationRequest{SessionID: id})
+func (c Client) StartCapture(ctx context.Context, id, key string) (persistence.CaptureAttempt, error) {
+	return checkpointResponse[persistence.CaptureAttempt](ctx, c, CaptureStartPath, checkpointStartRequest{SessionID: id, ID: key})
 }
 func (c Client) ObserveCapture(ctx context.Context, id, action string) (persistence.CaptureAttempt, error) {
 	return checkpointResponse[persistence.CaptureAttempt](ctx, c, CaptureObservePath, captureRequest{ID: id, Action: action})
@@ -90,11 +94,11 @@ func (s Service) CheckpointBoundary(ctx context.Context, id string) (persistence
 	}
 	return s.Checkpoints.CheckpointBoundary(ctx, id)
 }
-func (s Service) StartCapture(ctx context.Context, id string) (persistence.CaptureAttempt, error) {
+func (s Service) StartCapture(ctx context.Context, id, key string) (persistence.CaptureAttempt, error) {
 	if s.Checkpoints == nil {
 		return persistence.CaptureAttempt{}, ErrUnavailable
 	}
-	return s.Checkpoints.StartCapture(ctx, id)
+	return s.Checkpoints.StartCapture(ctx, id, key)
 }
 func (s Service) ObserveCapture(ctx context.Context, id, action string) (persistence.CaptureAttempt, error) {
 	if s.Checkpoints == nil {

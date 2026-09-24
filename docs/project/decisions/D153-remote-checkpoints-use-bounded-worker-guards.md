@@ -1,9 +1,9 @@
 # D153: Remote checkpoints use bounded worker guards
 
-- **Applicability:** current
+- **Applicability:** historical
 - **Areas:** client-api, core, sandboxes
 - **Read when:** Changing remote checkpoint capture, publication confirmation, worker credential custody, or branch control.
-- **Decision history:** Accepted 2026-09-24; extends D152's operator branch surface to authenticated clients.
+- **Decision history:** Accepted 2026-09-24; extends D152's operator branch surface to authenticated clients. Superseded by D154 on 2026-09-24.
 - **Decision:** The Control API exposes fixed capture and branch operations through the existing private worker boundary. Provider and checkpoint-storage credentials remain worker-owned. Clients need no deployment shell, provider credentials, callback URL or remote executable.
 - **Capture:** A short-lived worker attempt runs the existing guarded capture. After immutable upload, the client observes the exact provisional reference, pins its own state, then confirms. The original native guard remains active until validation and checkpoint publication. Native activity, timeout and cancellation invalidate the attempt. A provisional reference is never sufficient evidence of publication.
 - **Lifetime:** Pending guards are process-local, bounded and deliberately not resumable. Worker replacement loses them; clients discard unconfirmed application artifacts. Brief terminal observations let a client reconcile a lost confirmation response. Successful checkpoint facts and branch requests retain their existing durable owners. No second workflow ledger or application snapshot enters Core.

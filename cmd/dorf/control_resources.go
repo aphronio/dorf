@@ -41,6 +41,23 @@ func (a controlAPISessions) projectSessionResources(ctx context.Context, session
 	if err := a.projectUpgrades(ctx, session, &view); err != nil {
 		return controlapi.Session{}, err
 	}
+	receipt, found, err := a.store.SessionCheckpointBranch(ctx, session.ID)
+	if err != nil {
+		return controlapi.Session{}, err
+	}
+	if found {
+		state := "restoring"
+		if !receipt.RestoredAt.IsZero() {
+			state = "held"
+		}
+		if !receipt.ReleaseRequestedAt.IsZero() {
+			state = "activating"
+		}
+		if !receipt.ReadyAt.IsZero() {
+			state = "ready"
+		}
+		view.Restoration = &controlapi.SessionRestoration{CheckpointID: receipt.Checkpoint.ID, ThreadID: receipt.ThreadID, State: state}
+	}
 	return view, nil
 }
 

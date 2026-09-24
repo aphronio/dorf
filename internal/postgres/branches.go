@@ -156,7 +156,7 @@ func checkpointBranchReceipt(ctx context.Context, q *dbsql.Queries, id string) (
 	checkpoint := checkpointFromValues(checkpointRow.SessionID, checkpointRow.SandboxID, checkpointRow.ResourceID,
 		checkpointRow.ProfileName, checkpointRow.ProfileRevision, checkpointRow.EffectiveUpgradeID.String,
 		checkpointRow.LastActivityAt, checkpointRow.NativeRevision, checkpointRow.DeliveryHoldCount,
-		checkpointRow.Cleanup, checkpointRow.Repository, checkpointRow.SnapshotID, checkpointRow.PublishedAt)
+		checkpointRow.Cleanup, checkpointRow.Repository, checkpointRow.SnapshotID, checkpointRow.PublishedAt, checkpointRow.ID)
 	return persistence.BranchReceipt{
 		BranchRequest: persistence.BranchRequest{ID: row.ID, SourceSessionID: row.SourceSessionID,
 			Repository: row.CheckpointRepository, SnapshotID: row.CheckpointSnapshotID},

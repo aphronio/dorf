@@ -14,13 +14,14 @@ var (
 )
 
 // CaptureBoundary is a comparable observation of the durable facts that can
-// affect a Sandbox while an unfenced upload runs. NativeRevision is the exact
+// affect a Sandbox at the native copy boundary. NativeRevision is the exact
 // native dispatch cutoff. Eligibility also requires settled native work and
 // no unresolved mutation.
 //
 // Cleanup selects the closed-admission eligibility rule. It does not create a
 // different checkpoint kind or storage path. Eligible is derived from current
-// facts and must still be true when publication rechecks the boundary.
+// facts. Background upload retains the validated copy boundary; strict cleanup
+// capture rechecks current eligibility before publication.
 type CaptureBoundary struct {
 	SessionID          string    `json:"session_id"`
 	SandboxID          string    `json:"sandbox_id"`
@@ -46,6 +47,7 @@ type Reference struct {
 // Checkpoint is one successfully published recovery fact. Failed and cancelled
 // attempts remain diagnostic events and never enter this history.
 type Checkpoint struct {
+	ID string `json:"id"`
 	CaptureBoundary
 	Reference
 	PublishedAt time.Time `json:"published_at"`

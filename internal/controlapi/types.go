@@ -77,6 +77,8 @@ type RedeemRequest struct {
 }
 
 type CreateSessionRequest struct {
+	FromCheckpoint  string `json:"from_checkpoint,omitempty"`
+	Start           string `json:"start,omitempty"`
 	KeepRunning     bool   `json:"keep_running,omitempty"`
 	ClientReference string `json:"client_reference,omitempty"`
 	AgentsMD        string `json:"agents_md,omitempty"`
@@ -107,18 +109,19 @@ type SessionList struct {
 
 // Session is the canonical public execution context.
 type Session struct {
-	KeepRunning     bool            `json:"keep_running"`
-	CreatedByClient *SessionCreator `json:"created_by_client"`
-	ClientReference string          `json:"client_reference"`
-	ID              string          `json:"id"`
-	Profile         string          `json:"profile"`
-	Model           string          `json:"model"`
-	Reasoning       string          `json:"reasoning"`
-	Admission       Admission       `json:"admission"`
-	Execution       State           `json:"execution"`
-	Attention       *Attention      `json:"attention"`
-	Cleanup         State           `json:"cleanup"`
-	Sandboxes       []Sandbox       `json:"sandboxes"`
+	Restoration     *SessionRestoration `json:"restoration,omitempty"`
+	KeepRunning     bool                `json:"keep_running"`
+	CreatedByClient *SessionCreator     `json:"created_by_client"`
+	ClientReference string              `json:"client_reference"`
+	ID              string              `json:"id"`
+	Profile         string              `json:"profile"`
+	Model           string              `json:"model"`
+	Reasoning       string              `json:"reasoning"`
+	Admission       Admission           `json:"admission"`
+	Execution       State               `json:"execution"`
+	Attention       *Attention          `json:"attention"`
+	Cleanup         State               `json:"cleanup"`
+	Sandboxes       []Sandbox           `json:"sandboxes"`
 }
 
 type Admission struct {
@@ -211,4 +214,10 @@ type Sessions interface {
 	ReadSandboxFile(context.Context, string, string) ([]byte, error)
 	WriteSandboxFile(context.Context, string, string, []byte, bool) error
 	RequestCleanup(context.Context, string) (Session, error)
+}
+
+type SessionRestoration struct {
+	CheckpointID string `json:"checkpoint_id"`
+	ThreadID     string `json:"thread_id"`
+	State        string `json:"state"`
 }

@@ -18,6 +18,12 @@ native Turn, produced an independent checkpoint, and cleaned up only the destina
 used a deterministic local Responses fixture; a production model continuation is unproved. The
 branch contract and current limits are below.
 
+The client-initiated copy/upload revision passed a composed provider proof through public API and
+private worker HTTP: native copy, independent restore into a held Session, activation, continued
+native execution, and destination-only cleanup. Inference was controlled. The native copy and
+stock-restic restore-layout checks also run locally. This proof does not establish personal-client
+activation or production-model behavior for the revised protocol.
+
 ## Contract
 
 An explicitly configured direct Codex profile can preserve native session files and its workspace
@@ -25,10 +31,12 @@ in an encrypted restic repository independently of its provider VM. PostgreSQL r
 successful snapshot references alongside the native mutation revision and package-generation
 reference. It does not duplicate native input or transcripts. An unresolved native mutation blocks capture and recovery.
 
-After five seconds of continuous idle time, a backup may capture the latest state. New work takes
-priority: it invalidates publication and requests remote cancellation without waiting for process
-termination, storage, retry, or telemetry. Several turns can remain unprotected during continuous
-activity. Only the latest successfully published checkpoint is the recovery point.
+Clients initiate ordinary checkpoints. There is no autonomous after-turn/idle backup worker.
+A save copies the settled native roots into a private guest directory while the existing native
+file guard runs. Once the guard and admission boundary validate, the source may change: restic
+uploads only the copy. The copy preserves original restore paths and exclusions, using independent
+file bytes rather than hard links. Upload success publishes the historical captured boundary.
+The latest native revision wins recovery selection even if an older upload finishes later.
 
 Requested cleanup uses the same checkpoint mechanism once execution has stopped. It may wait for
 backup and durable publication before deleting compute. Failed backup leaves cleanup pending.
@@ -39,15 +47,16 @@ cleanup attention rather than publishing a checkpoint whose package-generation r
 match an in-flight activation. Completing that cleanup requires explicit upgrade reconciliation;
 this slice does not infer package state or release the upgrade hold.
 
-For Sessions that normally pause after one minute, ordinary capture stops accepting work 15 seconds
-before that pause deadline so remote cancellation has time to finish. A missed window retains the
-previous checkpoint. Capture does not extend the idle pause policy. Cleanup and `keep_running`
-Sessions use the configured backup timeout instead.
+Client-requested copies use the configured bounded backup timeout; they do not depend on the
+old five-second idle window. A failed or interrupted upload is not a recovery checkpoint.
+Local copies are temporary, not a second durable storage tier. Normal completion/failure removes
+them; abrupt worker loss may leave private guest artifacts until resource cleanup. Pending
+uploads are not resumed across worker replacement in this slice.
 
 ## Boundaries
 
-- The existing worker process owns coordination and trusted credential custody. Backup tasks have
-  independent Absurd capacity so they cannot occupy the last foreground task slot.
+- The existing worker process owns coordination and trusted credential custody. Bounded background
+  uploads run independently of foreground native work.
 - Restic in the sandbox sends encrypted, deduplicated data directly to private object storage.
   Temporary credentials are restricted to the selected repository; parent storage credentials
   remain on the worker. Direct execution necessarily gives that sandbox its repository key.
@@ -65,30 +74,24 @@ Sessions use the configured backup timeout instead.
   The Harness adapter owns native roots and exclusions; the same exclusions govern observation
   and backup. The Sandbox adapter supplies its workspace through `Workspace()`. Diagnostics retain bounded failure classes;
   completed watcher control files are removed after process termination is confirmed.
-- A local operator may run `dorf checkpoint capture-pin SESSION --pin-command /absolute/executable -- [args...]`.
-  The executable receives one JSON object on stdin with a fresh `attempt_id`, the exact
-  `boundary`, and the uploaded `reference`. It must return a bounded JSON object describing
-  a provisional application view within 30 seconds. Dorf keeps the native file guard armed
-  through that command, then checks the guard and publishes the exact checkpoint. Only a
-  successful invocation prints the checkpoint and pin result together. A failed or lost
-  invocation leaves the application pin unready; its owner must expire or remove provisional
-  artifacts. Every retry is a new capture attempt. This synchronous operation skips ineligible
-  or busy boundaries and does not promise continuous save coverage. It does not itself gate
-  application writers or turn a database pin into a complete application snapshot.
-- Authenticated clients can use the same guard through the checkpoint capture API. Start returns
-  an attempt; poll until `ready`, pin client state locally, confirm, then poll for `published`.
-  Only that terminal result contains an authoritative checkpoint. Native activity still invalidates
-  the save. Attempts last at most three minutes, with at most 30 seconds for client pinning; one
-  pending attempt per Session and 32 retained attempts per worker bound resource use. Terminal
-  replies expire five minutes after the deadline. Missing or restarted attempts require discarding
-  unconfirmed client artifacts; a lost start response must not be blindly retried. Cancellation
-  requests stop the guard; observe the final result because publication may have won the race.
-  No application callback or executable is accepted by the API. The managed worker retains all
-  provider/storage authority. Branch admission, status and release also have authenticated routes.
+- A local operator may run `dorf checkpoint capture SESSION`. Remote clients create a Checkpoint,
+  observe `copying`, then `uploading`, then `ready`. Uploading proves the private copy is sealed;
+  only ready is durably restorable. There is no application pin executable or confirmation callback.
+  Clients compose their own state with the native copy, holding relevant application writes until
+  copying finishes. Dorf never captures client databases or interprets their world state.
+- Checkpoint creation uses a client/session-scoped idempotency key. Pending operations last at most
+  three minutes, with one per Session and 32 retained operations per worker. Terminal observations
+  expire five minutes after the deadline. Successful checkpoint IDs are durable and queryable after
+  worker replacement. A missing unfinished operation cannot certify a save; the client discards
+  its provisional world. A new attempt may use a new key. A same-key request after a lost worker
+  can begin again if nothing was published; it is not a historical replay guarantee.
+- Native revision and custody are validated after copying. Publication retains that validated
+  historical boundary rather than requiring the live source to remain unchanged during upload.
+  Ordinary cleanup capture still validates its current closed-admission boundary before deletion.
+- Restore creates an ordinary held Session from an opaque checkpoint ID. Observe its restoration
+  state through Session reads, prepare destination-specific credentials/files, then activate it.
+  Internal branch receipts retain exact resource custody without a separate public branch API.
   [OpenAPI](../../internal/controlapi/openapi.json) owns the exact routes and schemas.
-- Publication uses a short Session fence plus the admission transaction lock. There is no Session fence
-  held across hashing, uploads, or remote cancellation. Accepted input, new activity, package
-  maintenance, or resource replacement invalidate an older boundary.
 - Recovery accepts an exact checkpoint and reserves its replacement with the delivery hold in one
   transaction. It restores, verifies native history, deletes the old resource, and atomically
   adopts the replacement and releases its hold. Clients retain unsent input during maintenance. The resource's provider binding
@@ -178,7 +181,7 @@ outside the repository and back it up independently of sandbox disks. It contain
 | `password_key` | Base64 encoding of at least 32 random bytes; durable repository encryption custody |
 | `restic_path` | Optional exact executable path; defaults to the pinned workstation profile |
 | `additional_paths` | Optional disjoint absolute directories beyond the workspace and native home |
-| `idle_delay_seconds` | Defaults to five; supported range 1–300 |
+| `idle_delay_seconds` | Legacy synchronous-capture setting; not an autosave schedule. Client-requested copying has no idle debounce. |
 | `backup_timeout_seconds` | Defaults to 120; supported range 1–1800 |
 
 The revision wildcard keeps checkpoints enabled across image updates without editing this file.
@@ -210,7 +213,8 @@ the disposable cleanup proof verifies this procedure without reopening the Sessi
 ### Restore into a new Session
 
 An operator can select an exact published checkpoint and stable request identity through the local
-`dorf` command. This slice does not add an authenticated client branch HTTP endpoint:
+`dorf` command. These operator commands use the same underlying custody as Session creation
+from a checkpoint through the authenticated API:
 
 ```bash
 dorf checkpoint boundary SOURCE_SESSION
@@ -222,9 +226,9 @@ dorf checkpoint branch-status UNIQUE_BRANCH_ID
 returns admission state, retained native Thread and mutation revision, pending native input/Turn
 IDs, and the capture boundary/eligibility from that same fenced observation. It does not call the
 Harness or read native history. Matching boundary observations alone cannot certify a composed
-application/native save: unobserved file changes may occur between observations. Use `capture-pin`
-to establish an application view while native file observation remains continuous. The application
-owns consistency of that view and publishes its combined save only after the command succeeds.
+application/native save: unobserved file changes may occur between observations. The application
+holds relevant writes while securing its own snapshot and requesting a native copy. It publishes
+the combined save only after both components finish storage successfully.
 Branch receipt JSON omits `restored_at`, `release_requested_at`, and `ready_at` until each milestone
 is actually reached; clients must not treat a zero time as completion.
 

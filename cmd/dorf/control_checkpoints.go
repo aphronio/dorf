@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlapi"
@@ -42,7 +44,19 @@ func (w *workerCheckpoints) CheckpointBoundary(ctx context.Context, id string) (
 	return result, checkpointOperationError(err)
 }
 
-func (w *workerCheckpoints) StartCapture(ctx context.Context, id string) (persistence.CaptureAttempt, error) {
+func (w *workerCheckpoints) StartCapture(ctx context.Context, id, key string) (persistence.CaptureAttempt, error) {
+	if key != "" {
+		previous, err := w.ObserveCapture(ctx, key, "status")
+		if err == nil {
+			if previous.SessionID != id {
+				return persistence.CaptureAttempt{}, persistence.ErrCaptureConflict
+			}
+			return previous, nil
+		}
+		if !errors.Is(err, persistence.ErrCaptureNotFound) {
+			return persistence.CaptureAttempt{}, err
+		}
+	}
 	boundary, err := w.store.Boundary(ctx, core.MainSandboxName(id), false)
 	if err != nil {
 		return persistence.CaptureAttempt{}, checkpointOperationError(err)
@@ -53,10 +67,17 @@ func (w *workerCheckpoints) StartCapture(ctx context.Context, id string) (persis
 		return persistence.CaptureAttempt{}, persistence.ErrCaptureConflict
 	}
 	service.Claim = func(context.Context) error { return nil }
-	return w.captures.Start(id, boundary.SandboxID, service)
+	return w.captures.Start(id, boundary.SandboxID, service, key)
 }
 
-func (w *workerCheckpoints) ObserveCapture(_ context.Context, id, action string) (persistence.CaptureAttempt, error) {
+func (w *workerCheckpoints) ObserveCapture(ctx context.Context, id, action string) (persistence.CaptureAttempt, error) {
+	saved, err := w.store.CheckpointByID(ctx, id)
+	if err == nil {
+		return persistence.CaptureAttempt{ID: id, SessionID: saved.SessionID, State: "ready", Boundary: &saved.CaptureBoundary, Checkpoint: &saved}, nil
+	}
+	if !errors.Is(err, persistence.ErrCheckpointNotFound) {
+		return persistence.CaptureAttempt{}, err
+	}
 	return w.captures.Observe(id, action)
 }
 
@@ -131,12 +152,12 @@ func (a controlAPISessions) CheckpointBoundary(ctx context.Context, id string) (
 	}
 	return operations.CheckpointBoundary(ctx, id)
 }
-func (a controlAPISessions) StartCapture(ctx context.Context, id string) (persistence.CaptureAttempt, error) {
+func (a controlAPISessions) StartCapture(ctx context.Context, id, key string) (persistence.CaptureAttempt, error) {
 	operations, err := a.checkpointOperations()
 	if err != nil {
 		return persistence.CaptureAttempt{}, err
 	}
-	return operations.StartCapture(ctx, id)
+	return operations.StartCapture(ctx, id, key)
 }
 func (a controlAPISessions) ObserveCapture(ctx context.Context, id, action string) (persistence.CaptureAttempt, error) {
 	operations, err := a.checkpointOperations()
@@ -160,3 +181,33 @@ func (a controlAPISessions) ObserveBranch(ctx context.Context, id string, releas
 	return operations.ObserveBranch(ctx, id, release)
 }
 func (a controlAPISessions) Close() {}
+
+func (a controlAPISessions) createFromCheckpoint(ctx context.Context, clientID, key string, input controlapi.CreateSessionRequest) (controlapi.Session, bool, error) {
+	if input.Start != "held" || input.Profile != "" || input.AgentsMD != "" || input.Model != "" || input.Reasoning != "" || input.AIConnection != "" || input.KeepRunning || input.ClientReference != "" {
+		return controlapi.Session{}, false, controlapi.ErrInvalidInput
+	}
+	checkpoint, err := a.store.CheckpointByID(ctx, input.FromCheckpoint)
+	if err != nil {
+		return controlapi.Session{}, false, checkpointOperationError(err)
+	}
+	requestID := fmt.Sprintf("restore-%x", sha256.Sum256([]byte(clientID+"\x00"+key)))
+	receipt, err := a.BranchCheckpoint(ctx, persistence.BranchRequest{ID: requestID, SourceSessionID: checkpoint.SessionID, Repository: checkpoint.Repository, SnapshotID: checkpoint.SnapshotID})
+	if err != nil {
+		return controlapi.Session{}, false, err
+	}
+	session, err := a.Get(ctx, receipt.DestinationSessionID)
+	return session, false, err
+}
+func (a controlAPISessions) ActivateSession(ctx context.Context, id string) (controlapi.Session, error) {
+	receipt, found, err := a.store.SessionCheckpointBranch(ctx, id)
+	if err != nil {
+		return controlapi.Session{}, err
+	}
+	if !found {
+		return controlapi.Session{}, persistence.ErrCaptureConflict
+	}
+	if _, err = a.ObserveBranch(ctx, receipt.ID, true); err != nil {
+		return controlapi.Session{}, err
+	}
+	return a.Get(ctx, id)
+}

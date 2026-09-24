@@ -78,7 +78,7 @@ func TestWorkspaceInspectionUsesLiveWorkerFactsWithoutNativeExecution(t *testing
 		return result
 	}
 	first := read()
-	if first.Path != cfg.Workspace || !first.BackupEnabled || first.IdleDelaySeconds == nil || first.LastSuccessfulCheckpointAt != nil {
+	if first.Path != cfg.Workspace || !first.BackupEnabled || first.IdleDelaySeconds != nil || first.LastSuccessfulCheckpointAt != nil {
 		t.Fatalf("first observation: %#v", first)
 	}
 	// Populate a synthetic published receipt; this test observes existing facts,

@@ -640,6 +640,12 @@ func (a controlAPISessions) application() core.Application {
 }
 
 func (a controlAPISessions) Create(ctx context.Context, clientID, key string, input controlapi.CreateSessionRequest) (controlapi.Session, bool, error) {
+	if input.FromCheckpoint != "" {
+		return a.createFromCheckpoint(ctx, clientID, key, input)
+	}
+	if input.Start != "" {
+		return controlapi.Session{}, false, controlapi.ErrInvalidInput
+	}
 	admission, err := newControlSessionAdmission(key, input.AgentsMD, input.Profile, input.AIConnection, input.Model, input.Reasoning)
 	if err != nil {
 		return controlapi.Session{}, false, err

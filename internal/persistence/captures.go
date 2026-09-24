@@ -10,10 +10,9 @@ import (
 )
 
 const (
-	CaptureLifetime    = 3 * time.Minute
-	CapturePinLifetime = 30 * time.Second
-	captureRetention   = 5 * time.Minute
-	maxCaptures        = 32
+	CaptureLifetime  = 3 * time.Minute
+	captureRetention = 5 * time.Minute
+	maxCaptures      = 32
 )
 
 var (
@@ -21,12 +20,12 @@ var (
 	ErrCaptureConflict = errors.New("capture attempt cannot accept this operation")
 )
 
-// CaptureAttempt is an observation of a bounded, process-local native guard.
-// Only Checkpoint proves publication; Ready never authorizes use of a snapshot.
+// CaptureAttempt reports copying, background upload, and publication.
+// Uploading means the native copy is stable; only Ready is restorable.
 type CaptureAttempt struct {
-	ID         string           `json:"attempt_id"`
+	ID         string           `json:"id"`
 	SessionID  string           `json:"session_id"`
-	State      string           `json:"state"`
+	State      string           `json:"status"`
 	ExpiresAt  time.Time        `json:"expires_at"`
 	Boundary   *CaptureBoundary `json:"boundary,omitempty"`
 	Reference  *Reference       `json:"reference,omitempty"`
@@ -34,25 +33,28 @@ type CaptureAttempt struct {
 }
 
 type captureAttempt struct {
-	view      CaptureAttempt
-	cancel    context.CancelFunc
-	confirm   chan struct{}
-	confirmed bool
+	view   CaptureAttempt
+	cancel context.CancelFunc
 }
 
-// Captures retains only live guards and short-lived replies. Published facts
-// remain in the checkpoint store. Process loss invalidates every pending guard.
+// Captures retains bounded uploads and short-lived observations. Published facts
+// remain in the checkpoint store. Process loss abandons unfinished saves.
 type Captures struct {
 	mu       sync.Mutex
 	attempts map[string]*captureAttempt
 	closed   bool
 }
 
-func (c *Captures) Start(sessionID, sandboxID string, service Service) (CaptureAttempt, error) {
+func (c *Captures) Start(sessionID, sandboxID string, service Service, keys ...string) (CaptureAttempt, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
 		return CaptureAttempt{}, ErrCaptureConflict
+	}
+	if len(keys) > 0 && keys[0] != "" {
+		if old := c.attempts[keys[0]]; old != nil {
+			return old.view, nil
+		}
 	}
 	now := time.Now()
 	for id, attempt := range c.attempts {
@@ -70,8 +72,12 @@ func (c *Captures) Start(sessionID, sandboxID string, service Service) (CaptureA
 	if _, err := rand.Read(identity[:]); err != nil {
 		return CaptureAttempt{}, err
 	}
+	id := hex.EncodeToString(identity[:])
+	if len(keys) > 0 && keys[0] != "" {
+		id = keys[0]
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), CaptureLifetime)
-	attempt := &captureAttempt{view: CaptureAttempt{ID: hex.EncodeToString(identity[:]), SessionID: sessionID, State: "capturing", ExpiresAt: now.Add(CaptureLifetime)}, cancel: cancel, confirm: make(chan struct{})}
+	attempt := &captureAttempt{view: CaptureAttempt{ID: id, SessionID: sessionID, State: "copying", ExpiresAt: now.Add(CaptureLifetime)}, cancel: cancel}
 	if c.attempts == nil {
 		c.attempts = make(map[string]*captureAttempt)
 	}
@@ -82,31 +88,11 @@ func (c *Captures) Start(sessionID, sandboxID string, service Service) (CaptureA
 
 func (c *Captures) run(ctx context.Context, attempt *captureAttempt, sandboxID string, service Service) {
 	defer attempt.cancel()
-	checkpoint, err := service.CaptureWithPin(ctx, sandboxID, func(pinCtx context.Context, boundary CaptureBoundary, reference Reference) error {
+	checkpoint, err := service.CaptureCopy(ctx, sandboxID, attempt.view.ID, func(boundary CaptureBoundary) {
 		c.mu.Lock()
-		if pinCtx.Err() != nil {
-			c.mu.Unlock()
-			return context.Canceled
-		}
-		attempt.view.State = "ready"
+		defer c.mu.Unlock()
+		attempt.view.State = "uploading"
 		attempt.view.Boundary = &boundary
-		attempt.view.Reference = &reference
-		deadline := time.Now().Add(CapturePinLifetime)
-		if nativeDeadline, ok := pinCtx.Deadline(); ok && nativeDeadline.Before(deadline) {
-			deadline = nativeDeadline
-		}
-		attempt.view.ExpiresAt = deadline
-		c.mu.Unlock()
-		timer := time.NewTimer(CapturePinLifetime)
-		defer timer.Stop()
-		select {
-		case <-pinCtx.Done():
-			return pinCtx.Err()
-		case <-timer.C:
-			return context.DeadlineExceeded
-		case <-attempt.confirm:
-			return nil
-		}
 	})
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -117,12 +103,12 @@ func (c *Captures) run(ctx context.Context, attempt *captureAttempt, sandboxID s
 		}
 		return
 	}
-	attempt.view.State = "published"
+	attempt.view.State = "ready"
 	attempt.view.Checkpoint = &checkpoint
 }
 
 func captureTerminal(state string) bool {
-	return state == "published" || state == "failed" || state == "cancelled"
+	return state == "ready" || state == "failed" || state == "cancelled"
 }
 
 func (c *Captures) Observe(id, action string) (CaptureAttempt, error) {
@@ -134,16 +120,6 @@ func (c *Captures) Observe(id, action string) (CaptureAttempt, error) {
 	}
 	switch action {
 	case "status":
-	case "commit":
-		if attempt.confirmed {
-			return attempt.view, nil
-		}
-		if attempt.view.State != "ready" || time.Now().After(attempt.view.ExpiresAt) {
-			return CaptureAttempt{}, ErrCaptureConflict
-		}
-		attempt.confirmed = true
-		attempt.view.State = "publishing"
-		close(attempt.confirm)
 	case "cancel":
 		if !captureTerminal(attempt.view.State) {
 			attempt.cancel()

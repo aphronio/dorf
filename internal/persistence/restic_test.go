@@ -153,3 +153,48 @@ func testAttempt(t *testing.T, prefix string) string {
 	}
 	return prefix + "-" + hex.EncodeToString(nonce[:])
 }
+
+// Optional local stock-restic proof; no cloud credentials or provider required.
+func TestStagedResticRestoresOriginalLayout(t *testing.T) {
+	executable := os.Getenv("DORF_TEST_RESTIC_PATH")
+	if executable == "" {
+		t.Skip("set DORF_TEST_RESTIC_PATH for local stock-restic proof")
+	}
+	root := t.TempDir()
+	stage := filepath.Join(root, "copy")
+	live := filepath.Join(stage, "workspace")
+	if err := os.MkdirAll(live, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(stage, "root/.codex"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(live, "saved.txt"), []byte("saved world"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stage, "root/.codex/history"), []byte("saved history"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	driver := Driver{Sandbox: localPersistenceSandbox{root: root}, ResticPath: executable, credentials: func(context.Context, provider.Ownership, RepositoryAccess) (repositoryCredentials, error) {
+		return repositoryCredentials{Repository: filepath.Join(root, "repository"), Password: "synthetic", ExpiresAt: time.Now().Add(time.Hour)}, nil
+	}}
+	if err := driver.InitializeRepository(t.Context(), provider.Ownership{}); err != nil {
+		t.Fatal(err)
+	}
+	driver.workingDirectory = stage
+	saved, err := driver.Backup(t.Context(), provider.Ownership{}, []string{"/workspace", "/root/.codex"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver.workingDirectory = ""
+	restore := filepath.Join(root, "restore")
+	if _, err := driver.Restore(t.Context(), provider.Ownership{}, saved.SnapshotID, restore); err != nil {
+		t.Fatal(err)
+	}
+	for file, want := range map[string]string{"workspace/saved.txt": "saved world", "root/.codex/history": "saved history"} {
+		data, err := os.ReadFile(filepath.Join(restore, file))
+		if err != nil || string(data) != want {
+			t.Fatalf("restored path %s: %v", file, err)
+		}
+	}
+}

@@ -38,12 +38,12 @@ where s.id=sqlc.arg(sandbox_id);
 
 -- name: InsertSandboxCheckpoint :execrows
 insert into dorf.sandbox_checkpoints(
-    repository,snapshot_id,sandbox_id,resource_id,profile_name,profile_revision,
+    id,repository,snapshot_id,sandbox_id,resource_id,profile_name,profile_revision,
     effective_upgrade_id,last_activity_at,native_revision,
     delivery_hold_count,cleanup
 )
 values(
-    sqlc.arg(repository),sqlc.arg(snapshot_id),sqlc.arg(sandbox_id),sqlc.arg(resource_id),
+    coalesce(nullif(sqlc.arg(id)::text,''),gen_random_uuid()::text),sqlc.arg(repository),sqlc.arg(snapshot_id),sqlc.arg(sandbox_id),sqlc.arg(resource_id),
     sqlc.arg(profile_name),sqlc.arg(profile_revision),nullif(sqlc.arg(effective_upgrade_id)::text,''),
     sqlc.arg(last_activity_at),sqlc.arg(native_revision),
     sqlc.arg(delivery_hold_count),sqlc.arg(cleanup)
@@ -61,7 +61,7 @@ select c.*,s.session_id
 from dorf.sandbox_checkpoints c
 join dorf.sandboxes s on s.id=c.sandbox_id
 where c.sandbox_id=sqlc.arg(sandbox_id)
-order by c.publication_sequence desc
+order by c.native_revision desc,c.publication_sequence desc
 limit 1;
 
 -- name: ListSandboxCheckpoints :many
@@ -69,7 +69,7 @@ select c.*,s.session_id
 from dorf.sandbox_checkpoints c
 join dorf.sandboxes s on s.id=c.sandbox_id
 where c.sandbox_id=sqlc.arg(sandbox_id)
-order by c.publication_sequence desc;
+order by c.native_revision desc,c.publication_sequence desc;
 
 -- name: ListIdleCheckpointSandboxIDs :many
 select s.id
@@ -105,8 +105,12 @@ where j.admission_open and j.cleanup_state='pending'
           and not c.cleanup
       from dorf.sandbox_checkpoints c
       where c.sandbox_id=s.id
-      order by c.publication_sequence desc
+      order by c.native_revision desc,c.publication_sequence desc
       limit 1
   ),false)
 order by j.sandbox_last_active_at,s.id
 limit 100;
+
+-- name: GetSandboxCheckpointByID :one
+select c.*,s.session_id from dorf.sandbox_checkpoints c
+join dorf.sandboxes s on s.id=c.sandbox_id where c.id=sqlc.arg(id);

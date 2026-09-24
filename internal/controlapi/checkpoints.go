@@ -1,15 +1,15 @@
 package controlapi
 
 import (
-	"net/http"
-	"regexp"
-
+	"context"
+	"crypto/sha256"
+	"fmt"
 	"github.com/aphronio/dorf/internal/controlauth"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/persistence"
+	"net/http"
+	"time"
 )
-
-var checkpointBranchID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$`)
 
 func (h *handler) checkpointOperations(w http.ResponseWriter, r *http.Request) persistence.Operations {
 	operations, ok := h.sessions.(persistence.Operations)
@@ -20,7 +20,48 @@ func (h *handler) checkpointOperations(w http.ResponseWriter, r *http.Request) p
 	return operations
 }
 
-func (h *handler) checkpointBoundaryRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
+type Checkpoint struct {
+	ID        string              `json:"id"`
+	SessionID string              `json:"session_id"`
+	Status    string              `json:"status"`
+	Boundary  *CheckpointBoundary `json:"boundary,omitempty"`
+	ExpiresAt time.Time           `json:"expires_at,omitzero"`
+}
+type CheckpointBoundary struct {
+	NativeRevision int64 `json:"native_revision"`
+}
+
+func checkpointView(attempt persistence.CaptureAttempt) Checkpoint {
+	result := Checkpoint{ID: attempt.ID, SessionID: attempt.SessionID, Status: attempt.State, ExpiresAt: attempt.ExpiresAt}
+	if attempt.Boundary != nil {
+		result.Boundary = &CheckpointBoundary{NativeRevision: attempt.Boundary.NativeRevision}
+	}
+	if attempt.State == "ready" {
+		result.ExpiresAt = time.Time{}
+	}
+	return result
+}
+func (h *handler) checkpointStartRoute(w http.ResponseWriter, r *http.Request, client controlauth.Client) {
+	if !h.exact(w, r, http.MethodPost, false) {
+		return
+	}
+	key, ok := h.idempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	operations := h.checkpointOperations(w, r)
+	if operations == nil {
+		return
+	}
+	id := fmt.Sprintf("cp_%x", sha256.Sum256([]byte(client.ID+"\x00"+r.PathValue("session")+"\x00"+key)))
+	result, err := operations.StartCapture(r.Context(), r.PathValue("session"), id)
+	if err != nil {
+		h.serviceError(w, r, err)
+		return
+	}
+	h.reply(w, http.StatusAccepted, checkpointView(result))
+}
+func (h *handler) checkpointRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
 	if !h.exact(w, r, http.MethodGet, false) {
 		return
 	}
@@ -28,108 +69,24 @@ func (h *handler) checkpointBoundaryRoute(w http.ResponseWriter, r *http.Request
 	if operations == nil {
 		return
 	}
-	result, err := operations.CheckpointBoundary(r.Context(), r.PathValue("session"))
+	result, err := operations.ObserveCapture(r.Context(), r.PathValue("checkpoint"), "status")
 	if err != nil {
 		h.serviceError(w, r, err)
 		return
 	}
-	h.reply(w, http.StatusOK, result)
+	h.reply(w, http.StatusOK, checkpointView(result))
 }
-
-func (h *handler) captureStartRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
+func (h *handler) activateSessionRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
 	if !h.exact(w, r, http.MethodPost, false) {
 		return
 	}
-	operations := h.checkpointOperations(w, r)
-	if operations == nil {
+	activator, ok := h.sessions.(interface {
+		ActivateSession(context.Context, string) (Session, error)
+	})
+	if !ok {
+		h.serviceError(w, r, core.ErrNativeUnavailable)
 		return
 	}
-	result, err := operations.StartCapture(r.Context(), r.PathValue("session"))
-	if err != nil {
-		h.serviceError(w, r, err)
-		return
-	}
-	h.reply(w, http.StatusAccepted, result)
-}
-
-func (h *handler) captureRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
-	method, action := http.MethodGet, "status"
-	if r.Method == http.MethodDelete {
-		method, action = http.MethodDelete, "cancel"
-	}
-	if !h.exact(w, r, method, false) {
-		return
-	}
-	h.captureObservation(w, r, action)
-}
-func (h *handler) captureCommitRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
-	if !h.exact(w, r, http.MethodPost, false) {
-		return
-	}
-	h.captureObservation(w, r, "commit")
-}
-func (h *handler) captureObservation(w http.ResponseWriter, r *http.Request, action string) {
-	operations := h.checkpointOperations(w, r)
-	if operations == nil {
-		return
-	}
-	result, err := operations.ObserveCapture(r.Context(), r.PathValue("capture"), action)
-	if err != nil {
-		h.serviceError(w, r, err)
-		return
-	}
-	h.reply(w, http.StatusOK, result)
-}
-
-func (h *handler) branchStartRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
-	if !h.exact(w, r, http.MethodPost, true) {
-		return
-	}
-	var request struct {
-		ID         string `json:"id"`
-		Repository string `json:"repository"`
-		SnapshotID string `json:"snapshot_id"`
-	}
-	if !h.decode(w, r, &request) {
-		return
-	}
-	input := persistence.BranchRequest{ID: request.ID, SourceSessionID: r.PathValue("session"), Repository: request.Repository, SnapshotID: request.SnapshotID}
-	if input.Validate() != nil || !checkpointBranchID.MatchString(input.ID) {
-		h.fail(w, problem("invalid_input"))
-		return
-	}
-	operations := h.checkpointOperations(w, r)
-	if operations == nil {
-		return
-	}
-	result, err := operations.BranchCheckpoint(r.Context(), input)
-	if err != nil {
-		h.serviceError(w, r, err)
-		return
-	}
-	h.reply(w, http.StatusAccepted, result)
-}
-func (h *handler) branchRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
-	if !h.exact(w, r, http.MethodGet, false) {
-		return
-	}
-	h.branchObservation(w, r, false)
-}
-func (h *handler) branchReleaseRoute(w http.ResponseWriter, r *http.Request, _ controlauth.Client) {
-	if !h.exact(w, r, http.MethodPost, false) {
-		return
-	}
-	h.branchObservation(w, r, true)
-}
-func (h *handler) branchObservation(w http.ResponseWriter, r *http.Request, release bool) {
-	operations := h.checkpointOperations(w, r)
-	if operations == nil {
-		return
-	}
-	result, err := operations.ObserveBranch(r.Context(), r.PathValue("branch"), release)
-	if err != nil {
-		h.serviceError(w, r, err)
-		return
-	}
-	h.reply(w, http.StatusOK, result)
+	session, err := activator.ActivateSession(r.Context(), r.PathValue("session"))
+	h.sessionResponse(w, r, session, err)
 }

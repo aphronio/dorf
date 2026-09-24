@@ -1252,9 +1252,7 @@ func worker(ctx context.Context, store postgres.Store, client *absurd.Client, cf
 	defer stop()
 	return runWorkerProcesses(workerCtx, reader,
 		func(runCtx context.Context) error {
-			return runWithCheckpoints(runCtx, runtimes, func(foregroundCtx context.Context) error {
-				return client.RunWorker(foregroundCtx, absurd.WorkerOptions{WorkerID: workerID(), ClaimTimeout: claimTimeout, BatchSize: *concurrency, Concurrency: *concurrency})
-			})
+			return client.RunWorker(runCtx, absurd.WorkerOptions{WorkerID: workerID(), ClaimTimeout: claimTimeout, BatchSize: *concurrency, Concurrency: *concurrency})
 		},
 		func() { fmt.Fprintln(stdout, "Dorf durable worker started") },
 	)

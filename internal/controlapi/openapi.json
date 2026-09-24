@@ -945,10 +945,10 @@
         "summary": "Discover native audio input supported by the exact Session model and adapter"
       }
     },
-    "/v1/sessions/{session}/checkpoint-boundary": {
-      "get": {
-        "operationId": "getCheckpointBoundary",
-        "summary": "Observe a passive native boundary",
+    "/v1/sessions/{session}/checkpoints": {
+      "post": {
+        "operationId": "createCheckpoint",
+        "summary": "Copy Session state, then upload in background",
         "tags": [
           "Sessions"
         ],
@@ -959,41 +959,10 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Observe a passive native boundary",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CheckpointBoundaryObservation"
-                }
-              }
             }
           },
-          "default": {
-            "$ref": "#/components/responses/Problem"
-          }
-        }
-      }
-    },
-    "/v1/sessions/{session}/checkpoint-captures": {
-      "post": {
-        "operationId": "startCheckpointCapture",
-        "summary": "Start a bounded native capture guard",
-        "tags": [
-          "Sessions"
-        ],
-        "parameters": [
           {
-            "in": "path",
-            "name": "session",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -1002,7 +971,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CheckpointCapture"
+                  "$ref": "#/components/schemas/Checkpoint"
                 }
               }
             }
@@ -1011,20 +980,20 @@
             "$ref": "#/components/responses/Problem"
           }
         },
-        "description": "Non-idempotent. Do not retry an ambiguous start. One pending attempt per Session; at most 32 retained attempts per worker. Attempts expire within 180 seconds; ready-to-pin has at most 30 seconds. Native activity invalidates the guard. Worker restart loses pending attempts; only a published checkpoint authorizes use. No application callback is executed by Dorf."
+        "description": "Client-initiated checkpoint. copying becomes uploading only after a coherent private copy exists; ready means durable and restorable. No client confirmation is required. Pending operations are bounded; lost worker attempts must be treated as failed. Completed IDs remain durable."
       }
     },
-    "/v1/checkpoint-captures/{capture}": {
+    "/v1/checkpoints/{checkpoint}": {
       "get": {
-        "operationId": "getCheckpointCapture",
-        "summary": "Observe a capture attempt",
+        "operationId": "getCheckpoint",
+        "summary": "Observe a checkpoint",
         "tags": [
           "Sessions"
         ],
         "parameters": [
           {
+            "name": "checkpoint",
             "in": "path",
-            "name": "capture",
             "required": true,
             "schema": {
               "type": "string"
@@ -1037,7 +1006,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CheckpointCapture"
+                  "$ref": "#/components/schemas/Checkpoint"
                 }
               }
             }
@@ -1046,168 +1015,19 @@
             "$ref": "#/components/responses/Problem"
           }
         },
-        "description": "Process-local replies remain available for up to five minutes after the attempt deadline, unless the worker restarts. A missing reply does not prove publication did not happen; discard the client artifact unless publication was confirmed."
-      },
-      "delete": {
-        "operationId": "cancelCheckpointCapture",
-        "summary": "Request capture cancellation; observe the final outcome",
-        "tags": [
-          "Sessions"
-        ],
-        "parameters": [
-          {
-            "in": "path",
-            "name": "capture",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Request capture cancellation; observe the final outcome",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CheckpointCapture"
-                }
-              }
-            }
-          },
-          "default": {
-            "$ref": "#/components/responses/Problem"
-          }
-        }
+        "description": "uploading means source execution may resume. Only ready is a published checkpoint."
       }
     },
-    "/v1/checkpoint-captures/{capture}/commit": {
+    "/v1/sessions/{session}/activate": {
       "post": {
-        "operationId": "commitCheckpointCapture",
-        "summary": "Confirm the client pin; publication still requires guard validation",
+        "operationId": "activateSession",
+        "summary": "Activate a restored Session after client preparation",
         "tags": [
           "Sessions"
         ],
         "parameters": [
           {
-            "in": "path",
-            "name": "capture",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Confirm the client pin; publication still requires guard validation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CheckpointCapture"
-                }
-              }
-            }
-          },
-          "default": {
-            "$ref": "#/components/responses/Problem"
-          }
-        }
-      }
-    },
-    "/v1/sessions/{session}/checkpoint-branches": {
-      "post": {
-        "operationId": "branchCheckpoint",
-        "summary": "Restore an exact checkpoint into a held independent Session",
-        "tags": [
-          "Sessions"
-        ],
-        "parameters": [
-          {
-            "in": "path",
-            "name": "session",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Restore an exact checkpoint into a held independent Session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CheckpointBranch"
-                }
-              }
-            }
-          },
-          "default": {
-            "$ref": "#/components/responses/Problem"
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CheckpointBranchRequest"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/checkpoint-branches/{branch}": {
-      "get": {
-        "operationId": "getCheckpointBranch",
-        "summary": "Observe durable branch readiness",
-        "tags": [
-          "Sessions"
-        ],
-        "parameters": [
-          {
-            "in": "path",
-            "name": "branch",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Observe durable branch readiness",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CheckpointBranch"
-                }
-              }
-            }
-          },
-          "default": {
-            "$ref": "#/components/responses/Problem"
-          }
-        }
-      }
-    },
-    "/v1/checkpoint-branches/{branch}/release": {
-      "post": {
-        "operationId": "releaseCheckpointBranch",
-        "summary": "Request idempotent release of a prepared branch",
-        "tags": [
-          "Sessions"
-        ],
-        "parameters": [
-          {
-            "in": "path",
-            "name": "branch",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
+            "$ref": "#/components/parameters/SessionID"
           }
         ],
         "responses": {
@@ -1216,7 +1036,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CheckpointBranch"
+                  "$ref": "#/components/schemas/Session"
                 }
               }
             }
@@ -1224,7 +1044,8 @@
           "default": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "description": "Idempotently request native verification and activation. Observe restoration.state on the Session until ready."
       }
     }
   },
@@ -1667,8 +1488,19 @@
           },
           "reasoning": {
             "$ref": "#/components/schemas/ReasoningEffort"
+          },
+          "from_checkpoint": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string",
+            "enum": [
+              "held"
+            ]
           }
-        }
+        },
+        "required": [],
+        "description": "Create a fresh Session, or supply only from_checkpoint and start: held to restore one. Restoration inherits source configuration; overrides are rejected."
       },
       "SessionList": {
         "type": "object",
@@ -1835,6 +1667,9 @@
             "items": {
               "$ref": "#/components/schemas/Sandbox"
             }
+          },
+          "restoration": {
+            "$ref": "#/components/schemas/SessionRestoration"
           }
         }
       },
@@ -2699,249 +2534,73 @@
           }
         }
       },
-      "CheckpointReference": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "repository",
-          "snapshot_id"
-        ],
-        "properties": {
-          "repository": {
-            "type": "string"
-          },
-          "snapshot_id": {
-            "type": "string",
-            "pattern": "^[0-9a-f]{64}$"
-          }
-        }
-      },
       "Checkpoint": {
         "type": "object",
         "additionalProperties": false,
         "required": [
+          "id",
           "session_id",
-          "sandbox_id",
-          "resource_id",
-          "profile_name",
-          "profile_revision",
-          "last_activity_at",
-          "native_revision",
-          "delivery_hold_count",
-          "cleanup",
-          "eligible",
-          "repository",
-          "snapshot_id",
-          "published_at"
+          "status"
         ],
         "properties": {
+          "id": {
+            "type": "string"
+          },
           "session_id": {
             "type": "string"
           },
-          "sandbox_id": {
-            "type": "string"
-          },
-          "resource_id": {
-            "type": "string"
-          },
-          "profile_name": {
-            "type": "string"
-          },
-          "profile_revision": {
-            "type": "string"
-          },
-          "effective_upgrade_id": {
-            "type": "string"
-          },
-          "last_activity_at": {
+          "status": {
             "type": "string",
-            "format": "date-time"
+            "enum": [
+              "copying",
+              "uploading",
+              "ready",
+              "failed",
+              "cancelled"
+            ]
           },
-          "native_revision": {
-            "type": "integer",
-            "format": "int64"
+          "boundary": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "native_revision"
+            ],
+            "properties": {
+              "native_revision": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
           },
-          "delivery_hold_count": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "cleanup": {
-            "type": "boolean"
-          },
-          "eligible": {
-            "type": "boolean"
-          },
-          "repository": {
-            "type": "string"
-          },
-          "snapshot_id": {
-            "type": "string",
-            "pattern": "^[0-9a-f]{64}$"
-          },
-          "published_at": {
+          "expires_at": {
             "type": "string",
             "format": "date-time"
           }
         }
       },
-      "CheckpointBoundaryObservation": {
+      "SessionRestoration": {
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "session_id",
+          "checkpoint_id",
           "thread_id",
-          "pending_input_id",
-          "pending_turn_id",
-          "admission_open",
-          "native_revision",
-          "boundary"
+          "state"
         ],
         "properties": {
-          "session_id": {
+          "checkpoint_id": {
             "type": "string"
           },
           "thread_id": {
-            "type": "string"
-          },
-          "pending_input_id": {
-            "type": "string"
-          },
-          "pending_turn_id": {
-            "type": "string"
-          },
-          "admission_open": {
-            "type": "boolean"
-          },
-          "native_revision": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "boundary": {
-            "$ref": "#/components/schemas/CheckpointBoundary"
-          }
-        }
-      },
-      "CheckpointCapture": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "attempt_id",
-          "session_id",
-          "state",
-          "expires_at"
-        ],
-        "properties": {
-          "attempt_id": {
-            "type": "string"
-          },
-          "session_id": {
             "type": "string"
           },
           "state": {
             "type": "string",
             "enum": [
-              "capturing",
-              "ready",
-              "publishing",
-              "published",
-              "failed",
-              "cancelled"
+              "restoring",
+              "held",
+              "activating",
+              "ready"
             ]
-          },
-          "expires_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "boundary": {
-            "$ref": "#/components/schemas/CheckpointBoundary"
-          },
-          "reference": {
-            "$ref": "#/components/schemas/CheckpointReference"
-          },
-          "checkpoint": {
-            "$ref": "#/components/schemas/Checkpoint"
-          }
-        }
-      },
-      "CheckpointBranchRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "repository",
-          "snapshot_id"
-        ],
-        "properties": {
-          "id": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$"
-          },
-          "repository": {
-            "type": "string"
-          },
-          "snapshot_id": {
-            "type": "string",
-            "pattern": "^[0-9a-f]{64}$"
-          }
-        }
-      },
-      "CheckpointBranch": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "source_session_id",
-          "destination_session_id",
-          "destination_sandbox_id",
-          "thread_id",
-          "repository",
-          "snapshot_id",
-          "checkpoint",
-          "requested_at"
-        ],
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "source_session_id": {
-            "type": "string"
-          },
-          "destination_session_id": {
-            "type": "string"
-          },
-          "destination_sandbox_id": {
-            "type": "string"
-          },
-          "thread_id": {
-            "type": "string"
-          },
-          "repository": {
-            "type": "string"
-          },
-          "snapshot_id": {
-            "type": "string",
-            "pattern": "^[0-9a-f]{64}$"
-          },
-          "checkpoint": {
-            "$ref": "#/components/schemas/Checkpoint"
-          },
-          "requested_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "restored_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "release_requested_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "ready_at": {
-            "type": "string",
-            "format": "date-time"
           }
         }
       }

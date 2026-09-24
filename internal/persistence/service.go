@@ -27,10 +27,10 @@ type Capturer interface {
 	Capture(context.Context, CaptureBoundary) (Reference, error)
 }
 
-// GuardedCapturer keeps its native source guard active while pin runs. A
-// successful pin is still provisional until the guard and publication succeed.
-type GuardedCapturer interface {
-	CaptureWithPin(context.Context, CaptureBoundary, func(context.Context, Reference) error) (Reference, error)
+// CopyCapturer seals a private copy before calling copied; uploads read only
+// that copy. New native work after copied returns cannot invalidate the upload.
+type CopyCapturer interface {
+	CaptureCopy(context.Context, CaptureBoundary, func(context.Context) error) (Reference, error)
 }
 
 type Service struct {
@@ -41,27 +41,63 @@ type Service struct {
 	Emit      func(telemetry.Event)
 }
 
-// Capture runs on backup capacity, or after cleanup has closed admission. It
+// Capture is the synchronous, current-boundary operation used by cleanup. It
 // holds no Session fence while reading native files, hashing, uploading or stopping
 // a cancelled process. Publication independently rechecks the durable boundary.
 func (s Service) Capture(ctx context.Context, sandboxID string, cleanup bool) (Checkpoint, error) {
-	return s.capture(ctx, sandboxID, cleanup, nil)
+	return s.capture(ctx, sandboxID, cleanup)
 }
 
-// CaptureWithPin calls pin after the immutable upload is available and before
-// the native guard ends. The caller must keep any pinned application view
-// provisional until this method returns a published checkpoint.
-func (s Service) CaptureWithPin(ctx context.Context, sandboxID string, pin func(context.Context, CaptureBoundary, Reference) error) (Checkpoint, error) {
-	if pin == nil {
-		return Checkpoint{}, fmt.Errorf("checkpoint pin is not configured")
+// CaptureCopy reports the stable boundary before background upload completes.
+func (s Service) CaptureCopy(ctx context.Context, sandboxID, id string, copied func(CaptureBoundary)) (Checkpoint, error) {
+	driver, ok := s.Driver.(CopyCapturer)
+	store, stored := s.Store.(interface {
+		PublishCapturedCheckpoint(context.Context, CaptureBoundary, Reference, string) (Checkpoint, error)
+	})
+	if !ok || !stored || s.Claim == nil {
+		return Checkpoint{}, fmt.Errorf("checkpoint copying is not configured")
 	}
-	if _, ok := s.Driver.(GuardedCapturer); !ok {
-		return Checkpoint{}, fmt.Errorf("checkpoint driver does not support guarded pinning")
+	boundary, err := s.Store.Boundary(ctx, sandboxID, false)
+	if err != nil {
+		return Checkpoint{}, err
 	}
-	return s.capture(ctx, sandboxID, false, pin)
+	if !boundary.Eligible {
+		return Checkpoint{}, ErrCheckpointIneligible
+	}
+	if err := s.Claim(ctx); err != nil {
+		return Checkpoint{}, err
+	}
+	// The native file guard covers copy consistency. Check admission immediately
+	// after it closes; later changes are independent of the copied tree.
+	sealed := false
+	reference, err := driver.CaptureCopy(ctx, boundary, func(copyCtx context.Context) error {
+		current, err := s.Store.Boundary(copyCtx, sandboxID, false)
+		if err != nil {
+			return err
+		}
+		if current != boundary {
+			return ErrCheckpointSuperseded
+		}
+		if err := s.Claim(copyCtx); err != nil {
+			return err
+		}
+		sealed = true
+		copied(boundary)
+		return nil
+	})
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	if !sealed {
+		return Checkpoint{}, fmt.Errorf("checkpoint upload omitted stable copy")
+	}
+	if err := s.Claim(ctx); err != nil {
+		return Checkpoint{}, err
+	}
+	return store.PublishCapturedCheckpoint(ctx, boundary, reference, id)
 }
 
-func (s Service) capture(ctx context.Context, sandboxID string, cleanup bool, pin func(context.Context, CaptureBoundary, Reference) error) (Checkpoint, error) {
+func (s Service) capture(ctx context.Context, sandboxID string, cleanup bool) (Checkpoint, error) {
 	boundary, err := s.Store.Boundary(ctx, sandboxID, cleanup)
 	if err != nil {
 		return Checkpoint{}, err
@@ -81,13 +117,7 @@ func (s Service) capture(ctx context.Context, sandboxID string, cleanup bool, pi
 	defer cancel()
 	monitorDone := make(chan error, 1)
 	go func() { monitorDone <- s.monitor(workCtx, cancel, boundary) }()
-	var reference Reference
-	var captureErr error
-	if pin == nil {
-		reference, captureErr = s.Driver.Capture(workCtx, boundary)
-	} else {
-		reference, captureErr = s.captureWithPin(workCtx, boundary, pin)
-	}
+	reference, captureErr := s.Driver.Capture(workCtx, boundary)
 	invalidated := workCtx.Err() != nil
 	cancel()
 	monitorErr := <-monitorDone
@@ -104,22 +134,6 @@ func (s Service) capture(ctx context.Context, sandboxID string, cleanup bool, pi
 		return Checkpoint{}, captureErr
 	}
 	return s.publish(ctx, boundary, reference, started)
-}
-
-func (s Service) captureWithPin(ctx context.Context, boundary CaptureBoundary, pin func(context.Context, CaptureBoundary, Reference) error) (Reference, error) {
-	return s.Driver.(GuardedCapturer).CaptureWithPin(ctx, boundary, func(pinCtx context.Context, reference Reference) error {
-		if err := s.Claim(pinCtx); err != nil {
-			return err
-		}
-		current, err := s.Store.Boundary(pinCtx, boundary.SandboxID, false)
-		if err != nil {
-			return err
-		}
-		if current != boundary || !current.Eligible {
-			return ErrCheckpointSuperseded
-		}
-		return pin(pinCtx, boundary, reference)
-	})
 }
 
 func (s Service) publish(ctx context.Context, boundary CaptureBoundary, reference Reference, started time.Time) (Checkpoint, error) {

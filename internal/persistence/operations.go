@@ -17,7 +17,7 @@ type BoundaryObservation struct {
 // It accepts no provider selection, credentials, callback or executable.
 type Operations interface {
 	CheckpointBoundary(context.Context, string) (BoundaryObservation, error)
-	StartCapture(context.Context, string) (CaptureAttempt, error)
+	StartCapture(context.Context, string, string) (CaptureAttempt, error)
 	ObserveCapture(context.Context, string, string) (CaptureAttempt, error)
 	BranchCheckpoint(context.Context, BranchRequest) (BranchReceipt, error)
 	ObserveBranch(context.Context, string, bool) (BranchReceipt, error)

@@ -328,3 +328,33 @@ func advanceNativeFixture(t *testing.T, store postgres.Store, ctx context.Contex
 		t.Fatal(err)
 	}
 }
+
+func TestCopiedCheckpointPublishesHistoricalBoundaryAndSurvivesRestart(t *testing.T) {
+	db, store, _ := testDatabase(t)
+	ctx := t.Context()
+	_, sandboxID, before := completedCheckpointFixture(t, store, ctx, "background-copy")
+	if _, err := db.ExecContext(ctx, `update dorf.sessions set native_revision=native_revision+1 where id=$1`, before.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.Boundary(ctx, sandboxID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer, err := store.PublishCheckpoint(ctx, current, checkpointReference("copy-repository", before.SessionID+":new"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := store.PublishCapturedCheckpoint(ctx, before, checkpointReference("copy-repository", before.SessionID+":old"), "cp_"+before.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened := postgres.Store{DB: db}
+	observed, err := reopened.CheckpointByID(ctx, saved.ID)
+	if err != nil || observed != saved {
+		t.Fatal("published ID lost across store recreation")
+	}
+	last, err := store.LastCheckpoint(ctx, sandboxID)
+	if err != nil || last != newer {
+		t.Fatal("late upload replaced newer recovery point")
+	}
+}

@@ -35,6 +35,16 @@ func (s Store) Boundary(ctx context.Context, sandboxID string, cleanup bool) (pe
 // The Session row lock serializes the recheck with native mutation, which does not
 // take the external-effect fence.
 func (s Store) PublishCheckpoint(ctx context.Context, expected persistence.CaptureBoundary, reference persistence.Reference) (persistence.Checkpoint, error) {
+	return s.publishCheckpoint(ctx, expected, reference, "", true)
+}
+
+// PublishCapturedCheckpoint records a tree already validated at its copy boundary.
+// The live source can advance during upload; its current state is not that tree.
+func (s Store) PublishCapturedCheckpoint(ctx context.Context, expected persistence.CaptureBoundary, reference persistence.Reference, id string) (persistence.Checkpoint, error) {
+	return s.publishCheckpoint(ctx, expected, reference, id, false)
+}
+
+func (s Store) publishCheckpoint(ctx context.Context, expected persistence.CaptureBoundary, reference persistence.Reference, id string, requireCurrent bool) (persistence.Checkpoint, error) {
 	if err := validateCheckpoint(expected, reference); err != nil {
 		return persistence.Checkpoint{}, err
 	}
@@ -57,7 +67,7 @@ func (s Store) PublishCheckpoint(ctx context.Context, expected persistence.Captu
 				stored.SessionID, stored.SandboxID, stored.ResourceID, stored.ProfileName,
 				stored.ProfileRevision, stored.EffectiveUpgradeID.String, stored.LastActivityAt,
 				stored.NativeRevision, stored.DeliveryHoldCount,
-				stored.Cleanup, stored.Repository, stored.SnapshotID, stored.PublishedAt,
+				stored.Cleanup, stored.Repository, stored.SnapshotID, stored.PublishedAt, stored.ID,
 			)
 			if checkpoint.CaptureBoundary != expected || checkpoint.Reference != reference {
 				return fmt.Errorf("checkpoint reference already records a different execution boundary")
@@ -67,23 +77,13 @@ func (s Store) PublishCheckpoint(ctx context.Context, expected persistence.Captu
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		row, err := q.GetCheckpointBoundary(ctx, dbsql.GetCheckpointBoundaryParams{SandboxID: expected.SandboxID, Cleanup: expected.Cleanup})
-		if err != nil {
-			return err
-		}
-		current := captureBoundary(
-			row.SessionID, row.SandboxID, row.ResourceID, row.ProfileName, row.ProfileRevision,
-			row.EffectiveUpgradeID, row.LastActivityAt, row.NativeRevision,
-			row.DeliveryHoldCount, expected.Cleanup, row.Eligible,
-		)
-		if current != expected {
-			return persistence.ErrCheckpointSuperseded
-		}
-		if !current.Eligible {
-			return persistence.ErrCheckpointIneligible
+		if requireCurrent {
+			if err := checkCurrentBoundary(ctx, q, expected); err != nil {
+				return err
+			}
 		}
 		_, err = q.InsertSandboxCheckpoint(ctx, dbsql.InsertSandboxCheckpointParams{
-			Repository: reference.Repository, SnapshotID: reference.SnapshotID,
+			ID: id, Repository: reference.Repository, SnapshotID: reference.SnapshotID,
 			SandboxID: expected.SandboxID, ResourceID: expected.ResourceID,
 			ProfileName: expected.ProfileName, ProfileRevision: expected.ProfileRevision,
 			EffectiveUpgradeID: expected.EffectiveUpgradeID, LastActivityAt: expected.LastActivityAt,
@@ -103,7 +103,7 @@ func (s Store) PublishCheckpoint(ctx context.Context, expected persistence.Captu
 			stored.SessionID, stored.SandboxID, stored.ResourceID, stored.ProfileName,
 			stored.ProfileRevision, stored.EffectiveUpgradeID.String, stored.LastActivityAt,
 			stored.NativeRevision, stored.DeliveryHoldCount,
-			stored.Cleanup, stored.Repository, stored.SnapshotID, stored.PublishedAt,
+			stored.Cleanup, stored.Repository, stored.SnapshotID, stored.PublishedAt, stored.ID,
 		)
 		if checkpoint.CaptureBoundary != expected || checkpoint.Reference != reference {
 			return fmt.Errorf("checkpoint reference already records a different execution boundary")
@@ -128,7 +128,7 @@ func (s Store) LastCheckpoint(ctx context.Context, sandboxID string) (persistenc
 		row.SessionID, row.SandboxID, row.ResourceID, row.ProfileName, row.ProfileRevision,
 		row.EffectiveUpgradeID.String, row.LastActivityAt, row.NativeRevision,
 		row.DeliveryHoldCount, row.Cleanup,
-		row.Repository, row.SnapshotID, row.PublishedAt,
+		row.Repository, row.SnapshotID, row.PublishedAt, row.ID,
 	), nil
 }
 
@@ -146,7 +146,7 @@ func (s Store) ListCheckpoints(ctx context.Context, sandboxID string) ([]persist
 			row.SessionID, row.SandboxID, row.ResourceID, row.ProfileName, row.ProfileRevision,
 			row.EffectiveUpgradeID.String, row.LastActivityAt, row.NativeRevision,
 			row.DeliveryHoldCount, row.Cleanup,
-			row.Repository, row.SnapshotID, row.PublishedAt,
+			row.Repository, row.SnapshotID, row.PublishedAt, row.ID,
 		))
 	}
 	return checkpoints, nil
@@ -196,8 +196,12 @@ func captureBoundary(sessionID, sandboxID, resourceID, profileName, profileRevis
 	}
 }
 
-func checkpointFromValues(sessionID, sandboxID, resourceID, profileName, profileRevision, effectiveUpgradeID string, lastActivityAt time.Time, nativeRevision, deliveryHoldCount int64, cleanup bool, repository, snapshotID string, publishedAt time.Time) persistence.Checkpoint {
-	return persistence.Checkpoint{
+func checkpointFromValues(sessionID, sandboxID, resourceID, profileName, profileRevision, effectiveUpgradeID string, lastActivityAt time.Time, nativeRevision, deliveryHoldCount int64, cleanup bool, repository, snapshotID string, publishedAt time.Time, ids ...string) persistence.Checkpoint {
+	id := ""
+	if len(ids) > 0 {
+		id = ids[0]
+	}
+	return persistence.Checkpoint{ID: id,
 		CaptureBoundary: captureBoundary(
 			sessionID, sandboxID, resourceID, profileName, profileRevision, effectiveUpgradeID,
 			lastActivityAt, nativeRevision, deliveryHoldCount, cleanup, true,
@@ -231,4 +235,30 @@ func validateCheckpoint(boundary persistence.CaptureBoundary, reference persiste
 
 func exactCheckpointIdentity(value string) bool {
 	return value != "" && len(value) <= 256 && value == strings.TrimSpace(value)
+}
+
+func (s Store) CheckpointByID(ctx context.Context, id string) (persistence.Checkpoint, error) {
+	row, err := dbsql.New(s.DB).GetSandboxCheckpointByID(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return persistence.Checkpoint{}, persistence.ErrCheckpointNotFound
+	}
+	if err != nil {
+		return persistence.Checkpoint{}, err
+	}
+	return checkpointFromValues(row.SessionID, row.SandboxID, row.ResourceID, row.ProfileName, row.ProfileRevision, row.EffectiveUpgradeID.String, row.LastActivityAt, row.NativeRevision, row.DeliveryHoldCount, row.Cleanup, row.Repository, row.SnapshotID, row.PublishedAt, row.ID), nil
+}
+
+func checkCurrentBoundary(ctx context.Context, q *dbsql.Queries, expected persistence.CaptureBoundary) error {
+	row, err := q.GetCheckpointBoundary(ctx, dbsql.GetCheckpointBoundaryParams{SandboxID: expected.SandboxID, Cleanup: expected.Cleanup})
+	if err != nil {
+		return err
+	}
+	current := captureBoundary(row.SessionID, row.SandboxID, row.ResourceID, row.ProfileName, row.ProfileRevision, row.EffectiveUpgradeID, row.LastActivityAt, row.NativeRevision, row.DeliveryHoldCount, expected.Cleanup, row.Eligible)
+	if current != expected {
+		return persistence.ErrCheckpointSuperseded
+	}
+	if !current.Eligible {
+		return persistence.ErrCheckpointIneligible
+	}
+	return nil
 }

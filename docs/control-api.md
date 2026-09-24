@@ -246,11 +246,23 @@ through the existing worker observation boundary. It performs no native executio
 The [checkpoint contract](implementation/session-checkpoints.md#workspace-inspection) owns the
 coverage and freshness semantics; OpenAPI owns the response fields.
 
-## Checkpoint capture and branches
+## Checkpoints and restored Sessions
 
-Authenticated clients can coordinate native saves and restore independent held Sessions through
-fixed API operations. The [checkpoint contract](implementation/session-checkpoints.md) owns guard
-lifetimes, provisional-reference rules and branch readiness; OpenAPI owns the exact schemas.
-Client application state remains outside Dorf. No deployment-shell access or caller-selected
-callback execution is required. A worker restart invalidates pending captures, while published
-checkpoints and admitted branches retain their durable receipts.
+Clients create checkpoints when their application reaches a saveable boundary. A checkpoint reports
+copying, uploading, then ready. Uploading means the validated private native copy is independent of
+future source changes; ready means storage completed and the checkpoint is restorable. Clients may
+resume their own work after their application snapshot and the native copy are secured. There is no
+application confirmation step, executable callback, or native-only autosave schedule.
+
+Creation supports a client/session-scoped idempotency key. Completed IDs survive worker restart;
+unfinished operations are bounded and may be lost. Never treat a missing or failed operation as a
+saved world. Storage repository names and native snapshot IDs remain internal.
+
+Create an ordinary Session with `from_checkpoint` and `start: held` to restore. The Session exposes
+its restoration state and retained Thread identity. Once held, prepare application-specific files
+and credentials, then request activation and observe readiness. Restore/activation reuse existing
+branch custody, without a second public branch resource. Source configuration is inherited; other
+creation overrides are rejected for restored Sessions in this slice.
+
+The [checkpoint contract](implementation/session-checkpoints.md) owns scope and failure behavior;
+[OpenAPI](../internal/controlapi/openapi.json) owns the wire contract.

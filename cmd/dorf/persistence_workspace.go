@@ -28,7 +28,7 @@ func (r profileRuntimeResolver) workspace(ctx context.Context, session core.Sess
 	result := persistence.Workspace{Path: sandbox.Workspace()}
 	result.BackupEnabled = cfg != nil && cfg.enabled(session.ProfileRef()) && profile.Harness == codex.Harness && profile.Provider == core.SandboxProviderE2B
 	if result.BackupEnabled {
-		result.IdleDelaySeconds = &cfg.IdleDelaySeconds
+		// Client scheduling replaced the autonomous idle timer.
 	}
 	checkpoint, err := r.store.LastCheckpoint(ctx, core.MainSandboxName(session.ID))
 	if err != nil && !errors.Is(err, persistence.ErrCheckpointNotFound) {

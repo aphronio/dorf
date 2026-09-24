@@ -26,6 +26,7 @@ type Driver struct {
 	Repository       R2Repository
 	ResticPath       string
 	OperationTimeout time.Duration
+	workingDirectory string
 	credentials      func(context.Context, provider.Ownership, RepositoryAccess) (repositoryCredentials, error)
 }
 
@@ -68,7 +69,13 @@ func (d Driver) Backup(ctx context.Context, owner provider.Ownership, paths, exc
 	for _, pattern := range excludes {
 		args = append(args, "--exclude", pattern)
 	}
-	args = append(append(args, "--"), paths...)
+	selected := append([]string(nil), paths...)
+	if d.workingDirectory != "" {
+		for i := range selected {
+			selected[i] = strings.TrimPrefix(selected[i], "/")
+		}
+	}
+	args = append(append(args, "--"), selected...)
 	observed, result, err := d.run(ctx, owner, RepositoryReadWrite, args...)
 	if err != nil {
 		return result, err
@@ -95,6 +102,16 @@ func (d Driver) Backup(ctx context.Context, owner provider.Ownership, paths, exc
 		}
 	}
 	return result, fmt.Errorf("restic backup omitted its full snapshot ID")
+}
+
+// BackupCopy stores a staged tree with its original restore layout. Restic's
+// relative paths omit the staging prefix from the restored tree.
+func (d Driver) BackupCopy(ctx context.Context, owner provider.Ownership, root string, paths []string) (Result, error) {
+	if !strings.HasPrefix(root, "/var/tmp/dorf-persistence/copy-") || path.Clean(root) != root {
+		return Result{}, fmt.Errorf("invalid checkpoint copy root")
+	}
+	d.workingDirectory = root
+	return d.Backup(ctx, owner, paths, nil)
 }
 
 func (d Driver) Restore(ctx context.Context, owner provider.Ownership, snapshot, target string) (Result, error) {
@@ -160,6 +177,9 @@ func (d Driver) runWithRepositoryOwner(ctx context.Context, destination, reposit
 	// PID, and a retry cannot overlap a command whose termination was uncertain.
 	command := []string{"/usr/bin/flock", "--nonblock", "--no-fork", "/var/tmp/dorf-restic.lock", "/usr/bin/nice", "-n", "10", executable,
 		"--cache-dir", fmt.Sprintf("/var/tmp/dorf-restic-cache/%x", digest)}
+	if d.workingDirectory != "" {
+		command = append([]string{"/bin/bash", "-c", `cd -- "$1" || exit; shift; exec "$@"`, "dorf-checkpoint-upload", d.workingDirectory}, command...)
+	}
 	started := time.Now()
 	observed, err := d.Sandbox.Run(ctx, destination, provider.RunRequest{Args: append(command, args...), Env: environment, Timeout: timeout})
 	result := Result{Duration: time.Since(started), Cancelled: ctx.Err() != nil, RemoteStopped: observed.Stopped, RemoteStopDuration: observed.StopDuration}

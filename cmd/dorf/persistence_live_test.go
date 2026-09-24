@@ -172,32 +172,14 @@ func TestLivePersistenceRecovery(t *testing.T) {
 		t.Fatalf("cancelled checkpoint unexpectedly became authoritative: %v", err)
 	}
 	successResources := proof.resourceSample()
-	var checkpoint persistence.Checkpoint
-	resolver := profileRuntimeResolver{cfg: cfg, store: store, client: tasks, emit: proof.emit}
-	if err := runWithCheckpoints(ctx, resolver, func(foregroundCtx context.Context) error {
-		ticker := time.NewTicker(100 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			published, err := store.LastCheckpoint(foregroundCtx, proof.sandboxID)
-			if err == nil {
-				checkpoint = published
-				return nil
-			}
-			if !errors.Is(err, persistence.ErrCheckpointNotFound) {
-				return err
-			}
-			select {
-			case <-foregroundCtx.Done():
-				return foregroundCtx.Err()
-			case <-ticker.C:
-			}
-		}
-	}); err != nil {
+	service = proof.checkpointService(cfg)
+	checkpoint, err := service.CaptureCopy(ctx, proof.sandboxID, "", func(persistence.CaptureBoundary) {})
+	if err != nil {
 		t.Fatal(err)
 	}
 	successDelta := successResources.delta(proof.resourceSample())
 	if checkpoint.CaptureBoundary != expectedBoundary {
-		t.Fatal("automatic idle checkpoint published a different execution boundary")
+		t.Fatal("requested checkpoint published a different execution boundary")
 	}
 	if len(checkpoint.SnapshotID) != 64 || checkpoint.Repository != baseConfig.ID {
 		t.Fatal("idle checkpoint omitted its exact immutable storage identity")
