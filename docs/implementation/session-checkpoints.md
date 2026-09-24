@@ -15,14 +15,17 @@ configured Codex/E2B base-package profile. A bounded live proof passed through t
 worker, pinned Codex 0.154.0, two E2B VMs, and direct R2/restic checkpoints. It restored the same
 native Thread into a held new Session, replaced synthetic credentials before release, continued a
 native Turn, produced an independent checkpoint, and cleaned up only the destination. Model inference
-used a deterministic local Responses fixture; a production model continuation is unproved. The
+used a deterministic local Responses fixture; deployed configured-model coverage is described below. The
 branch contract and current limits are below.
 
 The client-initiated copy/upload revision passed a composed provider proof through public API and
 private worker HTTP: native copy, independent restore into a held Session, activation, continued
 native execution, and destination-only cleanup. Inference was controlled. The native copy and
-stock-restic restore-layout checks also run locally. This proof does not establish personal-client
-activation or production-model behavior for the revised protocol.
+stock-restic restore-layout checks also run locally. A subsequent isolated deployed 0.30.1 test used
+the configured model connection and normal idle policy: API capture, independent restore, native
+continuation, application callback reachability, and source independence passed. The always-running
+fixture had missed idle suspension during capture; the power lock below corrects that interaction.
+These synthetic tests do not establish personal-client activation or broader behavior quality.
 
 ## Contract
 
