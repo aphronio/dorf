@@ -171,3 +171,95 @@ func TestCanceledSandboxActivityKeepsFenceUntilFinishIsRecorded(t *testing.T) {
 		t.Fatalf("finish was not durable: recent=%v error=%v", recent, err)
 	}
 }
+
+func TestBackgroundSandboxUseSkipsPauseWithoutBlockingSessionExecution(t *testing.T) {
+	db, store, client := testDatabase(t)
+	ctx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+	defer stop()
+	session, _, err := direct.NewAdmissionService(store, client.QueueName(), providerCheck{}).Admit(ctx, direct.AdmissionRequest{AdmissionKey: fmt.Sprintf("background-use-%d", time.Now().UnixNano()), SandboxProfile: "incus", ProviderConnection: "primary", Model: "model-test", ReasoningEffort: "low"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, "update dorf.sessions set sandbox_last_active_at=clock_timestamp()-interval '2 minutes' where id=$1", session.ID); err != nil {
+		t.Fatal(err)
+	}
+	useCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	entered, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	done := make(chan error, 1)
+	go func() {
+		done <- store.WithSandboxAwake(useCtx, session.ID, func() error {
+			close(entered)
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+			return useCtx.Err()
+		})
+	}()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	var pauses int
+	external := idleIntegrationExternals{pause: func() error { pauses++; return nil }}
+	reconcile := func() {
+		t.Helper()
+		if err := core.NewExecutionService(store, external, nil, nil).ReconcileIdleSandboxes(ctx, session.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reconcile()
+	if err := store.WithSessionFence(ctx, session.ID, func() error { return nil }); err != nil {
+		t.Fatalf("background use blocked ordinary execution: %v", err)
+	}
+	cancel()
+	reconcile()
+	if pauses != 0 {
+		t.Fatal("paused before background command cleanup finished")
+	}
+	release <- struct{}{}
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("background operation error: %v", err)
+	}
+	reconcile()
+	if pauses != 1 {
+		t.Fatal("completed background use prevented normal idle pause")
+	}
+}
+
+func TestBackgroundSandboxUseWaitsForAlreadyStartedPause(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	paused, resume := make(chan struct{}), make(chan struct{})
+	defer close(resume)
+	done := make(chan error, 1)
+	go func() {
+		done <- store.WithSandboxPauseFence(ctx, "pause-first", func() error {
+			close(paused)
+			select {
+			case <-resume:
+			case <-ctx.Done():
+			}
+			return nil
+		})
+	}()
+	<-paused
+	useCtx, stop := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer stop()
+	entered := false
+	err := store.WithSandboxAwake(useCtx, "pause-first", func() error { entered = true; return nil })
+	if err == nil || entered {
+		t.Fatal("background use overlapped an already-running pause")
+	}
+	resume <- struct{}{}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WithSandboxAwake(ctx, "pause-first", func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+}

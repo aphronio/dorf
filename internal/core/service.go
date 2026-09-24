@@ -17,6 +17,7 @@ type ExecutionStore interface {
 	NativeState(context.Context, string) (NativeState, error)
 	FinishNativeMutation(context.Context, string, int64) error
 	WithSessionFence(context.Context, string, func() error) error
+	WithSandboxPauseFence(context.Context, string, func() error) error
 	AuthorizeSandboxAction(context.Context, string, string, string) (SandboxActionAuthorization, error)
 	RecordSandboxActionSuccess(context.Context, string) error
 	BindSandboxResource(context.Context, Sandbox, string) error

@@ -36,6 +36,10 @@ func (s *idleStore) WithSessionFence(_ context.Context, _ string, run func() err
 	return run()
 }
 
+func (s *idleStore) WithSandboxPauseFence(_ context.Context, _ string, run func() error) error {
+	return run()
+}
+
 type idleExternals struct {
 	Externals
 	store *idleStore

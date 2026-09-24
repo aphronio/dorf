@@ -29,8 +29,11 @@ func (a Agent) CopyPersistenceCapture(ctx context.Context, owner provider.Owners
 		Args:    []string{"python3", "-c", copyPersistenceTree, root, string(paths), string(excludes)},
 		Timeout: 120 * time.Second,
 	})
-	if err != nil || result.ExitCode != 0 {
-		return "", fmt.Errorf("copy native checkpoint failed")
+	if err != nil {
+		return "", fmt.Errorf("copy native checkpoint: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return "", fmt.Errorf("copy native checkpoint failed (exit %d)", result.ExitCode)
 	}
 	return root, nil
 }

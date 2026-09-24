@@ -59,6 +59,16 @@ func (c checkpointCapture) CaptureCopy(ctx context.Context, b persistence.Captur
 }
 
 func (c checkpointCapture) capture(ctx context.Context, b persistence.CaptureBoundary, copied func(context.Context) error) (persistence.Reference, error) {
+	var reference persistence.Reference
+	err := c.store.WithSandboxAwake(ctx, b.SessionID, func() error {
+		var err error
+		reference, err = c.captureAwake(ctx, b, copied)
+		return err
+	})
+	return reference, err
+}
+
+func (c checkpointCapture) captureAwake(ctx context.Context, b persistence.CaptureBoundary, copied func(context.Context) error) (persistence.Reference, error) {
 	session, err := c.store.Session(ctx, b.SessionID)
 	if err != nil {
 		return persistence.Reference{}, err

@@ -49,6 +49,11 @@ this slice does not infer package state or release the upgrade hold.
 
 Client-requested copies use the configured bounded backup timeout; they do not depend on the
 old five-second idle window. A failed or interrupted upload is not a recovery checkpoint.
+Capture and upload hold a connection-owned shared power lock. Idle reconciliation takes its
+exclusive counterpart without waiting and skips suspension while capture uses the guest. An
+already-started pause finishes before capture can connect. This lock is independent of the
+Session execution fence: new native work remains possible after the copy boundary. Cancellation
+retains the lock through remote command cleanup; connection loss releases it without a lease table.
 Local copies are temporary, not a second durable storage tier. Normal completion/failure removes
 them; abrupt worker loss may leave private guest artifacts until resource cleanup. Pending
 uploads are not resumed across worker replacement in this slice.

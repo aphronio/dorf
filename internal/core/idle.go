@@ -42,37 +42,39 @@ func (s ExecutionService) ReconcileIdleSandboxes(ctx context.Context, sessionID 
 		return fmt.Errorf("idle reconciliation requires a Session identity")
 	}
 	return s.store.WithSessionFence(ctx, sessionID, func() error {
-		session, err := s.store.Session(ctx, sessionID)
-		if err != nil {
-			return err
-		}
-		if session.ID != sessionID {
-			return fmt.Errorf("idle reconciliation changed Session identity")
-		}
-		if !session.canPause() {
-			return nil
-		}
-		idle, err := s.store.SandboxIdleFor(ctx, sessionID, SandboxIdleGracePeriod)
-		if err != nil || !idle {
-			return err
-		}
-		sandboxes, err := s.store.Sandboxes(ctx, sessionID)
-		if err != nil {
-			return err
-		}
-		for _, sandbox := range sandboxes {
-			if sandbox.SessionID != sessionID {
-				return fmt.Errorf("idle Sandbox has a different Session owner")
+		return s.store.WithSandboxPauseFence(ctx, sessionID, func() error {
+			session, err := s.store.Session(ctx, sessionID)
+			if err != nil {
+				return err
 			}
-			idle, err := s.nativeIdle(ctx, session, sandbox)
+			if session.ID != sessionID {
+				return fmt.Errorf("idle reconciliation changed Session identity")
+			}
+			if !session.canPause() {
+				return nil
+			}
+			idle, err := s.store.SandboxIdleFor(ctx, sessionID, SandboxIdleGracePeriod)
 			if err != nil || !idle {
 				return err
 			}
-			if err := pauser.SandboxPause(ctx, session, sandbox); err != nil {
+			sandboxes, err := s.store.Sandboxes(ctx, sessionID)
+			if err != nil {
 				return err
 			}
-		}
-		return nil
+			for _, sandbox := range sandboxes {
+				if sandbox.SessionID != sessionID {
+					return fmt.Errorf("idle Sandbox has a different Session owner")
+				}
+				idle, err := s.nativeIdle(ctx, session, sandbox)
+				if err != nil || !idle {
+					return err
+				}
+				if err := pauser.SandboxPause(ctx, session, sandbox); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
 	})
 }
 
