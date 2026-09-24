@@ -48,6 +48,35 @@ func TestReadCheckpointConfigDefaultsAndMatchesExactProfile(t *testing.T) {
 	}
 }
 
+func TestCheckpointPinCommandTimesOutWithInheritedStdoutPipe(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := runCheckpointPin(ctx, "/usr/bin/python3", []string{"-c", "import subprocess,time; subprocess.Popen(['sleep','10']); time.sleep(10)"},
+		"attempt", persistence.CaptureBoundary{}, persistence.Reference{})
+	if err == nil || time.Since(started) > 3*time.Second {
+		t.Fatalf("pin command did not stop promptly: elapsed=%s error=%v", time.Since(started), err)
+	}
+}
+
+func TestCheckpointPinCommandReceivesExactReference(t *testing.T) {
+	boundary := persistence.CaptureBoundary{SessionID: "session", NativeRevision: 7}
+	reference := persistence.Reference{Repository: "repo", SnapshotID: strings.Repeat("a", 64)}
+	output, err := runCheckpointPin(context.Background(), "/usr/bin/python3", []string{"-c", "import json,sys; value=json.load(sys.stdin); print(json.dumps({'attempt':value['attempt_id'],'revision':value['boundary']['native_revision'],'snapshot':value['reference']['snapshot_id']}))"},
+		"attempt", boundary, reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pinned struct {
+		Attempt  string `json:"attempt"`
+		Revision int64  `json:"revision"`
+		Snapshot string `json:"snapshot"`
+	}
+	if err := json.Unmarshal(output, &pinned); err != nil || pinned.Attempt != "attempt" || pinned.Revision != 7 || pinned.Snapshot != reference.SnapshotID {
+		t.Fatalf("pin command receipt=%s error=%v", output, err)
+	}
+}
+
 func TestReadCheckpointConfigWildcardKeepsProfileScope(t *testing.T) {
 	cfg := validCheckpointConfig()
 	cfg.ProfileRevision = "*"

@@ -19,6 +19,8 @@ var problemCatalog = []ProblemDescriptor{
 	describeProblem(422, "attachment_image_too_large", "Attachment image exceeds the decoded pixel limit", false),
 	describeProblem(415, "body_not_allowed", "This operation does not accept a body or Content-Type", false),
 	describeProblem(413, "body_too_large", "Request body is too large", false),
+	describeProblem(409, "checkpoint_conflict", "Checkpoint operation conflicts with current state", false),
+	describeProblem(404, "checkpoint_not_found", "Checkpoint or attempt is unavailable", false),
 	describeProblem(409, "client_conflict", "Client credential is already registered", false),
 	describeProblem(401, "enrollment_unavailable", "Enrollment is invalid, expired, or already used", false),
 	describeProblem(404, "file_not_found", "Sandbox file not found", false),

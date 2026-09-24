@@ -21,6 +21,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/controlauth"
 	"github.com/aphronio/dorf/internal/core"
+	"github.com/aphronio/dorf/internal/persistence"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
@@ -69,6 +70,13 @@ func newHandlerContext(discovery Discovery, auth Auth, sessions Sessions, profil
 	h.mux.HandleFunc("/v1/sandboxes/{sandbox}/status", h.authenticate(h.sandboxStatusRoute))
 	h.mux.HandleFunc("/v1/sandboxes/{sandbox}/exec", h.authenticate(h.sandboxExecRoute))
 	h.mux.HandleFunc("/v1/sandboxes/{sandbox}/files", h.authenticate(h.fileRoute))
+	h.mux.HandleFunc("/v1/sessions/{session}/checkpoint-boundary", h.authenticate(h.checkpointBoundaryRoute))
+	h.mux.HandleFunc("/v1/sessions/{session}/checkpoint-captures", h.authenticate(h.captureStartRoute))
+	h.mux.HandleFunc("/v1/checkpoint-captures/{capture}", h.authenticate(h.captureRoute))
+	h.mux.HandleFunc("/v1/checkpoint-captures/{capture}/commit", h.authenticate(h.captureCommitRoute))
+	h.mux.HandleFunc("/v1/sessions/{session}/checkpoint-branches", h.authenticate(h.branchStartRoute))
+	h.mux.HandleFunc("/v1/checkpoint-branches/{branch}", h.authenticate(h.branchRoute))
+	h.mux.HandleFunc("/v1/checkpoint-branches/{branch}/release", h.authenticate(h.branchReleaseRoute))
 	h.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		h.fail(w, problem("not_found"))
 	})
@@ -666,6 +674,10 @@ func admissionProblemCode(err error) string {
 		return "profile_not_found"
 	case errors.Is(err, controlauth.ErrInvalidInput), errors.Is(err, ErrInvalidInput):
 		return "invalid_input"
+	case errors.Is(err, persistence.ErrCaptureNotFound):
+		return "checkpoint_not_found"
+	case errors.Is(err, persistence.ErrCaptureConflict):
+		return "checkpoint_conflict"
 	case errors.Is(err, ErrIdempotencyConflict):
 		return "idempotency_conflict"
 	default:

@@ -182,8 +182,9 @@ Sandbox       -> HTTPS model origin -> Provider Gateway
 The API receives its database URL, read-only API state, and an independently derived reader token
 through the protected Compose environment. It receives no Incus
 socket or identity, E2B key, Gateway state, or provider configuration. The worker's narrow reader answers
-only default and named AI-connection observation, exact Session-owned Sandbox file reads and bounded Sandbox file writes, and one
-native Session event submission or native conversation read. It has no generic proxy, provider selector,
+default and named AI-connection observation, exact Session-owned Sandbox file reads and bounded Sandbox file writes, and one
+native Session event submission or native conversation read. It also exposes fixed checkpoint
+capture and branch operations, preserving worker-only provider and storage authority. It has no generic proxy, provider selector,
 or credential response.
 
 The Compose manifest encodes startup dependencies, health checks, published ports, profile-gated
@@ -244,3 +245,12 @@ The workspace read exposes current configured backup coverage and the last publi
 through the existing worker observation boundary. It performs no native execution or capture.
 The [checkpoint contract](implementation/session-checkpoints.md#workspace-inspection) owns the
 coverage and freshness semantics; OpenAPI owns the response fields.
+
+## Checkpoint capture and branches
+
+Authenticated clients can coordinate native saves and restore independent held Sessions through
+fixed API operations. The [checkpoint contract](implementation/session-checkpoints.md) owns guard
+lifetimes, provisional-reference rules and branch readiness; OpenAPI owns the exact schemas.
+Client application state remains outside Dorf. No deployment-shell access or caller-selected
+callback execution is required. A worker restart invalidates pending captures, while published
+checkpoints and admitted branches retain their durable receipts.

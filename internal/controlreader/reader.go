@@ -70,6 +70,7 @@ type AdmissionProvider interface {
 // Service owns provider-facing reads. It accepts only durable Dorf identities
 // and one already-validated Sandbox file path.
 type Service struct {
+	Checkpoints          persistence.Operations
 	Workspace            func(context.Context, core.Session) (persistence.Workspace, error)
 	ObservationAttention func(context.Context, core.Session) (string, error)
 	Replies              *codex.ReplyFeed
@@ -343,6 +344,10 @@ func NewHandler(token string, service Service) (http.Handler, error) {
 		}),
 	}
 
+	for path, handle := range checkpointRoutes(service.Checkpoints) {
+		routes[path] = handle
+	}
+
 	expected := sha256.Sum256([]byte(token))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -478,37 +483,37 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
 	return true
 }
 
+var serviceProblems = []struct {
+	err    error
+	status int
+	code   string
+}{
+	{persistence.ErrCaptureNotFound, 404, "checkpoint_not_found"},
+	{persistence.ErrCaptureConflict, 409, "checkpoint_conflict"},
+	{core.ErrNativeUnknown, 409, "native_outcome_unknown"},
+	{core.ErrNativeUnavailable, 409, "native_unavailable"},
+	{core.ErrInvalidEvent, 422, "invalid_event"},
+	{ErrSessionNotFound, 404, "session_not_found"},
+	{core.ErrTurnNotFound, 404, "turn_not_found"},
+	{core.ErrTimelineUnavailable, 409, "timeline_unavailable"},
+	{ErrInvalidRequest, 422, "invalid_request"},
+	{ErrSandboxNotFound, 404, "sandbox_not_found"},
+	{ErrInvalidFilePath, 422, "invalid_file_path"},
+	{ErrFileNotFound, 404, "file_not_found"},
+	{ErrFileTooLarge, 409, "file_too_large"},
+	{ErrUnavailable, 409, "unavailable"},
+	{ErrResponseTooLarge, 409, "response_too_large"},
+	{ErrUnauthorized, 401, "unauthorized"},
+}
+
 func writeServiceError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, core.ErrNativeUnknown):
-		writeProblem(w, 409, "native_outcome_unknown")
-	case errors.Is(err, core.ErrNativeUnavailable):
-		writeProblem(w, 409, "native_unavailable")
-	case errors.Is(err, core.ErrInvalidEvent):
-		writeProblem(w, 422, "invalid_event")
-	case errors.Is(err, ErrSessionNotFound):
-		writeProblem(w, http.StatusNotFound, "session_not_found")
-	case errors.Is(err, core.ErrTurnNotFound):
-		writeProblem(w, http.StatusNotFound, "turn_not_found")
-	case errors.Is(err, core.ErrTimelineUnavailable):
-		writeProblem(w, http.StatusConflict, "timeline_unavailable")
-	case errors.Is(err, ErrInvalidRequest):
-		writeProblem(w, http.StatusUnprocessableEntity, "invalid_request")
-	case errors.Is(err, ErrSandboxNotFound):
-		writeProblem(w, http.StatusNotFound, "sandbox_not_found")
-	case errors.Is(err, ErrInvalidFilePath):
-		writeProblem(w, http.StatusUnprocessableEntity, "invalid_file_path")
-	case errors.Is(err, ErrFileNotFound):
-		writeProblem(w, http.StatusNotFound, "file_not_found")
-	case errors.Is(err, ErrFileTooLarge):
-		writeProblem(w, http.StatusConflict, "file_too_large")
-	case errors.Is(err, ErrUnavailable):
-		writeProblem(w, http.StatusConflict, "unavailable")
-	case errors.Is(err, ErrResponseTooLarge):
-		writeProblem(w, http.StatusConflict, "response_too_large")
-	default:
-		writeProblem(w, http.StatusInternalServerError, "internal_error")
+	for _, entry := range serviceProblems {
+		if errors.Is(err, entry.err) {
+			writeProblem(w, entry.status, entry.code)
+			return
+		}
 	}
+	writeProblem(w, http.StatusInternalServerError, "internal_error")
 }
 
 func writeProblem(w http.ResponseWriter, status int, code string) {
@@ -736,55 +741,24 @@ func decodeProblem(response *http.Response) error {
 }
 
 func problemError(code string, status int) error {
-	switch code {
-	case "native_outcome_unknown":
-		return core.ErrNativeUnknown
-	case "native_unavailable":
-		return core.ErrNativeUnavailable
-	case "invalid_event":
-		return core.ErrInvalidEvent
-	case "session_not_found":
-		return ErrSessionNotFound
-	case "turn_not_found":
-		return core.ErrTurnNotFound
-	case "timeline_unavailable":
-		return core.ErrTimelineUnavailable
-	case "unauthorized":
-		return ErrUnauthorized
-	case "invalid_request":
-		return ErrInvalidRequest
-	case "sandbox_not_found":
-		return ErrSandboxNotFound
-	case "invalid_file_path":
-		return ErrInvalidFilePath
-	case "file_not_found":
-		return ErrFileNotFound
-	case "file_too_large":
-		return ErrFileTooLarge
-	case "unavailable":
-		return ErrUnavailable
-	case "response_too_large":
-		return ErrResponseTooLarge
-	default:
-		return fmt.Errorf("control reader returned HTTP %d", status)
+	for _, entry := range serviceProblems {
+		if entry.code == code {
+			return entry.err
+		}
 	}
+	return fmt.Errorf("control reader returned HTTP %d", status)
 }
 
 func problemMatchesStatus(code string, status int) bool {
-	switch code {
-	case "unauthorized":
-		return status == http.StatusUnauthorized
-	case "invalid_request":
-		return status == http.StatusBadRequest || status == http.StatusUnprocessableEntity
-	case "sandbox_not_found", "file_not_found", "session_not_found", "turn_not_found":
-		return status == http.StatusNotFound
-	case "invalid_file_path", "invalid_event":
-		return status == http.StatusUnprocessableEntity
-	case "native_outcome_unknown", "native_unavailable", "unavailable", "response_too_large", "timeline_unavailable", "file_too_large":
-		return status == http.StatusConflict
-	default:
-		return false
+	if code == "invalid_request" && status == http.StatusBadRequest {
+		return true
 	}
+	for _, entry := range serviceProblems {
+		if entry.code == code {
+			return entry.status == status
+		}
+	}
+	return false
 }
 
 func validToken(value string) bool {

@@ -65,6 +65,27 @@ Sessions use the configured backup timeout instead.
   The Harness adapter owns native roots and exclusions; the same exclusions govern observation
   and backup. The Sandbox adapter supplies its workspace through `Workspace()`. Diagnostics retain bounded failure classes;
   completed watcher control files are removed after process termination is confirmed.
+- A local operator may run `dorf checkpoint capture-pin SESSION --pin-command /absolute/executable -- [args...]`.
+  The executable receives one JSON object on stdin with a fresh `attempt_id`, the exact
+  `boundary`, and the uploaded `reference`. It must return a bounded JSON object describing
+  a provisional application view within 30 seconds. Dorf keeps the native file guard armed
+  through that command, then checks the guard and publishes the exact checkpoint. Only a
+  successful invocation prints the checkpoint and pin result together. A failed or lost
+  invocation leaves the application pin unready; its owner must expire or remove provisional
+  artifacts. Every retry is a new capture attempt. This synchronous operation skips ineligible
+  or busy boundaries and does not promise continuous save coverage. It does not itself gate
+  application writers or turn a database pin into a complete application snapshot.
+- Authenticated clients can use the same guard through the checkpoint capture API. Start returns
+  an attempt; poll until `ready`, pin client state locally, confirm, then poll for `published`.
+  Only that terminal result contains an authoritative checkpoint. Native activity still invalidates
+  the save. Attempts last at most three minutes, with at most 30 seconds for client pinning; one
+  pending attempt per Session and 32 retained attempts per worker bound resource use. Terminal
+  replies expire five minutes after the deadline. Missing or restarted attempts require discarding
+  unconfirmed client artifacts; a lost start response must not be blindly retried. Cancellation
+  requests stop the guard; observe the final result because publication may have won the race.
+  No application callback or executable is accepted by the API. The managed worker retains all
+  provider/storage authority. Branch admission, status and release also have authenticated routes.
+  [OpenAPI](../../internal/controlapi/openapi.json) owns the exact routes and schemas.
 - Publication uses a short Session fence plus the admission transaction lock. There is no Session fence
   held across hashing, uploads, or remote cancellation. Accepted input, new activity, package
   maintenance, or resource replacement invalidate an older boundary.
@@ -200,9 +221,10 @@ dorf checkpoint branch-status UNIQUE_BRANCH_ID
 `checkpoint boundary` is a read-only, single-Session observation under the Session fence. It
 returns admission state, retained native Thread and mutation revision, pending native input/Turn
 IDs, and the capture boundary/eligibility from that same fenced observation. It does not call the
-Harness or read native history. A client composing its own application snapshot may compare this
-with an exact published checkpoint before and after its separately fenced application export;
-Dorf does not claim that the client's database was captured atomically with the native checkpoint.
+Harness or read native history. Matching boundary observations alone cannot certify a composed
+application/native save: unobserved file changes may occur between observations. Use `capture-pin`
+to establish an application view while native file observation remains continuous. The application
+owns consistency of that view and publishes its combined save only after the command succeeds.
 Branch receipt JSON omits `restored_at`, `release_requested_at`, and `ready_at` until each milestone
 is actually reached; clients must not treat a zero time as completion.
 

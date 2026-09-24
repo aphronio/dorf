@@ -64,7 +64,7 @@ func (s Store) RequestCheckpointBranch(ctx context.Context, queue string, reques
 func replayCheckpointBranch(ctx context.Context, tx *sql.Tx, q *dbsql.Queries, request persistence.BranchRequest, destinationID string) (persistence.BranchReceipt, error) {
 	replayed, err := checkpointBranchReceipt(ctx, q, request.ID)
 	if err != nil || replayed.BranchRequest != request || replayed.DestinationSessionID != destinationID {
-		return persistence.BranchReceipt{}, fmt.Errorf("branch identity already belongs to another request")
+		return persistence.BranchReceipt{}, fmt.Errorf("%w: branch identity already belongs to another request", persistence.ErrCaptureConflict)
 	}
 	return replayed, tx.Commit()
 }
@@ -84,10 +84,10 @@ func authorizeBranchSource(ctx context.Context, q *dbsql.Queries, request persis
 	if checkpoint.SessionID != source.ID || checkpoint.SandboxID != core.MainSandboxName(source.ID) ||
 		checkpoint.ProfileName != source.SandboxProfile || checkpoint.ProfileRevision != source.SandboxProfileRevision ||
 		checkpoint.NativeRevision == 0 || source.ThreadID == "" {
-		return dbsql.GetSessionRow{}, dbsql.GetSandboxCheckpointByReferenceRow{}, fmt.Errorf("source checkpoint cannot bind a supported native Thread")
+		return dbsql.GetSessionRow{}, dbsql.GetSandboxCheckpointByReferenceRow{}, fmt.Errorf("%w: source checkpoint cannot bind a supported native Thread", persistence.ErrCaptureConflict)
 	}
 	if checkpoint.EffectiveUpgradeID.Valid {
-		return dbsql.GetSessionRow{}, dbsql.GetSandboxCheckpointByReferenceRow{}, fmt.Errorf("branching an activated package generation is not yet supported")
+		return dbsql.GetSessionRow{}, dbsql.GetSandboxCheckpointByReferenceRow{}, fmt.Errorf("%w: branching an activated package generation is not yet supported", persistence.ErrCaptureConflict)
 	}
 	return source, checkpoint, nil
 }
@@ -183,7 +183,7 @@ func (s Store) ReleaseCheckpointBranch(ctx context.Context, queue, id string) (p
 		return persistence.BranchReceipt{}, err
 	}
 	if receipt.RestoredAt.IsZero() {
-		return persistence.BranchReceipt{}, fmt.Errorf("branch has not restored its checkpoint")
+		return persistence.BranchReceipt{}, fmt.Errorf("%w: branch has not restored its checkpoint", persistence.ErrCaptureConflict)
 	}
 	err = s.WithSessionFence(ctx, receipt.DestinationSessionID, func() error {
 		tx, err := s.DB.BeginTx(ctx, nil)
@@ -197,7 +197,7 @@ func (s Store) ReleaseCheckpointBranch(ctx context.Context, queue, id string) (p
 			return err
 		}
 		if !session.AdmissionOpen || session.CleanupState != core.CleanupPending || session.ThreadID != receipt.ThreadID {
-			return fmt.Errorf("branch Session is not open with its exact native binding")
+			return fmt.Errorf("%w: branch Session is not open with its exact native binding", persistence.ErrCaptureConflict)
 		}
 		if err := expectOneRows(q.RequestCheckpointBranchRelease(ctx, id)); err != nil {
 			return err

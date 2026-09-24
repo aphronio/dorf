@@ -27,6 +27,12 @@ type Capturer interface {
 	Capture(context.Context, CaptureBoundary) (Reference, error)
 }
 
+// GuardedCapturer keeps its native source guard active while pin runs. A
+// successful pin is still provisional until the guard and publication succeed.
+type GuardedCapturer interface {
+	CaptureWithPin(context.Context, CaptureBoundary, func(context.Context, Reference) error) (Reference, error)
+}
+
 type Service struct {
 	Store     CaptureStore
 	Driver    Capturer
@@ -39,6 +45,23 @@ type Service struct {
 // holds no Session fence while reading native files, hashing, uploading or stopping
 // a cancelled process. Publication independently rechecks the durable boundary.
 func (s Service) Capture(ctx context.Context, sandboxID string, cleanup bool) (Checkpoint, error) {
+	return s.capture(ctx, sandboxID, cleanup, nil)
+}
+
+// CaptureWithPin calls pin after the immutable upload is available and before
+// the native guard ends. The caller must keep any pinned application view
+// provisional until this method returns a published checkpoint.
+func (s Service) CaptureWithPin(ctx context.Context, sandboxID string, pin func(context.Context, CaptureBoundary, Reference) error) (Checkpoint, error) {
+	if pin == nil {
+		return Checkpoint{}, fmt.Errorf("checkpoint pin is not configured")
+	}
+	if _, ok := s.Driver.(GuardedCapturer); !ok {
+		return Checkpoint{}, fmt.Errorf("checkpoint driver does not support guarded pinning")
+	}
+	return s.capture(ctx, sandboxID, false, pin)
+}
+
+func (s Service) capture(ctx context.Context, sandboxID string, cleanup bool, pin func(context.Context, CaptureBoundary, Reference) error) (Checkpoint, error) {
 	boundary, err := s.Store.Boundary(ctx, sandboxID, cleanup)
 	if err != nil {
 		return Checkpoint{}, err
@@ -58,7 +81,13 @@ func (s Service) Capture(ctx context.Context, sandboxID string, cleanup bool) (C
 	defer cancel()
 	monitorDone := make(chan error, 1)
 	go func() { monitorDone <- s.monitor(workCtx, cancel, boundary) }()
-	reference, captureErr := s.Driver.Capture(workCtx, boundary)
+	var reference Reference
+	var captureErr error
+	if pin == nil {
+		reference, captureErr = s.Driver.Capture(workCtx, boundary)
+	} else {
+		reference, captureErr = s.captureWithPin(workCtx, boundary, pin)
+	}
 	invalidated := workCtx.Err() != nil
 	cancel()
 	monitorErr := <-monitorDone
@@ -75,6 +104,22 @@ func (s Service) Capture(ctx context.Context, sandboxID string, cleanup bool) (C
 		return Checkpoint{}, captureErr
 	}
 	return s.publish(ctx, boundary, reference, started)
+}
+
+func (s Service) captureWithPin(ctx context.Context, boundary CaptureBoundary, pin func(context.Context, CaptureBoundary, Reference) error) (Reference, error) {
+	return s.Driver.(GuardedCapturer).CaptureWithPin(ctx, boundary, func(pinCtx context.Context, reference Reference) error {
+		if err := s.Claim(pinCtx); err != nil {
+			return err
+		}
+		current, err := s.Store.Boundary(pinCtx, boundary.SandboxID, false)
+		if err != nil {
+			return err
+		}
+		if current != boundary || !current.Eligible {
+			return ErrCheckpointSuperseded
+		}
+		return pin(pinCtx, boundary, reference)
+	})
 }
 
 func (s Service) publish(ctx context.Context, boundary CaptureBoundary, reference Reference, started time.Time) (Checkpoint, error) {

@@ -955,9 +955,12 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 	}
 	defer listener.Close()
 	runtimes := profileRuntimeResolver{cfg: cfg, store: store, client: tasks}
-	reader, err := configuredControlReader(cfg, store, runtimes)
+	reader, err := configuredControlReader(cfg, store, tasks, runtimes)
 	if err != nil {
 		return err
+	}
+	if closer, ok := reader.(interface{ Close() }); ok {
+		defer closer.Close()
 	}
 	auth := controlauth.Service{Store: store}
 	sessions := controlAPISessions{
@@ -967,7 +970,7 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 	}
 	server := controlapi.NewServer(controlapi.Discovery{
 		Product: "dorf", Version: version.Version,
-		Capabilities: []string{"direct_sessions", "session_list", "profile_list", "session_watch", "session_history", "session_events", "native_turns", "session_retry", "sandbox_files", "sandbox_exec", "sandbox_status", "workspace_persistence"},
+		Capabilities: []string{"direct_sessions", "session_list", "profile_list", "session_watch", "session_history", "session_events", "native_turns", "session_retry", "sandbox_files", "sandbox_exec", "sandbox_status", "workspace_persistence", "checkpoint_worlds"},
 	}, auth, sessions, controlAPIProfiles{store: store})
 	serverCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -992,7 +995,7 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 	return err
 }
 
-func configuredControlReader(cfg config.Config, store postgres.Store, runtimes core.SandboxRuntimeResolver) (controlReader, error) {
+func configuredControlReader(cfg config.Config, store postgres.Store, tasks *absurd.Client, runtimes core.SandboxRuntimeResolver) (controlReader, error) {
 	origin := strings.TrimSpace(os.Getenv("DORF_CONTROL_READER_ORIGIN"))
 	token := strings.TrimSpace(os.Getenv("DORF_CONTROL_READER_TOKEN"))
 	if origin == "" && token == "" {
@@ -1000,8 +1003,9 @@ func configuredControlReader(cfg config.Config, store postgres.Store, runtimes c
 		// development. Compose always supplies the isolated HTTP capability.
 		return controlreader.Service{
 			Store: store, Runtimes: runtimes,
-			Workspace: (profileRuntimeResolver{cfg: cfg, store: store}).workspace,
-			Provider:  configuredProviderGateway(cfg),
+			Checkpoints: &workerCheckpoints{store: store, tasks: tasks, cfg: cfg},
+			Workspace:   (profileRuntimeResolver{cfg: cfg, store: store}).workspace,
+			Provider:    configuredProviderGateway(cfg),
 		}, nil
 	}
 	if origin == "" || token == "" {

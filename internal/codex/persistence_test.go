@@ -102,6 +102,20 @@ func TestPersistenceWatcherRejectsWorkspaceAndRecursiveMutations(t *testing.T) {
 	}
 }
 
+func TestPersistenceWatcherRejectsChangeDuringApplicationPin(t *testing.T) {
+	fixture := newPersistenceFixture(t, true)
+	defer fixture.stop(t)
+	// Backup has completed, but the application has not yet pinned its view.
+	// The same watcher must remain armed through that pin interval.
+	if err := os.WriteFile(filepath.Join(fixture.workspace, "work.txt"), []byte("changed during pin"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fixture.finish(t)
+	if status := fixture.wait(t); status != "dirty\n" {
+		t.Fatalf("post-backup source change was accepted: status=%q", status)
+	}
+}
+
 func TestPersistenceWatcherRejectsIndirectSQLiteState(t *testing.T) {
 	fixture := newPersistenceFixture(t, false)
 	fixture.stop(t)

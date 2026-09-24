@@ -51,6 +51,17 @@ func (r profileRuntimeResolver) checkpointService(ctx context.Context, boundary 
 }
 
 func (c checkpointCapture) Capture(ctx context.Context, b persistence.CaptureBoundary) (persistence.Reference, error) {
+	return c.capture(ctx, b, nil)
+}
+
+func (c checkpointCapture) CaptureWithPin(ctx context.Context, b persistence.CaptureBoundary, pin func(context.Context, persistence.Reference) error) (persistence.Reference, error) {
+	if pin == nil {
+		return persistence.Reference{}, fmt.Errorf("checkpoint pin is not configured")
+	}
+	return c.capture(ctx, b, pin)
+}
+
+func (c checkpointCapture) capture(ctx context.Context, b persistence.CaptureBoundary, pin func(context.Context, persistence.Reference) error) (persistence.Reference, error) {
 	session, err := c.store.Session(ctx, b.SessionID)
 	if err != nil {
 		return persistence.Reference{}, err
@@ -79,12 +90,12 @@ func (c checkpointCapture) Capture(ctx context.Context, b persistence.CaptureBou
 		err := scoped.WithAccess(accessCtx, owner, func(sandbox provider.Sandbox) error {
 			c.sandbox, c.agent.Sandbox = sandbox, sandbox
 			var err error
-			reference, err = c.captureOwned(ctx, b, owner)
+			reference, err = c.captureOwned(ctx, b, owner, pin)
 			return err
 		})
 		return reference, err
 	}
-	return c.captureOwned(ctx, b, owner)
+	return c.captureOwned(ctx, b, owner, pin)
 }
 
 func checkpointCaptureContext(ctx context.Context, keepRunning bool, boundary persistence.CaptureBoundary, now time.Time) (context.Context, context.CancelFunc, error) {
@@ -101,7 +112,7 @@ func checkpointCaptureContext(ctx context.Context, keepRunning bool, boundary pe
 	return bounded, cancel, nil
 }
 
-func (c checkpointCapture) captureOwned(ctx context.Context, b persistence.CaptureBoundary, owner provider.Ownership) (persistence.Reference, error) {
+func (c checkpointCapture) captureOwned(ctx context.Context, b persistence.CaptureBoundary, owner provider.Ownership, pin func(context.Context, persistence.Reference) error) (persistence.Reference, error) {
 	driver := c.restic()
 	// Initialization uses the same scoped repository, independently of capture.
 	// It is idempotent and does not add a checkpoint reference.
@@ -127,11 +138,17 @@ func (c checkpointCapture) captureOwned(ctx context.Context, b persistence.Captu
 	if err != nil {
 		return persistence.Reference{}, err
 	}
+	reference := persistence.Reference{Repository: c.config.ID, SnapshotID: result.SnapshotID}
+	if pin != nil {
+		if err := pin(ctx, reference); err != nil {
+			return persistence.Reference{}, err
+		}
+	}
 	if err := c.agent.FinishPersistenceCapture(ctx, owner, guard); err != nil {
 		c.recordNativeFailure(b, "finish", err)
 		return persistence.Reference{}, err
 	}
-	return persistence.Reference{Repository: c.config.ID, SnapshotID: result.SnapshotID}, nil
+	return reference, nil
 }
 
 func (c checkpointCapture) restic() persistence.Driver {

@@ -19,13 +19,15 @@ import (
 const workerControlReaderAddress = "0.0.0.0:8756"
 
 type workerControlReader struct {
-	server   *http.Server
-	listener net.Listener
+	server           *http.Server
+	closeCheckpoints func()
+	listener         net.Listener
 }
 
 func controlReaderService(store postgres.Store, tasks *absurd.Client, cfg config.Config) controlreader.Service {
 	return controlreader.Service{
-		Workspace: (profileRuntimeResolver{cfg: cfg, store: store, client: tasks}).workspace,
+		Checkpoints: &workerCheckpoints{store: store, tasks: tasks, cfg: cfg},
+		Workspace:   (profileRuntimeResolver{cfg: cfg, store: store, client: tasks}).workspace,
 		ObservationAttention: func(ctx context.Context, session core.Session) (string, error) {
 			task, err := fetchTaskResult(ctx, tasks, session.CurrentTaskID)
 			if err != nil {
@@ -63,6 +65,11 @@ func newWorkerControlReaderWithListen(token string, service controlreader.Servic
 	}
 	return &workerControlReader{
 		listener: listener,
+		closeCheckpoints: func() {
+			if service.Checkpoints != nil {
+				service.Checkpoints.Close()
+			}
+		},
 		server: &http.Server{
 			Handler:           handler,
 			ReadHeaderTimeout: 10 * time.Second,
@@ -86,6 +93,7 @@ func (r *workerControlReader) serve(ctx context.Context) error {
 }
 
 func (r *workerControlReader) shutdown(ctx context.Context) error {
+	r.closeCheckpoints()
 	if err := r.server.Shutdown(ctx); err != nil {
 		return fmt.Errorf("shut down worker control reader: %w", err)
 	}
@@ -93,6 +101,7 @@ func (r *workerControlReader) shutdown(ctx context.Context) error {
 }
 
 func (r *workerControlReader) close() error {
+	r.closeCheckpoints()
 	if err := r.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 		return fmt.Errorf("close worker control reader: %w", err)
 	}

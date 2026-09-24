@@ -97,7 +97,7 @@ func TestConfiguredControlReaderUsesOnlyCompleteInternalCapability(t *testing.T)
 	t.Run("manual local serve", func(t *testing.T) {
 		t.Setenv("DORF_CONTROL_READER_ORIGIN", "")
 		t.Setenv("DORF_CONTROL_READER_TOKEN", "")
-		reader, err := configuredControlReader(config.Config{}, postgres.Store{}, nil)
+		reader, err := configuredControlReader(config.Config{}, postgres.Store{}, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -109,7 +109,7 @@ func TestConfiguredControlReaderUsesOnlyCompleteInternalCapability(t *testing.T)
 	t.Run("partial capability rejected", func(t *testing.T) {
 		t.Setenv("DORF_CONTROL_READER_ORIGIN", "http://control-reader:8756")
 		t.Setenv("DORF_CONTROL_READER_TOKEN", "")
-		if _, err := configuredControlReader(config.Config{}, postgres.Store{}, nil); err == nil || !strings.Contains(err.Error(), "requires both") {
+		if _, err := configuredControlReader(config.Config{}, postgres.Store{}, nil, nil); err == nil || !strings.Contains(err.Error(), "requires both") {
 			t.Fatalf("configuredControlReader() error=%v", err)
 		}
 	})
@@ -117,7 +117,7 @@ func TestConfiguredControlReaderUsesOnlyCompleteInternalCapability(t *testing.T)
 	t.Run("Compose capability", func(t *testing.T) {
 		t.Setenv("DORF_CONTROL_READER_ORIGIN", "http://control-reader:8756")
 		t.Setenv("DORF_CONTROL_READER_TOKEN", strings.Repeat("a", 64))
-		reader, err := configuredControlReader(config.Config{}, postgres.Store{}, nil)
+		reader, err := configuredControlReader(config.Config{}, postgres.Store{}, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

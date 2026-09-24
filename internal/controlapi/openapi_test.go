@@ -43,6 +43,14 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 	}
 
 	wantOperations := map[string][]string{
+		"/v1/sessions/{session}/checkpoint-boundary": {"get"},
+		"/v1/sessions/{session}/checkpoint-captures": {"post"},
+		"/v1/checkpoint-captures/{capture}":          {"get", "delete"},
+		"/v1/checkpoint-captures/{capture}/commit":   {"post"},
+		"/v1/sessions/{session}/checkpoint-branches": {"post"},
+		"/v1/checkpoint-branches/{branch}":           {"get"},
+		"/v1/checkpoint-branches/{branch}/release":   {"post"},
+
 		"/v1/sessions/{session}/input-capabilities": {"get"},
 		"/v1":                                  {"get"},
 		"/v1/openapi.json":                     {"get"},

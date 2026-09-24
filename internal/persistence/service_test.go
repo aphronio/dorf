@@ -47,6 +47,16 @@ type captureFunc func(context.Context, CaptureBoundary) (Reference, error)
 func (f captureFunc) Capture(ctx context.Context, b CaptureBoundary) (Reference, error) {
 	return f(ctx, b)
 }
+
+type guardedCaptureFunc func(context.Context, CaptureBoundary, func(context.Context, Reference) error) (Reference, error)
+
+func (f guardedCaptureFunc) Capture(ctx context.Context, b CaptureBoundary) (Reference, error) {
+	return f(ctx, b, nil)
+}
+
+func (f guardedCaptureFunc) CaptureWithPin(ctx context.Context, b CaptureBoundary, pin func(context.Context, Reference) error) (Reference, error) {
+	return f(ctx, b, pin)
+}
 func captureServiceFixture(driver Capturer) (Service, *captureStoreFixture) {
 	store := &captureStoreFixture{boundary: CaptureBoundary{SessionID: "session-test", SandboxID: "sandbox-test", ResourceID: "resource-test", NativeRevision: 1, Eligible: true, LastActivityAt: time.Now().Add(-time.Minute)}}
 	return Service{Store: store, Driver: driver, Claim: func(context.Context) error { return nil }}, store
@@ -170,5 +180,77 @@ func TestLostTaskClaimCannotPublishCompletedUpload(t *testing.T) {
 	}
 	if store.published != 0 {
 		t.Fatal("upload published after its task claim was lost")
+	}
+}
+
+func TestGuardedPinRunsBeforeNativeFinishAndPublication(t *testing.T) {
+	guardActive := false
+	called := false
+	service, store := captureServiceFixture(guardedCaptureFunc(func(ctx context.Context, _ CaptureBoundary, pin func(context.Context, Reference) error) (Reference, error) {
+		guardActive = true
+		ref := Reference{Repository: "test", SnapshotID: "exact"}
+		if err := pin(ctx, ref); err != nil {
+			return Reference{}, err
+		}
+		guardActive = false // native Finish would validate and stop here
+		return ref, nil
+	}))
+	_, err := service.CaptureWithPin(context.Background(), "sandbox-test", func(_ context.Context, boundary CaptureBoundary, reference Reference) error {
+		called = true
+		if !guardActive || boundary.NativeRevision != 1 || reference.SnapshotID != "exact" || store.published != 0 {
+			t.Fatal("application view was pinned outside the protected native interval")
+		}
+		return nil
+	})
+	if err != nil || !called || store.published != 1 {
+		t.Fatalf("guarded pin result: called=%t published=%d error=%v", called, store.published, err)
+	}
+}
+
+func TestGuardedPinRejectsLateNativeChangeAfterProvisionalPin(t *testing.T) {
+	var store *captureStoreFixture
+	service, fixture := captureServiceFixture(guardedCaptureFunc(func(ctx context.Context, _ CaptureBoundary, pin func(context.Context, Reference) error) (Reference, error) {
+		ref := Reference{Repository: "test", SnapshotID: "exact"}
+		if err := pin(ctx, ref); err != nil {
+			return Reference{}, err
+		}
+		store.admit() // native admission after the application pin
+		return ref, nil
+	}))
+	store = fixture
+	pinned := false
+	_, err := service.CaptureWithPin(context.Background(), "sandbox-test", func(context.Context, CaptureBoundary, Reference) error {
+		pinned = true
+		return nil
+	})
+	if !pinned || !errors.Is(err, ErrCheckpointSuperseded) || store.published != 0 {
+		t.Fatalf("late native change: pinned=%t published=%d error=%v", pinned, store.published, err)
+	}
+}
+
+func TestGuardedPinFailureOrCancellationNeverPublishes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		pin  func(context.Context, CaptureBoundary, Reference) error
+	}{
+		{"failed", func(context.Context, CaptureBoundary, Reference) error { return errors.New("pin failed") }},
+		{"timeout", func(ctx context.Context, _ CaptureBoundary, _ Reference) error { <-ctx.Done(); return ctx.Err() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service, store := captureServiceFixture(guardedCaptureFunc(func(ctx context.Context, _ CaptureBoundary, pin func(context.Context, Reference) error) (Reference, error) {
+				ref := Reference{Repository: "test", SnapshotID: "exact"}
+				return ref, pin(ctx, ref)
+			}))
+			ctx := context.Background()
+			if tc.name == "timeout" {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, time.Millisecond)
+				defer cancel()
+			}
+			_, err := service.CaptureWithPin(ctx, "sandbox-test", tc.pin)
+			if err == nil || store.published != 0 {
+				t.Fatalf("failed pin became authoritative: published=%d error=%v", store.published, err)
+			}
+		})
 	}
 }

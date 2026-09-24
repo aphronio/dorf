@@ -3,7 +3,7 @@
 - **Applicability:** current
 - **Areas:** core, sandboxes, client-api
 - **Read when:** Changing checkpoint restore ownership, branch admission, preparation holds, or destination cleanup.
-- **Decision history:** Accepted 2026-09-23; extends D138 checkpoint custody and D148's native Session boundary.
+- **Decision history:** Accepted 2026-09-23; extends D138 checkpoint custody and D148's native Session boundary. Extended by D153 for remote API access.
 - **Decision:** An authorized immutable checkpoint may seed a new Session. The branch has its own Sandbox resource, repository namespace, route authority, native revision, and cleanup. The source Session and checkpoint remain untouched. A stable request identity returns the same destination or rejects conflicting input.
 - **Preparation:** Restore runs in the destination with read-only authority to the source repository while native access is held. The client can replace restored file-based credentials and prepare its environment through bounded file operations. A release request installs destination-scoped model authority, verifies native Thread resume, and opens native access only after verification.
 - **Recovery:** Use the existing resource and task custody machinery. Unknown provider outcomes reconcile against the reserved destination. Source replacement and branching share the same restore effect; branching does not relax replacement's native-safety guard.
