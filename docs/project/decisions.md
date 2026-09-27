@@ -140,11 +140,12 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D134: Delivery holds survive executor restarts](decisions/D134-delivery-holds-survive-executor-restarts.md) (`current`). Coordinating a persistent Sandbox upgrade or explaining accepted input that is waiting during maintenance.
 - [D135: Package recovery releases verified resource custody](decisions/D135-package-recovery-releases-verified-resource-custody.md) (`current`). Executing package upgrades, recovering replacement VMs, or investigating held messages and upgrade failures.
 - [D136: Shared images install Codex through pinned Nix](decisions/D136-shared-images-install-codex-through-pinned-nix.md) (`partial`). Building guest images or changing how persistent Sandboxes obtain Codex packages.
-- [D137: Provider images share one Nix workstation](decisions/D137-provider-images-share-one-nix-workstation.md) (`current`). Changing shared guest tools, browser installation, or package parity between Incus and E2B.
+- [D137: Provider images share one Nix workstation](decisions/D137-provider-images-share-one-nix-workstation.md) (`partial`). Changing shared guest tools, browser installation, or package parity between Incus and E2B.
 - [D138: Session checkpoints use stock restic and scoped object storage](decisions/D138-session-checkpoints-use-stock-restic.md) (`current`). Changing session checkpoint storage, capture, or recovery.
 - [D149: Adapters own directory backup selection](decisions/D149-adapter-owned-directory-backups.md) (`current`). Changing checkpoint file selection, client configuration continuity, or backup privacy.
 - [D152: Checkpoint branches own new Sessions](decisions/D152-checkpoint-branches-own-new-sessions.md) (`current`). Changing checkpoint restore ownership, branch admission, preparation holds, or destination cleanup.
 - [D154: Checkpoints copy before background upload](decisions/D154-checkpoints-copy-before-background-upload.md) (`current`). Changing checkpoint capture, background upload, save scheduling or restored Session APIs.
+- [D155: Worker images include guest Docker](decisions/D155-worker-images-include-guest-docker.md) (`current`). Changing guest container tooling, daemon startup, or provider image parity.
 
 ## Harnesses
 
@@ -171,7 +172,7 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D127: Message observations deliver completed prefix deltas](decisions/D127-message-observations-deliver-completed-prefix-deltas.md) (`current`). Changing Message observation, native connection reuse, stream replay, or idle behavior.
 - [D131: Application observations reuse automatic delivery](decisions/D131-application-observations-reuse-automatic-delivery.md) (`current`). Delivering application updates into active work or recovering native start-or-steer races.
 - [D136: Shared images install Codex through pinned Nix](decisions/D136-shared-images-install-codex-through-pinned-nix.md) (`partial`). Building guest images or changing how persistent Sandboxes obtain Codex packages.
-- [D137: Provider images share one Nix workstation](decisions/D137-provider-images-share-one-nix-workstation.md) (`current`). Changing shared guest tools, browser installation, or package parity between Incus and E2B.
+- [D137: Provider images share one Nix workstation](decisions/D137-provider-images-share-one-nix-workstation.md) (`partial`). Changing shared guest tools, browser installation, or package parity between Incus and E2B.
 - [D138: Session checkpoints use stock restic and scoped object storage](decisions/D138-session-checkpoints-use-stock-restic.md) (`current`). Changing session checkpoint storage, capture, or recovery.
 - [D139: Codex routes use native launch overrides](decisions/D139-codex-routes-use-native-launch-overrides.md) (`current`). Changing Codex route installation, native configuration ownership, or app-server launch.
 - [D145: Direct Job owns its Thread](decisions/D145-direct-job-owns-its-thread.md) (`partial`). Changing conversation continuity, native acceptance recovery, or Thread migration.
@@ -306,9 +307,10 @@ Each linked file keeps routing metadata next to the authoritative decision and i
 - [D114: Incus guests include an isolated browser](decisions/D114-incus-guests-include-an-isolated-browser.md) (`partial`). Changing browser tooling, guest browser persistence, or Incus image proof.
 - [D124: Image publication does not require live coding proofs](decisions/D124-image-publication-does-not-require-live-coding-proofs.md) (`current`). Changing Incus image publication prerequisites or release verification.
 - [D136: Shared images install Codex through pinned Nix](decisions/D136-shared-images-install-codex-through-pinned-nix.md) (`partial`). Building guest images or changing how persistent Sandboxes obtain Codex packages.
-- [D137: Provider images share one Nix workstation](decisions/D137-provider-images-share-one-nix-workstation.md) (`current`). Changing shared guest tools, browser installation, or package parity between Incus and E2B.
+- [D137: Provider images share one Nix workstation](decisions/D137-provider-images-share-one-nix-workstation.md) (`partial`). Changing shared guest tools, browser installation, or package parity between Incus and E2B.
 - [D140: Solo development drops DCO sign-off](decisions/D140-solo-development-drops-dco-sign-off.md) (`current`). Changing contribution certification or commit requirements.
 - [D141: Documentation validation is local, not release-blocking](decisions/D141-documentation-validation-is-local-not-release-blocking.md) (`current`). Changing the CI validation gate or contributor verification commands.
+- [D155: Worker images include guest Docker](decisions/D155-worker-images-include-guest-docker.md) (`current`). Changing guest container tooling, daemon startup, or provider image parity.
 
 ## Historical decisions
 

@@ -45,6 +45,31 @@ for command in [['pi', '--version'], ['python3', '--version'], ['node', '--versi
     print(run(command).strip())
 with tempfile.TemporaryDirectory(prefix='dorf-workstation-proof-') as temporary:
     temporary = Path(temporary)
+    # Use the baked daemon without installing packages or starting a service ourselves.
+    assert run(['systemctl', 'is-enabled', 'docker']).strip() == 'enabled'
+    run(['systemctl', 'is-active', 'docker'])
+    run(['docker', 'info'])
+    run(['docker', 'compose', 'version'])
+    run(['docker', 'buildx', 'version'])
+    for name, version in metadata['system_packages'].items():
+        assert run(['dpkg-query', '-W', '-f=${Version}', name]) == version, name
+    (temporary / 'Dockerfile').write_text(
+        'FROM busybox:1.37.0\nRUN mkdir /www && echo compose-ready > /www/index.html\n'
+        'CMD ["httpd", "-f", "-p", "8080", "-h", "/www"]\n')
+    (temporary / 'compose.json').write_text(json.dumps({'services': {'web': {
+        'build': '.', 'ports': ['127.0.0.1::8080'],
+        'healthcheck': {'test': ['CMD', 'wget', '-qO-', 'http://127.0.0.1:8080'],
+                        'interval': '1s', 'timeout': '2s', 'retries': 30},
+    }}}))
+    compose = ['docker', 'compose', '-p', temporary.name, '-f', str(temporary / 'compose.json')]
+    try:
+        run([*compose, 'up', '--build', '--wait', '--wait-timeout', '60'])
+        address = run([*compose, 'port', 'web', '8080']).strip()
+        with urllib.request.urlopen('http://' + address, timeout=5) as response:
+            assert response.read() == b'compose-ready\n'
+        print('guest Docker built and served a healthy Compose application')
+    finally:
+        run([*compose, 'down', '--volumes', '--rmi', 'local'])
     source = temporary / 'main.c'
     source.write_text('#include <stdio.h>\nint main(void) { puts("native compiler ready"); }\n')
     run(['gcc', str(source), '-o', str(temporary / 'native')])
@@ -99,4 +124,5 @@ with tempfile.TemporaryDirectory(prefix='dorf-workstation-proof-') as temporary:
             server.shutdown()
             server.server_close()
             thread.join()
-print(json.dumps({'workstation': str(profile), 'tools': metadata['tools'], 'result': 'passed'}))
+print(json.dumps({'workstation': str(profile), 'tools': metadata['tools'],
+                  'system_packages': metadata['system_packages'], 'result': 'passed'}))

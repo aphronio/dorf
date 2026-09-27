@@ -150,6 +150,11 @@ replace VM-state checkpoints. No browser is started or managed by Dorf. Browser-
 to Chromium through CDP; Playwright is not installed. The upstream browser-use installer supplies
 its skill unchanged, with no Dorf-specific text inserted.
 
+The Debian layer supplies Docker Engine, CLI, Compose and Buildx with their standard guest systemd
+services enabled at boot. Image metadata records their Debian package versions. Keep these OS
+services in the shared guest recipe so both providers receive the same setup; do not add a
+repository-specific Docker installer or expose a host Docker socket.
+
 For disposable local candidate builds and retained-conversation verification, use
 `mise run integration:nix-image build incus` or `mise run integration:nix-image build e2b`.
 Each prints the exact `verify` command and retains a build receipt with input hashes. The recipe
@@ -158,8 +163,9 @@ release, promote a deployment profile, or update an existing user VM. Verify bot
 sequentially against the configured disposable PostgreSQL database. The verification uses the
 image's installed package helper and requires baked-in Nix before staging additional versions.
 The workstation probe compiles native code, creates a Python environment, and exercises browser-use
-through an agent-started Chromium process. Its retained `workstation.json` allows exact package
-parity comparison across providers.
+through an agent-started Chromium process. It also builds and serves a healthy Compose application
+using the baked guest daemon without installing packages or starting services. Its retained
+`workstation.json` allows exact package parity comparison across providers.
 
 Use `python3 scripts/sandbox/packages/lock.py browser` or `pi` on a development machine to refresh
 the browser wheel inputs or Pi dependency lock. Review those changes and update Pi's `npm_deps_hash`

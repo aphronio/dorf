@@ -1,9 +1,9 @@
 # D137: Provider images share one Nix workstation
 
-- **Applicability:** current
+- **Applicability:** partial
 - **Areas:** release, sandboxes, harnesses
 - **Read when:** Changing shared guest tools, browser installation, or package parity between Incus and E2B.
-- **Decision history:** Refines D064 tool packaging, replaces D114's Dorf-managed browser service, and extends D136 to the shared workstation, 2026-09-15.
+- **Decision history:** Refines D064 tool packaging, replaces D114's Dorf-managed browser service, and extends D136 to the shared workstation, 2026-09-15. D155 adds guest container services to the Debian layer.
 - **Decision:** Both provider builders install the same immutable Nix workstation closure. The
   profile contains the language runtimes, compilers, utilities, Pi, and browser tools. Codex keeps
   its independently selected runner profile so its existing upgrade operation cannot remove the

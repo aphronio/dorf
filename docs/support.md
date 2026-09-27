@@ -79,6 +79,11 @@ through `browser-use`.
 This capability needs neither the operator's desktop browser nor a browser cloud account. Existing
 VMs and deployed profiles keep their admitted contents until explicitly upgraded or promoted.
 
+The shared guest recipe also installs Docker Engine, CLI, Compose and Buildx, with the guest
+daemon enabled at boot. Projects can build and run their own Compose applications inside the VM;
+no provider host Docker socket is exposed. Repository setup and application credentials remain
+client-owned. Existing deployed images need explicit replacement to receive this capability.
+
 Guided setup routes the model hostname through the same named Cloudflare Tunnel as the separate
 Control API hostname; any operator-owned route satisfying the exact HTTPS `/v1` Gateway contract is
 also valid. The [deployment-host procedure](getting-started.md#1-install-the-application-initialize-a-deployment-host)

@@ -49,6 +49,8 @@ The candidate receipt hashes the entire shared package source directory. Fresh-i
 also runs `scripts/sandbox/workstation-proof.py`: it checks Nix executable selection, compiles a C
 program, creates a Python environment, and exercises browser-use directly against a local page.
 It verifies that Playwright is absent and the installed skill matches the upstream CLI output.
+It also checks the baked Docker package inventory and builds and serves a Compose application
+without installing packages or starting the daemon; its own containers and images are removed.
 It first verifies that no browser is running, then owns and closes the browser it starts.
 There is no Dorf browser service. Each retained-worker proof writes `workstation.json`; compare
 the Incus and E2B files to establish identical package identity and tool versions. Workstation

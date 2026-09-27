@@ -14,9 +14,15 @@ if [[ -z "${DORF_BASE_IMAGE:-}" || ! "${DORF_BASE_FINGERPRINT:-}" =~ ^[0-9a-f]{6
   exit 1
 fi
 
-# Only the provider OS and the tools required to bootstrap Nix come from Debian.
+# Debian owns OS services and the Nix bootstrap; developer tools live in Nix.
 apt-get update
-apt-get install -y --no-install-recommends bash ca-certificates curl python3 tar xz-utils
+apt-get install -y --no-install-recommends bash ca-certificates curl python3 tar xz-utils \
+  docker.io docker-cli docker-compose docker-buildx openssl
+# Enable the guest daemon for fresh VM boots; never connect to the provider host's daemon.
+systemctl enable docker.service containerd.service
+docker --version
+docker compose version
+docker buildx version
 chmod 0755 "$PACKAGE_DIR/guest.sh"
 ln -sfn "$PACKAGE_DIR/guest.sh" /usr/local/bin/dorf-packages
 dorf-packages bootstrap
@@ -48,12 +54,16 @@ jq \
   --arg workstation_path "$(readlink -f "$TOOL_PROFILE")" \
   --arg nix_version "$(nix --version | awk '{print $3}')" \
   --arg nix_integrity "sha256:$(jq -r .nix.sha256 "$PACKAGE_DIR/packages.json")" \
+  --argjson system_packages "$(dpkg-query -W -f='${Package}=${Version}\n' \
+    docker.io docker-cli docker-compose docker-buildx containerd runc openssl | \
+    jq -Rn '[inputs | split("=") | {key: .[0], value: .[1]}] | from_entries')" \
   '.base_image = {reference: $base_reference, fingerprint: $base_fingerprint}
    | .harnesses.codex = {package: "@openai/codex", version: $codex_version,
        npm_integrity: $codex_integrity, source_url: $codex_source,
        package_manager: "nix", store_path: $codex_path}
    | .workstation.store_path = $workstation_path
    | .tools.nix = $nix_version
+   | .system_packages = $system_packages
    | .tool_integrity = {nix: $nix_integrity}' \
   "$TOOL_PROFILE/share/dorf/workstation.json" > /usr/local/share/dorf/image.json
 chmod 0644 /usr/local/share/dorf/image.json
