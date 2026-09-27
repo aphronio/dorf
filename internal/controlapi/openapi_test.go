@@ -107,7 +107,7 @@ func TestOpenAPIDocumentDescribesTheCompleteRemoteBoundary(t *testing.T) {
 		t.Fatalf("default security=%#v, want clientBearer", security)
 	}
 
-	wantHoldReasons := []any{"workspace_upgrade", "checkpoint_recovery"}
+	wantHoldReasons := []any{"workspace_upgrade", "checkpoint_recovery", "checkpoint_branch"}
 	for _, path := range [][]string{
 		{"components", "schemas", "SandboxDeliveryHold", "properties", "reason"},
 	} {

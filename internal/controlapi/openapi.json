@@ -1799,7 +1799,8 @@
             "type": "string",
             "enum": [
               "workspace_upgrade",
-              "checkpoint_recovery"
+              "checkpoint_recovery",
+              "checkpoint_branch"
             ]
           },
           "requested_at": {
