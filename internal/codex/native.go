@@ -27,6 +27,7 @@ func (a Agent) SubmitNative(ctx context.Context, owner provider.Ownership, sessi
 		return a.withServer(ctx, owner, func(p *protocol) error {
 			p.instructions = instructions
 			p.refreshSkills = event.RefreshSkills
+			p.refreshMCPServers = event.RefreshMCPServers
 			if ack.ThreadID != "" {
 				if err = p.resumeThread(ctx, ack.ThreadID); err != nil {
 					if !mutation.Unused {

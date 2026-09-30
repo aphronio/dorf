@@ -30,6 +30,7 @@ type NativeEvent struct {
 	Text                  string             `json:"text,omitempty"`
 	DeveloperInstructions *string            `json:"developer_instructions,omitempty"`
 	RefreshSkills         bool               `json:"refresh_skills,omitempty"`
+	RefreshMCPServers     bool               `json:"refresh_mcp_servers,omitempty"`
 	Attachments           []NativeAttachment `json:"attachments,omitempty"`
 }
 
@@ -102,7 +103,7 @@ func validInputText(e NativeEvent) bool {
 }
 
 func (e NativeEvent) hasInput() bool {
-	return e.ClientID != "" || e.Text != "" || e.DeveloperInstructions != nil || e.RefreshSkills || len(e.Attachments) != 0
+	return e.ClientID != "" || e.Text != "" || e.DeveloperInstructions != nil || e.RefreshSkills || e.RefreshMCPServers || len(e.Attachments) != 0
 }
 
 func (s NativeState) Pending() bool { return s.PendingInputID != "" || s.PendingTurnID != "" }

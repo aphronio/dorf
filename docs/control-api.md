@@ -94,9 +94,12 @@ caching remains Harness-owned; Dorf adds no separate catalog or capability stora
 unavailability is an error, not evidence of absent model support. Clients can choose transcription
 outside Dorf when native audio is unsupported. Audio support does not promise music recognition.
 
-`developer_instructions` and `refresh_skills` are per-request native adapter options. Instructions
-are injected before that input; skill refresh uses the native catalog reload. Neither creates a
-Dorf delivery envelope or a deferred refresh queue. Workspace AGENTS.md and SOUL.md remain client-owned.
+`developer_instructions`, `refresh_skills`, and `refresh_mcp_servers` are per-request native adapter
+options. Instructions are injected before that input; catalog refresh uses the native skill reload
+or `config/mcpServer/reload`. Clients prepare native MCP configuration in the Sandbox; Dorf does
+not store or interpret application tool definitions or credentials. A reload failure prevents input
+submission and is reported as definitely not submitted. No deferred refresh queue is created.
+Workspace AGENTS.md and SOUL.md remain client-owned.
 Application tool output uses native tool-output attribution and is omitted from the conversational
 raw-history view; completed-item observations retain its correlation for client publication.
 

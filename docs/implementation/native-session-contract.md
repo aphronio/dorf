@@ -72,7 +72,8 @@ the same version. Package selection remains in the [package manifest](../../scri
 | `thread/read`, `thread/turns/list`, `thread/items/list` | Native history and execution views. Paginated APIs and storage modes have version-specific constraints; use the already verified timeline path before adding another one. |
 | Turn/item/status notifications | Native live observations. A reconnect needs history reconciliation where supported, not replay of a Dorf Message. Connection and process lifetime need their own proof. |
 | `turn/start.toolOutput` | Supports standalone application tool output and start-or-steer placement. It cannot be combined with nonempty user input. Its attribution is not the user-message correlation field. |
-| `skills/list`, `config/mcpServer/reload`, configuration reads/writes | Existing native capabilities to evaluate for explicit refresh/configuration. They do not justify a universal configuration language. |
+| `skills/list`, `config/mcpServer/reload` | Explicit input options refresh native catalogs before starting a turn; a failed refresh prevents submission. MCP reload was also verified against an isolated Codex 0.159.0 app-server by adding and removing a configured server. |
+| Configuration reads/writes | Clients own native configuration and credentials. Native configuration APIs remain candidates for evaluation; they do not justify a universal configuration language. |
 | `fs/*`, `command/exec` and command controls | Potential transport reuse. Do not replace existing workspace operations before comparing bounds, process custody and uncertain effects. |
 | Experimental `thread/queue/*` | Native queued input is a distinct capability with a service dependency. Ordinary `turn/start` does not imply durable queuing. No queue API is adopted by this decision. |
 

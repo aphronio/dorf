@@ -19,6 +19,7 @@ func remoteEventSend(ctx context.Context, client *controlclient.Client, args []s
 	filename := set.String("input-file", "", "file containing native input")
 	clientID := set.String("client-id", "", "native correlation ID (not a replay key)")
 	refresh := set.Bool("refresh-skills", false, "refresh native skills")
+	refreshMCP := set.Bool("refresh-mcp-servers", false, "Reload native MCP configuration before this input")
 	var files attachmentFlags
 	set.Var(&files, "attach", "local attachment (repeatable)")
 	if err := set.Parse(args); err != nil {
@@ -36,6 +37,7 @@ func remoteEventSend(ctx context.Context, client *controlclient.Client, args []s
 		return err
 	}
 	event.RefreshSkills = *refresh
+	event.RefreshMCPServers = *refreshMCP
 	ack, err := client.SubmitEvent(ctx, set.Arg(0), event)
 	if err != nil {
 		return err

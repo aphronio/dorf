@@ -57,11 +57,16 @@ func (e *resumeBindingError) Error() string {
 }
 func (e *resumeBindingError) DefiniteNoSubmit() bool { return true }
 
-type skillsReloadError struct{ err error }
+type catalogReloadError struct {
+	catalog string
+	err     error
+}
 
-func (e *skillsReloadError) Error() string          { return "refresh Codex skills: " + e.err.Error() }
-func (e *skillsReloadError) Unwrap() error          { return e.err }
-func (e *skillsReloadError) DefiniteNoSubmit() bool { return true }
+func (e *catalogReloadError) Error() string {
+	return "refresh Codex " + e.catalog + ": " + e.err.Error()
+}
+func (e *catalogReloadError) Unwrap() error          { return e.err }
+func (e *catalogReloadError) DefiniteNoSubmit() bool { return true }
 
 type attentionError struct{ reason string }
 
@@ -271,6 +276,7 @@ func dialProtocol(ctx context.Context, endpoint, token string, headers http.Head
 
 type protocol struct {
 	refreshSkills              bool
+	refreshMCPServers          bool
 	instructions               *workspaceInstructions
 	freshThread                bool
 	connection                 *websocket.Conn
@@ -421,10 +427,8 @@ func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, inputID 
 	if capability == "read-only" {
 		policyType = "readOnly"
 	}
-	if p.refreshSkills {
-		if _, err := p.call(ctx, "skills/list", map[string]any{"cwds": []string{workspace}, "forceReload": true}); err != nil {
-			return TurnOutcome{}, &skillsReloadError{err: err}
-		}
+	if err := p.reloadCatalogs(ctx, workspace); err != nil {
+		return TurnOutcome{}, err
 	}
 	bound := false
 	defer func() {
@@ -540,3 +544,18 @@ func randomToken() (string, error) {
 }
 
 func stringValue(value any) string { text, _ := value.(string); return text }
+
+// Reload only the native catalogs explicitly requested by the client, before input.
+func (p *protocol) reloadCatalogs(ctx context.Context, workspace string) error {
+	if p.refreshMCPServers {
+		if _, err := p.call(ctx, "config/mcpServer/reload", map[string]any{}); err != nil {
+			return &catalogReloadError{catalog: "MCP servers", err: err}
+		}
+	}
+	if p.refreshSkills {
+		if _, err := p.call(ctx, "skills/list", map[string]any{"cwds": []string{workspace}, "forceReload": true}); err != nil {
+			return &catalogReloadError{catalog: "skills", err: err}
+		}
+	}
+	return nil
+}

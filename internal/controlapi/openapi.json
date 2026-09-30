@@ -2085,6 +2085,10 @@
             "type": "string",
             "maxLength": 1048576
           },
+          "refresh_mcp_servers": {
+            "type": "boolean",
+            "default": false
+          },
           "refresh_skills": {
             "type": "boolean",
             "default": false

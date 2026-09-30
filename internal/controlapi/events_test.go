@@ -42,7 +42,7 @@ func TestEventsAcknowledgeNativeInputAndExposeUncertainty(t *testing.T) {
 		handler.ServeHTTP(w, r)
 		return w
 	}
-	body := `{"type":"input.message","client_id":"client","text":"hello","attachments":[{"filename":"note.txt","contents":"aGVsbG8="}]}`
+	body := `{"type":"input.message","client_id":"client","text":"hello","refresh_mcp_servers":true,"attachments":[{"filename":"note.txt","contents":"aGVsbG8="}]}`
 	for i := 0; i < 2; i++ {
 		w := send(body)
 		requireStatusType(t, w, 200, "application/json")
@@ -50,7 +50,7 @@ func TestEventsAcknowledgeNativeInputAndExposeUncertainty(t *testing.T) {
 			t.Fatal(w.Body.String())
 		}
 	}
-	if service.calls != 2 || string(service.event.Attachments[0].Contents) != "hello" {
+	if service.calls != 2 || !service.event.RefreshMCPServers || string(service.event.Attachments[0].Contents) != "hello" {
 		t.Fatalf("calls=%d event=%+v", service.calls, service.event)
 	}
 	service.err = core.ErrNativeUnknown
