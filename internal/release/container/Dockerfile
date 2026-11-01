@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.19.0@sha256:b6afd42430b15f2d2a4c5a02b919e98a525b785b1aaff16747d2f623364e39b6
 FROM debian:13.6-slim@sha256:9bb8a3626890e084ab54e888fdd7c4b6d2f119071cd4c5dc5fecb4d73062aa5f
 RUN sed -i \
-        -e 's|http://deb.debian.org/debian-security|http://snapshot.debian.org/archive/debian-security/20260713T000000Z|g' \
-        -e 's|http://deb.debian.org/debian|http://snapshot.debian.org/archive/debian/20260713T000000Z|g' \
+        -e 's|http://deb.debian.org/debian-security|http://snapshot.debian.org/archive/debian-security/20261031T000000Z|g' \
+        -e 's|http://deb.debian.org/debian|http://snapshot.debian.org/archive/debian/20261031T000000Z|g' \
         /etc/apt/sources.list.d/debian.sources \
     && apt-get -o Acquire::Check-Valid-Until=false update \
     && apt-get install --yes --no-install-recommends ca-certificates git \

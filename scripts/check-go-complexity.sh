@@ -4,7 +4,7 @@ export LC_ALL=C
 
 readonly mode="${1:-check}"
 readonly maximum=15
-readonly expected_go_version="go1.26.5"
+readonly expected_go_version="go1.26.10"
 readonly expected_gocyclo_module="github.com/fzipp/gocyclo"
 readonly expected_gocyclo_version="v0.6.0"
 readonly baseline_header=$'# dorf-go-complexity-v1\tmaximum=15'

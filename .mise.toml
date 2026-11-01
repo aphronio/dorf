@@ -1,5 +1,5 @@
 [tools]
-go = "1.26.5"
+go = "1.26.10"
 sqlc = "1.31.1"
 "github:earendil-works/absurd" = { version = "0.5.0", asset_pattern = "absurdctl" }
 "aqua:golangci/golangci-lint" = "2.13.1"
