@@ -24,10 +24,10 @@ import (
 )
 
 const (
-	BinaryVersion        = "2026.8.2"
+	BinaryVersion        = "2026.10.7"
 	ComposeControlOrigin = "http://control-api:8745"
 	ComposeGatewayOrigin = "http://provider-gateway:8317"
-	binarySHA256         = "fcfb02b575a52ca1af2e3267af4e1517bcdeb30ac48c834c69abaed3c0576ad2"
+	binarySHA256         = "1f99fb518b83dec2ba8d870a7cc991d82a77e6196295a3d2754ba17ab9f91872"
 	binaryURL            = "https://github.com/cloudflare/cloudflared/releases/download/" + BinaryVersion + "/cloudflared-linux-amd64"
 )
 
