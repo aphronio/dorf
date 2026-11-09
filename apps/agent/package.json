@@ -1,0 +1,21 @@
+{
+  "name": "@dorf/agent",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=26" },
+  "scripts": {
+    "start": "node src/main.ts",
+    "check": "tsc",
+    "proof": "../../deploy/up.sh && node test/s1.ts"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.5.0",
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-durable": "1.5.0",
+    "@earendil-works/pi-env": "1.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2"
+  }
+}
