@@ -1,52 +1,21 @@
 <picture>
   <source media="(prefers-reduced-motion: reduce)" srcset="assets/cover.png">
-  <img alt="Agents continuing Sessions inside isolated Sandboxes in the Dorf village" src="assets/cover.gif">
+  <img alt="Agents working inside isolated Sandboxes in the Dorf village" src="assets/cover.gif">
 </picture>
 
-<p align="center"><strong>Your agents. Your infrastructure. One API.</strong></p>
+<p align="center"><strong>Hand a coding task to an agent that works in its own Linux machine.</strong></p>
 
 # Dorf
 
-**Dorf is the open-source control plane for running agent harnesses on infrastructure you control.**
-
-Dorf's direction is to carry a supported agent setup into compatible isolated infrastructure
-without rebuilding it in a new agent framework. Dorf provides a stable API and manages Session
-configuration, compute, access, supported recovery, and requested cleanup. The native harness owns
-the conversation and execution. The [North Star](docs/project/north-star.md) describes this accepted
-direction; implementation is tracked in the [Session slices](docs/implementation/session-product-proposals.md).
+Dorf is a self-hosted coding agent. Each Thread gets its own Sandbox: an isolated Linux machine
+that keeps its files and running processes while paused and resumes on the next tool call. The
+agent loop runs outside the Sandbox, built on [Pi Durable](https://github.com/earendil-works/pi);
+Sandboxes run on [Agent Substrate](https://github.com/agent-substrate/substrate).
 
 ```text
-Deployment-host CLI      Remote clients
-       |                       |
-  loopback HTTP          HTTPS ingress
-       +-----------+-----------+
-                   |
-             Dorf deployment
-       durable execution and recovery
-                   |
-       Sandbox providers x Harnesses
+ you -> agent (Threads, Pi Durable) --tools--> Sandbox per Thread (Agent Substrate)
 ```
 
-Dorf is a stateful, self-hosted control plane, not an agent framework or an embeddable runtime SDK.
-An enrolled CLI admits a direct Session and operates its interaction
-loop—native events, observation, eligible recovery, exact Sandbox files,
-cleanup, and bounded Session listing—through one configured Dorf deployment. The deployment-host CLI
-uses fixed authenticated loopback HTTP; remote clients use operator-owned HTTPS ingress. Each
-deployment publishes its OpenAPI and typed Problem catalog. Static release manifests define
-separately supervised API and worker services; one resumable `dorf setup` flow prepares their
-protected configuration and applies that exact Compose project. Operators use Compose directly only
-for advanced lifecycle operations. Client SDKs, MCP, and a control-plane UI remain later work.
-
-Clients supply instructions, prepare their workspace, and decide what the results mean and when to
-release resources. Coding, review, and publication policy belong to those clients. See
-[Getting started](docs/getting-started.md) for supported deployment, profiles, commands, and inputs.
-To hand installation or operation to an agent, point it at the concise
-[Agent guide](docs/agent-guide.md).
-The stable remote contract and deployment boundary are in the
-[Remote Control API reference](docs/control-api.md).
-
-## Build and contribute
-
-Follow [CONTRIBUTING.md](CONTRIBUTING.md) for the repository-managed setup, build, and verification
-contract.
-Architecture and authority details are indexed in [docs/README.md](docs/README.md).
+**Status:** rebuild in progress. The [North Star](docs/project/north-star.md) describes the
+product and [Slices](docs/slices.md) tracks the work. Releases up to 0.31.3 were a different
+product, a control plane for third-party agent harnesses; that code is frozen at the `v0.31.3` tag.

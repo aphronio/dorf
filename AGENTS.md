@@ -2,27 +2,26 @@
 
 ## Authorities
 
-Start with the [documentation map](docs/README.md). Read the owner of the boundary you are changing
-and update it when its documented behavior changes. Follow
-[CONTRIBUTING.md](CONTRIBUTING.md) for setup, verification, contribution licensing, and consequential decisions.
+The [North Star](docs/project/north-star.md) owns the product, its shape, vocabulary and
+boundaries, and what was deleted with the conditions to add it back. Push back on changes outside
+it. [Slices](docs/slices.md) owns the plan, each slice's proof, and carry-over facts.
 
-Before changing Dorf Core or product direction, apply the
-[North Star product boundary](docs/project/north-star.md#product-boundary). Push back on violations,
-even when a native workflow ships in the Dorf repository or binary.
-
-For delegated installation or operation, follow the [Agent Guide](docs/agent-guide.md).
+Until the 0.31 removal lands, the Go tree (`cmd/`, `internal/`) is frozen at `v0.31.3`. Do not
+change or extend it.
 
 ## Development
 
-- Use repository-managed commands. For fast Go feedback, run `mise run lint` and
-  `mise run complexity`; follow their remediation rather than editing complexity ceilings by hand.
-- For PostgreSQL changes, edit schema and query sources, then use `sql:generate` and `sql:check`.
-  Do not hand-edit generated `dbsql` files.
-- Durable storage, SQL, transaction, and sequencing changes require
-  PostgreSQL-backed integration coverage before pushing. Match live Sandbox, Harness, Provider
-  Gateway, or external-authority proof to the boundary changed.
-- Use `gh` for GitHub repository operations, not the Codex GitHub app.
-  Write Markdown issue and PR bodies to a temporary file and pass it with `--body-file`.
+- TypeScript on Node. Pin dependencies exactly and install with `npm ci --ignore-scripts`.
+- Build on Pi Durable the way its README and `packages/durable/test/examples` do. Read the matching
+  example before adding host-side state or a new mechanism.
+- Only the agent's Substrate module and deployment files use Substrate terms (Actor, Worker,
+  Atespace, ActorTemplate).
+- One concept per file. Keep a module as a file until a second caller needs it; extract a package
+  only when a second app imports it.
+- Tests use Pi's faux model. Never put real model keys in tests, examples or CI.
+- Prove a slice with the one command its row in [Slices](docs/slices.md) names.
+- Use `gh` for GitHub repository operations. Write Markdown issue and PR bodies to a temporary
+  file and pass it with `--body-file`.
 
 ## Public repository confidentiality
 
