@@ -5,7 +5,7 @@ Each slice is the smallest demoable step. A slice is done when its proof runs fr
 | Slice | Delivers | Proof | Status |
 | --- | --- | --- | --- |
 | S0 | New North Star, repository rules and README; removal of the 0.31 code and docs | Secret scan green on the reduced repository | Done |
-| S1 | One Thread, one Sandbox, pause and resume on Agent Substrate | On a local cluster with the faux model: tool call writes a file and starts a process; the Sandbox pauses after the run; the next message resumes it with both intact; an agent killed mid-call finishes after restart; deleting the Thread deletes the Sandbox. Then one manual run with a real model | Next |
+| S1 | One Thread, one Sandbox, pause and resume on Agent Substrate | `npm --prefix apps/agent run proof` on a cluster running Substrate, with the faux model: tool call writes a file and starts a process; the Sandbox pauses after the run; the next message resumes it with both intact; an agent killed mid-call finishes after restart; deleting the Thread deletes the Sandbox. Then one manual run with a real model | Done |
 | S2 | Harmless Substrate upgrades | Scripted upgrade and rollback with drain, zero hand steps, under a live Thread, in CI | Planned |
 | S3 | A real repository, used daily | Clone, change, test and push from a Thread | Planned |
 | S4 | GitHub triggers | A mention or failing check starts or continues a Thread | Planned |
@@ -24,3 +24,9 @@ Facts learned in one slice that a later slice must respect.
   the client reconnects cleanly.
 - The pi-env daemon and the init are frozen into each Sandbox's memory snapshot at creation. Keep
   them small and stable.
+- The router passes only `Upgrade: websocket` requests; any other upgrade gets 403.
+- Sandbox image builds are not reproducible, so `deploy/up.sh` tags the image with a hash of its
+  inputs and builds only when the template lacks that tag. Replacing a template (new image for new
+  Threads) is not supported yet.
+- `apt-get` fails inside a Sandbox under gVisor (`seteuid` is not permitted), and the image carries
+  no language toolchains. A real repository needs its toolchain in the image or a setup step.

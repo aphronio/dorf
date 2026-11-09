@@ -68,6 +68,7 @@ Substrate module and in deployment files.
 | Code mode | A measured need |
 | The microVM class | Running code from people we do not trust, such as pull requests from forks |
 | Silently replacing a deleted Sandbox | Never. Tools fail with "Sandbox not found" |
+| Archiving a Thread | With the chat page. Then follow Amp: archive hides the Thread and pauses its Sandbox at once; delete removes both |
 | A dashboard | Daily use asks for more than a minimal chat page |
 | Provider adapters, sessions, profiles, the Provider Gateway, durable message custody | Never as before. These served the 0.31 control plane |
 
