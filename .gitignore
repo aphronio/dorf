@@ -1,12 +1,10 @@
 .web/
+.dorf/
+.firecrawl/
+.cloudflare/
 .codex
 dist/
 build/
-.dorf/
-.firecrawl/
-.reference/
-__pycache__/
-*.py[cod]
 node_modules/
 
 # Local credentials and environment overrides

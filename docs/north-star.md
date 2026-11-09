@@ -86,4 +86,4 @@ them, not designed ahead of it.
   is live, and no Sandbox loses work.
 - Tests use Pi's faux model; real model keys never appear in tests or CI.
 
-Slices and their status are in [slices.md](../slices.md).
+Slices and their status are in [slices.md](slices.md).

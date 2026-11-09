@@ -16,6 +16,9 @@ Sandboxes run on [Agent Substrate](https://github.com/agent-substrate/substrate)
  you -> agent (Threads, Pi Durable) --tools--> Sandbox per Thread (Agent Substrate)
 ```
 
-**Status:** rebuild in progress. The [North Star](docs/project/north-star.md) describes the
+**Status:** rebuild in progress. The [North Star](docs/north-star.md) describes the
 product and [Slices](docs/slices.md) tracks the work. Releases up to 0.31.3 were a different
 product, a control plane for third-party agent harnesses; that code is frozen at the `v0.31.3` tag.
+
+Contributions are submitted under the [Apache 2.0 license](LICENSE). Contributors retain copyright
+in their contributions and must have the right to submit them.

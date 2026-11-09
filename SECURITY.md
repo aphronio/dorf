@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Dorf is currently an alpha project. Security fixes are provided for the latest released version.
+Dorf is being rebuilt and has no supported release. Security fixes land on `main`.
 
 ## Reporting a vulnerability
 

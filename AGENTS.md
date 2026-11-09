@@ -2,12 +2,9 @@
 
 ## Authorities
 
-The [North Star](docs/project/north-star.md) owns the product, its shape, vocabulary and
+The [North Star](docs/north-star.md) owns the product, its shape, vocabulary and
 boundaries, and what was deleted with the conditions to add it back. Push back on changes outside
 it. [Slices](docs/slices.md) owns the plan, each slice's proof, and carry-over facts.
-
-Until the 0.31 removal lands, the Go tree (`cmd/`, `internal/`) is frozen at `v0.31.3`. Do not
-change or extend it.
 
 ## Development
 

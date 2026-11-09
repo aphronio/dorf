@@ -4,7 +4,7 @@ Each slice is the smallest demoable step. A slice is done when its proof runs fr
 
 | Slice | Delivers | Proof | Status |
 | --- | --- | --- | --- |
-| S0 | New North Star, repository rules and README; removal of the 0.31 code and docs | CI green on the reduced repository | In progress |
+| S0 | New North Star, repository rules and README; removal of the 0.31 code and docs | Secret scan green on the reduced repository | Done |
 | S1 | One Thread, one Sandbox, pause and resume on Agent Substrate | On a local cluster with the faux model: tool call writes a file and starts a process; the Sandbox pauses after the run; the next message resumes it with both intact; an agent killed mid-call finishes after restart; deleting the Thread deletes the Sandbox. Then one manual run with a real model | Next |
 | S2 | Harmless Substrate upgrades | Scripted upgrade and rollback with drain, zero hand steps, under a live Thread, in CI | Planned |
 | S3 | A real repository, used daily | Clone, change, test and push from a Thread | Planned |
