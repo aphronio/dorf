@@ -1,11 +1,10 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { defineDoc, type ConversationId, type Harness, type HarnessOptions } from "@earendil-works/pi-durable";
+import { type AgentChange, type ConversationId, defineDoc, type Harness, type HarnessOptions } from "@earendil-works/pi-durable";
+import { pauseWhenIdle } from "./idle.ts";
 import type { Sandboxes } from "./sandbox.ts";
 
-export const WORKSPACE = "/workspace";
-
 // `fork: "initial"`: a fork gets no Sandbox until one is assigned.
-export const ThreadSandbox = defineDoc<{ name?: string }>({
+const ThreadSandbox = defineDoc<{ name?: string }>({
 	kind: "dorf.sandbox",
 	version: 1,
 	scope: "conversation",
@@ -25,40 +24,45 @@ const ThreadList = defineDoc<{ items: ThreadSummary[] }>({
 	checkpointWhen: () => false,
 });
 
-export function sandboxEnv(sandboxes: Sandboxes): HarnessOptions["env"] {
+export function sandboxEnv(sandboxes: Sandboxes, workspace: string): HarnessOptions["env"] {
 	return async ({ conversationId, cwd, read }, envContext) => {
 		const sandbox = await read.snapshot(ThreadSandbox, conversationId, envContext);
-		return sandbox?.name ? sandboxes.env(sandbox.name, cwd ?? WORKSPACE) : undefined;
+		return sandbox?.name ? sandboxes.env(sandbox.name, cwd ?? workspace) : undefined;
 	};
 }
 
-export type Agent = Parameters<Harness["createConversation"]>[0]["agent"];
-
 export class Threads {
-	readonly harness: Harness;
-	readonly sandboxes: Sandboxes;
-	readonly agent: Agent;
+	readonly #harness: Harness;
+	readonly #sandboxes: Sandboxes;
+	readonly #agent: AgentChange;
+	readonly #idleMs: number;
 
-	constructor(harness: Harness, sandboxes: Sandboxes, agent: Agent) {
-		this.harness = harness;
-		this.sandboxes = sandboxes;
-		this.agent = agent;
+	constructor(harness: Harness, sandboxes: Sandboxes, agent: AgentChange, idleMs: number) {
+		this.#harness = harness;
+		this.#sandboxes = sandboxes;
+		this.#agent = agent;
+		this.#idleMs = idleMs;
+	}
+
+	async open(): Promise<void> {
+		for (const thread of await this.list()) await this.#watchIdle(thread.id);
 	}
 
 	async list(): Promise<ThreadSummary[]> {
-		return (await this.harness.snapshot(ThreadList, context))?.items ?? [];
+		return (await this.#harness.snapshot(ThreadList, context))?.items ?? [];
 	}
 
 	async sandbox(id: ConversationId): Promise<string | undefined> {
-		return (await this.harness.snapshot(ThreadSandbox, id, context))?.name;
+		return (await this.#harness.snapshot(ThreadSandbox, id, context))?.name;
 	}
 
+	// The Thread commits before its Sandbox exists, so no Sandbox is ever left without a Thread.
 	async create(prompt: string): Promise<{ id: ConversationId; sandbox: string }> {
-		const sandbox = await this.sandboxes.create();
-		const conversation = await this.harness.createConversation(
+		const sandbox = this.#sandboxes.newName();
+		const conversation = await this.#harness.createConversation(
 			{
 				ownership: { kind: "ownerless" },
-				agent: this.agent,
+				agent: this.#agent,
 				init: async (tx, id) => {
 					(await tx.doc(ThreadSandbox, id)).name = sandbox;
 					(await tx.doc(ThreadList)).items.push({ id, title: prompt.slice(0, 80), createdAt: new Date().toISOString() });
@@ -66,6 +70,13 @@ export class Threads {
 			},
 			context,
 		);
+		try {
+			await this.#sandboxes.create(sandbox);
+		} catch (e) {
+			await this.delete(conversation.id);
+			throw e;
+		}
+		await this.#watchIdle(conversation.id);
 		await conversation.submit({ type: "input", content: prompt }, context);
 		return { id: conversation.id, sandbox };
 	}
@@ -93,8 +104,8 @@ export class Threads {
 		if (!conversation) return false;
 		await conversation.abort(context);
 		const sandbox = await this.sandbox(id);
-		if (sandbox) await this.sandboxes.delete(sandbox);
-		await this.harness.commit(async (tx) => {
+		if (sandbox) await this.#sandboxes.delete(sandbox);
+		await this.#harness.commit(async (tx) => {
 			const list = await tx.doc(ThreadList);
 			list.items = list.items.filter((t) => t.id !== id);
 			await tx.retireDoc(ThreadSandbox, id);
@@ -102,7 +113,15 @@ export class Threads {
 		return true;
 	}
 
+	#watchIdle(id: ConversationId): Promise<void> {
+		return pauseWhenIdle(this.#harness, id, this.#idleMs, async (stillIdle) => {
+			const name = await this.sandbox(id);
+			if (!name || (await this.#sandboxes.state(name)) !== "ACTOR_STATE_RUNNING" || !stillIdle()) return;
+			await this.#sandboxes.pause(name);
+		});
+	}
+
 	async #known(id: ConversationId) {
-		return (await this.list()).some((t) => t.id === id) ? this.harness.conversation(id, context) : undefined;
+		return (await this.list()).some((t) => t.id === id) ? this.#harness.conversation(id, context) : undefined;
 	}
 }

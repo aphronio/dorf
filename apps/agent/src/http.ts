@@ -10,7 +10,7 @@ async function json(req: http.IncomingMessage): Promise<Record<string, unknown>>
 	return text ? JSON.parse(text) : {};
 }
 
-async function route(threads: Threads, req: http.IncomingMessage, onCreate: (id: ConversationId) => void): Promise<Reply> {
+async function route(threads: Threads, req: http.IncomingMessage): Promise<Reply> {
 	const [, root, rawId, sub] = new URL(req.url ?? "/", "http://x").pathname.split("/");
 	const id = Number(rawId) as ConversationId;
 	if (root !== "threads") return [404, { error: "not found" }];
@@ -21,9 +21,7 @@ async function route(threads: Threads, req: http.IncomingMessage, onCreate: (id:
 		case "POST ": {
 			const { prompt } = await json(req);
 			if (typeof prompt !== "string" || !prompt) return [400, { error: "prompt required" }];
-			const created = await threads.create(prompt);
-			onCreate(created.id);
-			return [201, created];
+			return [201, await threads.create(prompt)];
 		}
 		case "GET :id": {
 			const view = await threads.read(id);
@@ -40,12 +38,12 @@ async function route(threads: Threads, req: http.IncomingMessage, onCreate: (id:
 	return [405, { error: "method not allowed" }];
 }
 
-export function serve(threads: Threads, port: number, onCreate: (id: ConversationId) => void): http.Server {
+export function serve(threads: Threads, port: number): http.Server {
 	return http
 		.createServer(async (req, res) => {
 			let reply: Reply;
 			try {
-				reply = await route(threads, req, onCreate);
+				reply = await route(threads, req);
 			} catch (e) {
 				reply = [500, { error: (e as Error).message }];
 			}
