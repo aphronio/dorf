@@ -28,5 +28,11 @@ Facts learned in one slice that a later slice must respect.
 - Sandbox image builds are not reproducible, so `deploy/up.sh` tags the image with a hash of its
   inputs and builds only when the template lacks that tag. Replacing a template (new image for new
   Threads) is not supported yet.
-- `apt-get` fails inside a Sandbox under gVisor (`seteuid` is not permitted), and the image carries
-  no language toolchains. A real repository needs its toolchain in the image or a setup step.
+- Substrate denies all egress by default. Each Sandbox gets a policy at create that allows every
+  host, with TLS passed through untouched. An `https` rule would instead intercept TLS, which needs
+  Substrate's trust bundle in the image.
+- Root in a Sandbox has only three capabilities (no setuid, no DAC override), so the image runs apt
+  as root and owns apt's directories. The image carries no language toolchains; the agent installs
+  what a repository needs.
+- Substrate's egress gateway can inject a credential into requests to a named host, from a
+  Kubernetes Secret. That lets a Sandbox push to a repository without holding the token (S3).

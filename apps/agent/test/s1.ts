@@ -17,9 +17,11 @@ function log(step: string, detail = ""): void {
 	console.log(`${String(((Date.now() - t0) / 1000).toFixed(1)).padStart(6)}s  ${step}${detail ? `  ${detail}` : ""}`);
 }
 
-function fail(message: string): never {
+let sandbox: string | undefined;
+async function fail(message: string): Promise<never> {
 	console.error(`FAIL: ${message}`);
 	agent?.kill("SIGKILL");
+	if (sandbox) await sandboxes.delete(sandbox).catch(() => {});
 	process.exit(1);
 }
 
@@ -39,7 +41,7 @@ async function until<T>(what: string, check: () => Promise<T | undefined | false
 		if (value) return value;
 		await new Promise((r) => setTimeout(r, 250));
 	}
-	return fail(`timed out waiting for ${what}`);
+	return await fail(`timed out waiting for ${what}`);
 }
 
 async function call(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
@@ -66,15 +68,17 @@ async function runEnded(id: number, n: number): Promise<string[]> {
 await startAgent();
 log("agent started", `data ${DATA}`);
 
-// 1. A tool call writes a file and starts a background process.
+// 1. A tool call writes a file and starts a background process; the Sandbox reaches the internet.
 const created = await call("POST", "/threads", {
-	prompt: "$ echo hello > note.txt && (sleep 100000 & echo $! > pid) && echo started",
+	prompt: "$ echo hello > note.txt && (sleep 100000 & echo $! > pid) && echo started\n$ git ls-remote https://github.com/git/git HEAD",
 });
-if (created.status !== 201) fail(`create: ${created.status} ${JSON.stringify(created.json)}`);
-const { id, sandbox } = created.json;
+if (created.status !== 201) await fail(`create: ${created.status} ${JSON.stringify(created.json)}`);
+const id: number = created.json.id;
+sandbox = created.json.sandbox as string;
 const first = await runEnded(id, 1);
-if (!first[0]?.includes("started")) fail(`first tool call: ${JSON.stringify(first)}`);
-log("1. thread created, file written, process started", `thread ${id}, sandbox ${sandbox}`);
+if (!first[0]?.includes("started")) await fail(`first tool call: ${JSON.stringify(first)}`);
+if (!/\tHEAD/.test(first[1] ?? "")) await fail(`internet: ${JSON.stringify(first[1])}`);
+log("1. thread created, file written, process started, internet reached", `thread ${id}, sandbox ${sandbox}`);
 
 // 2. The Sandbox pauses after the idle window.
 const ranAt = Date.now();
@@ -85,7 +89,7 @@ log("2. sandbox paused", `${((Date.now() - ranAt) / 1000).toFixed(1)}s after the
 const sentAt = Date.now();
 await call("POST", `/threads/${id}/messages`, { text: "$ cat note.txt && kill -0 $(cat pid) && echo alive" });
 const second = await runEnded(id, 2);
-if (!/hello[\s\S]*alive/.test(second[0] ?? "")) fail(`after resume: ${JSON.stringify(second)}`);
+if (!/hello[\s\S]*alive/.test(second[0] ?? "")) await fail(`after resume: ${JSON.stringify(second)}`);
 log("3. resumed with file and process intact", `message to answer ${Date.now() - sentAt} ms`);
 
 // 4. An agent killed mid-call finishes the run after a restart.
@@ -95,17 +99,18 @@ agent!.kill("SIGKILL");
 log("4. agent killed mid-call");
 await startAgent();
 const third = await runEnded(id, 3);
-log("   run finished after restart", `tool result: ${JSON.stringify(third[0]?.slice(0, 120))}`);
+if (!third[0]?.includes("interrupted")) await fail(`killed call: ${JSON.stringify(third)}`);
+log("   run finished after restart", "the model got the call as interrupted");
 
 // 5. Deleting the Thread deletes its Sandbox.
 const deleted = await call("DELETE", `/threads/${id}`);
-if (deleted.status !== 204) fail(`delete: ${deleted.status}`);
+if (deleted.status !== 204) await fail(`delete: ${deleted.status}`);
 const gone = await sandboxes.state(sandbox).then(
 	() => false,
 	(e) => e instanceof SandboxNotFound,
 );
-if (!gone) fail(`sandbox ${sandbox} still exists after delete`);
-if ((await call("GET", `/threads/${id}`)).status !== 404) fail("deleted thread still readable");
+if (!gone) await fail(`sandbox ${sandbox} still exists after delete`);
+if ((await call("GET", `/threads/${id}`)).status !== 404) await fail("deleted thread still readable");
 log("5. thread deleted, sandbox gone");
 
 agent!.kill();
