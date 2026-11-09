@@ -1,0 +1,8 @@
+metadata: {atespace: dorf, name: sandbox}
+workerSelector: {matchLabels: {workload: dorf-sandbox}}
+containers:
+- name: sandbox
+  image: ${IMAGE}
+  wakeupProbe: {httpGet: {path: /readyz, port: 80}}
+resources: {limits: {cpuMillicores: 1000, memoryBytes: 1073741824}}
+snapshotConfig: {preferredFidelity: SNAPSHOT_FIDELITY_MEMORY}
