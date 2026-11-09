@@ -3,7 +3,7 @@
 **Hand a coding task to an agent that works in its own Linux machine.**
 
 Dorf is a self-hosted coding agent. Each Thread gets its own Sandbox: an isolated Linux machine
-that keeps its disk, memory and running processes while paused, costs almost nothing while
+with internet access that keeps its disk, memory and running processes while paused, costs almost nothing while
 paused, and resumes on the next tool call. The agent loop and its history run outside the
 Sandbox; only the tools run inside it. Upgrades are scripted and harmless to running work.
 
@@ -66,7 +66,7 @@ Substrate module and in deployment files.
 | Our own Postgres and migrations | The agent needs more than one replica |
 | App authentication, tunnels, enrolled CLIs | Access from outside the cluster; then put an existing access proxy in front |
 | Code mode | A measured need |
-| The microVM class | Running code from people we do not trust, such as pull requests from forks |
+| The microVM class and restricted egress | Running code from people we do not trust, such as pull requests from forks |
 | Silently replacing a deleted Sandbox | Never. Tools fail with "Sandbox not found" |
 | Archiving a Thread | With the chat page. Then follow Amp: archive hides the Thread and pauses its Sandbox at once; delete removes both |
 | A dashboard | Daily use asks for more than a minimal chat page |

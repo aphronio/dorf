@@ -7,6 +7,8 @@ import { Connection, RemoteExecutionEnv } from "@earendil-works/pi-env";
 const ATESPACE = "dorf";
 const TEMPLATE = "sandbox";
 const PIPE = new URL("./pipe.ts", import.meta.url).pathname;
+// Like a machine of your own: every host, TLS passed through untouched. Substrate denies all by default.
+const OPEN_EGRESS = 'rules: [{tlsPassthrough: {hostnames: ["*"], ports: {all: {}}}}, {http: {hostnames: ["*"]}}]';
 
 export class SandboxNotFound extends Error {
 	constructor(name: string) {
@@ -34,6 +36,7 @@ export class Sandboxes {
 
 	async create(name: string): Promise<void> {
 		await ate(name, ["create", "actor", name, "--template", TEMPLATE]);
+		await ate(name, ["create", "egress-policy", name, "-f", "-"], OPEN_EGRESS);
 	}
 
 	async state(name: string): Promise<string> {
