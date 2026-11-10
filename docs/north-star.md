@@ -2,6 +2,8 @@
 
 **Hand a coding task to an agent that works in its own Linux machine.**
 
+Dorf protects human attention: every choice minimizes friction and maximizes delight.
+
 Dorf is a self-hosted coding agent. Each Thread gets its own Sandbox: an isolated Linux machine
 with internet access that keeps its disk, memory and running processes while paused, costs almost nothing while
 paused, and resumes on the next tool call. The agent loop and its history run outside the
