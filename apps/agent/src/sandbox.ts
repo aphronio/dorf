@@ -27,7 +27,8 @@ export class Sandboxes {
 
 	async #call(name: string, method: string, path: string): Promise<any> {
 		const token = readFileSync(this.#tokenFile, "utf8").trim();
-		const res = await fetch(this.#gate + path, { method, headers: { authorization: `Bearer ${token}` } });
+		// A little longer than the gate gives Substrate per call.
+		const res = await fetch(this.#gate + path, { method, headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(6 * 60_000) });
 		if (res.status === 404 && name) throw new SandboxNotFound(name);
 		if (!res.ok) throw new Error(`gate ${method} ${path}: ${res.status} ${await res.text()}`);
 		return res.status === 204 ? undefined : res.json();

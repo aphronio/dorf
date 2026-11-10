@@ -81,7 +81,19 @@ Facts learned in one slice that a later slice must respect.
   gate's pod certificate could reach every Sandbox. The gate therefore opens a WebSocket only after
   `ResumeActor` succeeds with the caller's token (it needs `editor` and is harmless on a running
   Sandbox). `deploy/substrate.sh` puts `dorf-gate` on the allow-list at install; the install record
-  keeps it across upgrades.
+  keeps it across upgrades. The gate runs in its own namespace so that identity stays apart from the
+  Sandboxes' pool, and has only a ClusterIP: anything outside the cluster reaches it through a port
+  forward or a private tunnel, never a node port.
+- Substrate has no proxy of its own that accepts a token: the router takes only allow-listed pod
+  certificates (token support is a TODO in its client). That is why Dorf runs the gate's byte path;
+  replace it once the router accepts tokens scoped by atespace.
+- The gate checks the caller once per WebSocket, so a stream outlives its token's expiry or removal
+  from the access policy until it closes.
+- `apps/gate/ateapi.proto` is a copy from the pinned Substrate release; copy it again when
+  `SUBSTRATE_VERSION` moves.
+- Before the agent can run in a Worker: pi-env's client still spawns a process (`pipe.ts`), the
+  agent reads its token from a file, and ServiceAccount tokens expire, so something with the right
+  to create tokens must renew an off-cluster agent's token.
 - Through the gate, resuming to the first byte takes about 195 ms, down from about 816 ms through
   a `kubectl ate proxy` per connection; warm calls and a 100 MB stream are unchanged. A call in
   flight survives the gate's pod being deleted: pi-env reconnects and the job reattaches.

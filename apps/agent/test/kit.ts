@@ -1,6 +1,8 @@
 // What the slice proofs share: an agent process on the faux model, its HTTP API, and waits.
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
+import type { Readable } from "node:stream";
+import { createInterface } from "node:readline";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Sandboxes } from "../src/sandbox.ts";
@@ -8,11 +10,19 @@ import { Sandboxes } from "../src/sandbox.ts";
 export const IDLE_MS = 10_000;
 const PORT = 8193;
 const DATA = mkdtempSync(join(tmpdir(), "dorf-proof-"));
-// The proofs act as the cluster's operator: they mint the agent's token and find the gate on a node.
-const kubectl = (...args: string[]) => execFileSync("kubectl", args, { encoding: "utf8" }).trim();
+// The proofs act as the cluster's operator: they mint the agent's token and forward a port to the gate.
 const TOKEN = join(DATA, "token");
-writeFileSync(TOKEN, kubectl("-n", "dorf", "create", "token", "dorf-agent", "--audience", "api.ate-system.svc", "--duration", "24h"));
-const GATE = `http://${kubectl("get", "nodes", "-o", 'jsonpath={.items[0].status.addresses[?(@.type=="InternalIP")].address}')}:30080`;
+writeFileSync(TOKEN, execFileSync("kubectl", ["-n", "dorf-gate", "create", "token", "dorf-agent", "--audience", "api.ate-system.svc", "--duration", "24h"]));
+const forward = spawn("kubectl", ["-n", "dorf-gate", "port-forward", "svc/dorf-gate", "0:80"], { stdio: ["ignore", "pipe", "ignore"] });
+process.on("exit", () => forward.kill());
+const GATE = await new Promise<string>((resolve) => {
+	createInterface({ input: forward.stdout as Readable }).on("line", (line) => {
+		const port = line.match(/^Forwarding from 127\.0\.0\.1:(\d+) /)?.[1];
+		if (port) resolve(`http://127.0.0.1:${port}`);
+	});
+});
+forward.unref();
+(forward.stdout as Readable & { unref(): void }).unref();
 export const sandboxes = new Sandboxes(GATE, TOKEN);
 const t0 = Date.now();
 const owned = new Set<string>();

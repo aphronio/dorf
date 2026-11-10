@@ -1,12 +1,19 @@
 # Dorf's gate: the agent's only way into the cluster. It acts on Sandboxes with each caller's own
 # token, reaches them through Substrate's router as dorf-gate, and itself may only list pool pods.
+# Its own namespace keeps the identity the router trusts away from the Sandboxes' pool.
 apiVersion: v1
-kind: ServiceAccount
-metadata: {name: dorf-agent, namespace: dorf}
+kind: Namespace
+metadata:
+  name: dorf-gate
+  labels: {ate.dev/api-access: "true"}
 ---
 apiVersion: v1
 kind: ServiceAccount
-metadata: {name: dorf-gate, namespace: dorf}
+metadata: {name: dorf-agent, namespace: dorf-gate}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: dorf-gate, namespace: dorf-gate}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -19,11 +26,11 @@ kind: RoleBinding
 metadata: {name: dorf-gate, namespace: dorf}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: dorf-gate}
 subjects:
-- {kind: ServiceAccount, name: dorf-gate, namespace: dorf}
+- {kind: ServiceAccount, name: dorf-gate, namespace: dorf-gate}
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: dorf-gate, namespace: dorf}
+metadata: {name: dorf-gate, namespace: dorf-gate}
 spec:
   selector: {matchLabels: {app: dorf-gate}}
   template:
@@ -57,9 +64,7 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: {name: dorf-gate, namespace: dorf}
+metadata: {name: dorf-gate, namespace: dorf-gate}
 spec:
-  type: NodePort
   selector: {app: dorf-gate}
-  # Reachable on the nodes only; reach from elsewhere goes through a private tunnel.
-  ports: [{port: 80, targetPort: 8080, nodePort: 30080}]
+  ports: [{port: 80, targetPort: 8080}]

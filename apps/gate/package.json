@@ -2,12 +2,18 @@
   "name": "@dorf/gate",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=26" },
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "check": "tsc"
+  },
   "dependencies": {
     "@grpc/grpc-js": "1.14.6",
     "@grpc/proto-loader": "0.8.1"
   },
   "devDependencies": {
-    "@types/node": "26.6.6"
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2"
   }
 }

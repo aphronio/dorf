@@ -1,9 +1,6 @@
 // Dorf's door into the cluster and the only code that knows Agent Substrate. A Sandbox is one Actor
-// in atespace dorf, made from the newest `sandbox-*` ActorTemplate. Callers send a bearer token
-// that Substrate scopes; every request is checked by Substrate with that token, so the gate holds
-// no permissions of its own over Sandboxes. The WebSocket on /sandboxes/<name>/pienv reaches the
-// Sandbox through Substrate's router with the gate's pod certificate. The other routes manage
-// Sandboxes.
+// in atespace dorf, made from the newest `sandbox-*` ActorTemplate. Every call carries the caller's
+// token to Substrate, which decides; the gate holds no rights over Sandboxes of its own.
 import { readFileSync } from "node:fs";
 import http from "node:http";
 import type { Duplex } from "node:stream";
@@ -11,6 +8,9 @@ import tls from "node:tls";
 import { type Api, connect, httpStatus } from "./ateapi.ts";
 
 const ATESPACE = "dorf";
+const POOL_NAMESPACE = "dorf";
+const NAME = /^[a-z0-9-]+$/;
+const ROUTER_TIMEOUT_MS = 30_000;
 const SERVICEDNS = "/run/ate/servicedns/trust-bundle.pem";
 const PODIDENTITY = "/run/ate/podidentity/credential-bundle.pem";
 const ROUTER = "atenet-router.ate-system.svc";
@@ -60,6 +60,7 @@ function routerTunnel(name: string): Promise<tls.TLSSocket> {
 		const socket = tls.connect({ host: ROUTER, port: 8444, servername: ROUTER, ca: readFileSync(SERVICEDNS), key, cert }, () => {
 			socket.write(`CONNECT ${name}:80 HTTP/1.1\r\nHost: ${name}:80\r\nate-target-actor: ${ATESPACE}/${name}\r\n\r\n`);
 		});
+		socket.setTimeout(ROUTER_TIMEOUT_MS, () => socket.destroy(new HttpError(504, "router did not answer")));
 		let head = Buffer.alloc(0);
 		const onData = (chunk: Buffer) => {
 			head = Buffer.concat([head, chunk]);
@@ -68,10 +69,11 @@ function routerTunnel(name: string): Promise<tls.TLSSocket> {
 			socket.off("data", onData);
 			const status = head.subarray(0, head.indexOf("\r\n")).toString();
 			if (!/^HTTP\/1\.[01] 200/.test(status)) return reject(new HttpError(502, `router: ${status}`));
+			socket.setTimeout(0);
 			if (head.length > end + 4) socket.unshift(head.subarray(end + 4));
 			resolve(socket);
 		};
-		socket.on("data", onData).once("error", reject);
+		socket.on("data", onData).once("error", reject).once("close", () => reject(new HttpError(502, "router closed the tunnel")));
 	});
 }
 
@@ -105,9 +107,9 @@ async function newestTemplate(token: string): Promise<string> {
 	return newest.metadata.name;
 }
 
-// Worker pods being deleted, read with the gate's own ServiceAccount: only pods in this atespace's pool.
+// Worker pods being deleted, read with the gate's own ServiceAccount, which may list only the pool's pods.
 async function leavingPods(): Promise<Set<string>> {
-	const res = await fetch(`https://kubernetes.default.svc/api/v1/namespaces/${ATESPACE}/pods?labelSelector=ate.dev/worker-pool`, {
+	const res = await fetch(`https://kubernetes.default.svc/api/v1/namespaces/${POOL_NAMESPACE}/pods?labelSelector=ate.dev/worker-pool`, {
 		headers: { authorization: `Bearer ${readFileSync(`${KUBE}/token`, "utf8")}` },
 	});
 	if (!res.ok) throw new HttpError(502, `pods: ${res.status}`);
@@ -123,7 +125,8 @@ async function route(req: http.IncomingMessage): Promise<[number, unknown]> {
 		const leaving = await leavingPods();
 		return [200, actors.filter((a: any) => a.status.state === "ACTOR_STATE_RUNNING" && leaving.has(a.status.workerAssignment?.workerPod)).map((a: any) => a.metadata.name)];
 	}
-	if (root !== "sandboxes" || !name) return [404, { error: "not found" }];
+	// 400, not 404: the agent reads 404 as a Sandbox that no longer exists.
+	if (root !== "sandboxes" || !NAME.test(name ?? "")) return [400, { error: "no such route" }];
 	switch (`${req.method} ${action ?? ""}`) {
 		case "POST ": {
 			const actorTemplate = ref(await newestTemplate(token));
@@ -156,6 +159,8 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.on("upgrade", (req, socket, head) => {
+	// Without a listener, a client resetting the connection mid-check would crash the gate.
+	socket.on("error", () => socket.destroy());
 	const name = req.url?.match(/^\/sandboxes\/([a-z0-9-]+)\/pienv$/)?.[1];
 	if (!name) return socket.destroy();
 	pienv(req, socket, head, name).catch((e) => {

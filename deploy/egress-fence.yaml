@@ -1,4 +1,4 @@
-# Sandboxes may reach any host name (apps/agent/src/sandbox.ts), and the egress gateway resolves
+# Sandboxes may reach any host name (apps/gate/gate.ts), and the egress gateway resolves
 # cluster names too, so it alone dials them. Fence it to public addresses, DNS and the two
 # Substrate services it calls. Needs a CNI that enforces NetworkPolicy; add the cluster's ranges
 # when its pods, services or nodes use public addresses.

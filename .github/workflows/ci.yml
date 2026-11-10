@@ -39,3 +39,4 @@ jobs:
       - run: npm ci --ignore-scripts --prefix ../../images/sandbox
       - run: npm ci --ignore-scripts --prefix ../gate
       - run: npm run check
+      - run: npm run check --prefix ../gate
