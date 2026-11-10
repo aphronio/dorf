@@ -119,7 +119,7 @@ export default function Page() {
             value={draft}
             onValueChange={setDraft}
             onSend={(value) => void send(value)}
-            placeholder={id === undefined ? "Describe a coding task" : ""}
+            placeholder={id === undefined ? "Describe a coding task" : "Ask or tell Dorf anything"}
             status={running ? "streaming" : "idle"}
             onStop={stop}
             leftSlot={repoPicker}
