@@ -2,10 +2,10 @@
 
 import { useEffect } from "react"
 import { useTheme } from "next-themes"
-import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select"
-import { THEMES, type ThemeId, applyTheme, chooseTheme, useThemeId } from "@/lib/themes"
+import { THEMES, applyTheme, chooseTheme, useThemeId } from "@/lib/themes"
 
-export function ThemePicker() {
+// Applies the theme on screen, and T / Shift+T step through the themes. Choosing one is in ⌘⇧P.
+export function ThemeSync() {
   const id = useThemeId()
   const { setTheme } = useTheme()
   useEffect(() => void applyTheme(id, setTheme), [id, setTheme])
@@ -21,16 +21,5 @@ export function ThemePicker() {
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
   }, [id, setTheme])
-  return (
-    <Select value={id} onValueChange={(v) => chooseTheme(v as ThemeId)}>
-      <SelectTrigger variant="borderless" className="w-full min-w-0" />
-      <SelectContent>
-        {THEMES.map((t, i) => (
-          <SelectItem key={t.id} value={t.id} index={i}>
-            {t.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  )
+  return null
 }

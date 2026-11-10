@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/u
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { SidebarInsetTopbar } from "@/components/sidebar-app/inset-topbar"
 import { CommandPalette } from "@/components/dorf/command-palette"
+import { ThemeSync } from "@/components/dorf/theme-sync"
 import { ThreadSidebar } from "@/components/dorf/thread-sidebar"
 import { Transcript } from "@/components/dorf/transcript"
 import { useIcons } from "@/lib/icon-context"
@@ -87,6 +88,7 @@ export default function Page() {
     <SidebarProvider className="h-dvh">
       <ThreadSidebar threads={threads} current={id} />
       <CommandPalette threads={threads} />
+      <ThemeSync />
       <SidebarInset className="max-md:!m-0 max-md:!rounded-none">
         <SidebarInsetTopbar>
           <span className="min-w-0 flex-1 truncate text-sm font-medium">

@@ -13,7 +13,6 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { ClaudeStatus } from "@/components/dorf/claude-status"
-import { ThemePicker } from "@/components/dorf/theme-picker"
 import { useIcons } from "@/lib/icon-context"
 import type { Thread } from "@/lib/dorf"
 
@@ -56,7 +55,6 @@ export function ThreadSidebar({ threads, current }: { threads: Thread[]; current
         )}
       </SidebarContent>
       <SidebarFooter>
-        <ThemePicker />
         <ClaudeStatus />
       </SidebarFooter>
     </Sidebar>
