@@ -5,7 +5,6 @@ import { Connection, RemoteExecutionEnv } from "@earendil-works/pi-env";
 // Longer than the gate's own deadline, so the gate's error arrives first.
 const GATE_TIMEOUT_MS = 6 * 60_000;
 const PIPE = new URL("./pipe.ts", import.meta.url).pathname;
-const WAIT_FOR_ROOM_MS = 10 * 60_000;
 const RETRY_ROOM_MS = 5_000;
 
 export class SandboxNotFound extends Error {
@@ -47,12 +46,11 @@ export class Sandboxes {
 	}
 
 	async #resume(name: string): Promise<void> {
-		const deadline = Date.now() + WAIT_FOR_ROOM_MS;
 		for (;;) {
 			try {
 				return await this.#call(name, "POST", `/sandboxes/${name}/resume`);
 			} catch (e) {
-				if (!(e instanceof NoRoom) || Date.now() > deadline) throw e;
+				if (!(e instanceof NoRoom)) throw e;
 			}
 			if (!(await this.makeRoom())) await new Promise((r) => setTimeout(r, RETRY_ROOM_MS));
 		}
