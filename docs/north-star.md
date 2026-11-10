@@ -14,13 +14,18 @@ harnesses. That code is frozen at the `v0.31.3` tag and is not maintained.
 
 ```text
 +-------------------------------------------+     +---------------------------+
-|  agent  (TypeScript, the only process)    |     |  deploy/substrate.sh      |
+|  agent  (TypeScript)                      |     |  deploy/substrate.sh      |
 |  Threads | Pi Durable Harness + SQLite    |     |  install, upgrade and     |
 |  pauses a Sandbox after its run ends      |     |  rollback of Substrate,   |
 |  drains Sandboxes off workers going away  |     |  from released images     |
-|  calls Substrate: create | pause | delete |     |                           |
 +---------------------+---------------------+     +---------------------------+
-                      | tools through pi-env; a request resumes a paused Sandbox
+                      | HTTP: create | pause | delete    WebSocket: tools through pi-env
+                      v
++-------------------------------------------+
+|  gate (in the cluster)                    |
+|  the agent's token decides; Substrate API |
++---------------------+---------------------+
+                      | a request resumes a paused Sandbox
                       v
 +-------------------------------------------+
 |  Agent Substrate on Kubernetes (gVisor)   |
