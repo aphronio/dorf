@@ -4,6 +4,8 @@ import { createBashTool } from "@earendil-works/pi-durable/tools";
 
 const JOBS = "/var/tmp/dorf-jobs";
 const GIVE_UP_AFTER = 120;
+// An attempt that lasted this long reached the daemon; pi-env fails a connect within 60 s.
+const CONNECTED_MS = 90_000;
 
 // Starts the command once per job id in its own session, then streams its output from a byte
 // offset and exits with its status. A start cut off before the job ran is claimed again; a job
@@ -70,6 +72,7 @@ export const SandboxJobs = defineExtension({
 				while (true) {
 					const command = `bash -c ${quote(ATTACH)} _ ${job} ${offset} ${script}`;
 					const timeout = deadline === undefined ? undefined : Math.max(0.001, (deadline - Date.now()) / 1000);
+					const started = Date.now();
 					try {
 						return await bash.execute({ ...args, command, timeout }, counting, context);
 					} catch (e) {
@@ -78,7 +81,7 @@ export const SandboxJobs = defineExtension({
 							if (deadline !== undefined && Date.now() >= deadline) throw new Error(`Command timed out after ${args.timeout} seconds`);
 							throw e;
 						}
-						stalled = offset > seen ? 0 : stalled + 1;
+						stalled = offset > seen || Date.now() - started > CONNECTED_MS ? 0 : stalled + 1;
 						seen = offset;
 						if (stalled > GIVE_UP_AFTER) {
 							throw new Error("Lost the Sandbox for minutes. The command may still be running or have partly run; check before retrying.");
