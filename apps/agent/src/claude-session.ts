@@ -1,4 +1,4 @@
-import { type Options, query, type Query, type SDKMessage, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { type EffortLevel, type ModelInfo, type Options, query, type Query, type SDKMessage, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, type CallToolResult, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
@@ -26,6 +26,7 @@ export type SessionStart = {
 	executable?: string;
 	cwd: string;
 	model: string;
+	effort?: EffortLevel;
 	system: Options["systemPrompt"];
 	tools: ToolDeclaration[];
 	persist: boolean;
@@ -148,6 +149,7 @@ export class ClaudeSession {
 				hooks: { PreToolUse: [{ hooks: [async (i) => (i.hook_event_name === "PreToolUse" && this.pending.before(i.tool_use_id), {})] }] },
 				verbatimPrompts: true,
 				thinking: { type: "adaptive", display: "summarized" },
+				...(start.effort ? { effort: start.effort } : {}),
 				includePartialMessages: true,
 				persistSession: start.persist,
 				...("resume" in start ? { resume: start.resume } : { sessionId: start.sessionId }),
@@ -218,6 +220,12 @@ export class ClaudeSession {
 		this.#input.enqueue({ type: "user", message: { role: "user", content }, parent_tool_use_id: null });
 	}
 
+	// A message the user sent mid-turn: Claude Code hands it to the model with the next tool results, as one typed in its terminal.
+	steer(content: UserContent) {
+		if (!this.#turn) throw new Error("Claude Code is not in a turn");
+		this.#input.enqueue({ type: "user", message: { role: "user", content }, parent_tool_use_id: null, priority: "next" });
+	}
+
 	// One model response: ends when it called tools, which now wait on `pending`, or at the turn's result.
 	async readStep(emit: (m: SDKMessage) => void): Promise<"tools" | SDKResultMessage> {
 		let calledTools = false;
@@ -244,6 +252,11 @@ export class ClaudeSession {
 		}
 	}
 
+	// Applies from the next model call, also inside a turn.
+	setEffort(effort: EffortLevel | undefined): Promise<void> {
+		return this.#query.applyFlagSettings({ effortLevel: effort ?? null });
+	}
+
 	interrupt(): Promise<unknown> {
 		return this.#turn ? this.#query.interrupt() : Promise.resolve();
 	}
@@ -263,5 +276,18 @@ export class ClaudeSession {
 			.catch(() => {})
 			.finally(() => this.#query.close());
 		return this.#stopping;
+	}
+}
+
+// The models the signed-in plan offers, read from Claude Code's start-up handshake, which sends no model request.
+export async function offeredModels(executable: string | undefined, cwd: string): Promise<ModelInfo[]> {
+	const q = query({
+		prompt: new ReadableStream<SDKUserMessage>(),
+		options: { pathToClaudeCodeExecutable: executable, env: { ...claudeEnv(), ...ISOLATION_ENV }, cwd, settingSources: [], tools: [], persistSession: false },
+	});
+	try {
+		return (await q.initializationResult()).models;
+	} finally {
+		q.close();
 	}
 }

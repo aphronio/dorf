@@ -5,13 +5,14 @@ import { fileURLToPath } from "node:url";
 import type { ConversationId } from "@earendil-works/pi-durable";
 import { type ClaudeLogin, LoginError } from "./claude-login.ts";
 import type { GitHub } from "./github.ts";
+import type { Catalog } from "./models.ts";
 import type { Threads } from "./threads.ts";
 
 type Reply = [status: number, body: unknown];
 
 // The page's static export, copied in by the image build (apps/web).
 const WEB = fileURLToPath(new URL("../web/", import.meta.url));
-const API = new Set(["threads", "repos", "claude"]);
+const API = new Set(["threads", "repos", "claude", "models"]);
 const TYPES: Record<string, string> = {
 	".html": "text/html; charset=utf-8",
 	".txt": "text/plain; charset=utf-8",
@@ -51,17 +52,21 @@ function refused(req: http.IncomingMessage, owner: string): Reply | undefined {
 	if (site && site !== "same-origin" && site !== "none") return [403, { error: "cross-site request" }];
 }
 
-async function route(threads: Threads, claude: ClaudeLogin, github: GitHub | undefined, req: http.IncomingMessage): Promise<Reply> {
+async function route(threads: Threads, catalog: Catalog, claude: ClaudeLogin, github: GitHub | undefined, req: http.IncomingMessage): Promise<Reply> {
 	const [, root, rawId, sub] = new URL(req.url ?? "/", "http://x").pathname.split("/");
 	if (root === "repos" && req.method === "GET" && !rawId) return [200, github ? await github.repos() : []];
+	if (root === "models" && req.method === "GET" && !rawId) return [200, catalog.list()];
 	if (root === "claude") {
 		switch (`${req.method} ${rawId ?? ""}`) {
 			case "GET ":
 				return [200, await claude.status()];
 			case "POST login":
 				return [200, { url: await claude.start() }];
-			case "POST code":
-				return [200, await claude.finish((await json(req)).code)];
+			case "POST code": {
+				const status = await claude.finish((await json(req)).code);
+				await catalog.refresh();
+				return [200, status];
+			}
 		}
 		return [405, { error: "method not allowed" }];
 	}
@@ -72,19 +77,27 @@ async function route(threads: Threads, claude: ClaudeLogin, github: GitHub | und
 		case "GET ":
 			return [200, await threads.list()];
 		case "POST ": {
-			const { prompt, repo } = await json(req);
+			const { prompt, repo, model, thinking } = await json(req);
 			if (typeof prompt !== "string" || !prompt) return [400, { error: "prompt required" }];
 			if (repo !== undefined && typeof repo !== "string") return [400, { error: "repo must be owner/name" }];
-			return [201, await threads.create(prompt, repo || undefined)];
+			return [201, await threads.create(prompt, repo || undefined, catalog.choose(model, thinking))];
 		}
 		case "GET :id": {
 			const view = await threads.read(id);
-			return view ? [200, { sandbox: await threads.sandbox(id), ...view }] : [404, { error: "no such thread" }];
+			return view ? [200, { sandbox: await threads.sandbox(id), agent: await threads.agent(id), ...view }] : [404, { error: "no such thread" }];
 		}
 		case "POST :id/messages": {
 			const { text } = await json(req);
 			if (typeof text !== "string" || !text) return [400, { error: "text required" }];
 			return (await threads.send(id, text)) ? [202, {}] : [404, { error: "no such thread" }];
+		}
+		case "POST :id/thinking": {
+			const agent = await threads.agent(id);
+			if (!agent) return [404, { error: "no such thread" }];
+			if (!agent.model) return [409, { error: "the Thread has no model" }];
+			const { level } = await json(req);
+			if (typeof level !== "string") return [400, { error: "level required" }];
+			return (await threads.think(id, catalog.thinking(agent.model, level))) ? [202, {}] : [404, { error: "no such thread" }];
 		}
 		case "POST :id/abort":
 			return (await threads.abort(id)) ? [202, {}] : [404, { error: "no such thread" }];
@@ -106,8 +119,10 @@ async function asset(path: string, res: http.ServerResponse): Promise<boolean> {
 	return true;
 }
 
-async function follow(threads: Threads, id: ConversationId, req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
-	const stop = await threads.follow(id, (event) => {
+type Emit = Parameters<Threads["follow"]>[1];
+
+async function follow(start: (emit: Emit) => Promise<(() => Promise<unknown>) | undefined>, req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
+	const stop = await start((event) => {
 		if (!res.headersSent) res.writeHead(200, { ...HEADERS, "cache-control": "no-store, no-transform", "content-type": "text/event-stream" });
 		res.write(`data: ${JSON.stringify(event)}\n\n`);
 	});
@@ -116,7 +131,7 @@ async function follow(threads: Threads, id: ConversationId, req: http.IncomingMe
 	return true;
 }
 
-export function serve(threads: Threads, claude: ClaudeLogin, github: GitHub | undefined, owner: string, port: number): http.Server {
+export function serve(threads: Threads, catalog: Catalog, claude: ClaudeLogin, github: GitHub | undefined, owner: string, port: number): http.Server {
 	return http
 		.createServer(async (req, res) => {
 			const send = ([status, body]: Reply) =>
@@ -126,9 +141,14 @@ export function serve(threads: Threads, claude: ClaudeLogin, github: GitHub | un
 				if (denied) return send(denied);
 				const path = new URL(req.url ?? "/", "http://x").pathname;
 				if (req.method === "GET" && !API.has(path.split("/")[1])) return (await asset(path, res)) || send([404, { error: "not found" }]);
-				const events = req.method === "GET" && path.match(/^\/threads\/(\d+)\/events$/);
-				if (events) return (await follow(threads, Number(events[1]) as ConversationId, req, res)) || send([404, { error: "no such thread" }]);
-				send(await route(threads, claude, github, req));
+				const events = req.method === "GET" && path.match(/^\/threads\/(\d+)(?:\/subagents\/([^/]+))?\/events$/);
+				if (events) {
+					const id = Number(events[1]) as ConversationId;
+					const name = events[2] && decodeURIComponent(events[2]);
+					const followed = await follow((emit) => (name ? threads.followSubagent(id, name, emit) : threads.follow(id, emit)), req, res);
+					return followed || send([404, { error: name ? "no such subagent" : "no such thread" }]);
+				}
+				send(await route(threads, catalog, claude, github, req));
 			} catch (e) {
 				send([e instanceof BadRequest || e instanceof LoginError || e instanceof RangeError ? 400 : 500, { error: (e as Error).message }]);
 			}

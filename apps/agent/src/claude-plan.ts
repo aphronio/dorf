@@ -1,22 +1,28 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { deleteSession, getSessionInfo, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import { deleteSession, type EffortLevel, getSessionInfo, type ModelInfo, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { Api, AssistantMessage, ImageContent, Message, Model, SimpleStreamOptions, TextContent, ToolResultMessage, TranscriptContext } from "@earendil-works/pi-ai";
-import { createProvider } from "@earendil-works/pi-ai/models";
+import { clampThinkingLevel, createProvider } from "@earendil-works/pi-ai/models";
 import { type AssistantMessageEventStream, createAssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
-import { ClaudeSession, ExtraUsage, TOOL_SERVER, type ToolDeclaration, type UserContent } from "./claude-session.ts";
+import { ClaudeSession, ExtraUsage, offeredModels, TOOL_SERVER, type ToolDeclaration, type UserContent } from "./claude-session.ts";
 
 export const CLAUDE_PLAN = "claude-plan";
-const MODELS = ["opus", "sonnet", "haiku"];
-const RUNTIME = "You are running in Dorf through Claude Code. Your tools run in the Thread's own Linux machine.";
+const MODELS: Pick<ModelInfo, "value" | "displayName">[] = [
+	{ value: "opus", displayName: "Opus" },
+	{ value: "sonnet", displayName: "Sonnet" },
+	{ value: "haiku", displayName: "Haiku" },
+];
+const EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max"] satisfies EffortLevel[];
+const RUNTIME =
+	"You are running in Dorf, a self-hosted coding agent, through Claude Code. Your tools run in the Thread's own Linux machine. Claude Code's slash commands, settings and built-in tools do not exist here: the owner picks the model when a Thread starts and the thinking level in Dorf's page.";
 const TOOL_PREFIX = `mcp__${TOOL_SERVER}__`;
 
 type Role = "user" | "assistant" | "toolResult";
 type Group = { role: Role; hash: string; start: number; end: number };
 type Saved = { claude: string; hashes: string[] };
-type Thread = { saved?: Saved; session?: ClaudeSession; launch?: string };
+type Thread = { saved?: Saved; session?: ClaudeSession; launch?: string; effort?: EffortLevel };
 
 const canonical = (v: unknown): string =>
 	Array.isArray(v)
@@ -94,11 +100,12 @@ function catchUp(messages: Message[], missed: Group[]): UserContent {
 	return out;
 }
 
+type Part = (TextContent | ImageContent)[];
+const toolParts = (content: Part) => content.map((c) => (c.type === "text" ? { type: "text" as const, text: c.text } : { type: "image" as const, data: c.data, mimeType: c.mimeType }));
+
 const toolResult = (r: ToolResultMessage): CallToolResult => ({
 	isError: r.isError,
-	content: r.content.length
-		? r.content.map((c) => (c.type === "text" ? { type: "text" as const, text: c.text } : { type: "image" as const, data: c.data, mimeType: c.mimeType }))
-		: [{ type: "text", text: "(no output)" }],
+	content: r.content.length ? toolParts(r.content) : [{ type: "text" as const, text: "(no output)" }],
 });
 
 class Reply {
@@ -140,6 +147,7 @@ class Reply {
 			const e = m.event;
 			if (e.type === "message_start") {
 				this.#id = e.message.id;
+				partial.responseModel = e.message.model;
 				this.#count(this.#id, e.message.usage);
 			}
 			if (e.type === "message_delta") this.#count(this.#id, e.usage);
@@ -196,6 +204,29 @@ class Reply {
 	}
 }
 
+// Pi's thinking levels are Claude Code's effort levels; the ones a model lacks map to null.
+function planModel(m: Pick<ModelInfo, "value" | "displayName" | "supportsEffort" | "supportedEffortLevels">) {
+	const efforts: readonly string[] = m.supportedEffortLevels ?? (m.supportsEffort === false ? [] : ["low", "medium", "high"]);
+	return {
+		id: m.value,
+		name: m.displayName,
+		api: CLAUDE_PLAN,
+		provider: CLAUDE_PLAN,
+		baseUrl: "",
+		input: ["text", "image"] as ("text" | "image")[],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		reasoning: efforts.length > 0,
+		thinkingLevelMap: Object.fromEntries(["off", "minimal", ...EFFORTS].map((level) => [level, efforts.includes(level) ? level : null])),
+		contextWindow: 200_000,
+		maxTokens: 32_000,
+	};
+}
+
+const effortOf = (model: Model<Api>, reasoning: SimpleStreamOptions["reasoning"]) => {
+	const level = reasoning && clampThinkingLevel(model, reasoning);
+	return level && EFFORTS.includes(level) ? (level as EffortLevel) : undefined;
+};
+
 const failure = (step: "tools" | SDKResultMessage) =>
 	step !== "tools" && (step.subtype !== "success" || step.is_error) ? `Claude Code: ${step.subtype} ${step.subtype === "success" ? step.result : step.errors.join("; ")}` : undefined;
 
@@ -219,18 +250,8 @@ export class ClaudePlan {
 			id: CLAUDE_PLAN,
 			name: "Claude plan",
 			auth: { apiKey: { name: "Claude Code login", resolve: async () => ({ auth: {} }) } },
-			models: MODELS.map((id) => ({
-				id,
-				name: `Claude ${id} (plan)`,
-				api: CLAUDE_PLAN,
-				provider: CLAUDE_PLAN,
-				baseUrl: "",
-				input: ["text", "image"] as ("text" | "image")[],
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				reasoning: true,
-				contextWindow: 200_000,
-				maxTokens: 32_000,
-			})),
+			models: MODELS.map(planModel),
+			fetchModels: async () => (await offeredModels(executable, dataDir)).filter((m) => m.value !== "default").map(planModel),
 			api: { stream, streamSimple: stream },
 		});
 	}
@@ -296,13 +317,15 @@ export class ClaudePlan {
 		const system = getCurrentSystemPrompt(context.messages);
 		const sessionId = options?.sessionId;
 		const signal = options?.signal;
+		const effort = effortOf(model, options?.reasoning);
+		if (effort) reply.message.providerThinkingLevel = effort;
 		const work =
 			Date.now() < this.#refusedUntil
 				? Promise.reject(new Error(`Claude plan requests are refused until ${new Date(this.#refusedUntil).toISOString()}: the plan's extra usage was drawn`))
 				: // Requests without tools, like Pi's compaction summaries, stand alone and leave the Thread's session alone.
 					sessionId && tools.length
-					? this.#serial(sessionId, () => this.#threadStep(model, context.messages, tools, system, sessionId, reply, signal))
-					: this.#oneShot(model, context.messages, system, reply, signal);
+					? this.#serial(sessionId, () => this.#threadStep(model, effort, context.messages, tools, system, sessionId, reply, signal))
+					: this.#oneShot(model, effort, context.messages, system, reply, signal);
 		work.catch((e) => {
 			if (e instanceof ExtraUsage) this.#refusedUntil = e.until;
 			reply.fail(e, Boolean(signal?.aborted));
@@ -310,11 +333,12 @@ export class ClaudePlan {
 		return stream;
 	}
 
-	async #oneShot(model: Model<Api>, messages: Message[], system: string, reply: Reply, signal?: AbortSignal) {
+	async #oneShot(model: Model<Api>, effort: EffortLevel | undefined, messages: Message[], system: string, reply: Reply, signal?: AbortSignal) {
 		const session = await ClaudeSession.open({
 			executable: this.#executable,
 			cwd: this.#cwd,
 			model: model.id,
+			effort,
 			system: system || "Return only the requested output.",
 			tools: [],
 			persist: false,
@@ -336,11 +360,16 @@ export class ClaudePlan {
 		}
 	}
 
-	async #threadStep(model: Model<Api>, messages: Message[], tools: ToolDeclaration[], system: string, sessionId: string, reply: Reply, signal?: AbortSignal) {
+	async #threadStep(model: Model<Api>, effort: EffortLevel | undefined, messages: Message[], tools: ToolDeclaration[], system: string, sessionId: string, reply: Reply, signal?: AbortSignal) {
 		const thread = this.#threads.get(sessionId) ?? { saved: this.#load(sessionId) };
 		this.#threads.set(sessionId, thread);
 		const launch = hash({ model: model.id, system, tools });
 		if (thread.session && (thread.session.ended || thread.launch !== launch)) await this.#stop(thread);
+		// A session that refuses the new level is relaunched with it.
+		if (thread.session && thread.effort !== effort) {
+			await thread.session.setEffort(effort);
+			thread.effort = effort;
+		}
 
 		const all = groups(messages);
 		const sent = thread.saved?.hashes ?? [];
@@ -350,13 +379,17 @@ export class ClaudePlan {
 		if (sent.length && !resume) console.error(`claude-plan: Pi's history changed at group ${seen} of ${sent.length}, likely a compaction; starting a new Claude Code session`);
 		let missed = resume ? all.slice(seen) : all;
 
-		const results = missed.length === 1 && missed[0].role === "toolResult" ? (messages.slice(missed[0].start, missed[0].end) as ToolResultMessage[]) : [];
+		const [answered, ...after] = missed;
+		const inTurn = answered?.role === "toolResult" && after.every((g) => g.role === "user");
+		const results = inTurn ? (messages.slice(answered.start, answered.end) as ToolResultMessage[]) : [];
+		const steer = inTurn ? (after.flatMap((g) => messages.slice(g.start, g.end)) as Extract<Message, { role: "user" }>[]) : [];
 		const live = thread.session;
 		let begun = false;
 		const interrupt = () => void thread.session?.interrupt();
 		signal?.addEventListener("abort", interrupt, { once: true });
 		try {
 			if (resume && live?.waiting && results.length && results.every((r) => live.pending.has(r.toolCallId))) {
+				if (steer.length) live.steer(steer.flatMap((m) => claudeBlocks(m.content)));
 				for (const r of results) live.pending.resolve(r.toolCallId, toolResult(r));
 			} else {
 				if (live && (live.waiting || !resume)) await this.#stop(thread);
@@ -374,12 +407,14 @@ export class ClaudePlan {
 						executable: this.#executable,
 						cwd: this.#cwd,
 						model: model.id,
+						effort,
 						system: { type: "preset", preset: "claude_code", append: `${RUNTIME}\n\n${system}` },
 						tools,
 						persist: true,
 						...(resume ? { resume: claude } : { sessionId: claude }),
 					});
 					thread.launch = launch;
+					thread.effort = effort;
 				}
 				signal?.throwIfAborted();
 				thread.session.begin(catchUp(messages, missed));

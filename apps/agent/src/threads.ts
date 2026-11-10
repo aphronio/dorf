@@ -1,18 +1,15 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { type AgentChange, type ConversationId, defineDoc, type Harness, type HarnessOptions, ProviderDoc } from "@earendil-works/pi-durable";
+import { type AgentChange, type Conversation, type ConversationId, type ModelRef, defineDoc, type Harness, type HarnessOptions, LiveDoc, ProviderDoc } from "@earendil-works/pi-durable";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { REPO } from "./github.ts";
 import { pauseWhenIdle } from "./idle.ts";
 import type { Sandboxes } from "./sandbox.ts";
+import { SUBAGENTS_DOC, subagentsOf } from "./subagent.ts";
+import { ThreadSandbox } from "./thread-sandbox.ts";
 
-const ThreadSandbox = defineDoc<{ name?: string }>({
-	kind: "dorf.sandbox",
-	version: 1,
-	scope: "conversation",
-	history: "latest",
-	fork: "initial",
-	initial: () => ({}),
-	checkpointWhen: () => false,
-});
+export type ThreadAgent = { model?: ModelRef; thinkingLevel: ModelThinkingLevel };
+export type SubagentView = { name: string; model?: ModelRef; working: boolean };
+type FollowEvent = { entries?: readonly unknown[]; live: unknown; agent?: ThreadAgent; subagents?: SubagentView[] };
 
 export type ThreadSummary = { id: ConversationId; title: string; createdAt: string; repo?: string };
 
@@ -30,6 +27,11 @@ export function sandboxEnv(sandboxes: Sandboxes, workspace: string): HarnessOpti
 		return sandbox?.name ? sandboxes.env(sandbox.name, cwd ?? workspace) : undefined;
 	};
 }
+
+const agentOf = async (conversation: { agent(c: typeof context): Promise<ThreadAgent> }): Promise<ThreadAgent> => {
+	const { model, thinkingLevel } = await conversation.agent(context);
+	return { model, thinkingLevel };
+};
 
 // A provider that keeps a process or copy per Thread, keyed by Pi's provider session id.
 export type ProviderSessions = { release(sessionId: string): Promise<void>; forget(sessionId: string): Promise<void> };
@@ -64,12 +66,12 @@ export class Threads {
 	}
 
 	// The Thread commits before its Sandbox exists, so no Sandbox is ever left without a Thread.
-	async create(prompt: string, repo?: string): Promise<{ id: ConversationId; sandbox: string }> {
+	async create(prompt: string, repo: string | undefined, choice: { model: ModelRef; thinkingLevel: ModelThinkingLevel }): Promise<{ id: ConversationId; sandbox: string }> {
 		if (repo !== undefined && !REPO.test(repo)) throw new RangeError(`not a GitHub repository: ${repo}`);
 		const sandbox = this.#sandboxes.newName();
 		const workspace = this.#agent.cwd ?? "/";
 		const cwd = repo ? `${workspace}/${repo.split("/")[1]}` : workspace;
-		const agent = repo ? { ...this.#agent, cwd, instructions: `${this.#agent.instructions}\n\nThe repository ${repo} is cloned in ${cwd}.` } : this.#agent;
+		const agent = { ...this.#agent, ...choice, ...(repo ? { cwd, instructions: `${this.#agent.instructions}\n\nThe repository ${repo} is cloned in ${cwd}.` } : {}) };
 		const conversation = await this.#harness.createConversation(
 			{
 				ownership: { kind: "ownerless" },
@@ -105,7 +107,20 @@ export class Threads {
 	async send(id: ConversationId, text: string): Promise<boolean> {
 		const conversation = await this.#known(id);
 		if (!conversation) return false;
-		await conversation.submit({ type: "input", content: text }, context);
+		await conversation.submit({ type: "input", content: text, whenBusy: "steer" }, context);
+		return true;
+	}
+
+	async agent(id: ConversationId): Promise<ThreadAgent | undefined> {
+		const conversation = await this.#known(id);
+		return conversation && agentOf(conversation);
+	}
+
+	// Applies from the Thread's next model request.
+	async think(id: ConversationId, thinkingLevel: ModelThinkingLevel): Promise<boolean> {
+		const conversation = await this.#known(id);
+		if (!conversation) return false;
+		await conversation.configure({ thinkingLevel }, context);
 		return true;
 	}
 
@@ -132,20 +147,62 @@ export class Threads {
 		return true;
 	}
 
-	// Pi's JSON state mode: first every entry, then per change the new entries and the live state.
-	async follow(id: ConversationId, send: (event: { entries?: readonly unknown[]; live: unknown }) => void): Promise<(() => Promise<unknown>) | undefined> {
+	// Pi's JSON state mode: first every entry, then per change the new entries and the live state. The agent goes along
+	// when it changes, and for a Thread the list of its subagents when one starts or one's work starts or ends.
+	async follow(id: ConversationId, send: (event: FollowEvent) => void): Promise<(() => Promise<unknown>) | undefined> {
 		const conversation = await this.#known(id);
-		if (!conversation) return undefined;
+		return conversation && this.#follow(conversation, send, true);
+	}
+
+	async followSubagent(id: ConversationId, name: string, send: (event: FollowEvent) => void): Promise<(() => Promise<unknown>) | undefined> {
+		if (!(await this.#known(id))) return undefined;
+		const child = (await subagentsOf(this.#harness, id)).find((s) => s.name === name);
+		const conversation = child && (await this.#harness.conversation(child.conversationId, context));
+		return conversation && this.#follow(conversation, send, false);
+	}
+
+	async #follow(conversation: Conversation, send: (event: FollowEvent) => void, withSubagents: boolean): Promise<() => Promise<unknown>> {
 		const watch = await conversation.watch(context);
+		const children = new Map<ConversationId, SubagentView & { stop: () => Promise<unknown> }>();
+		const subagents = () => [...children.values()].map(({ name, model, working }) => ({ name, model, working }));
+		let live = watch.value.docs["pi.live"];
+		const watchChildren = async () => {
+			for (const { name, conversationId } of await subagentsOf(this.#harness, conversation.id)) {
+				if (children.has(conversationId)) continue;
+				const child = (await this.#harness.conversation(conversationId, context))!;
+				const childLive = (await this.#harness.watchDoc(LiveDoc, conversationId, context))!;
+				const view = { name, model: (await child.agent(context)).model, working: Boolean(childLive.value.run), stop: () => childLive.stop() };
+				children.set(conversationId, view);
+				childLive.start(async (call) => {
+					if (call.kind !== "value" || Boolean(call.value.run) === view.working) return;
+					view.working = Boolean(call.value.run);
+					send({ live, subagents: subagents() });
+				});
+			}
+		};
+		if (withSubagents) await watchChildren();
 		let newest = watch.value.entries.at(-1)?.id ?? 0;
-		send({ entries: watch.value.entries, live: watch.value.docs["pi.live"] });
+		let agent = watch.value.docs["pi.agent"];
+		let listed = watch.value.docs[SUBAGENTS_DOC];
+		send({ entries: watch.value.entries, live, agent: await agentOf(conversation), ...(withSubagents ? { subagents: subagents() } : {}) });
 		watch.start(async (call) => {
 			if (call.kind !== "value") return;
 			const entries = call.value.entries.filter((entry) => entry.id > newest);
 			newest = call.value.entries.at(-1)?.id ?? newest;
-			send({ ...(entries.length ? { entries } : {}), live: call.value.docs["pi.live"] });
+			live = call.value.docs["pi.live"];
+			const agentChanged = call.value.docs["pi.agent"] !== agent;
+			agent = call.value.docs["pi.agent"];
+			const started = withSubagents && call.value.docs[SUBAGENTS_DOC] !== listed;
+			listed = call.value.docs[SUBAGENTS_DOC];
+			if (started) await watchChildren();
+			send({
+				...(entries.length ? { entries } : {}),
+				live,
+				...(agentChanged ? { agent: await agentOf(conversation) } : {}),
+				...(started ? { subagents: subagents() } : {}),
+			});
 		});
-		return () => watch.stop();
+		return () => Promise.all([watch.stop(), ...[...children.values()].map((c) => c.stop())]);
 	}
 
 	// The Sandbox goes before the commit: a crash in between leaves a listed Thread whose
@@ -153,16 +210,19 @@ export class Threads {
 	async delete(id: ConversationId): Promise<boolean> {
 		const conversation = await this.#known(id);
 		if (!conversation) return false;
-		await conversation.abort(context);
-		const session = await this.#providerSession(id);
-		if (session) await this.#providerSessions.forget(session);
+		await conversation.abort(context, { background: true });
+		const children = (await subagentsOf(this.#harness, id)).map((s) => s.conversationId);
+		for (const each of [id, ...children]) {
+			const session = await this.#providerSession(each);
+			if (session) await this.#providerSessions.forget(session);
+		}
 		const sandbox = await this.sandbox(id);
 		if (sandbox) await this.#sandboxes.delete(sandbox);
 		this.#idleSince.delete(id);
 		await this.#harness.commit(async (tx) => {
 			const list = await tx.doc(ThreadList);
 			list.items = list.items.filter((t) => t.id !== id);
-			await tx.retireDoc(ThreadSandbox, id);
+			for (const each of [id, ...children]) await tx.retireDoc(ThreadSandbox, each);
 		}, context);
 		return true;
 	}
@@ -177,10 +237,14 @@ export class Threads {
 		);
 	}
 
-	// Returns whether the Sandbox was running and is now paused.
-	async #sleep(id: ConversationId, stillIdle: () => boolean): Promise<boolean> {
-		const session = await this.#providerSession(id);
-		if (session && stillIdle()) await this.#providerSessions.release(session);
+	// Returns whether the Sandbox was running and is now paused; "busy" while a subagent works in it.
+	async #sleep(id: ConversationId, stillIdle: () => boolean): Promise<boolean | "busy"> {
+		const children = (await subagentsOf(this.#harness, id)).map((s) => s.conversationId);
+		for (const child of children) if ((await this.#harness.snapshot(LiveDoc, child, context))?.run) return "busy";
+		for (const each of [id, ...children]) {
+			const session = await this.#providerSession(each);
+			if (session && stillIdle()) await this.#providerSessions.release(session);
+		}
 		const name = await this.sandbox(id);
 		if (!name || (await this.#sandboxes.state(name)) !== "running" || !stillIdle()) return false;
 		await this.#sandboxes.pause(name, "idle");
@@ -190,7 +254,7 @@ export class Threads {
 	// The worker is full: the Thread idle the longest gives up its Sandbox before its idle pause.
 	async #makeRoom(): Promise<boolean> {
 		for (const [id] of [...this.#idleSince].sort((a, b) => a[1] - b[1])) {
-			const paused = await this.#sleep(id, () => this.#idleSince.has(id)).catch((e) => {
+			const paused = await this.#sleep(id, () => this.#idleSince.has(id)).then((r) => r === true).catch((e) => {
 				console.error(`make room: Thread ${id}: ${e.message}`);
 				return false;
 			});

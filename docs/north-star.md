@@ -39,6 +39,9 @@ harnesses. That code is frozen at the `v0.31.3` tag and is not maintained.
 - The agent is built from [Pi Durable](https://github.com/earendil-works/pi) and follows its own
   patterns: the Thread's Sandbox is an app document written in the creating commit, and the
   Harness `env` function looks it up for every tool call.
+- A Thread runs on the model and thinking level picked when it starts; the thinking level can change
+  later. It can start persistent subagents, Pi's pattern, that share its Sandbox and may run on
+  another offered model.
 - Each bash call is a job the Sandbox owns; the agent's stream is only a view of it, so a lost
   stream, a pause or an agent restart reattaches instead of failing the call.
 - [Agent Substrate](https://github.com/agent-substrate/substrate) owns isolation, memory

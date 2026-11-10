@@ -10,7 +10,8 @@
     "proof:upgrade": "KIND=1 ../../deploy/substrate.sh install v1.0.0-rc.3 && ../../deploy/up.sh && node test/substrate-upgrade.ts",
     "proof:repository": "../../deploy/up.sh && node test/repository.ts",
     "proof:claude-plan": "../../deploy/up.sh && node test/claude-plan.ts",
-    "proof:make-room": "../../deploy/up.sh && node test/make-room.ts"
+    "proof:make-room": "../../deploy/up.sh && node test/make-room.ts",
+    "proof:models": "../../deploy/up.sh && node test/models.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.322",
@@ -19,6 +20,7 @@
     "@earendil-works/pi-ai": "1.5.0",
     "@earendil-works/pi-durable": "1.5.0",
     "@earendil-works/pi-env": "1.5.0",
+    "@earendil-works/pi-schema": "1.5.0",
     "@modelcontextprotocol/sdk": "1.32.2",
     "zod": "4.6.7"
   },

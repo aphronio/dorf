@@ -75,8 +75,8 @@ export async function call(method: string, path: string, body?: unknown): Promis
 	return { status: res.status, json: text ? JSON.parse(text) : undefined };
 }
 
-export async function createThread(prompt: string, repo?: string): Promise<{ id: number; sandbox: string }> {
-	const created = await call("POST", "/threads", { prompt, repo });
+export async function createThread(prompt: string, repo?: string, choice?: { model?: string; thinking?: string }): Promise<{ id: number; sandbox: string }> {
+	const created = await call("POST", "/threads", { prompt, repo, ...choice });
 	if (created.status !== 201) await fail(`create: ${created.status} ${JSON.stringify(created.json)}`);
 	owned.add(created.json.sandbox);
 	return created.json;

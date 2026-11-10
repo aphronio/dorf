@@ -13,11 +13,14 @@ type Entry = { kind: string; model?: Msg[] };
 const text = (m?: Msg) => (typeof m?.content === "string" ? m.content : (m?.content ?? []).map((c) => c.text ?? "").join(""));
 const steps = (usage: Usage[]) => usage.map((u) => `read ${u.cacheRead}/write ${u.cacheWrite}`).join(", ");
 const claudeSession = () => JSON.parse(readFileSync(`${RECORDS}/${readdirSync(RECORDS)[0]}`, "utf8")).claude as string;
-const claudeChildren = () =>
-	execFileSync("ps", ["-e", "-o", "ppid=,comm="])
+const claudePids = () =>
+	execFileSync("ps", ["-e", "-o", "pid=,ppid=,comm="])
 		.toString()
 		.split("\n")
-		.filter((line) => line.trim().split(/\s+/).join(" ") === `${agentPid()} claude`).length;
+		.map((line) => line.trim().split(/\s+/))
+		.filter(([, ppid, comm]) => ppid === String(agentPid()) && comm === "claude")
+		.map(([pid]) => pid);
+const claudeChildren = () => claudePids().length;
 
 async function entries(id: number): Promise<{ entries: Entry[]; running: boolean }> {
 	const { json } = await call("GET", `/threads/${id}`);
@@ -60,6 +63,35 @@ const transcript = JSON.stringify(await getSessionMessages(claudeSession(), { di
 if (transcript.includes("Cancelled.")) await fail("a tool call was cancelled and replayed instead of answered in place");
 log("2. warm turn read the cache; parallel tool calls answered in place", `${b.tools.length} calls; ${steps(b.usage)}`);
 
+const { json: offered } = (await call("GET", "/models")) as { json: { ref: string; name: string; thinking: string[] }[] };
+const real = ((await entries(id)).entries.findLast((e) => e.kind === "pi.assistant")?.model?.[0] as { responseModel?: string })?.responseModel;
+if (offered[0]?.ref !== MODEL || !offered[0].thinking.includes("high") || !real?.startsWith("claude-"))
+	await fail(`models ${JSON.stringify(offered)}, reply by ${real}`);
+log("2b. the model list comes from Claude Code; replies name the model that wrote them", `${offered.map((m) => `${m.name} [${m.thinking.join(" ")}]`).join(", ")}; ${real}`);
+
+const session = claudeSession();
+const [claudePid] = claudePids();
+if ((await call("POST", `/threads/${id}/thinking`, { level: "low" })).status !== 202) await fail("thinking change");
+const lighter = "Use the bash tool to run `echo light`, then reply with only its output.";
+await send(id, lighter);
+if (!(await answer(id, lighter)).tools.some((t) => t.includes("light"))) await fail("turn after the thinking change");
+const base = "Use the bash tool to run `sleep 8 && echo base-done`, then reply with only its output.";
+await send(id, base);
+await until("the base call to start", async () => {
+	const view = await entries(id);
+	const asked = view.entries.findLastIndex((e) => e.kind === "pi.user" && text(e.model?.[0]) === base);
+	return asked >= 0 && view.entries.slice(asked).some((e) => e.kind === "pi.assistant" && JSON.stringify(e.model).includes('"toolCall"'));
+});
+const steer = "Also end your reply with the word pineapple.";
+await send(id, steer);
+const steered = await answer(id, steer);
+const kept = JSON.stringify(await getSessionMessages(claudeSession(), { dir: `${DATA}/claude` }));
+const level = ((await entries(id)).entries.findLast((e) => e.kind === "pi.assistant")?.model?.[0] as { providerThinkingLevel?: string })?.providerThinkingLevel;
+// Read as the user's, the steer is obeyed; read as tool output, it is only mentioned.
+if (!/pineapple\W*$/i.test(steered.reply.trim()) || kept.includes("Cancelled.") || claudeSession() !== session || claudePids()[0] !== claudePid || level !== "low")
+	await fail(`steer: reply ${JSON.stringify(steered.reply)}, cancelled ${kept.includes("Cancelled.")}, same session ${claudeSession() === session}, same process ${claudePids()[0] === claudePid}, effort ${level}`);
+log("2c. thinking changed and a steer landed mid-turn, both in the same running Claude Code process", `reply ${JSON.stringify(steered.reply)}`);
+
 const slow = "Use the bash tool to run `echo run >> runs && sleep 8 && echo slow-done`, then reply with only its last line.";
 await send(id, slow);
 await until("the slow call to start", async () => {
@@ -94,8 +126,21 @@ if (!d.reply.includes(release!)) await fail(`after compaction the reply was ${JS
 if (claudeSession() === before) await fail("the turn after compaction did not start a new Claude Code session");
 log("4. manual compaction: the next turn ran in a new Claude Code session and remembered", `reply ${JSON.stringify(d.reply)}; ${steps(d.usage)}`);
 
+const delegate =
+	'Use the subagent tool to spawn a subagent named helper with the message "Use the bash tool to run `echo sub-ok`, then reply with only its output." Then reply with only the word spawned.';
+await send(id, delegate);
+await answer(id, delegate);
+const report = await until("the subagent's report", async () =>
+	(await entries(id)).entries.find((e) => e.kind === "dorf.subagent-report" && text(e.model?.[0]).startsWith("[subagent helper answered")),
+	180_000,
+);
+if (!text(report.model?.[0]).includes("sub-ok")) await fail(`subagent report: ${text(report.model?.[0])}`);
+await until("the Thread to finish with the report", async () => !(await entries(id)).running, 180_000);
+if (claudeChildren() !== 2) await fail(`${claudeChildren()} Claude Code processes, not one each for the Thread and its subagent`);
+log("4b. a subagent ran as its own Claude Code session in the Thread's Sandbox and reported back", text(report.model?.[0]));
+
 await until("idle pause", async () => (await sandboxes.state(sandbox)) === "paused", IDLE_MS + 60_000);
-if (claudeChildren()) await fail("Claude Code still runs after the Thread went idle");
+if (claudeChildren()) await fail("Claude Code still runs for the Thread or its subagent after the Thread went idle");
 const resumed = "Use the bash tool to run `echo resumed`, then reply with only its output.";
 await send(id, resumed);
 const e = await answer(id, resumed);
@@ -103,7 +148,7 @@ if (!e.tools.some((t) => t.includes("resumed"))) await fail(`after idle: ${JSON.
 log("5. idle stopped Claude Code with the Sandbox; the next message resumed its session", steps(e.usage));
 
 if ((await call("DELETE", `/threads/${id}`)).status !== 204) await fail("delete");
-if (existsSync(RECORDS) && readdirSync(RECORDS).length) await fail("the Thread's Claude Code record survived its deletion");
+if (existsSync(RECORDS) && readdirSync(RECORDS).length) await fail("a Claude Code record of the Thread or its subagent survived its deletion");
 log("6. thread deleted with its Claude Code record");
 
 killAgent();

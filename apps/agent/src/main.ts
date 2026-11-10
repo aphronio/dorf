@@ -9,7 +9,9 @@ import { ClaudePlan } from "./claude-plan.ts";
 import { FAUX_MODEL, scriptedModel } from "./faux.ts";
 import { GitHub } from "./github.ts";
 import { serve } from "./http.ts";
+import { Catalog } from "./models.ts";
 import { Sandboxes } from "./sandbox.ts";
+import { subagents } from "./subagent.ts";
 import { drain } from "./drain.ts";
 import { SandboxJobs } from "./jobs.ts";
 import { sandboxEnv, Threads } from "./threads.ts";
@@ -37,6 +39,9 @@ const registry = createRegistry();
 const sandboxes = new Sandboxes(process.env.DORF_GATE ?? "http://127.0.0.1:8080", process.env.DORF_TOKEN_FILE ?? "token");
 registry.install(CodingTools);
 registry.install(SandboxJobs);
+const catalog = new Catalog(models, model);
+await catalog.refresh();
+registry.install(subagents(catalog));
 const harness = await Harness.open(
 	await openNodeSqliteStorage(`${DATA}/agent.sqlite`),
 	{
@@ -57,6 +62,7 @@ const threads = new Threads(
 	sandboxes,
 	{
 		model,
+		thinkingLevel: catalog.thinking(model),
 		cwd: WORKSPACE,
 		instructions: `You work in a Linux machine of your own, with internet access. The workspace is ${WORKSPACE}.${github ? " git over HTTPS and the gh CLI are already authenticated to GitHub: clone, push, and work with pull requests, issues and CI runs without asking for a token." : ""} Keep answers short.`,
 	},
@@ -65,5 +71,5 @@ const threads = new Threads(
 );
 await threads.open();
 drain(sandboxes);
-serve(threads, new ClaudeLogin(CLAUDE), github, OWNER, PORT);
+serve(threads, catalog, new ClaudeLogin(CLAUDE), github, OWNER, PORT);
 console.log(`dorf agent on 127.0.0.1:${PORT}, model ${model.provider}/${model.modelId}`);
