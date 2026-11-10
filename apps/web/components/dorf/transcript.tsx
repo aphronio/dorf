@@ -5,6 +5,7 @@ import { ChatMessage } from "@/components/ui/chat-message"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { Markdown } from "@/components/dorf/markdown"
 import { ToolCalls } from "@/components/dorf/tool-call"
+import { useIcons } from "@/lib/icon-context"
 import { type Block, type Entry, type Live, type Message, text } from "@/lib/dorf"
 
 type Call = Extract<Block, { type: "toolCall" }>
@@ -37,6 +38,7 @@ function push(items: Item[], key: string, message: Message) {
 }
 
 export function Transcript({ entries, live, onSubagent }: { entries: Entry[]; live: Live; onSubagent?: (name: string) => void }) {
+  const Chevron = useIcons()["chevron-right"]
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
 
@@ -106,17 +108,16 @@ export function Transcript({ entries, live, onSubagent }: { entries: Entry[]; li
               )
             case "subagent":
               return (
-                <div key={item.key} className="flex flex-col gap-1 border-l-2 border-border pl-3">
-                  <button
-                    type="button"
-                    disabled={!onSubagent}
-                    onClick={() => onSubagent?.(item.name)}
-                    className={`self-start font-mono text-[13px] ${item.error ? "text-red-600 dark:text-red-400" : "text-muted-foreground"} enabled:hover:text-foreground`}
-                  >
-                    Subagent {item.name}
-                  </button>
-                  <Markdown>{item.text}</Markdown>
-                </div>
+                <button
+                  key={item.key}
+                  type="button"
+                  disabled={!onSubagent}
+                  onClick={() => onSubagent?.(item.name)}
+                  className={`flex items-center gap-1 self-start font-mono text-[13px] ${item.error ? "text-red-600 dark:text-red-400" : "text-muted-foreground"} enabled:hover:text-foreground`}
+                >
+                  {item.name} {item.error ? "failed" : "answered"}
+                  {onSubagent && <Chevron className="size-3.5" />}
+                </button>
               )
             case "note":
               return item.key === "thinking" ? (

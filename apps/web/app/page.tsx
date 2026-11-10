@@ -10,8 +10,8 @@ import { CommandPalette } from "@/components/dorf/command-palette"
 import { ThemeSync } from "@/components/dorf/theme-sync"
 import { Picker } from "@/components/dorf/picker"
 import { Starting } from "@/components/dorf/starting"
-import { SubagentChips } from "@/components/dorf/subagent-chips"
-import { SubagentPanel } from "@/components/dorf/subagent-panel"
+import { Thinking } from "@/components/dorf/thinking"
+import { SubagentList, SubagentView } from "@/components/dorf/subagent-panel"
 import { ThreadSidebar } from "@/components/dorf/thread-sidebar"
 import { Transcript } from "@/components/dorf/transcript"
 import { useIcons } from "@/lib/icon-context"
@@ -48,6 +48,7 @@ export default function Page() {
   const [starting, setStarting] = useState<{ prompt: string; repo?: string }>()
   const { entries, live, agent, subagents } = useThread(id)
   const [panel, setPanel] = useState<string>()
+  const openSubagent = subagents.find((s) => s.name === panel)
   const [models, setModels] = useState<ModelChoice[]>([])
   const [model, setModel] = useState<string>()
   const [thinking, setThinking] = useState<string>()
@@ -116,7 +117,6 @@ export default function Page() {
   const threadModel = agent?.model && models.find((m) => m.ref === `${agent.model!.provider}/${agent.model!.modelId}`)
   const answered = lastModel(entries)
   const think = (next: string) => id !== undefined && api("POST", `/threads/${id}/thinking`, { level: next }).catch((e) => setError(e.message))
-  const levels = (offered: string[]) => offered.map((l) => ({ value: l, label: l }))
 
   const controls =
     id === undefined ? (
@@ -137,20 +137,13 @@ export default function Page() {
             options={models.map((m) => ({ value: m.ref, label: m.name }))}
           />
         )}
-        {newLevel && (
-          <Picker label="Thinking" value={newLevel} onChange={(v) => (setThinking(v), store(THINKING_KEY, v))} options={levels(newLevels)} />
-        )}
+        {newLevel && <Thinking value={newLevel} levels={newLevels} onChange={(v) => (setThinking(v), store(THINKING_KEY, v))} />}
       </>
     ) : (
       <>
         <span className="px-2 text-xs text-muted-foreground">{answered ? modelName(answered) : (threadModel?.name ?? "")}</span>
         {agent && threadModel && threadModel.thinking.length > 0 && (
-          <Picker
-            label="Thinking"
-            value={agent.thinkingLevel}
-            onChange={think}
-            options={threadModel.thinking.includes(agent.thinkingLevel) ? levels(threadModel.thinking) : [{ value: agent.thinkingLevel, label: "default" }, ...levels(threadModel.thinking)]}
-          />
+          <Thinking value={agent.thinkingLevel} levels={threadModel.thinking} onChange={think} />
         )}
       </>
     )
@@ -167,7 +160,6 @@ export default function Page() {
           </span>
           {id !== undefined && (
             <>
-              <SubagentChips subagents={subagents} open={panel} onOpen={(name) => setPanel(panel === name ? undefined : name)} />
               <Badge color={running ? "amber" : "gray"} size="compact">{running ? "working" : "idle"}</Badge>
               <Button variant="ghost" size="icon-compact" aria-label="Delete Thread" onClick={remove}>
                 <DeleteIcon />
@@ -176,7 +168,7 @@ export default function Page() {
           )}
         </SidebarInsetTopbar>
 
-        <div className="flex min-h-0 flex-1">
+        <div className="relative flex min-h-0 flex-1">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {starting ? (
           <Starting prompt={starting.prompt} repo={starting.repo} />
@@ -185,9 +177,12 @@ export default function Page() {
             <h1 className="text-2xl font-semibold">What should Dorf do?</h1>
             <p className="text-sm text-muted-foreground">Each Thread runs in a Linux machine of its own.</p>
           </div>
+        ) : openSubagent ? (
+          <SubagentView thread={id} subagent={openSubagent} models={models} onBack={() => setPanel(undefined)} />
         ) : (
           <Transcript entries={entries} live={live} onSubagent={setPanel} />
         )}
+        {id !== undefined && !starting && <SubagentList subagents={subagents} open={panel} onOpen={setPanel} />}
 
         <div className="mx-auto w-full max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           {error && <p className="px-2 pb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
@@ -206,7 +201,6 @@ export default function Page() {
           />
         </div>
         </div>
-        {id !== undefined && panel && <SubagentPanel thread={id} name={panel} models={models} onClose={() => setPanel(undefined)} />}
         </div>
       </SidebarInset>
     </SidebarProvider>
