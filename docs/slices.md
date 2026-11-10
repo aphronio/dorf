@@ -7,7 +7,7 @@ Each slice is the smallest demoable step. A slice is done when its proof runs fr
 | S0 | New North Star, repository rules and README; removal of the 0.31 code and docs | Secret scan green on the reduced repository | Done |
 | S1 | One Thread, one Sandbox, pause and resume on Agent Substrate | `npm --prefix apps/agent run proof:lifecycle` on a cluster running Substrate, with the faux model: tool call writes a file and starts a process, and the Sandbox reaches the internet but not the cluster; the Sandbox pauses after the run; the next message resumes it with both intact; an agent killed mid-call finishes the call after restart, running it once; a timeout kills its command; deleting the Thread deletes the Sandbox. Then one manual run with a real model | Done |
 | S2 | Harmless Substrate upgrades | `npm --prefix apps/agent run proof:upgrade` on a fresh machine: installs the previous Substrate release on kind, then upgrades to the pinned one and rolls back with no hand steps while two Threads run tool calls and a third is paused. No tool call fails, no Sandbox crashes, busy Sandboxes move workers, and every Thread keeps its files and processes | Done |
-| S3 | A real repository, used daily | Clone, change, test and push from a Thread | Planned |
+| S3 | A real repository, used daily | `npm --prefix apps/agent run proof:repository` with `DORF_PROOF_REPO` set to a private repository with a `node --test` suite: a Thread clones it, changes it, runs the tests, commits and pushes a branch the remote then shows, with the token injected by the egress gateway. Then daily use with a real model on this repository | In progress |
 | S4 | GitHub triggers | A mention or failing check starts or continues a Thread | Planned |
 
 ## Carry-over
@@ -53,8 +53,10 @@ Facts learned in one slice that a later slice must respect.
 - Root in a Sandbox has only three capabilities (no setuid, no DAC override), so the image runs apt
   as root and owns apt's directories. The image carries no language toolchains; the agent installs
   what a repository needs.
-- Substrate's egress gateway can inject a credential into requests to a named host, from a
-  Kubernetes Secret. That lets a Sandbox push to a repository without holding the token (S3).
+- Substrate's egress gateway injects the GitHub token from Secret `dorf-secrets/github`, so a
+  Sandbox pushes without holding it. The gateway only replaces an Authorization header the request
+  already carries, so git's credential helper sends a placeholder. Without the Secret every
+  github.com request is denied, so `deploy/up.sh` requires it.
 - Egress rules are allow-only host names, and the gateway resolves cluster names too, so an open
   policy reached the Kubernetes API by its cluster name. `deploy/egress-fence.yaml` limits the
   gateway to public addresses, DNS and the two Substrate services it calls; it needs a CNI that

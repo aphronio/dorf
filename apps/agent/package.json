@@ -7,7 +7,8 @@
     "start": "node src/main.ts",
     "check": "tsc",
     "proof:lifecycle": "../../deploy/up.sh && node test/sandbox-lifecycle.ts",
-    "proof:upgrade": "KIND=1 ../../deploy/substrate.sh install v1.0.0-rc.3 && ../../deploy/up.sh && node test/substrate-upgrade.ts"
+    "proof:upgrade": "KIND=1 ../../deploy/substrate.sh install v1.0.0-rc.3 && ../../deploy/up.sh && node test/substrate-upgrade.ts",
+    "proof:repository": "../../deploy/up.sh && node test/repository.ts"
   },
   "dependencies": {
     "@earendil-works/chord": "1.5.0",

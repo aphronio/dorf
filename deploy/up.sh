@@ -16,6 +16,20 @@ TEMPLATE=sandbox-$TAG
 ate() { kubectl ate "$@" 2> >(grep -v '^Warning: no --token-file' >&2); }
 ate get atespace dorf >/dev/null 2>&1 || ate create atespace dorf >/dev/null
 kubectl apply -f deploy/egress-fence.yaml >/dev/null
+# Sandboxes may resolve Secrets only from namespaces granted to atespace dorf (see sandbox.ts).
+kubectl create namespace dorf-secrets --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl -n dorf-secrets get secret github >/dev/null 2>&1 || {
+	echo "Sandboxes reach github.com only with Secret dorf-secrets/github, key basic: base64 of x-access-token:<token>" >&2
+	exit 1
+}
+policy=$(kubectl -n ate-system get configmap k8s-credential-provider-namespace-policy -o jsonpath='{.data.namespace-policy\.yaml}')
+if ! grep -q '^- atespace: dorf$' <<<"$policy"; then
+	grep -q '^policies: \[\]$' <<<"$policy" || { echo "grant atespace dorf the namespace dorf-secrets in configmap ate-system/k8s-credential-provider-namespace-policy" >&2; exit 1; }
+	kubectl -n ate-system create configmap k8s-credential-provider-namespace-policy --dry-run=client -o yaml \
+		--from-literal=namespace-policy.yaml=$'policies:\n- atespace: dorf\n  allowedNamespaces: [dorf-secrets]\n' | kubectl apply -f - >/dev/null
+	kubectl -n ate-system rollout restart deployment/k8s-credential-provider >/dev/null
+	kubectl -n ate-system rollout status deployment/k8s-credential-provider --timeout=5m >/dev/null
+fi
 # The pool runs the installed Substrate's worker; only deploy/substrate.sh moves it.
 generation() { kubectl -n dorf get deployment/sandbox -o jsonpath='{.metadata.generation}' 2>/dev/null || echo 0; }
 before=$(generation)

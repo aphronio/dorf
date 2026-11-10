@@ -9,7 +9,16 @@ const POOL_NAMESPACE = "dorf";
 const TEMPLATE = "sandbox-";
 const PIPE = new URL("./pipe.ts", import.meta.url).pathname;
 // Like a machine of your own: every host, TLS passed through untouched. Substrate denies all by default.
-const OPEN_EGRESS = 'rules: [{tlsPassthrough: {hostnames: ["*"], ports: {all: {}}}}, {http: {hostnames: ["*"]}}]';
+// GitHub is intercepted so the gateway can put the token from deploy/up.sh into git's Basic auth.
+const EGRESS = `rules:
+- tlsPassthrough: {hostnames: ["*"], ports: {all: {}}}
+- http: {hostnames: ["*"]}
+- https:
+    hostnames: [github.com]
+    effects:
+      replaceHeaders:
+      - {header: Authorization, prefix: "Basic ", credentialUri: "ate-secret://k8s.io/default/dorf-secrets/github/basic"}
+`;
 
 export class SandboxNotFound extends Error {
 	constructor(name: string) {
@@ -51,7 +60,7 @@ export class Sandboxes {
 			.sort((a, b) => Date.parse(b.metadata.createTime) - Date.parse(a.metadata.createTime))[0];
 		if (!template) throw new Error("No Sandbox template; run deploy/up.sh");
 		await ate(name, ["create", "actor", name, "--template", template.metadata.name]);
-		await ate(name, ["create", "egress-policy", name, "-f", "-"], OPEN_EGRESS);
+		await ate(name, ["create", "egress-policy", name, "-f", "-"], EGRESS);
 	}
 
 	async state(name: string): Promise<string> {
