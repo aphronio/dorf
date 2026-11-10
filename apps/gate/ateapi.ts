@@ -1,5 +1,3 @@
-// Agent Substrate's control API over gRPC. Every call carries its caller's own bearer token, so
-// Substrate decides what the caller may do.
 import grpc from "@grpc/grpc-js";
 import loader from "@grpc/proto-loader";
 
@@ -23,7 +21,6 @@ export function connect(address: string, ca: Buffer, serverName: string): Api {
 		});
 }
 
-// gRPC status codes as HTTP statuses, for callers that speak HTTP.
 export function httpStatus(error: { code?: number }): number {
 	return ({ 3: 400, 5: 404, 6: 409, 7: 403, 9: 409, 16: 401 } as Record<number, number>)[error.code ?? -1] ?? 502;
 }

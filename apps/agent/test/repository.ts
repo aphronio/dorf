@@ -1,6 +1,4 @@
-// A Thread works on a real repository: clone a private one, change it, test, commit and push, with
-// the push credential injected by Substrate's egress gateway. DORF_PROOF_REPO is an HTTPS GitHub
-// URL of a repository with a `node --test` suite that the dorf-secrets/github token can push to.
+// DORF_PROOF_REPO: a private repository with a `node --test` suite that dorf-secrets/github can push to.
 import { randomUUID } from "node:crypto";
 import { call, createThread, fail, killAgent, log, runEnded, startAgent } from "./kit.ts";
 

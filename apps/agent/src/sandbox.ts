@@ -1,10 +1,10 @@
-// The agent's only view of Agent Substrate: Dorf's gate (apps/gate), called with a token Substrate
-// scopes to Dorf's Sandboxes. A request that reaches a paused Sandbox resumes it, so there is no
-// resume call.
+// A request that reaches a paused Sandbox resumes it, so there is no resume call.
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { Connection, RemoteExecutionEnv } from "@earendil-works/pi-env";
 
+// Longer than the gate's own deadline, so the gate's error arrives first.
+const GATE_TIMEOUT_MS = 6 * 60_000;
 const PIPE = new URL("./pipe.ts", import.meta.url).pathname;
 
 export class SandboxNotFound extends Error {
@@ -15,7 +15,6 @@ export class SandboxNotFound extends Error {
 
 export class Sandboxes {
 	#gate: string;
-	// Read on every call, so a token rotated on disk is picked up.
 	#tokenFile: string;
 	#connections = new Map<string, Connection>();
 	#pausing = new Map<string, Promise<void>>();
@@ -27,8 +26,7 @@ export class Sandboxes {
 
 	async #call(name: string, method: string, path: string): Promise<any> {
 		const token = readFileSync(this.#tokenFile, "utf8").trim();
-		// A little longer than the gate gives Substrate per call.
-		const res = await fetch(this.#gate + path, { method, headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(6 * 60_000) });
+		const res = await fetch(this.#gate + path, { method, headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(GATE_TIMEOUT_MS) });
 		if (res.status === 404 && name) throw new SandboxNotFound(name);
 		if (!res.ok) throw new Error(`gate ${method} ${path}: ${res.status} ${await res.text()}`);
 		return res.status === 204 ? undefined : res.json();
@@ -46,7 +44,6 @@ export class Sandboxes {
 		return (await this.#call(name, "GET", `/sandboxes/${name}`)).state;
 	}
 
-	// Running Sandboxes on a node that is going away.
 	evicted(): Promise<string[]> {
 		return this.#call("", "GET", "/draining");
 	}

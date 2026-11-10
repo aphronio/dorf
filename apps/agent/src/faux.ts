@@ -1,6 +1,4 @@
-// A scripted model for tests and keyless runs: every line of the newest user message that starts
-// with `$ ` becomes one bash call, in order (`$[5] ` sets a 5 s timeout); then it answers "done".
-// It reads only the transcript, so it gives the same next step after a restart.
+// Each `$ ` line of the newest user message becomes a bash call (`$[5] ` sets a 5 s timeout), then "done".
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 
 export const FAUX_MODEL = { provider: "faux", modelId: "faux" };

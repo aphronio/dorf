@@ -1,4 +1,3 @@
-// What the slice proofs share: an agent process on the faux model, its HTTP API, and waits.
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import type { Readable } from "node:stream";
@@ -10,7 +9,6 @@ import { Sandboxes } from "../src/sandbox.ts";
 export const IDLE_MS = 10_000;
 const PORT = 8193;
 const DATA = mkdtempSync(join(tmpdir(), "dorf-proof-"));
-// The proofs act as the cluster's operator: they mint the agent's token and forward a port to the gate.
 const TOKEN = join(DATA, "token");
 writeFileSync(TOKEN, execFileSync("kubectl", ["-n", "dorf-gate", "create", "token", "dorf-agent", "--audience", "api.ate-system.svc", "--duration", "24h"]));
 const forward = spawn("kubectl", ["-n", "dorf-gate", "port-forward", "svc/dorf-gate", "0:80"], { stdio: ["ignore", "pipe", "ignore"] });
@@ -82,7 +80,6 @@ const text = (e: Entry) =>
 
 export type Result = { output: string; error: boolean };
 
-// Waits for the run answering `message` to end; returns its tool results in order.
 export async function runEnded(id: number, message: string, timeoutMs = 60_000): Promise<Result[]> {
 	return until(
 		`the answer to ${JSON.stringify(message.slice(0, 40))}`,

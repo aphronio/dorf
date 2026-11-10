@@ -4,17 +4,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 # Root in a Sandbox lacks setuid and DAC override, so apt must not hand its dirs to _apt.
 RUN echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/90sandbox \
  && chown -R root:root /var/cache/apt /var/lib/apt
-# Git answers GitHub's 401 with a placeholder; the egress gateway swaps in the real token, so
-# the Sandbox never holds it. Public clones get no 401 and send nothing.
+# A placeholder the egress gateway swaps for the real token, so the Sandbox never holds it.
 RUN git config --system credential.https://github.com.helper \
   '!f() { echo username=x-access-token; echo password=placeholder; }; f'
-# The daemon comes from the agent's pinned pi-env package, so client and daemon always match.
 COPY --from=pienv pi-env /usr/local/bin/pi-env
 COPY package.json package-lock.json /init/
 RUN cd /init && npm ci --ignore-scripts --omit=dev --no-audit --no-fund
 COPY init.mts /init/init.mts
-# The template mounts Substrate's trust bundle here: public roots plus the egress gateway's CA,
-# which signs the hosts whose requests it rewrites, such as credential injection.
 ENV SSL_CERT_FILE=/run/ate/egress-trust-bundle/trust-bundle.pem \
     NODE_EXTRA_CA_CERTS=/run/ate/egress-trust-bundle/trust-bundle.pem \
     GIT_SSL_CAINFO=/run/ate/egress-trust-bundle/trust-bundle.pem \

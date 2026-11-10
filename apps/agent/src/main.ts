@@ -15,7 +15,6 @@ const DATA = process.env.DORF_DATA ?? "data";
 const PORT = Number(process.env.DORF_PORT ?? 8091);
 const IDLE_MS = Number(process.env.DORF_IDLE_MS ?? 5 * 60_000);
 const WORKSPACE = "/workspace";
-// `faux` or `<provider>/<model>`; a real provider reads its key from its usual environment variable.
 const MODEL = process.env.DORF_MODEL ?? "faux";
 
 const models = builtinModels();
@@ -25,7 +24,6 @@ const model = MODEL === "faux" ? FAUX_MODEL : { provider: MODEL.slice(0, slash),
 if (MODEL === "faux") models.setProvider(scriptedModel());
 
 const registry = createRegistry();
-// The gate's address and a file holding the agent's token (deploy/gate.yaml's dorf-agent).
 const sandboxes = new Sandboxes(process.env.DORF_GATE ?? "http://127.0.0.1:8080", process.env.DORF_TOKEN_FILE ?? "token");
 registry.install(CodingTools);
 registry.install(SandboxJobs);

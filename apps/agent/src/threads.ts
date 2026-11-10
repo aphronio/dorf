@@ -3,7 +3,6 @@ import { type AgentChange, type ConversationId, defineDoc, type Harness, type Ha
 import { pauseWhenIdle } from "./idle.ts";
 import type { Sandboxes } from "./sandbox.ts";
 
-// `fork: "initial"`: a fork gets no Sandbox until one is assigned.
 const ThreadSandbox = defineDoc<{ name?: string }>({
 	kind: "dorf.sandbox",
 	version: 1,

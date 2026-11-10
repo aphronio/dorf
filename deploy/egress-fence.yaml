@@ -1,7 +1,5 @@
-# Sandboxes may reach any host name (apps/gate/gate.ts), and the egress gateway resolves
-# cluster names too, so it alone dials them. Fence it to public addresses, DNS and the two
-# Substrate services it calls. Needs a CNI that enforces NetworkPolicy; add the cluster's ranges
-# when its pods, services or nodes use public addresses.
+# The egress gateway resolves cluster names too, so keep it to public addresses. Needs a CNI that
+# enforces NetworkPolicy; add the cluster's ranges if its pods, services or nodes use public ones.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

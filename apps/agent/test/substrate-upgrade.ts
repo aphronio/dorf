@@ -1,5 +1,3 @@
-// A Substrate upgrade and its rollback, with no hand steps, under live Threads.
-// Needs a cluster on an earlier release than deploy/substrate.env, prepared by deploy/up.sh.
 import { execFileSync, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createThread, fail, killAgent, log, type Result, runEnded, sandboxes, send, startAgent, until } from "./kit.ts";
@@ -26,7 +24,6 @@ async function paused(thread: Thread): Promise<void> {
 	await until(`${thread.sandbox} to pause`, async () => (await sandboxes.state(thread.sandbox)) === "paused", 2 * 60_000);
 }
 
-// Sends `message` again each time its run ends, until the roll is over.
 async function keepBusy(thread: Thread, message: string, rolling: () => boolean): Promise<Result[]> {
 	const results: Result[] = [];
 	while (rolling()) {

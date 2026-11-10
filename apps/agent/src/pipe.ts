@@ -1,5 +1,3 @@
-// pi-env transport: `node pipe.ts <url> <token-file> serve --token <hex>`. Opens a WebSocket to a
-// Sandbox's pi-env through the gate and carries this process's stdio as binary messages.
 import { readFileSync } from "node:fs";
 
 const [url, tokenFile, ...args] = process.argv.slice(2);

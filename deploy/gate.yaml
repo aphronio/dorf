@@ -1,5 +1,3 @@
-# Dorf's gate: the agent's only way into the cluster. It acts on Sandboxes with each caller's own
-# token, reaches them through Substrate's router as dorf-gate, and itself may only list pool pods.
 # Its own namespace keeps the identity the router trusts away from the Sandboxes' pool.
 apiVersion: v1
 kind: Namespace

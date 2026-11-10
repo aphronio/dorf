@@ -1,6 +1,4 @@
-// Dorf's door into the cluster and the only code that knows Agent Substrate. A Sandbox is one Actor
-// in atespace dorf, made from the newest `sandbox-*` ActorTemplate. Every call carries the caller's
-// token to Substrate, which decides; the gate holds no rights over Sandboxes of its own.
+// Every call carries the caller's token to Substrate, which decides; the gate holds no rights over Sandboxes.
 import { readFileSync } from "node:fs";
 import http from "node:http";
 import type { Duplex } from "node:stream";
@@ -15,8 +13,7 @@ const SERVICEDNS = "/run/ate/servicedns/trust-bundle.pem";
 const PODIDENTITY = "/run/ate/podidentity/credential-bundle.pem";
 const ROUTER = "atenet-router.ate-system.svc";
 const KUBE = "/var/run/secrets/kubernetes.io/serviceaccount";
-// Like a machine of your own: every host, TLS passed through untouched. GitHub is intercepted so
-// the egress gateway can put the token from Secret dorf-secrets/github into git's Basic auth.
+// GitHub is intercepted so the egress gateway can put the token from dorf-secrets/github into git's auth.
 const EGRESS = [
 	{ tlsPassthrough: { hostnames: ["*"], ports: { all: {} } } },
 	{ http: { hostnames: ["*"] } },
@@ -51,13 +48,17 @@ function bearer(req: http.IncomingMessage): string {
 	return token;
 }
 
-// The router authenticates the gate by its pod certificate, which the kubelet rotates in place.
-function routerTunnel(name: string): Promise<tls.TLSSocket> {
+function currentPodCertificate(): { key?: string; cert?: string } {
 	const bundle = readFileSync(PODIDENTITY, "utf8");
-	const key = bundle.match(/-----BEGIN [A-Z ]*PRIVATE KEY-----[^-]+-----END [A-Z ]*PRIVATE KEY-----/)?.[0];
-	const cert = bundle.match(/-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----/g)?.join("\n");
+	return {
+		key: bundle.match(/-----BEGIN [A-Z ]*PRIVATE KEY-----[^-]+-----END [A-Z ]*PRIVATE KEY-----/)?.[0],
+		cert: bundle.match(/-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----/g)?.join("\n"),
+	};
+}
+
+function routerTunnel(name: string): Promise<tls.TLSSocket> {
 	return new Promise((resolve, reject) => {
-		const socket = tls.connect({ host: ROUTER, port: 8444, servername: ROUTER, ca: readFileSync(SERVICEDNS), key, cert }, () => {
+		const socket = tls.connect({ host: ROUTER, port: 8444, servername: ROUTER, ca: readFileSync(SERVICEDNS), ...currentPodCertificate() }, () => {
 			socket.write(`CONNECT ${name}:80 HTTP/1.1\r\nHost: ${name}:80\r\nate-target-actor: ${ATESPACE}/${name}\r\n\r\n`);
 		});
 		socket.setTimeout(ROUTER_TIMEOUT_MS, () => socket.destroy(new HttpError(504, "router did not answer")));
@@ -77,8 +78,7 @@ function routerTunnel(name: string): Promise<tls.TLSSocket> {
 	});
 }
 
-// The Sandbox's init answers the WebSocket itself; the gate forwards the upgrade and then bytes.
-async function pienv(req: http.IncomingMessage, client: Duplex, head: Buffer, name: string) {
+async function forwardUpgradeToSandbox(req: http.IncomingMessage, client: Duplex, head: Buffer, name: string) {
 	await call("ResumeActor", { actor: ref(name) }, bearer(req));
 	const tunnel = await routerTunnel(name);
 	const headers = Object.entries(req.headers).filter(([k]) => k !== "authorization" && k !== "host");
@@ -93,7 +93,6 @@ async function pienv(req: http.IncomingMessage, client: Duplex, head: Buffer, na
 	client.on("error", end).on("close", end);
 }
 
-// A Sandbox's state in Dorf's words: running, paused, crashed, and so on.
 function sandboxState(actorState: string): string {
 	return actorState === "ACTOR_STATE_SUSPENDED" ? "paused" : actorState.replace(/^ACTOR_STATE_/, "").toLowerCase();
 }
@@ -107,7 +106,6 @@ async function newestTemplate(token: string): Promise<string> {
 	return newest.metadata.name;
 }
 
-// Worker pods being deleted, read with the gate's own ServiceAccount, which may list only the pool's pods.
 async function leavingPods(): Promise<Set<string>> {
 	const res = await fetch(`https://kubernetes.default.svc/api/v1/namespaces/${POOL_NAMESPACE}/pods?labelSelector=ate.dev/worker-pool`, {
 		headers: { authorization: `Bearer ${readFileSync(`${KUBE}/token`, "utf8")}` },
@@ -163,7 +161,7 @@ server.on("upgrade", (req, socket, head) => {
 	socket.on("error", () => socket.destroy());
 	const name = req.url?.match(/^\/sandboxes\/([a-z0-9-]+)\/pienv$/)?.[1];
 	if (!name) return socket.destroy();
-	pienv(req, socket, head, name).catch((e) => {
+	forwardUpgradeToSandbox(req, socket, head, name).catch((e) => {
 		const status = e instanceof HttpError ? e.status : 502;
 		socket.end(`HTTP/1.1 ${status} ${http.STATUS_CODES[status]}\r\ncontent-type: text/plain\r\n\r\n${e.message}\n`);
 	});

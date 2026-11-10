@@ -1,5 +1,4 @@
-// The Sandbox's main process. Substrate's router carries only HTTP and WebSocket, so each
-// WebSocket on /pienv becomes the stdio of a fresh pi-env daemon: one binary message per chunk.
+// Frozen into every snapshot: keep the /pienv path and X-Pienv-Args header stable.
 import { spawn } from "node:child_process";
 import http from "node:http";
 import { WebSocketServer } from "ws";

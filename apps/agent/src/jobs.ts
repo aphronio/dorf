@@ -46,8 +46,6 @@ function killJob(api: ToolExecutionApi, job: string): Promise<unknown> {
 	return api.env!.exec(`bash -c ${quote(KILL)} _ ${job}`, { cwd: api.env!.cwd }, BACKGROUND_CONTEXT).catch(() => {});
 }
 
-// Each bash call is a job the Sandbox owns; the stream is only a view of it, so a lost stream,
-// a paused Sandbox or an agent restart reattaches instead of failing the call.
 export const SandboxJobs = defineExtension({
 	name: "dorf.sandbox-jobs",
 	wraps: [

@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Install, upgrade or roll back Agent Substrate from its released images, following its upgrade
-# runbook with no hand steps. The version comes from deploy/substrate.env; `install` also takes
-# one. KIND=1 creates a local kind cluster first. Needs git, go, kubectl and docker.
-#   deploy/substrate.sh install [version] | upgrade | rollback | worker-image
-# The agent drains Sandboxes off workers as they roll, so keep it running throughout.
+# deploy/substrate.sh install [version] | upgrade | rollback | worker-image   (KIND=1: create a kind cluster first)
+# Keep the agent running throughout: it drains Sandboxes off workers as they roll.
 set -euo pipefail
 shopt -s inherit_errexit
 DORF=$(cd "$(dirname "$0")/.." && pwd)
@@ -18,7 +15,6 @@ checkout() { [ -d "$2" ] || git clone -q --depth 1 --branch "$1" https://github.
 # Image pulls on a fresh node can outlast ate-setup's default 60 s rollout wait.
 setup() { (cd "$1" && go run ./cmd/ate-setup "${@:2}" --rollout-timeout 1h); }
 record() { ls -t "$RECORDS"/*.yaml | head -1; }
-# The running release, from the API server's image tag; a build without one falls back to the record.
 installed() {
 	local image
 	image=$(kubectl -n ate-system get deploy ate-api-server -o jsonpath='{.spec.template.spec.containers[0].image}')
@@ -47,7 +43,6 @@ install() {
 
 pools() { kubectl get workerpools -A -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name,CLASS:.spec.sandboxClasses[0].name,IMAGE:.spec.workerImage' --no-headers; }
 
-# Moves every pool to its worker image for the version, then waits until no old worker is left.
 roll_workers() {
 	while read -r ns pool class _; do
 		local image
@@ -89,7 +84,6 @@ upgrade() {
 	(cd "$WORK/new" && go install ./cmd/kubectl-ate)
 }
 
-# Undoes the last upgrade, every step in reverse.
 rollback() {
 	local old
 	old=$(sed -n 's/^ *substrateVersion: //p' "$WORK/old.yaml")
