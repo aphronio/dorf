@@ -11,7 +11,7 @@ metadata:
   labels:
     workload: dorf-sandbox
 spec:
-  replicas: 2
+  replicas: 1
   workerImage: ${WORKER_IMAGE}
   sandboxClasses:
   - name: gvisor
@@ -19,5 +19,5 @@ spec:
       name: gvisor-default
   template:
     resources:
-      limits: {cpu: "4", memory: 4Gi}
+      limits: {cpu: "12", memory: 25Gi}
       requests: {cpu: 250m, memory: 4Gi}

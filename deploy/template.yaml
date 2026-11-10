@@ -13,5 +13,5 @@ volumes:
     - trustBundle:
         names: [egress-mitm.ate.dev, system-roots.ate.dev]
         path: trust-bundle.pem
-resources: {limits: {cpuMillicores: 1000, memoryBytes: 1073741824}}
+resources: {limits: {cpuMillicores: 4000, memoryBytes: 8589934592}}
 snapshotConfig: {preferredFidelity: SNAPSHOT_FIDELITY_MEMORY}
