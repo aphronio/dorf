@@ -72,8 +72,9 @@ Facts learned in one slice that a later slice must respect.
   gateway to public addresses, DNS and the two Substrate services it calls; it needs a CNI that
   enforces NetworkPolicy (kind's does). It cannot fence the gateway's own loopback, so keep the
   `http` rule on port 80 (agent-substrate/substrate#2086, #1736).
-- Worker capacity is the pool's resource limits. A 4 CPU, 4 GiB worker holds about four 1 CPU,
-  1 GiB Sandboxes; at 2 CPU, 1.5 GiB it held one.
+- A gVisor worker hosts as many Sandboxes as its memory limit books, less a 64 MiB reserve
+  (Substrate's `cmd/ateworker-gvisor/memory.go`). The pool runs one worker of 25 GiB, so three
+  8 GiB Sandboxes run at once; a fourth resume fails with `no worker has room for the actor`.
 - `deploy/up.sh` gives the pool the worker image of the installed Substrate release, so only
   `deploy/substrate.sh` moves workers between releases.
 - Substrate's API speaks only gRPC: plain HTTP/1.1 does not connect and JSON gets 415, so a Worker
