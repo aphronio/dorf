@@ -1,0 +1,27 @@
+# Sandboxes may reach any host name (apps/agent/src/sandbox.ts), and the egress gateway resolves
+# cluster names too, so it alone dials them. Fence it to public addresses, DNS and the two
+# Substrate services it calls. Needs a CNI that enforces NetworkPolicy; add the cluster's ranges
+# when its pods, services or nodes use public addresses.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dorf-egress-fence
+  namespace: ate-system
+spec:
+  podSelector:
+    matchLabels: {app: atenet-egress}
+  policyTypes: [Egress]
+  egress:
+  - to:
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+      podSelector: {matchLabels: {k8s-app: kube-dns}}
+    ports:
+    - {protocol: UDP, port: 53}
+    - {protocol: TCP, port: 53}
+  - to:
+    - podSelector: {matchLabels: {app: ate-api-server}}
+    - podSelector: {matchLabels: {app: k8s-credential-provider}}
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8]

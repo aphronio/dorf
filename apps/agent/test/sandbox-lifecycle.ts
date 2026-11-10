@@ -7,13 +7,16 @@ const zombies = "grep -l 'State:.*Z' /proc/[0-9]*/status 2>/dev/null | wc -l";
 
 await startAgent();
 
-// 1. A tool call writes a file and starts a background process; the Sandbox reaches the internet.
-const prompt = "$ echo hello > note.txt && (sleep 100000 & echo $! > pid) && echo started\n$ git ls-remote https://github.com/git/git HEAD";
+// 1. A tool call writes a file and starts a background process; the Sandbox reaches the internet
+// but not the cluster: the Kubernetes API answers anyone who reaches it by its cluster name.
+const cluster = `$ node -e "require('https').get({host:'kubernetes.default.svc.cluster.local',path:'/version',rejectUnauthorized:false,timeout:5000},r=>console.log('cluster answered',r.statusCode)).on('timeout',function(){this.destroy(new Error('timeout'))}).on('error',e=>console.log('cluster unreachable',e.code??e.message))"`;
+const prompt = `$ echo hello > note.txt && (sleep 100000 & echo $! > pid) && echo started\n$ git ls-remote https://github.com/git/git HEAD\n${cluster}`;
 const { id, sandbox } = await createThread(prompt);
 const first = await runEnded(id, prompt);
 if (!first[0]?.output.includes("started")) await fail(`first tool call: ${JSON.stringify(first)}`);
 if (!/\tHEAD/.test(first[1]?.output ?? "")) await fail(`internet: ${JSON.stringify(first[1])}`);
-log("1. thread created, file written, process started, internet reached", `thread ${id}, sandbox ${sandbox}`);
+if (!first[2]?.output.includes("cluster unreachable")) await fail(`cluster reachable: ${JSON.stringify(first[2])}`);
+log("1. thread created, file written, process started, internet reached, cluster not", `thread ${id}, sandbox ${sandbox}`);
 
 // 2. The Sandbox pauses after the idle window.
 const ranAt = Date.now();

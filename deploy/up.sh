@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Prepare Dorf's Sandboxes on a cluster that runs Agent Substrate:
-# build and push the Sandbox image, then create the atespace, worker pool and template.
+# build and push the Sandbox image, then create the atespace, egress fence, worker pool and template.
 # REGISTRY is a registry the cluster pulls from (the Substrate kind setup serves localhost:5001).
 set -euo pipefail
 shopt -s inherit_errexit
@@ -14,6 +14,7 @@ REPO=$REGISTRY/dorf-sandbox:$TAG
 
 ate() { kubectl ate "$@" 2> >(grep -v '^Warning: no --token-file' >&2); }
 ate get atespace dorf >/dev/null 2>&1 || ate create atespace dorf >/dev/null
+kubectl apply -f deploy/egress-fence.yaml >/dev/null
 # The pool runs the installed Substrate's worker; only deploy/substrate.sh moves it.
 generation() { kubectl -n dorf get deployment/sandbox -o jsonpath='{.metadata.generation}' 2>/dev/null || echo 0; }
 before=$(generation)
