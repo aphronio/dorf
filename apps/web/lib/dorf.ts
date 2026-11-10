@@ -5,6 +5,10 @@ import { useEffect, useState } from "react"
 export type Thread = { id: number; title: string; createdAt: string; repo?: string }
 export type Repo = { name: string; private: boolean }
 export type Claude = { loggedIn: boolean; plan: string | null; email: string | null }
+export type ModelChoice = { ref: string; name: string; thinking: string[]; defaultThinking: string }
+export type ModelRef = { provider: string; modelId: string }
+export type ThreadAgent = { model?: ModelRef; thinkingLevel: string }
+export type Subagent = { name: string; model?: ModelRef; working: boolean }
 
 export type Block =
   | { type: "text"; text: string }
@@ -13,12 +17,14 @@ export type Block =
 export type Message = {
   role: "user" | "assistant" | "toolResult"
   content: string | Block[]
+  model?: string
+  responseModel?: string
   stopReason?: string
   errorMessage?: string
   toolCallId?: string
   isError?: boolean
 }
-export type Entry = { id: number; kind: string; model?: Message[] }
+export type Entry = { id: number; kind: string; model?: Message[]; data?: unknown }
 export type Live = {
   run?: unknown
   generation?: { message?: Message; retry?: { error: string } }
@@ -50,22 +56,45 @@ function merge(prev: Entry[], next: Entry[]): Entry[] {
   return [...byId.values()].sort((a, b) => a.id - b.id)
 }
 
-export function useThread(id: number | undefined) {
+// A Thread's or a subagent's event stream.
+export function useConversation(url: string | undefined) {
   const [entries, setEntries] = useState<Entry[]>([])
   const [live, setLive] = useState<Live>({})
+  const [agent, setAgent] = useState<ThreadAgent>()
+  const [subagents, setSubagents] = useState<Subagent[]>([])
   useEffect(() => {
     setEntries([])
     setLive({})
-    if (id === undefined) return
-    const stream = new EventSource(`/threads/${id}/events`)
+    setAgent(undefined)
+    setSubagents([])
+    if (url === undefined) return
+    const stream = new EventSource(url)
     stream.onmessage = (m) => {
-      const event = JSON.parse(m.data) as { entries?: Entry[]; live?: Live }
+      const event = JSON.parse(m.data) as { entries?: Entry[]; live?: Live; agent?: ThreadAgent; subagents?: Subagent[] }
       if (event.entries?.length) setEntries((prev) => merge(prev, event.entries!))
+      if (event.agent) setAgent(event.agent)
+      if (event.subagents) setSubagents(event.subagents)
       setLive(event.live ?? {})
     }
     return () => stream.close()
-  }, [id])
-  return { entries, live }
+  }, [url])
+  return { entries, live, agent, subagents }
+}
+
+export const useThread = (id: number | undefined) => useConversation(id === undefined ? undefined : `/threads/${id}/events`)
+
+// The model that actually answered: "claude-opus-5-5-20261101" reads "Opus 5.5".
+export function modelName(id: string): string {
+  const claude = id.match(/^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-|$)/)
+  if (!claude) return id
+  return `${claude[1][0].toUpperCase()}${claude[1].slice(1)} ${claude[2]}${claude[3] ? `.${claude[3]}` : ""}`
+}
+
+export function lastModel(entries: Entry[]): string | undefined {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const m = entries[i].model?.[0]
+    if (m?.role === "assistant" && (m.responseModel ?? m.model)) return m.responseModel ?? m.model
+  }
 }
 
 export function useHashId(): number | undefined {

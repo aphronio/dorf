@@ -13,8 +13,15 @@ type Item =
   | { kind: "user" | "text"; key: string; text: string }
   | { kind: "calls"; key: string; calls: Call[] }
   | { kind: "note"; key: string; text: string; error?: boolean }
+  | { kind: "subagent"; key: string; name: string; text: string; error?: boolean }
 
-const command = (c: Call) => (c.name === "bash" ? String(c.arguments?.command ?? "") : `${c.name} ${JSON.stringify(c.arguments ?? {})}`)
+const command = (c: Call) => {
+  const a = c.arguments ?? {}
+  if (c.name === "bash") return String(a.command ?? "")
+  if (c.name === "subagent") return [`subagent ${a.action}`, a.name, a.message && `: ${a.message}`].filter(Boolean).join(" ")
+  return `${c.name} ${JSON.stringify(a)}`
+}
+
 
 // Consecutive commands form one block, even across the assistant messages Pi splits them into.
 function push(items: Item[], key: string, message: Message) {
@@ -29,7 +36,7 @@ function push(items: Item[], key: string, message: Message) {
   if (message.stopReason === "error") items.push({ kind: "note", key: `${key}.e`, text: message.errorMessage ?? "The model failed.", error: true })
 }
 
-export function Transcript({ entries, live }: { entries: Entry[]; live: Live }) {
+export function Transcript({ entries, live, onSubagent }: { entries: Entry[]; live: Live; onSubagent?: (name: string) => void }) {
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
 
@@ -40,6 +47,12 @@ export function Transcript({ entries, live }: { entries: Entry[]; live: Live }) 
     if (!m) continue
     if (e.kind === "pi.tool-result" && m.toolCallId) outputs[m.toolCallId] = { text: text(m.content), error: m.isError }
     else if (e.kind === "pi.user") items.push({ kind: "user", key: String(e.id), text: text(m.content) })
+    else if (e.kind === "dorf.subagent-report") {
+      // The model reads "[subagent name answered…] text"; the page shows the author once.
+      const { name, failed } = e.data as { name: string; failed?: true }
+      const body = text(m.content)
+      items.push({ kind: "subagent", key: String(e.id), name, text: failed ? body : body.slice(body.indexOf("] ") + 2), error: failed })
+    }
     else if (e.kind === "pi.assistant") push(items, String(e.id), m)
     else if (e.kind === "pi.compaction") items.push({ kind: "note", key: String(e.id), text: "Earlier conversation summarized" })
   }
@@ -89,6 +102,20 @@ export function Transcript({ entries, live }: { entries: Entry[]; live: Live }) 
                   <ToolCalls
                     calls={item.calls.map((c) => ({ id: c.id, command: command(c), shell: c.name === "bash", ...outputs[c.id], output: outputs[c.id]?.text }))}
                   />
+                </div>
+              )
+            case "subagent":
+              return (
+                <div key={item.key} className="flex flex-col gap-1 border-l-2 border-border pl-3">
+                  <button
+                    type="button"
+                    disabled={!onSubagent}
+                    onClick={() => onSubagent?.(item.name)}
+                    className={`self-start font-mono text-[13px] ${item.error ? "text-red-600 dark:text-red-400" : "text-muted-foreground"} enabled:hover:text-foreground`}
+                  >
+                    Subagent {item.name}
+                  </button>
+                  <Markdown>{item.text}</Markdown>
                 </div>
               )
             case "note":

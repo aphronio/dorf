@@ -4,18 +4,38 @@ import { useCallback, useEffect, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { InputMessage } from "@/components/ui/input-message"
-import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { SidebarInsetTopbar } from "@/components/sidebar-app/inset-topbar"
 import { CommandPalette } from "@/components/dorf/command-palette"
 import { ThemeSync } from "@/components/dorf/theme-sync"
+import { Picker } from "@/components/dorf/picker"
+import { Starting } from "@/components/dorf/starting"
+import { SubagentChips } from "@/components/dorf/subagent-chips"
+import { SubagentPanel } from "@/components/dorf/subagent-panel"
 import { ThreadSidebar } from "@/components/dorf/thread-sidebar"
 import { Transcript } from "@/components/dorf/transcript"
 import { useIcons } from "@/lib/icon-context"
-import { api, type Repo, type Thread, useHashId, useThread } from "@/lib/dorf"
+import { api, lastModel, type ModelChoice, modelName, type Repo, type Thread, useHashId, useThread } from "@/lib/dorf"
 
 const NO_REPO = "none"
 const REPO_KEY = "dorf.repo"
+const MODEL_KEY = "dorf.model"
+const THINKING_KEY = "dorf.thinking"
+
+const stored = (key: string) => {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+const store = (key: string, value: string) => {
+  try {
+    localStorage.setItem(key, value)
+  } catch {}
+}
+// The level last picked, if the model offers it; else the model's default.
+const level = (m: ModelChoice | undefined, wanted: string | null) => (wanted && m?.thinking.includes(wanted) ? wanted : m?.defaultThinking)
 
 export default function Page() {
   const id = useHashId()
@@ -25,7 +45,12 @@ export default function Page() {
   const [repo, setRepo] = useState(NO_REPO)
   const [draft, setDraft] = useState("")
   const [error, setError] = useState<string>()
-  const { entries, live } = useThread(id)
+  const [starting, setStarting] = useState<{ prompt: string; repo?: string }>()
+  const { entries, live, agent, subagents } = useThread(id)
+  const [panel, setPanel] = useState<string>()
+  const [models, setModels] = useState<ModelChoice[]>([])
+  const [model, setModel] = useState<string>()
+  const [thinking, setThinking] = useState<string>()
   const thread = threads.find((t) => t.id === id)
   const running = Boolean(live.run)
 
@@ -43,22 +68,37 @@ export default function Page() {
       })
       .catch(() => {})
   }, [])
-  useEffect(() => setError(undefined), [id])
+  useEffect(() => {
+    api<ModelChoice[]>("GET", "/models")
+      .then((list) => {
+        setModels(list)
+        const last = stored(MODEL_KEY)
+        setModel(list.some((m) => m.ref === last) ? last! : list[0]?.ref)
+        setThinking(stored(THINKING_KEY) ?? undefined)
+      })
+      .catch(() => {})
+  }, [])
+  useEffect(() => {
+    setError(undefined)
+    setPanel(undefined)
+  }, [id])
 
   const send = async (value: string) => {
     setDraft("")
     setError(undefined)
     try {
       if (id !== undefined) return void (await api("POST", `/threads/${id}/messages`, { text: value }))
-      try {
-        localStorage.setItem(REPO_KEY, repo)
-      } catch {}
-      const created = await api<Thread>("POST", "/threads", { prompt: value, ...(repo !== NO_REPO ? { repo } : {}) })
+      store(REPO_KEY, repo)
+      const chosen = repo !== NO_REPO ? repo : undefined
+      setStarting({ prompt: value, repo: chosen })
+      const created = await api<Thread>("POST", "/threads", { prompt: value, ...(chosen ? { repo: chosen } : {}), model, thinking: newLevels.length ? newLevel : undefined })
       window.location.hash = String(created.id)
       await refresh()
     } catch (e) {
       setDraft(value)
       setError((e as Error).message)
+    } finally {
+      setStarting(undefined)
     }
   }
   const stop = () => id !== undefined && api("POST", `/threads/${id}/abort`).catch((e) => setError(e.message))
@@ -70,19 +110,50 @@ export default function Page() {
   }
   const DeleteIcon = icons.x
 
-  const repoPicker =
-    id === undefined && repos.length > 0 ? (
-      <Select value={repo} onValueChange={setRepo}>
-        <SelectTrigger variant="borderless" className="w-auto max-w-56 min-w-0" />
-        <SelectContent>
-          {[{ name: NO_REPO, label: "No repository" }, ...repos.map((r) => ({ name: r.name, label: r.name }))].map((o, i) => (
-            <SelectItem key={o.name} value={o.name} index={i}>
-              {o.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    ) : null
+  const newModel = models.find((m) => m.ref === model)
+  const newLevels = newModel?.thinking ?? []
+  const newLevel = newLevels.length ? level(newModel, thinking ?? null) : undefined
+  const threadModel = agent?.model && models.find((m) => m.ref === `${agent.model!.provider}/${agent.model!.modelId}`)
+  const answered = lastModel(entries)
+  const think = (next: string) => id !== undefined && api("POST", `/threads/${id}/thinking`, { level: next }).catch((e) => setError(e.message))
+  const levels = (offered: string[]) => offered.map((l) => ({ value: l, label: l }))
+
+  const controls =
+    id === undefined ? (
+      <>
+        {repos.length > 0 && (
+          <Picker
+            label="Repository"
+            value={repo}
+            onChange={setRepo}
+            options={[{ value: NO_REPO, label: "No repository" }, ...repos.map((r) => ({ value: r.name, label: r.name }))]}
+          />
+        )}
+        {model && models.length > 1 && (
+          <Picker
+            label="Model"
+            value={model}
+            onChange={(v) => (setModel(v), store(MODEL_KEY, v))}
+            options={models.map((m) => ({ value: m.ref, label: m.name }))}
+          />
+        )}
+        {newLevel && (
+          <Picker label="Thinking" value={newLevel} onChange={(v) => (setThinking(v), store(THINKING_KEY, v))} options={levels(newLevels)} />
+        )}
+      </>
+    ) : (
+      <>
+        <span className="px-2 text-xs text-muted-foreground">{answered ? modelName(answered) : (threadModel?.name ?? "")}</span>
+        {agent && threadModel && threadModel.thinking.length > 0 && (
+          <Picker
+            label="Thinking"
+            value={agent.thinkingLevel}
+            onChange={think}
+            options={threadModel.thinking.includes(agent.thinkingLevel) ? levels(threadModel.thinking) : [{ value: agent.thinkingLevel, label: "default" }, ...levels(threadModel.thinking)]}
+          />
+        )}
+      </>
+    )
 
   return (
     <SidebarProvider className="h-dvh">
@@ -92,10 +163,11 @@ export default function Page() {
       <SidebarInset className="max-md:!m-0 max-md:!rounded-none">
         <SidebarInsetTopbar>
           <span className="min-w-0 flex-1 truncate text-sm font-medium">
-            {thread ? (thread.repo ? `${thread.repo} · ${thread.title}` : thread.title) : id === undefined ? "New Thread" : ""}
+            {thread ? (thread.repo ? `${thread.repo} · ${thread.title}` : thread.title) : id === undefined ? (starting?.prompt ?? "New Thread") : ""}
           </span>
           {id !== undefined && (
             <>
+              <SubagentChips subagents={subagents} open={panel} onOpen={(name) => setPanel(panel === name ? undefined : name)} />
               <Badge color={running ? "amber" : "gray"} size="compact">{running ? "working" : "idle"}</Badge>
               <Button variant="ghost" size="icon-compact" aria-label="Delete Thread" onClick={remove}>
                 <DeleteIcon />
@@ -104,13 +176,17 @@ export default function Page() {
           )}
         </SidebarInsetTopbar>
 
-        {id === undefined ? (
+        <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {starting ? (
+          <Starting prompt={starting.prompt} repo={starting.repo} />
+        ) : id === undefined ? (
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
             <h1 className="text-2xl font-semibold">What should Dorf do?</h1>
             <p className="text-sm text-muted-foreground">Each Thread runs in a Linux machine of its own.</p>
           </div>
         ) : (
-          <Transcript entries={entries} live={live} />
+          <Transcript entries={entries} live={live} onSubagent={setPanel} />
         )}
 
         <div className="mx-auto w-full max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
@@ -122,12 +198,15 @@ export default function Page() {
             placeholder={id === undefined ? "Describe a coding task" : "Ask or tell Dorf anything"}
             status={running ? "streaming" : "idle"}
             onStop={stop}
-            leftSlot={repoPicker}
+            leftSlot={controls}
             className="bg-surface-3 shadow-surface-3"
             minRows={id === undefined ? 3 : 1}
             maxRows={6}
             textareaProps={{ className: "max-h-[30dvh]" }}
           />
+        </div>
+        </div>
+        {id !== undefined && panel && <SubagentPanel thread={id} name={panel} models={models} onClose={() => setPanel(undefined)} />}
         </div>
       </SidebarInset>
     </SidebarProvider>
