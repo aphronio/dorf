@@ -42,16 +42,14 @@ export class Threads {
 	readonly #agent: AgentChange;
 	readonly #idleMs: number;
 	readonly #providerSessions: ProviderSessions;
-	readonly #offered: () => string;
 	readonly #idleSince = new Map<ConversationId, number>();
 
-	constructor(harness: Harness, sandboxes: Sandboxes, agent: AgentChange, idleMs: number, providerSessions: ProviderSessions, offered: () => string) {
+	constructor(harness: Harness, sandboxes: Sandboxes, agent: AgentChange, idleMs: number, providerSessions: ProviderSessions) {
 		this.#harness = harness;
 		this.#sandboxes = sandboxes;
 		this.#agent = agent;
 		this.#idleMs = idleMs;
 		this.#providerSessions = providerSessions;
-		this.#offered = offered;
 		sandboxes.makeRoom = () => this.#makeRoom();
 	}
 
@@ -73,15 +71,13 @@ export class Threads {
 		const sandbox = this.#sandboxes.newName();
 		const workspace = this.#agent.cwd ?? "/";
 		const cwd = repo ? `${workspace}/${repo.split("/")[1]}` : workspace;
-		// The models as they are when the Thread starts, so its first subagent call names one right.
-		const instructions = [this.#agent.instructions, repo && `The repository ${repo} is cloned in ${cwd}.`, `Models you can give a subagent: ${this.#offered()}.`];
-		const agent = { ...this.#agent, ...choice, cwd, instructions: instructions.filter(Boolean).join("\n\n") };
+		const agent = { ...this.#agent, ...choice, cwd };
 		const conversation = await this.#harness.createConversation(
 			{
 				ownership: { kind: "ownerless" },
 				agent,
 				init: async (tx, id) => {
-					(await tx.doc(ThreadSandbox, id)).name = sandbox;
+					Object.assign(await tx.doc(ThreadSandbox, id), { name: sandbox, ...(repo ? { repo } : {}) });
 					await tx.doc(Subagents, id);
 					(await tx.doc(ThreadList)).items.push({ id, title: prompt.slice(0, 80), createdAt: new Date().toISOString(), ...(repo ? { repo } : {}) });
 				},

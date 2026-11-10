@@ -1,0 +1,17 @@
+import { defineExtension, section } from "@earendil-works/pi-durable";
+import { ThreadSandbox } from "./thread-sandbox.ts";
+
+// Dorf's part of every Thread's and subagent's system prompt, rendered before each request.
+export function prompt(workspace: string, github: boolean) {
+	const gh = github
+		? " git over HTTPS and the gh CLI are already authenticated to GitHub: clone, push, and work with pull requests, issues and CI runs without asking for a token."
+		: "";
+	return defineExtension({
+		name: "dorf",
+		sections: [
+			section("preamble", () => `You work in a Linux machine of your own, with internet access. The workspace is ${workspace}.${gh} Keep answers short.`, { tag: false }),
+			section("cwd", (input) => input.env?.cwd),
+			section("repository", async (input, context) => (await input.read.snapshot(ThreadSandbox, input.conversationId, context))?.repo),
+		],
+	});
+}

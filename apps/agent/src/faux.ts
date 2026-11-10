@@ -1,5 +1,5 @@
 // Each `$ ` line of the newest user message becomes a bash call (`$[5] ` sets a 5 s timeout), and each `@ {...}` line
-// a subagent call with those arguments; then "done". A message of just `?` gets the instructions back.
+// a subagent call with those arguments; then "done". A message of just `?` gets the system prompt's sections back.
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 
 export const FAUX_MODEL = { provider: "faux", modelId: "faux" };

@@ -1,7 +1,6 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
-	AgentDoc,
 	AssistantEntry,
 	type ConversationId,
 	configure,
@@ -14,6 +13,7 @@ import {
 	type Extension,
 	type Harness,
 	LiveDoc,
+	section,
 	type TaskId,
 } from "@earendil-works/pi-durable";
 import { bool, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
@@ -147,11 +147,10 @@ export function subagents(catalog: Catalog): Extension {
 					if (Object.hasOwn(state.agents, name)) return `${name} already exists; use send.`;
 					const anchor = await tx.createTask(Anchor, null, background);
 					const child = await tx.createConversation({ ownership: { kind: "task", taskId: anchor } });
-					(await tx.doc(ThreadSandbox, child.id)).name = (await tx.doc(ThreadSandbox, api.conversationId)).name;
-					const instructions = (await tx.doc(AgentDoc, api.conversationId)).instructions;
+					Object.assign(await tx.doc(ThreadSandbox, child.id), await tx.doc(ThreadSandbox, api.conversationId));
 					await configure(tx, child.id, {
 						extensions: { remove: [extension] },
-						instructions: `${instructions ? `${instructions}\n\n` : ""}You are the subagent "${name}". Answer the main agent's requests.`,
+						instructions: `You are the subagent "${name}". Answer the main agent's requests.`,
 						...choice,
 					});
 					state.agents[name] = { conversationId: child.id, reported: [] };
@@ -164,6 +163,11 @@ export function subagents(catalog: Catalog): Extension {
 		},
 	});
 	// The task definitions come with the extension, so reporters resume after a restart.
-	const extension: Extension = defineExtension({ name: "subagent", tasks: [Anchor, Reporter], tools: [tool] });
+	const extension: Extension = defineExtension({
+		name: "subagent",
+		tasks: [Anchor, Reporter],
+		tools: [tool],
+		sections: [section("subagent_models", () => `Models you can give a subagent: ${catalog.offered()}.`)],
+	});
 	return extension;
 }

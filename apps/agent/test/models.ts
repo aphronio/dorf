@@ -28,7 +28,7 @@ const replied = (view.entries as Entry[]).filter((e) => e.kind === "pi.assistant
 if (view.agent.model.modelId !== "faux-2" || view.agent.thinkingLevel !== "low" || !replied.every((m) => m === "faux-2"))
 	await fail(`thread on faux-2: ${JSON.stringify(view.agent)} replied by ${replied}`);
 await send(id, "?");
-await until("the instructions", async () =>
+await until("the system prompt", async () =>
 	((await call("GET", `/threads/${id}`)).json.entries as Entry[]).some((e) => e.kind === "pi.assistant" && text(e).includes("Models you can give a subagent: faux (faux), faux-2 (Faux 2)")),
 );
 log("2. a Thread runs on the model and level it was created with and is told the models; unknown models and levels are refused");
