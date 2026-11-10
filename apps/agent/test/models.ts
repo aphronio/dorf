@@ -1,6 +1,6 @@
 // Model choice, thinking levels and subagents, on the faux provider's two models.
 import { SandboxNotFound } from "../src/sandbox.ts";
-import { call, createThread, fail, IDLE_MS, killAgent, log, runEnded, sandboxes, send, startAgent, until } from "./kit.ts";
+import { call, createThread, fail, follow, IDLE_MS, killAgent, log, runEnded, sandboxes, send, startAgent, until } from "./kit.ts";
 
 type Choice = { ref: string; name: string; thinking: string[] };
 type Entry = { kind: string; model?: { role: string; model?: string; isError?: boolean; content?: string | { type: string; text?: string }[] }[] };
@@ -61,7 +61,11 @@ const reports = async (name: string) =>
 	).length;
 const subagent = (args: object) => `@ ${JSON.stringify(args)}`;
 
+const stream = follow(`/threads/${id}/events`);
+await until("the stream", async () => stream.events.length > 0);
 const [started] = await ask(subagent({ action: "spawn", name: "helper", message: "$ echo from-child > child.txt" }));
+await until("helper in the streamed subagents", async () => stream.events.some((e) => e.subagents?.some((s: { name: string }) => s.name === "helper")), 10_000);
+stream.close();
 if (started?.output !== "Started helper.") await fail(`spawn: ${JSON.stringify(started)}`);
 await until("helper's report", async () => (await reports("helper")) === 1);
 await ask(subagent({ action: "send", name: "helper", message: "$ echo again >> child.txt" }));
@@ -71,7 +75,7 @@ const [file] = await ask("$ cat child.txt");
 const [status] = await ask(subagent({ action: "status" }));
 if (!again?.output.includes("already exists") || file?.output.trim() !== "from-child\nagain" || status?.output.split("\n")[0] !== "helper: idle")
 	await fail(`persistent subagent: ${JSON.stringify({ again, file, status })}`);
-log("4. a subagent works in the Thread's machine, keeps its conversation across messages, and reports each answer");
+log("4. a subagent works in the Thread's machine, keeps its conversation across messages, and reports each answer; the Thread's stream lists it live");
 
 const [listed] = await ask(subagent({ action: "status" }));
 const [other] = await ask(subagent({ action: "spawn", name: "second", model: "other/claude-Faux-2", message: "$ true" }));

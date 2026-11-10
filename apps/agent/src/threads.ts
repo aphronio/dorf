@@ -4,7 +4,7 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { REPO } from "./github.ts";
 import { pauseWhenIdle } from "./idle.ts";
 import type { Sandboxes } from "./sandbox.ts";
-import { SUBAGENTS_DOC, subagentsOf } from "./subagent.ts";
+import { Subagents, subagentsOf } from "./subagent.ts";
 import { ThreadSandbox } from "./thread-sandbox.ts";
 
 export type ThreadAgent = { model?: ModelRef; thinkingLevel: ModelThinkingLevel };
@@ -82,6 +82,7 @@ export class Threads {
 				agent,
 				init: async (tx, id) => {
 					(await tx.doc(ThreadSandbox, id)).name = sandbox;
+					await tx.doc(Subagents, id);
 					(await tx.doc(ThreadList)).items.push({ id, title: prompt.slice(0, 80), createdAt: new Date().toISOString(), ...(repo ? { repo } : {}) });
 				},
 			},
@@ -170,9 +171,11 @@ export class Threads {
 		const children = new Map<ConversationId, SubagentView & { stop: () => Promise<unknown> }>();
 		const subagents = () => [...children.values()].map(({ name, model, working }) => ({ name, model, working }));
 		let live = watch.value.docs["pi.live"];
-		const watchChildren = async () => {
-			for (const { name, conversationId } of await subagentsOf(this.#harness, conversation.id)) {
+		const watchChildren = async (agents: Record<string, { conversationId: ConversationId }>) => {
+			let started = false;
+			for (const [name, { conversationId }] of Object.entries(agents)) {
 				if (children.has(conversationId)) continue;
+				started = true;
 				const child = (await this.#harness.conversation(conversationId, context))!;
 				const childLive = (await this.#harness.watchDoc(LiveDoc, conversationId, context))!;
 				const view = { name, model: (await child.agent(context)).model, working: Boolean(childLive.value.run), stop: () => childLive.stop() };
@@ -183,11 +186,12 @@ export class Threads {
 					send({ live, subagents: subagents() });
 				});
 			}
+			return started;
 		};
-		if (withSubagents) await watchChildren();
+		const registry = withSubagents ? await this.#harness.watchDoc(Subagents, conversation.id, context) : undefined;
+		if (registry) await watchChildren(registry.value.agents);
 		let newest = watch.value.entries.at(-1)?.id ?? 0;
 		let agent = watch.value.docs["pi.agent"];
-		let listed = watch.value.docs[SUBAGENTS_DOC];
 		send({ entries: watch.value.entries, live, agent: await agentOf(conversation), ...(withSubagents ? { subagents: subagents() } : {}) });
 		watch.start(async (call) => {
 			if (call.kind !== "value") return;
@@ -196,17 +200,12 @@ export class Threads {
 			live = call.value.docs["pi.live"];
 			const agentChanged = call.value.docs["pi.agent"] !== agent;
 			agent = call.value.docs["pi.agent"];
-			const started = withSubagents && call.value.docs[SUBAGENTS_DOC] !== listed;
-			listed = call.value.docs[SUBAGENTS_DOC];
-			if (started) await watchChildren();
-			send({
-				...(entries.length ? { entries } : {}),
-				live,
-				...(agentChanged ? { agent: await agentOf(conversation) } : {}),
-				...(started ? { subagents: subagents() } : {}),
-			});
+			send({ ...(entries.length ? { entries } : {}), live, ...(agentChanged ? { agent: await agentOf(conversation) } : {}) });
 		});
-		return () => Promise.all([watch.stop(), ...[...children.values()].map((c) => c.stop())]);
+		registry?.start(async (call) => {
+			if (call.kind === "value" && (await watchChildren(call.value.agents))) send({ live, subagents: subagents() });
+		});
+		return () => Promise.all([watch.stop(), registry?.stop(), ...[...children.values()].map((c) => c.stop())]);
 	}
 
 	// The Sandbox goes before the commit: a crash in between leaves a listed Thread whose

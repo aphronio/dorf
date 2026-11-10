@@ -22,13 +22,13 @@ import { ThreadSandbox } from "./thread-sandbox.ts";
 
 // Pi's persistent background subagents (its example 22). Each subagent is a conversation of its own that remembers
 // earlier messages, works in the Thread's Sandbox, and reports each answer back to the Thread as a follow-up.
-export const SUBAGENTS_DOC = "dorf.subagents";
 type Subagent = { conversationId: ConversationId; reported: EntryId[] };
 // A subagent's answer in the Thread: the model reads its text, the page its author.
 export const SubagentReport = defineEntry<{ name: string; failed?: true }>("dorf.subagent-report");
-const Subagents = defineDoc<{ agents: Record<string, Subagent>; reporters: Record<string, TaskId> }>({
+// Created with its Thread, so the page can follow it from the start: a watch never creates a document.
+export const Subagents = defineDoc<{ agents: Record<string, Subagent>; reporters: Record<string, TaskId> }>({
 	checkpointWhen: () => false,
-	kind: SUBAGENTS_DOC,
+	kind: "dorf.subagents",
 	version: 1,
 	scope: "conversation",
 	history: "latest",

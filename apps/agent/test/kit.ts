@@ -109,3 +109,21 @@ export async function send(id: number, message: string): Promise<void> {
 	const sent = await call("POST", `/threads/${id}/messages`, { text: message });
 	if (sent.status !== 202) await fail(`send: ${sent.status}`);
 }
+
+// A Thread's event stream, as the page reads it.
+export function follow(path: string): { events: any[]; close: () => void } {
+	const events: any[] = [];
+	const abort = new AbortController();
+	void fetch(`http://127.0.0.1:${PORT}${path}`, { headers: HEADERS, signal: abort.signal })
+		.then(async (res) => {
+			let buffer = "";
+			for await (const chunk of res.body!.pipeThrough(new TextDecoderStream())) {
+				buffer += chunk;
+				const parts = buffer.split("\n\n");
+				buffer = parts.pop()!;
+				for (const part of parts) if (part.startsWith("data: ")) events.push(JSON.parse(part.slice(6)));
+			}
+		})
+		.catch(() => {});
+	return { events, close: () => abort.abort() };
+}
