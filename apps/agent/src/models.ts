@@ -6,6 +6,9 @@ export type ModelChoice = { ref: string; name: string; thinking: ThinkingLevel[]
 
 const DEFAULT_THINKING: ThinkingLevel = "high";
 
+// A model names another as it pleases: sonnet, Sonnet 5.5, claude-sonnet-5-5 or anthropic/claude-sonnet-5-5.
+const key = (name: string) => name.toLowerCase().replace(/^.*\//, "").replace(/^claude-/, "").replace(/[^a-z0-9]+/g, "-");
+
 // The models a Thread can run on: those of the default model's provider, so far Claude through the owner's plan.
 export class Catalog {
 	readonly #models: Models;
@@ -31,13 +34,22 @@ export class Catalog {
 		);
 	}
 
-	// A Thread's model and thinking level, checked against what the model offers; unset ones take the defaults.
+	// The offered models' ids, as a model reads them; all share the default model's provider.
+	offered(): string {
+		return this.#models
+			.getModels(this.#default.provider)
+			.map((m) => `${m.id} (${m.name})`)
+			.join(", ");
+	}
+
+	// A Thread's model, by an offered model's id or name, and thinking level, checked against what the model offers;
+	// unset ones take the defaults.
 	choose(ref?: unknown, thinking?: unknown): { model: ModelRef; thinkingLevel: ModelThinkingLevel } {
-		if (ref !== undefined && typeof ref !== "string") throw new RangeError("model must be provider/model");
-		const slash = ref?.indexOf("/") ?? -1;
-		const model = ref ? { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) } : this.#default;
-		const found = this.#models.getModel(model.provider, model.modelId);
-		if (!found || model.provider !== this.#default.provider) throw new RangeError(`not an offered model: ${ref}`);
+		if (ref !== undefined && typeof ref !== "string") throw new RangeError("model must be a model id");
+		const all = this.#models.getModels(this.#default.provider);
+		const found = ref ? (all.find((m) => key(m.id) === key(ref)) ?? all.find((m) => key(m.name) === key(ref))) : undefined;
+		if (ref && !found) throw new RangeError(`not an offered model: ${ref}. Offered: ${this.offered()}`);
+		const model = found ? { provider: found.provider, modelId: found.id } : this.#default;
 		return { model, thinkingLevel: this.thinking(model, thinking) };
 	}
 

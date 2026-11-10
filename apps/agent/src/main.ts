@@ -68,6 +68,7 @@ const threads = new Threads(
 	},
 	IDLE_MS,
 	claudePlan,
+	() => catalog.offered(),
 );
 await threads.open();
 drain(sandboxes);

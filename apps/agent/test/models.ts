@@ -19,6 +19,7 @@ for (const [body, what] of [
 	const refused = await call("POST", "/threads", { prompt: "hi", ...body });
 	if (refused.status !== 400) await fail(`${what}: ${refused.status}`);
 }
+const text = (e: Entry) => (e.model ?? []).flatMap((m) => (typeof m.content === "string" ? [m.content] : (m.content ?? []).map((c) => c.text ?? ""))).join("");
 const first = "$ echo hello";
 const { id, sandbox } = await createThread(first, undefined, { model: "faux/faux-2", thinking: "low" });
 await runEnded(id, first);
@@ -26,7 +27,11 @@ const view = (await call("GET", `/threads/${id}`)).json;
 const replied = (view.entries as Entry[]).filter((e) => e.kind === "pi.assistant").map((e) => e.model?.[0]?.model);
 if (view.agent.model.modelId !== "faux-2" || view.agent.thinkingLevel !== "low" || !replied.every((m) => m === "faux-2"))
 	await fail(`thread on faux-2: ${JSON.stringify(view.agent)} replied by ${replied}`);
-log("2. a Thread runs on the model and level it was created with; unknown models and levels are refused");
+await send(id, "?");
+await until("the instructions", async () =>
+	((await call("GET", `/threads/${id}`)).json.entries as Entry[]).some((e) => e.kind === "pi.assistant" && text(e).includes("Models you can give a subagent: faux (faux), faux-2 (Faux 2)")),
+);
+log("2. a Thread runs on the model and level it was created with and is told the models; unknown models and levels are refused");
 
 if ((await call("POST", `/threads/${id}/thinking`, { level: "medium" })).status !== 202) await fail("thinking change");
 if ((await call("POST", `/threads/${id}/thinking`, { level: "max" })).status !== 400) await fail("max was accepted");
@@ -35,7 +40,6 @@ if (changed !== "medium") await fail(`thinking after change: ${changed}`);
 log("3. thinking changes mid-Thread; a level the model lacks is refused");
 
 // Reports from subagents arrive as user messages, so an answer is found by its message, not as the newest one.
-const text = (e: Entry) => (e.model ?? []).flatMap((m) => (typeof m.content === "string" ? [m.content] : (m.content ?? []).map((c) => c.text ?? ""))).join("");
 async function answered(message: string): Promise<{ output: string; error: boolean }[]> {
 	return until(`the answer to ${JSON.stringify(message.slice(0, 50))}`, async () => {
 		const entries: Entry[] = (await call("GET", `/threads/${id}`)).json.entries;
@@ -65,14 +69,16 @@ await until("helper's second report", async () => (await reports("helper")) === 
 const [again] = await ask(subagent({ action: "spawn", name: "helper", message: "x" }));
 const [file] = await ask("$ cat child.txt");
 const [status] = await ask(subagent({ action: "status" }));
-if (!again?.output.includes("already exists") || file?.output.trim() !== "from-child\nagain" || status?.output !== "helper: idle")
+if (!again?.output.includes("already exists") || file?.output.trim() !== "from-child\nagain" || status?.output.split("\n")[0] !== "helper: idle")
 	await fail(`persistent subagent: ${JSON.stringify({ again, file, status })}`);
 log("4. a subagent works in the Thread's machine, keeps its conversation across messages, and reports each answer");
 
-const [other] = await ask(subagent({ action: "spawn", name: "second", model: "faux/faux-2", message: "$ true" }));
-const [unknown] = await ask(subagent({ action: "spawn", name: "third", model: "faux/nope", message: "$ true" }));
-if (other?.output !== "Started second." || !unknown?.error) await fail(`subagent models: ${JSON.stringify({ other, unknown })}`);
-log("5. a subagent can run on another offered model; an unknown one fails the call");
+const [listed] = await ask(subagent({ action: "status" }));
+const [other] = await ask(subagent({ action: "spawn", name: "second", model: "other/claude-Faux-2", message: "$ true" }));
+const [unknown] = await ask(subagent({ action: "spawn", name: "third", model: "anthropic/nope", message: "$ true" }));
+if (!listed?.output.includes("Offered models: faux") || other?.output !== "Started second." || !unknown?.error || !unknown.output.includes("faux-2"))
+	await fail(`subagent models: ${JSON.stringify({ listed, other, unknown })}`);
+log("5. status lists the offered models; a subagent runs on one however a model names it; an unknown one fails with the list");
 
 await ask(subagent({ action: "spawn", name: "sleeper", message: "$[60] sleep 16" }));
 await new Promise((r) => setTimeout(r, IDLE_MS + 3_000));

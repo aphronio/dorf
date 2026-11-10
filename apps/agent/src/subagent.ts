@@ -96,9 +96,10 @@ export function subagents(catalog: Catalog): Extension {
 		name: "subagent",
 		description:
 			"Manage persistent subagents that work in the background in this Thread's machine. Actions: spawn (name, message, " +
-			"optional model: provider/model of another offered model, e.g. a stronger one for a hard question), send (name, " +
+			"optional model: another offered model's id or name, e.g. a stronger one for a hard question), send (name, " +
 			"message; followUp: true queues it after the current answer instead of steering), stop (name: aborts its current " +
-			"work), status (name, or all subagents without one). Each subagent remembers its earlier messages. Answers are " +
+			"work), status (name, or all subagents and the offered models without one). Each subagent remembers its earlier " +
+				"messages. Answers are " +
 			"reported back to you when they arrive.",
 		parameters: obj({
 			action: oneOf(["spawn", "send", "stop", "status"]),
@@ -125,7 +126,8 @@ export function subagents(catalog: Catalog): Extension {
 					const busy = (await api.snapshot(LiveDoc, found.conversationId, callContext))?.run !== undefined;
 					lines.push(`${each}: ${busy ? "working" : "idle"}`);
 				}
-				return reply(lines.length === 0 ? "No subagents." : lines.join("\n"));
+				if (name === undefined) lines.push(`${lines.length ? "" : "No subagents.\n"}Offered models: ${catalog.offered()}`);
+				return reply(lines.join("\n"));
 			}
 			if (name === undefined) return reply(`${action} needs a name.`);
 			const agent = Object.hasOwn(registry.agents, name) ? registry.agents[name] : undefined;

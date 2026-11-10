@@ -42,14 +42,16 @@ export class Threads {
 	readonly #agent: AgentChange;
 	readonly #idleMs: number;
 	readonly #providerSessions: ProviderSessions;
+	readonly #offered: () => string;
 	readonly #idleSince = new Map<ConversationId, number>();
 
-	constructor(harness: Harness, sandboxes: Sandboxes, agent: AgentChange, idleMs: number, providerSessions: ProviderSessions) {
+	constructor(harness: Harness, sandboxes: Sandboxes, agent: AgentChange, idleMs: number, providerSessions: ProviderSessions, offered: () => string) {
 		this.#harness = harness;
 		this.#sandboxes = sandboxes;
 		this.#agent = agent;
 		this.#idleMs = idleMs;
 		this.#providerSessions = providerSessions;
+		this.#offered = offered;
 		sandboxes.makeRoom = () => this.#makeRoom();
 	}
 
@@ -71,7 +73,9 @@ export class Threads {
 		const sandbox = this.#sandboxes.newName();
 		const workspace = this.#agent.cwd ?? "/";
 		const cwd = repo ? `${workspace}/${repo.split("/")[1]}` : workspace;
-		const agent = { ...this.#agent, ...choice, ...(repo ? { cwd, instructions: `${this.#agent.instructions}\n\nThe repository ${repo} is cloned in ${cwd}.` } : {}) };
+		// The models as they are when the Thread starts, so its first subagent call names one right.
+		const instructions = [this.#agent.instructions, repo && `The repository ${repo} is cloned in ${cwd}.`, `Models you can give a subagent: ${this.#offered()}.`];
+		const agent = { ...this.#agent, ...choice, cwd, instructions: instructions.filter(Boolean).join("\n\n") };
 		const conversation = await this.#harness.createConversation(
 			{
 				ownership: { kind: "ownerless" },
