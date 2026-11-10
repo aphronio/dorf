@@ -9,6 +9,7 @@ export function scriptedModel() {
 		provider: FAUX_MODEL.provider,
 		models: [
 			{ id: FAUX_MODEL.modelId, reasoning: true },
+			{ id: "faux-1", name: "Faux 1", reasoning: true },
 			{ id: "faux-2", name: "Faux 2", reasoning: true },
 		],
 	});

@@ -10,7 +10,7 @@ await startAgent();
 const { json: models } = (await call("GET", "/models")) as { json: Choice[] };
 if (models.map((m) => m.ref).join() !== "faux/faux,faux/faux-2") await fail(`models: ${JSON.stringify(models)}`);
 if (!models[0].thinking.includes("high") || models[0].thinking.includes("max")) await fail(`thinking levels: ${models[0].thinking}`);
-log("1. the default model leads the list, with only the levels it offers", models[0].thinking.join(" "));
+log("1. the default model leads the list, then the newest of each family, with only the levels it offers", models[0].thinking.join(" "));
 
 for (const [body, what] of [
 	[{ model: "faux/nope" }, "an unknown model"],

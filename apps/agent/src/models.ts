@@ -8,8 +8,15 @@ const DEFAULT_THINKING: ThinkingLevel = "high";
 
 // A model names another as it pleases: sonnet, Sonnet 5.5, claude-sonnet-5-5 or anthropic/claude-sonnet-5-5.
 const key = (name: string) => name.toLowerCase().replace(/^.*\//, "").replace(/^claude-/, "").replace(/[^a-z0-9]+/g, "-");
+const family = (name: string) => name.replace(/[\d.\s]+$/, "").toLowerCase();
+const version = (name: string) => (name.match(/[\d.]+$/)?.[0] ?? "0").split(".").map(Number);
+const newer = (a: number[], b: number[]) => {
+	for (let i = 0; i < Math.max(a.length, b.length); i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+	return false;
+};
 
-// The models a Thread can run on: those of the default model's provider, so far Claude through the owner's plan.
+// The models a Thread can run on: the default model and the newest of each family ("Opus 5.5" over "Opus 4.8") of the
+// default model's provider, so far Claude through the owner's plan.
 export class Catalog {
 	readonly #models: Models;
 	readonly #default: ModelRef;
@@ -26,8 +33,18 @@ export class Catalog {
 		if (error) console.error(`models: ${error.message}`);
 	}
 
-	list(): ModelChoice[] {
+	#offered() {
 		const all = this.#models.getModels(this.#default.provider);
+		const newest = new Map<string, (typeof all)[number]>();
+		for (const m of all) {
+			const seen = newest.get(family(m.name));
+			if (!seen || newer(version(m.name), version(seen.name))) newest.set(family(m.name), m);
+		}
+		return all.filter((m) => m.id === this.#default.modelId || [...newest.values()].includes(m));
+	}
+
+	list(): ModelChoice[] {
+		const all = this.#offered();
 		const first = all.find((m) => m.id === this.#default.modelId);
 		return [first, ...all.filter((m) => m !== first)].flatMap((m) =>
 			m ? [{ ref: `${m.provider}/${m.id}`, name: m.name, thinking: getSupportedThinkingLevels(m).filter((l): l is ThinkingLevel => l !== "off"), defaultThinking: clampThinkingLevel(m, DEFAULT_THINKING) }] : [],
@@ -36,8 +53,7 @@ export class Catalog {
 
 	// The offered models' ids, as a model reads them; all share the default model's provider.
 	offered(): string {
-		return this.#models
-			.getModels(this.#default.provider)
+		return this.#offered()
 			.map((m) => `${m.id} (${m.name})`)
 			.join(", ");
 	}
@@ -46,7 +62,7 @@ export class Catalog {
 	// unset ones take the defaults.
 	choose(ref?: unknown, thinking?: unknown): { model: ModelRef; thinkingLevel: ModelThinkingLevel } {
 		if (ref !== undefined && typeof ref !== "string") throw new RangeError("model must be a model id");
-		const all = this.#models.getModels(this.#default.provider);
+		const all = this.#offered();
 		const found = ref ? (all.find((m) => key(m.id) === key(ref)) ?? all.find((m) => key(m.name) === key(ref))) : undefined;
 		if (ref && !found) throw new RangeError(`not an offered model: ${ref}. Offered: ${this.offered()}`);
 		const model = found ? { provider: found.provider, modelId: found.id } : this.#default;
