@@ -1,5 +1,7 @@
-import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import http from "node:http";
+import { extname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ConversationId } from "@earendil-works/pi-durable";
 import { type ClaudeLogin, LoginError } from "./claude-login.ts";
 import type { GitHub } from "./github.ts";
@@ -7,7 +9,19 @@ import type { Threads } from "./threads.ts";
 
 type Reply = [status: number, body: unknown];
 
-const PAGE = readFileSync(new URL("./page.html", import.meta.url));
+// The page's static export, copied in by the image build (apps/web).
+const WEB = fileURLToPath(new URL("../web/", import.meta.url));
+const API = new Set(["threads", "repos", "claude"]);
+const TYPES: Record<string, string> = {
+	".html": "text/html; charset=utf-8",
+	".txt": "text/plain; charset=utf-8",
+	".js": "text/javascript",
+	".css": "text/css",
+	".woff2": "font/woff2",
+	".ico": "image/x-icon",
+	".svg": "image/svg+xml",
+	".png": "image/png",
+};
 const MAX_BODY = 1 << 20;
 // Identity comes from the network, not a cookie, so a framing site would act as the owner.
 const HEADERS = { "cache-control": "no-store", "x-frame-options": "DENY", "content-security-policy": "frame-ancestors 'none'", "x-content-type-options": "nosniff" };
@@ -82,9 +96,19 @@ async function route(threads: Threads, claude: ClaudeLogin, github: GitHub | und
 	return [405, { error: "method not allowed" }];
 }
 
+async function asset(path: string, res: http.ServerResponse): Promise<boolean> {
+	const file = join(WEB, path === "/" ? "index.html" : decodeURIComponent(path));
+	if (!file.startsWith(WEB)) return false;
+	const body = await readFile(file).catch(() => undefined);
+	if (!body) return false;
+	const cache = path.startsWith("/_next/static/") ? "public, max-age=31536000, immutable" : "no-store";
+	res.writeHead(200, { ...HEADERS, "cache-control": cache, "content-type": TYPES[extname(file)] ?? "application/octet-stream" }).end(body);
+	return true;
+}
+
 async function follow(threads: Threads, id: ConversationId, req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
 	const stop = await threads.follow(id, (event) => {
-		if (!res.headersSent) res.writeHead(200, { ...HEADERS, "content-type": "text/event-stream" });
+		if (!res.headersSent) res.writeHead(200, { ...HEADERS, "cache-control": "no-store, no-transform", "content-type": "text/event-stream" });
 		res.write(`data: ${JSON.stringify(event)}\n\n`);
 	});
 	if (!stop) return false;
@@ -101,7 +125,7 @@ export function serve(threads: Threads, claude: ClaudeLogin, github: GitHub | un
 				const denied = refused(req, owner);
 				if (denied) return send(denied);
 				const path = new URL(req.url ?? "/", "http://x").pathname;
-				if (req.method === "GET" && path === "/") return res.writeHead(200, { ...HEADERS, "content-type": "text/html; charset=utf-8" }).end(PAGE);
+				if (req.method === "GET" && !API.has(path.split("/")[1])) return (await asset(path, res)) || send([404, { error: "not found" }]);
 				const events = req.method === "GET" && path.match(/^\/threads\/(\d+)\/events$/);
 				if (events) return (await follow(threads, Number(events[1]) as ConversationId, req, res)) || send([404, { error: "no such thread" }]);
 				send(await route(threads, claude, github, req));

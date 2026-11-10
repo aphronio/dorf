@@ -1,0 +1,133 @@
+"use client"
+
+import { useCallback, useEffect, useState } from "react"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { InputMessage } from "@/components/ui/input-message"
+import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select"
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
+import { SidebarInsetTopbar } from "@/components/sidebar-app/inset-topbar"
+import { CommandPalette } from "@/components/dorf/command-palette"
+import { ThreadSidebar } from "@/components/dorf/thread-sidebar"
+import { Transcript } from "@/components/dorf/transcript"
+import { useIcons } from "@/lib/icon-context"
+import { api, type Repo, type Thread, useHashId, useThread } from "@/lib/dorf"
+
+const NO_REPO = "none"
+const REPO_KEY = "dorf.repo"
+
+export default function Page() {
+  const id = useHashId()
+  const icons = useIcons()
+  const [threads, setThreads] = useState<Thread[]>([])
+  const [repos, setRepos] = useState<Repo[]>([])
+  const [repo, setRepo] = useState(NO_REPO)
+  const [draft, setDraft] = useState("")
+  const [error, setError] = useState<string>()
+  const { entries, live } = useThread(id)
+  const thread = threads.find((t) => t.id === id)
+  const running = Boolean(live.run)
+
+  const refresh = useCallback(() => api<Thread[]>("GET", "/threads").then((list) => setThreads(list.slice().reverse())).catch(() => {}), [])
+  useEffect(() => void refresh(), [id, refresh])
+  useEffect(() => {
+    api<Repo[]>("GET", "/repos")
+      .then((list) => {
+        setRepos(list)
+        let last: string | null = null
+        try {
+          last = localStorage.getItem(REPO_KEY)
+        } catch {}
+        if (last && list.some((r) => r.name === last)) setRepo(last)
+      })
+      .catch(() => {})
+  }, [])
+  useEffect(() => setError(undefined), [id])
+
+  const send = async (value: string) => {
+    setDraft("")
+    setError(undefined)
+    try {
+      if (id !== undefined) return void (await api("POST", `/threads/${id}/messages`, { text: value }))
+      try {
+        localStorage.setItem(REPO_KEY, repo)
+      } catch {}
+      const created = await api<Thread>("POST", "/threads", { prompt: value, ...(repo !== NO_REPO ? { repo } : {}) })
+      window.location.hash = String(created.id)
+      await refresh()
+    } catch (e) {
+      setDraft(value)
+      setError((e as Error).message)
+    }
+  }
+  const stop = () => id !== undefined && api("POST", `/threads/${id}/abort`).catch((e) => setError(e.message))
+  const remove = async () => {
+    if (id === undefined || !confirm("Delete this Thread and its machine?")) return
+    await api("DELETE", `/threads/${id}`).catch((e) => setError(e.message))
+    window.location.hash = ""
+    await refresh()
+  }
+  const DeleteIcon = icons.x
+
+  const repoPicker =
+    id === undefined && repos.length > 0 ? (
+      <Select value={repo} onValueChange={setRepo}>
+        <SelectTrigger variant="borderless" className="w-auto max-w-56 min-w-0" />
+        <SelectContent>
+          {[{ name: NO_REPO, label: "No repository" }, ...repos.map((r) => ({ name: r.name, label: r.name }))].map((o, i) => (
+            <SelectItem key={o.name} value={o.name} index={i}>
+              {o.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    ) : null
+
+  return (
+    <SidebarProvider className="h-dvh">
+      <ThreadSidebar threads={threads} current={id} />
+      <CommandPalette threads={threads} />
+      <SidebarInset className="max-md:!m-0 max-md:!rounded-none">
+        <SidebarInsetTopbar>
+          <span className="min-w-0 flex-1 truncate text-sm font-medium">
+            {thread ? (thread.repo ? `${thread.repo} · ${thread.title}` : thread.title) : id === undefined ? "New Thread" : ""}
+          </span>
+          {id !== undefined && (
+            <>
+              <Badge color={running ? "amber" : "gray"} size="compact">{running ? "working" : "idle"}</Badge>
+              <Button variant="ghost" size="icon-compact" aria-label="Delete Thread" onClick={remove}>
+                <DeleteIcon />
+              </Button>
+            </>
+          )}
+        </SidebarInsetTopbar>
+
+        {id === undefined ? (
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
+            <h1 className="text-2xl font-semibold">What should Dorf do?</h1>
+            <p className="text-sm text-muted-foreground">Each Thread runs in a Linux machine of its own.</p>
+          </div>
+        ) : (
+          <Transcript entries={entries} live={live} />
+        )}
+
+        <div className="mx-auto w-full max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+          {error && <p className="px-2 pb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
+          <InputMessage
+            value={draft}
+            onValueChange={setDraft}
+            onSend={(value) => void send(value)}
+            placeholder={id === undefined ? "Describe a coding task" : "Reply"}
+            status={running ? "streaming" : "idle"}
+            onStop={stop}
+            leftSlot={repoPicker}
+            className="bg-surface-3 shadow-surface-3"
+            minRows={id === undefined ? 3 : 1}
+            maxRows={6}
+            textareaProps={{ className: "max-h-[30dvh]" }}
+          />
+        </div>
+      </SidebarInset>
+    </SidebarProvider>
+  )
+}

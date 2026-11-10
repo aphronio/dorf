@@ -1,0 +1,88 @@
+/* Dorf: neutral black with the coral orange as the accent (amber stays for "working"). Light mode uses the
+   editor colors of Shiki's github-light-default theme, which also highlights code. */
+:root {
+  --fluid-accent: #c4532b;
+  --background: #ffffff;
+  --foreground: #1f2328;
+  --card: #f6f8fa;
+  --card-foreground: #1f2328;
+  --popover: #ffffff;
+  --popover-foreground: #1f2328;
+  --primary: #c4532b;
+  --primary-foreground: #ffffff;
+  --secondary: #f6f8fa;
+  --secondary-foreground: #1f2328;
+  --muted: #f6f8fa;
+  --muted-foreground: #656d76;
+  --accent: #f6f8fa;
+  --accent-foreground: #1f2328;
+  --destructive: #cf222e;
+  --border: #d0d7de;
+  --input: #d0d7de;
+  --ring: #c4532b;
+  --sidebar: #f6f8fa;
+  --sidebar-foreground: #1f2328;
+  --sidebar-primary: #c4532b;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f6f8fa;
+  --sidebar-accent-foreground: #1f2328;
+  --sidebar-border: #d0d7de;
+  --sidebar-ring: #c4532b;
+  --surface-1: #f6f8fa;
+  --surface-2: #ffffff;
+  --surface-3: #f6f8fa;
+  --surface-4: #eaeef2;
+  --surface-5: #d0d7de;
+  --surface-6: #d0d7de;
+  --surface-7: #d0d7de;
+  --surface-8: #d0d7de;
+}
+
+.dark {
+  --fluid-accent: #f0794a;
+  --background: #0b0b0b;
+  --foreground: #ededed;
+  --card: #141414;
+  --card-foreground: #e6edf3;
+  --popover: #141414;
+  --popover-foreground: #e6edf3;
+  --primary: #f0794a;
+  --primary-foreground: #0b0b0b;
+  --secondary: #1c1c1c;
+  --secondary-foreground: #e6edf3;
+  --muted: #1c1c1c;
+  --muted-foreground: #8f8f8f;
+  --accent: #1c1c1c;
+  --accent-foreground: #e6edf3;
+  --destructive: #ff7b72;
+  --border: #262626;
+  --input: #2e2e2e;
+  --ring: #f0794a;
+  --sidebar: #050505;
+  --sidebar-foreground: #e6edf3;
+  --sidebar-primary: #f0794a;
+  --sidebar-primary-foreground: #0b0b0b;
+  --sidebar-accent: #1c1c1c;
+  --sidebar-accent-foreground: #e6edf3;
+  --sidebar-border: #262626;
+  --sidebar-ring: #f0794a;
+  --surface-1: #050505;
+  --surface-2: #0b0b0b;
+  --surface-3: #171717;
+  --surface-4: #262626;
+  --surface-5: #333333;
+  --surface-6: #333333;
+  --surface-7: #333333;
+  --surface-8: #333333;
+}
+
+/* Shiki writes both themes as variables; the page picks one. */
+.shiki,
+.shiki span {
+  color: var(--shiki-light);
+  background-color: transparent !important;
+}
+.dark .shiki,
+.dark .shiki span {
+  color: var(--shiki-dark);
+}

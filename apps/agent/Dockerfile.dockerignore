@@ -1,0 +1,4 @@
+**/node_modules
+agent/test
+web/.next
+web/out
