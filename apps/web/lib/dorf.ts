@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 
 export type Thread = { id: number; title: string; createdAt: string; repo?: string }
 export type Repo = { name: string; private: boolean }
@@ -48,8 +48,8 @@ export const text = (content: Message["content"] | undefined) =>
     ? content
     : (content ?? []).flatMap((c) => (c.type === "text" ? [c.text] : [])).join("")
 
-// Pi's JSON state stream: the first event holds every entry, later ones the new entries. A
-// reconnect starts over, so entries merge by id.
+// Pi's JSON state stream: the first event holds the newest entries and whether earlier ones exist,
+// later ones the new entries. A reconnect starts over from its first event.
 function merge(prev: Entry[], next: Entry[]): Entry[] {
   const byId = new Map(prev.map((e) => [e.id, e]))
   for (const e of next) byId.set(e.id, e)
@@ -62,23 +62,35 @@ export function useConversation(url: string | undefined) {
   const [live, setLive] = useState<Live>({})
   const [agent, setAgent] = useState<ThreadAgent>()
   const [subagents, setSubagents] = useState<Subagent[]>([])
+  const [earlier, setEarlier] = useState(false)
   useEffect(() => {
     setEntries([])
+    setEarlier(false)
     setLive({})
     setAgent(undefined)
     setSubagents([])
     if (url === undefined) return
     const stream = new EventSource(url)
     stream.onmessage = (m) => {
-      const event = JSON.parse(m.data) as { entries?: Entry[]; live?: Live; agent?: ThreadAgent; subagents?: Subagent[] }
-      if (event.entries?.length) setEntries((prev) => merge(prev, event.entries!))
+      const event = JSON.parse(m.data) as { entries?: Entry[]; earlier?: boolean; live?: Live; agent?: ThreadAgent; subagents?: Subagent[] }
+      if (event.earlier !== undefined) {
+        setEntries(event.entries ?? [])
+        setEarlier(event.earlier)
+      } else if (event.entries?.length) setEntries((prev) => merge(prev, event.entries!))
       if (event.agent) setAgent(event.agent)
       if (event.subagents) setSubagents(event.subagents)
       setLive(event.live ?? {})
     }
     return () => stream.close()
   }, [url])
-  return { entries, live, agent, subagents }
+  const loadEarlier = useCallback(async () => {
+    const oldest = entries[0]
+    if (!url || !oldest) return
+    const page = (await (await fetch(`${url.replace(/\/events$/, "/entries")}?before=${oldest.id}`)).json()) as { entries: Entry[]; earlier: boolean }
+    setEntries((prev) => merge(page.entries, prev))
+    setEarlier(page.earlier)
+  }, [url, entries])
+  return { entries, live, agent, subagents, loadEarlier: earlier ? loadEarlier : undefined }
 }
 
 export const useThread = (id: number | undefined) => useConversation(id === undefined ? undefined : `/threads/${id}/events`)

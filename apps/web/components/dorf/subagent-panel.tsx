@@ -46,7 +46,7 @@ export function SubagentList({ subagents, open, onOpen }: { subagents: Subagent[
 // A subagent's live conversation in the Thread's place, under a bar that names it, its model and thinking level. The
 // arrow or Esc leads back.
 export function SubagentView({ thread, subagent, models, onBack }: { thread: number; subagent: Subagent; models: ModelChoice[]; onBack: () => void }) {
-  const { entries, live, agent } = useConversation(`/threads/${thread}/subagents/${encodeURIComponent(subagent.name)}/events`)
+  const { entries, live, agent, loadEarlier } = useConversation(`/threads/${thread}/subagents/${encodeURIComponent(subagent.name)}/events`)
   const answered = lastModel(entries)
   const ref = subagent.model && `${subagent.model.provider}/${subagent.model.modelId}`
   const model = answered ? modelName(answered) : models.find((m) => m.ref === ref)?.name
@@ -73,7 +73,7 @@ export function SubagentView({ thread, subagent, models, onBack }: { thread: num
           {details && <span className="shrink-0 max-sm:hidden">{details}</span>}
         </div>
       </div>
-      <Transcript key={subagent.name} entries={entries} live={live} />
+      <Transcript key={subagent.name} entries={entries} live={live} loadEarlier={loadEarlier} />
     </>
   )
 }

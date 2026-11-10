@@ -11,7 +11,8 @@
     "proof:repository": "../../deploy/up.sh && node test/repository.ts",
     "proof:claude-plan": "../../deploy/up.sh && node test/claude-plan.ts",
     "proof:make-room": "../../deploy/up.sh && node test/make-room.ts",
-    "proof:models": "../../deploy/up.sh && node test/models.ts"
+    "proof:models": "../../deploy/up.sh && node test/models.ts",
+    "proof:history": "../../deploy/up.sh && node test/history.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.322",

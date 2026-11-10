@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import http from "node:http";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ConversationId } from "@earendil-works/pi-durable";
+import type { ConversationId, EntryId } from "@earendil-works/pi-durable";
 import { type ClaudeLogin, LoginError } from "./claude-login.ts";
 import type { GitHub } from "./github.ts";
 import type { Catalog } from "./models.ts";
@@ -119,7 +119,7 @@ async function asset(path: string, res: http.ServerResponse): Promise<boolean> {
 	return true;
 }
 
-type Emit = Parameters<Threads["follow"]>[1];
+type Emit = Parameters<Threads["follow"]>[2];
 
 async function follow(start: (emit: Emit) => Promise<(() => Promise<unknown>) | undefined>, req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
 	const stop = await start((event) => {
@@ -141,12 +141,15 @@ export function serve(threads: Threads, catalog: Catalog, claude: ClaudeLogin, g
 				if (denied) return send(denied);
 				const path = new URL(req.url ?? "/", "http://x").pathname;
 				if (req.method === "GET" && !API.has(path.split("/")[1])) return (await asset(path, res)) || send([404, { error: "not found" }]);
-				const events = req.method === "GET" && path.match(/^\/threads\/(\d+)(?:\/subagents\/([^/]+))?\/events$/);
-				if (events) {
-					const id = Number(events[1]) as ConversationId;
-					const name = events[2] && decodeURIComponent(events[2]);
-					const followed = await follow((emit) => (name ? threads.followSubagent(id, name, emit) : threads.follow(id, emit)), req, res);
-					return followed || send([404, { error: name ? "no such subagent" : "no such thread" }]);
+				const stream = req.method === "GET" && path.match(/^\/threads\/(\d+)(?:\/subagents\/([^/]+))?\/(events|entries)$/);
+				if (stream) {
+					const id = Number(stream[1]) as ConversationId;
+					const name = stream[2] ? decodeURIComponent(stream[2]) : undefined;
+					const missing: Reply = [404, { error: name ? "no such subagent" : "no such thread" }];
+					if (stream[3] === "events") return (await follow((emit) => threads.follow(id, name, emit), req, res)) || send(missing);
+					const before = Number(new URL(req.url ?? "/", "http://x").searchParams.get("before"));
+					if (!Number.isSafeInteger(before) || before < 1) return send([400, { error: "before must be an entry id" }]);
+					return send((await threads.earlier(id, name, before as EntryId).then((page) => page && ([200, page] as Reply))) ?? missing);
 				}
 				send(await route(threads, catalog, claude, github, req));
 			} catch (e) {

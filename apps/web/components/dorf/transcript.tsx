@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useLayoutEffect, useRef } from "react"
+import { Button } from "@/components/ui/button"
 import { ChatMessage } from "@/components/ui/chat-message"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { Markdown } from "@/components/dorf/markdown"
@@ -37,7 +38,9 @@ function push(items: Item[], key: string, message: Message) {
   if (message.stopReason === "error") items.push({ kind: "note", key: `${key}.e`, text: message.errorMessage ?? "The model failed.", error: true })
 }
 
-export function Transcript({ entries, live, onSubagent }: { entries: Entry[]; live: Live; onSubagent?: (name: string) => void }) {
+type TranscriptProps = { entries: Entry[]; live: Live; onSubagent?: (name: string) => void; loadEarlier?: () => Promise<void> }
+
+export function Transcript({ entries, live, onSubagent, loadEarlier }: TranscriptProps) {
   const Chevron = useIcons()["chevron-right"]
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
@@ -92,6 +95,22 @@ export function Transcript({ entries, live, onSubagent }: { entries: Entry[]; li
       className="min-h-0 flex-1 overflow-y-auto"
     >
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-6">
+        {loadEarlier && (
+          <Button
+            variant="ghost"
+            size="compact"
+            className="self-center"
+            onClick={async () => {
+              // Keep the reader where they were as the earlier entries land above.
+              const el = scroller.current!
+              const fromBottom = el.scrollHeight - el.scrollTop
+              await loadEarlier()
+              requestAnimationFrame(() => (el.scrollTop = el.scrollHeight - fromBottom))
+            }}
+          >
+            Load earlier
+          </Button>
+        )}
         {items.map((item) => {
           switch (item.kind) {
             case "user":
