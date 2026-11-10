@@ -7,6 +7,8 @@ import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { FAUX_MODEL, scriptedModel } from "./faux.ts";
 import { serve } from "./http.ts";
 import { Sandboxes } from "./sandbox.ts";
+import { drain } from "./drain.ts";
+import { SandboxJobs } from "./jobs.ts";
 import { sandboxEnv, Threads } from "./threads.ts";
 
 const DATA = process.env.DORF_DATA ?? "data";
@@ -23,8 +25,9 @@ const model = MODEL === "faux" ? FAUX_MODEL : { provider: MODEL.slice(0, slash),
 if (MODEL === "faux") models.setProvider(scriptedModel());
 
 const registry = createRegistry();
-registry.install(CodingTools);
 const sandboxes = new Sandboxes();
+registry.install(CodingTools);
+registry.install(SandboxJobs);
 mkdirSync(DATA, { recursive: true });
 const harness = await Harness.open(
 	await openNodeSqliteStorage(`${DATA}/agent.sqlite`),
@@ -52,5 +55,6 @@ const threads = new Threads(
 	IDLE_MS,
 );
 await threads.open();
+drain(sandboxes);
 serve(threads, PORT);
 console.log(`dorf agent on 127.0.0.1:${PORT}, model ${model.provider}/${model.modelId}`);

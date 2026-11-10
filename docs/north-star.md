@@ -14,10 +14,11 @@ harnesses. That code is frozen at the `v0.31.3` tag and is not maintained.
 
 ```text
 +-------------------------------------------+     +---------------------------+
-|  agent  (TypeScript, the only process)    |     |  upgrade  (script)        |
-|  Threads | Pi Durable Harness + SQLite    |     |  upgrade and rollback     |
-|  pauses a Sandbox after its run ends      |     |  drains Sandboxes off     |
-|  calls Substrate: create | pause | delete |     |  terminating workers      |
+|  agent  (TypeScript, the only process)    |     |  deploy/substrate.sh      |
+|  Threads | Pi Durable Harness + SQLite    |     |  install, upgrade and     |
+|  pauses a Sandbox after its run ends      |     |  rollback of Substrate,   |
+|  drains Sandboxes off workers going away  |     |  from released images     |
+|  calls Substrate: create | pause | delete |     |                           |
 +---------------------+---------------------+     +---------------------------+
                       | tools through pi-env; a request resumes a paused Sandbox
                       v
@@ -31,6 +32,8 @@ harnesses. That code is frozen at the `v0.31.3` tag and is not maintained.
 - The agent is built from [Pi Durable](https://github.com/earendil-works/pi) and follows its own
   patterns: the Thread's Sandbox is an app document written in the creating commit, and the
   Harness `env` function looks it up for every tool call.
+- Each bash call is a job the Sandbox owns; the agent's stream is only a view of it, so a lost
+  stream, a pause or an agent restart reattaches instead of failing the call.
 - [Agent Substrate](https://github.com/agent-substrate/substrate) owns isolation, memory
   snapshots, routing and automatic resume. Dorf adds only what Substrate leaves to its user: when
   to pause, and pausing Sandboxes before their worker goes away.
@@ -43,7 +46,7 @@ harnesses. That code is frozen at the `v0.31.3` tag and is not maintained.
 | **Thread** | One line of work: a transcript and at most one Sandbox. In Pi-facing code it is a root `Conversation`. |
 | **Sandbox** | The isolated machine where a Thread's tools run. Keeps disk, memory and processes while paused. |
 | **create, pause, delete** | The three Sandbox operations Dorf performs. A paused Sandbox resumes when a request reaches it. |
-| **drain** | Pausing every Sandbox on a worker that is about to terminate, so an upgrade loses no work. |
+| **drain** | Pausing every running Sandbox on a worker that is going away, even mid-call, so an upgrade loses no work. Substrate leaves it to the Sandbox's driver, the agent. |
 
 Substrate's own terms (Actor, Worker, Atespace, ActorTemplate) appear only in the agent's
 Substrate module and in deployment files.
@@ -59,10 +62,10 @@ Substrate module and in deployment files.
 
 | Deleted | Add back when |
 | --- | --- |
-| A separate Sandbox service | A second app owns Sandboxes, or something other than our upgrade script terminates workers (managed node upgrades, an autoscaler, Spot nodes) |
+| A separate Sandbox service | A second app owns Sandboxes |
 | Per-call leases | Never. The agent pauses a Sandbox a few minutes after its run ends |
 | Pausing the least recently used Sandbox to make room | A Thread actually fails for lack of a free worker |
-| An always-on drain loop | Same condition as the Sandbox service |
+| Draining from outside the agent | Sandboxes can be awake while no agent runs: the agent is down during an upgrade, or it has more than one replica |
 | Our own Postgres and migrations | The agent needs more than one replica |
 | App authentication, tunnels, enrolled CLIs | Access from outside the cluster; then put an existing access proxy in front |
 | Code mode | A measured need |

@@ -12,12 +12,12 @@ metadata:
     workload: dorf-sandbox
 spec:
   replicas: 2
-  workerImage: ghcr.io/agent-substrate/substrate/ateworker-gvisor@sha256:f8987236c6256f58c4b2625e543b43f4ae4bdded6ee6821c03d966effb7c0f17 # v1.0.0
+  workerImage: ${WORKER_IMAGE}
   sandboxClasses:
   - name: gvisor
     configRef:
       name: gvisor-default
   template:
     resources:
-      limits: {cpu: "2", memory: 1536Mi}
-      requests: {cpu: 250m, memory: 1536Mi}
+      limits: {cpu: "4", memory: 4Gi}
+      requests: {cpu: 250m, memory: 4Gi}

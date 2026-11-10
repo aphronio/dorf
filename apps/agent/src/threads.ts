@@ -117,7 +117,7 @@ export class Threads {
 		return pauseWhenIdle(this.#harness, id, this.#idleMs, async (stillIdle) => {
 			const name = await this.sandbox(id);
 			if (!name || (await this.#sandboxes.state(name)) !== "ACTOR_STATE_RUNNING" || !stillIdle()) return;
-			await this.#sandboxes.pause(name);
+			await this.#sandboxes.pause(name, "idle");
 		});
 	}
 

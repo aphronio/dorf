@@ -3,6 +3,7 @@
 # build and push the Sandbox image, then create the atespace, worker pool and template.
 # REGISTRY is a registry the cluster pulls from (the Substrate kind setup serves localhost:5001).
 set -euo pipefail
+shopt -s inherit_errexit
 cd "$(dirname "$0")/.."
 REGISTRY=${REGISTRY:-localhost:5001}
 
@@ -13,8 +14,16 @@ REPO=$REGISTRY/dorf-sandbox:$TAG
 
 ate() { kubectl ate "$@" 2> >(grep -v '^Warning: no --token-file' >&2); }
 ate get atespace dorf >/dev/null 2>&1 || ate create atespace dorf >/dev/null
-kubectl apply -f deploy/pool.yaml >/dev/null
-kubectl -n dorf wait workerpool/sandbox --for=jsonpath='{.status.readyReplicas}'=2 --timeout=10m >/dev/null
+# The pool runs the installed Substrate's worker; only deploy/substrate.sh moves it.
+generation() { kubectl -n dorf get deployment/sandbox -o jsonpath='{.metadata.generation}' 2>/dev/null || echo 0; }
+before=$(generation)
+WORKER_IMAGE=$(deploy/substrate.sh worker-image)
+applied=$(WORKER_IMAGE=$WORKER_IMAGE envsubst <deploy/pool.yaml | kubectl apply -f -)
+if grep -q 'workerpool.*\(configured\|created\)' <<<"$applied"; then
+	for _ in $(seq 15); do [ "$(generation)" != "$before" ] && break; sleep 1; done
+fi
+kubectl -n dorf rollout status deployment/sandbox --timeout=70m >/dev/null
+until [ -z "$(kubectl -n dorf get pods -l ate.dev/worker-pool -o jsonpath='{.items[?(@.metadata.deletionTimestamp)].metadata.name}')" ]; do sleep 2; done
 
 # Templates are immutable, and Sandboxes keep the template they were made from.
 current=$({ ate get actor-template sandbox -a dorf -o json | node -pe 'JSON.parse(require("fs").readFileSync(0)).containers[0].image'; } 2>/dev/null || true)
