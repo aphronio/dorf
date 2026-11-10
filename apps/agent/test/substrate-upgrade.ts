@@ -23,7 +23,7 @@ async function expectIntact(thread: Thread, label: string): Promise<void> {
 }
 
 async function paused(thread: Thread): Promise<void> {
-	await until(`${thread.sandbox} to pause`, async () => (await sandboxes.state(thread.sandbox)) === "ACTOR_STATE_SUSPENDED", 2 * 60_000);
+	await until(`${thread.sandbox} to pause`, async () => (await sandboxes.state(thread.sandbox)) === "paused", 2 * 60_000);
 }
 
 // Sends `message` again each time its run ends, until the roll is over.
@@ -49,8 +49,8 @@ async function roll(direction: "upgrade" | "rollback", a: Thread, b: Thread, c: 
 	const watch = setInterval(async () => {
 		for (const t of [a, b, c]) {
 			const state = await sandboxes.state(t.sandbox).catch(() => "unknown");
-			if (state === "ACTOR_STATE_CRASHED") crashed.add(t.sandbox);
-			if (t === c && state !== "ACTOR_STATE_SUSPENDED") cWoke = true;
+			if (state === "crashed") crashed.add(t.sandbox);
+			if (t === c && state !== "paused") cWoke = true;
 		}
 	}, 2_000);
 

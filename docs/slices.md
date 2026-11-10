@@ -8,6 +8,7 @@ Each slice is the smallest demoable step. A slice is done when its proof runs fr
 | S1 | One Thread, one Sandbox, pause and resume on Agent Substrate | `npm --prefix apps/agent run proof:lifecycle` on a cluster running Substrate, with the faux model: tool call writes a file and starts a process, and the Sandbox reaches the internet but not the cluster; the Sandbox pauses after the run; the next message resumes it with both intact; an agent killed mid-call finishes the call after restart, running it once; a timeout kills its command; deleting the Thread deletes the Sandbox. Then one manual run with a real model | Done |
 | S2 | Harmless Substrate upgrades | `npm --prefix apps/agent run proof:upgrade` on a fresh machine: installs the previous Substrate release on kind, then upgrades to the pinned one and rolls back with no hand steps while two Threads run tool calls and a third is paused. No tool call fails, no Sandbox crashes, busy Sandboxes move workers, and every Thread keeps its files and processes | Done |
 | S3 | A real repository, used daily | `npm --prefix apps/agent run proof:repository` with `DORF_PROOF_REPO` set to a private repository with a `node --test` suite: a Thread clones it, changes it, runs the tests, commits and pushes a branch the remote then shows, with the token injected by the egress gateway. Then one run with a real model on this repository | Done |
+| S3.5 | The agent reaches Sandboxes without `kubectl` or a cluster kubeconfig, through Dorf's gate, so it can later run on Cloudflare | `npm --prefix apps/agent run proof:lifecycle`: the agent holds only a `dorf-agent` token and calls the gate over HTTP and WebSocket; every step of S1's proof still passes | Done |
 | S4 | GitHub triggers | A mention or failing check starts or continues a Thread | Planned |
 
 ## Carry-over
@@ -67,3 +68,20 @@ Facts learned in one slice that a later slice must respect.
   1 GiB Sandboxes; at 2 CPU, 1.5 GiB it held one.
 - `deploy/up.sh` gives the pool the worker image of the installed Substrate release, so only
   `deploy/substrate.sh` moves workers between releases.
+- Substrate's API speaks only gRPC: plain HTTP/1.1 does not connect and JSON gets 415, so a Worker
+  cannot call it. The gate (`apps/gate`) is the agent's only door: HTTP for create, state, pause
+  and delete, and a WebSocket per pi-env connection. A design where the agent called Substrate's
+  API itself (with a door only for bytes) was as fast but cannot run in a Worker, and its token
+  also had to work at the Kubernetes API.
+- Substrate scopes a ServiceAccount token to one atespace through that atespace's access policy
+  (`editor`); the token's audience must be `api.ate-system.svc`. The `dorf-agent` token is denied
+  other atespaces, global calls and changing its own policy. The gate forwards it on every call and
+  holds no rights over Sandboxes itself.
+- Substrate's router accepts clients by an exact SPIFFE allow-list and checks no atespace, so the
+  gate's pod certificate could reach every Sandbox. The gate therefore opens a WebSocket only after
+  `ResumeActor` succeeds with the caller's token (it needs `editor` and is harmless on a running
+  Sandbox). `deploy/substrate.sh` puts `dorf-gate` on the allow-list at install; the install record
+  keeps it across upgrades.
+- Through the gate, resuming to the first byte takes about 195 ms, down from about 816 ms through
+  a `kubectl ate proxy` per connection; warm calls and a 100 MB stream are unchanged. A call in
+  flight survives the gate's pod being deleted: pi-env reconnects and the job reattaches.

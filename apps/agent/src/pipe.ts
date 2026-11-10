@@ -1,29 +1,19 @@
-// pi-env transport: `node pipe.ts <atespace> <sandbox> serve --token <hex>`. Opens a
-// `kubectl ate proxy` to the Sandbox, opens a WebSocket to its /pienv, and carries this
-// process's stdio as binary messages. The proxy lives exactly as long as this process.
-import { spawn } from "node:child_process";
-import { createInterface } from "node:readline";
+// pi-env transport: `node pipe.ts <url> <token-file> serve --token <hex>`. Opens a WebSocket to a
+// Sandbox's pi-env through the gate and carries this process's stdio as binary messages.
+import { readFileSync } from "node:fs";
 
-const [atespace, sandbox, ...args] = process.argv.slice(2);
-const proxy = spawn("kubectl", ["ate", "proxy", "actor", sandbox, "0:80", "-a", atespace], { stdio: ["ignore", "ignore", "pipe"] });
+const [url, tokenFile, ...args] = process.argv.slice(2);
 
 function exit(code: number, message?: string): never {
 	if (message) process.stderr.write(`pipe: ${message}\n`);
-	proxy.kill();
 	process.exit(code);
 }
 process.on("SIGTERM", () => exit(0));
-proxy.on("exit", () => exit(1, "proxy exited"));
-
-const port = await new Promise<number>((resolve) => {
-	createInterface({ input: proxy.stderr }).on("line", (line) => {
-		const match = line.match(/^Proxying 127\.0\.0\.1:(\d+) /);
-		if (match) resolve(Number(match[1]));
-	});
-});
 
 const BUFFERED = 1 << 20;
-const ws = new WebSocket(`ws://127.0.0.1:${port}/pienv`, { headers: { "X-Pienv-Args": JSON.stringify(args) } });
+const ws = new WebSocket(url, {
+	headers: { authorization: `Bearer ${readFileSync(tokenFile, "utf8").trim()}`, "X-Pienv-Args": JSON.stringify(args) },
+});
 ws.binaryType = "arraybuffer";
 let opened = false;
 ws.onopen = () => {

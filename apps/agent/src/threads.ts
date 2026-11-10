@@ -116,7 +116,7 @@ export class Threads {
 	#watchIdle(id: ConversationId): Promise<void> {
 		return pauseWhenIdle(this.#harness, id, this.#idleMs, async (stillIdle) => {
 			const name = await this.sandbox(id);
-			if (!name || (await this.#sandboxes.state(name)) !== "ACTOR_STATE_RUNNING" || !stillIdle()) return;
+			if (!name || (await this.#sandboxes.state(name)) !== "running" || !stillIdle()) return;
 			await this.#sandboxes.pause(name, "idle");
 		});
 	}

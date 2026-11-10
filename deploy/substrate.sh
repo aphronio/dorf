@@ -41,7 +41,7 @@ install() {
 	[ -z "$ATE_INSTALL_KIND" ] || step kind bash -c "cd $src && hack/create-kind-cluster.sh"
 	step ate-system setup "$src" deploy ate-system --image-repo "$REPO" --image-tag "$version" \
 		--credential-provider='{"name":"k8s.io"}' \
-		--ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client
+		--ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client,spiffe://cluster.local/ns/dorf/sa/dorf-gate
 	(cd "$src" && go install ./cmd/kubectl-ate)
 }
 

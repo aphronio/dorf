@@ -1,5 +1,5 @@
 // One Thread, one Sandbox: pause and resume, an agent killed mid-call, a timeout, delete.
-// Needs a cluster prepared by deploy/up.sh and `kubectl ate` on PATH. Uses the faux model.
+// Needs a cluster prepared by deploy/up.sh and `kubectl` on PATH to mint the agent's token. Uses the faux model.
 import { SandboxNotFound } from "../src/sandbox.ts";
 import { call, createThread, fail, IDLE_MS, killAgent, log, runEnded, sandboxes, send, startAgent, until } from "./kit.ts";
 
@@ -20,7 +20,7 @@ log("1. thread created, file written, process started, internet reached, cluster
 
 // 2. The Sandbox pauses after the idle window.
 const ranAt = Date.now();
-await until("pause", async () => (await sandboxes.state(sandbox)) === "ACTOR_STATE_SUSPENDED", IDLE_MS + 60_000);
+await until("pause", async () => (await sandboxes.state(sandbox)) === "paused", IDLE_MS + 60_000);
 log("2. sandbox paused", `${((Date.now() - ranAt) / 1000).toFixed(1)}s after the run (idle window ${IDLE_MS / 1000}s)`);
 
 // 3. The next message resumes it with the file and the process intact, and no zombies left.

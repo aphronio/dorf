@@ -1,24 +1,11 @@
-// The agent's only view of Agent Substrate. A Sandbox is one Actor made from the newest `sandbox-*`
-// ActorTemplate; a request that reaches a paused Actor resumes it, so there is no resume call.
-import { execFile } from "node:child_process";
+// The agent's only view of Agent Substrate: Dorf's gate (apps/gate), called with a token Substrate
+// scopes to Dorf's Sandboxes. A request that reaches a paused Sandbox resumes it, so there is no
+// resume call.
+import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { Connection, RemoteExecutionEnv } from "@earendil-works/pi-env";
 
-const ATESPACE = "dorf";
-const POOL_NAMESPACE = "dorf";
-const TEMPLATE = "sandbox-";
 const PIPE = new URL("./pipe.ts", import.meta.url).pathname;
-// Like a machine of your own: every host, TLS passed through untouched. Substrate denies all by default.
-// GitHub is intercepted so the gateway can put the token from deploy/up.sh into git's Basic auth.
-const EGRESS = `rules:
-- tlsPassthrough: {hostnames: ["*"], ports: {all: {}}}
-- http: {hostnames: ["*"]}
-- https:
-    hostnames: [github.com]
-    effects:
-      replaceHeaders:
-      - {header: Authorization, prefix: "Basic ", credentialUri: "ate-secret://k8s.io/default/dorf-secrets/github/basic"}
-`;
 
 export class SandboxNotFound extends Error {
 	constructor(name: string) {
@@ -26,58 +13,41 @@ export class SandboxNotFound extends Error {
 	}
 }
 
-function ate(name: string, args: string[], stdin?: string): Promise<string> {
-	return kubectl(name, ["ate", ...args, "-a", ATESPACE], stdin);
-}
-
-function kubectl(name: string, args: string[], stdin?: string): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const child = execFile("kubectl", [...args, "-o", "json"], (error, stdout, stderr) => {
-			if (!error) return resolve(stdout);
-			const message = stderr.split("\n").filter((l) => l && !l.startsWith("Warning: no --token-file")).join(" ");
-			reject(/not ?found/i.test(message) ? new SandboxNotFound(name) : new Error(`kubectl ${args.slice(0, 3).join(" ")}: ${message}`));
-		});
-		child.stdin?.end(stdin);
-	});
-}
-
-type Actor = { metadata: { name: string }; status: { state: string; workerAssignment?: { workerPod: string } } };
-
 export class Sandboxes {
+	#gate: string;
+	// Read on every call, so a token rotated on disk is picked up.
+	#tokenFile: string;
 	#connections = new Map<string, Connection>();
 	#pausing = new Map<string, Promise<void>>();
+
+	constructor(gate: string, tokenFile: string) {
+		this.#gate = gate;
+		this.#tokenFile = tokenFile;
+	}
+
+	async #call(name: string, method: string, path: string): Promise<any> {
+		const token = readFileSync(this.#tokenFile, "utf8").trim();
+		const res = await fetch(this.#gate + path, { method, headers: { authorization: `Bearer ${token}` } });
+		if (res.status === 404 && name) throw new SandboxNotFound(name);
+		if (!res.ok) throw new Error(`gate ${method} ${path}: ${res.status} ${await res.text()}`);
+		return res.status === 204 ? undefined : res.json();
+	}
 
 	newName(): string {
 		return `s-${randomUUID().slice(0, 8)}`;
 	}
 
 	async create(name: string): Promise<void> {
-		const { actorTemplates = [] }: { actorTemplates?: { metadata: { name: string; createTime: string } }[] } = JSON.parse(
-			await ate("", ["get", "actor-templates"]),
-		);
-		const template = actorTemplates
-			.filter((t) => t.metadata.name.startsWith(TEMPLATE))
-			.sort((a, b) => Date.parse(b.metadata.createTime) - Date.parse(a.metadata.createTime))[0];
-		if (!template) throw new Error("No Sandbox template; run deploy/up.sh");
-		await ate(name, ["create", "actor", name, "--template", template.metadata.name]);
-		await ate(name, ["create", "egress-policy", name, "-f", "-"], EGRESS);
+		await this.#call("", "POST", `/sandboxes/${name}`);
 	}
 
 	async state(name: string): Promise<string> {
-		return JSON.parse(await ate(name, ["get", "actor", name])).status.state;
+		return (await this.#call(name, "GET", `/sandboxes/${name}`)).state;
 	}
 
-	// Running Sandboxes on a worker that is going away.
-	async evicted(): Promise<string[]> {
-		const pods: { items: { metadata: { name: string; deletionTimestamp?: string } }[] } = JSON.parse(
-			await kubectl("", ["get", "pods", "-n", POOL_NAMESPACE, "-l", "ate.dev/worker-pool"]),
-		);
-		const leaving = new Set(pods.items.filter((p) => p.metadata.deletionTimestamp).map((p) => p.metadata.name));
-		if (!leaving.size) return [];
-		const { actors = [] }: { actors?: Actor[] } = JSON.parse(await ate("", ["get", "actors"]));
-		return actors
-			.filter((a) => a.status.state === "ACTOR_STATE_RUNNING" && leaving.has(a.status.workerAssignment?.workerPod ?? ""))
-			.map((a) => a.metadata.name);
+	// Running Sandboxes on a node that is going away.
+	evicted(): Promise<string[]> {
+		return this.#call("", "GET", "/draining");
 	}
 
 	// An idle pause closes the stream so the next call opens a fresh one at once; a drain keeps it
@@ -86,7 +56,7 @@ export class Sandboxes {
 		let pausing = this.#pausing.get(name);
 		if (!pausing) {
 			if (reason === "idle") this.#close(name);
-			pausing = ate(name, ["suspend", "actor", name, `--mode=${reason === "idle" ? "async" : "sync"}`])
+			pausing = this.#call(name, "POST", `/sandboxes/${name}/suspend?mode=${reason === "idle" ? "async" : "sync"}`)
 				.then(() => {})
 				.finally(() => this.#pausing.delete(name));
 			this.#pausing.set(name, pausing);
@@ -96,7 +66,7 @@ export class Sandboxes {
 
 	async delete(name: string): Promise<void> {
 		this.#close(name);
-		await ate(name, ["delete", "actor", name]).catch((e) => {
+		await this.#call(name, "DELETE", `/sandboxes/${name}`).catch((e) => {
 			if (!(e instanceof SandboxNotFound)) throw e;
 		});
 	}
@@ -108,7 +78,7 @@ export class Sandboxes {
 				command: async () => {
 					await this.#pausing.get(name)?.catch(() => {});
 					await this.state(name);
-					return ["node", PIPE, ATESPACE, name];
+					return ["node", PIPE, `${this.#gate.replace(/^http/, "ws")}/sandboxes/${name}/pienv`, this.#tokenFile];
 				},
 				onLog: (text) => process.stderr.write(`[pi-env ${name}] ${text}`),
 			});

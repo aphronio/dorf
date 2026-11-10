@@ -37,4 +37,5 @@ jobs:
           node-version: 26.13.0
       - run: npm ci --ignore-scripts
       - run: npm ci --ignore-scripts --prefix ../../images/sandbox
+      - run: npm ci --ignore-scripts --prefix ../gate
       - run: npm run check

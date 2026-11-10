@@ -1,0 +1,65 @@
+# Dorf's gate: the agent's only way into the cluster. It acts on Sandboxes with each caller's own
+# token, reaches them through Substrate's router as dorf-gate, and itself may only list pool pods.
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: dorf-agent, namespace: dorf}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: dorf-gate, namespace: dorf}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: dorf-gate, namespace: dorf}
+rules:
+- {apiGroups: [""], resources: [pods], verbs: [list]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: dorf-gate, namespace: dorf}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: dorf-gate}
+subjects:
+- {kind: ServiceAccount, name: dorf-gate, namespace: dorf}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: dorf-gate, namespace: dorf}
+spec:
+  selector: {matchLabels: {app: dorf-gate}}
+  template:
+    metadata: {labels: {app: dorf-gate}}
+    spec:
+      serviceAccountName: dorf-gate
+      containers:
+      - name: gate
+        image: ${GATE_IMAGE}
+        ports: [{containerPort: 8080}]
+        env: [{name: NODE_EXTRA_CA_CERTS, value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt}]
+        readinessProbe: {tcpSocket: {port: 8080}}
+        volumeMounts:
+        - {name: servicedns, mountPath: /run/ate/servicedns}
+        - {name: podidentity, mountPath: /run/ate/podidentity}
+      volumes:
+      - name: servicedns
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector: {matchLabels: {podcert.ate.dev/canarying: live}}
+              path: trust-bundle.pem
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+---
+apiVersion: v1
+kind: Service
+metadata: {name: dorf-gate, namespace: dorf}
+spec:
+  type: NodePort
+  selector: {app: dorf-gate}
+  # Reachable on the nodes only; reach from elsewhere goes through a private tunnel.
+  ports: [{port: 80, targetPort: 8080, nodePort: 30080}]

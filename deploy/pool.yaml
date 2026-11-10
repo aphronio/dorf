@@ -2,6 +2,8 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: dorf
+  # The gate calls Substrate's API from here; worker pods are refused by Substrate's policy.
+  labels: {ate.dev/api-access: "true"}
 ---
 apiVersion: ate.dev/v1
 kind: WorkerPool

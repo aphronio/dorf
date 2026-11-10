@@ -11,7 +11,7 @@ it. [Slices](docs/slices.md) owns the plan, each slice's proof, and carry-over f
 - TypeScript on Node. Pin dependencies exactly and install with `npm ci --ignore-scripts`.
 - Build on Pi Durable the way its README and `packages/durable/test/examples` do. Read the matching
   example before adding host-side state or a new mechanism.
-- Only the agent's Substrate module and deployment files use Substrate terms (Actor, Worker,
+- Only the gate (`apps/gate`) and deployment files use Substrate terms (Actor, Worker,
   Atespace, ActorTemplate).
 - One concept per file. Keep a module as a file until a second caller needs it; extract a package
   only when a second app imports it.

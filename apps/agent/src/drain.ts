@@ -1,7 +1,7 @@
 import type { Sandboxes } from "./sandbox.ts";
 
-// Substrate SIGTERMs the Actors on a worker that is going away and leaves suspending them to their
-// driver, within 30 minutes; an Actor still running then crashes. The agent is that driver.
+// Substrate SIGTERMs the Sandboxes on a node that is going away and leaves pausing them to their
+// driver, within 30 minutes; a Sandbox still running then crashes. The agent is that driver.
 export function drain(sandboxes: Sandboxes, everyMs = 5_000): void {
 	const draining = new Set<string>();
 	const tick = async () => {

@@ -1,14 +1,19 @@
 // What the slice proofs share: an agent process on the faux model, its HTTP API, and waits.
-import { type ChildProcess, spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { type ChildProcess, execFileSync, spawn } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Sandboxes } from "../src/sandbox.ts";
 
 export const IDLE_MS = 10_000;
-export const sandboxes = new Sandboxes();
 const PORT = 8193;
 const DATA = mkdtempSync(join(tmpdir(), "dorf-proof-"));
+// The proofs act as the cluster's operator: they mint the agent's token and find the gate on a node.
+const kubectl = (...args: string[]) => execFileSync("kubectl", args, { encoding: "utf8" }).trim();
+const TOKEN = join(DATA, "token");
+writeFileSync(TOKEN, kubectl("-n", "dorf", "create", "token", "dorf-agent", "--audience", "api.ate-system.svc", "--duration", "24h"));
+const GATE = `http://${kubectl("get", "nodes", "-o", 'jsonpath={.items[0].status.addresses[?(@.type=="InternalIP")].address}')}:30080`;
+export const sandboxes = new Sandboxes(GATE, TOKEN);
 const t0 = Date.now();
 const owned = new Set<string>();
 let agent: ChildProcess | undefined;
@@ -26,7 +31,7 @@ export async function fail(message: string): Promise<never> {
 
 export async function startAgent(): Promise<void> {
 	agent = spawn("node", [new URL("../src/main.ts", import.meta.url).pathname], {
-		env: { ...process.env, DORF_MODEL: "faux", DORF_DATA: DATA, DORF_PORT: String(PORT), DORF_IDLE_MS: String(IDLE_MS) },
+		env: { ...process.env, DORF_MODEL: "faux", DORF_DATA: DATA, DORF_PORT: String(PORT), DORF_IDLE_MS: String(IDLE_MS), DORF_GATE: GATE, DORF_TOKEN_FILE: TOKEN },
 		stdio: ["ignore", "inherit", "inherit"],
 	});
 	await until("agent up", async () => (await fetch(`http://127.0.0.1:${PORT}/threads`).catch(() => undefined))?.ok);

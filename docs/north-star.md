@@ -48,14 +48,16 @@ harnesses. That code is frozen at the `v0.31.3` tag and is not maintained.
 | **create, pause, delete** | The three Sandbox operations Dorf performs. A paused Sandbox resumes when a request reaches it. |
 | **drain** | Pausing every running Sandbox on a worker that is going away, even mid-call, so an upgrade loses no work. Substrate leaves it to the Sandbox's driver, the agent. |
 
-Substrate's own terms (Actor, Worker, Atespace, ActorTemplate) appear only in the agent's
-Substrate module and in deployment files.
+Substrate's own terms (Actor, Worker, Atespace, ActorTemplate) appear only in the gate and in
+deployment files.
 
 ## Boundaries
 
-- Only the agent's Substrate module knows Substrate. Thread code knows a Sandbox ID and nothing else.
+- Only the gate knows Substrate. It runs in the cluster and acts with the agent's own token, which
+  Substrate scopes to Dorf's atespace. The agent's Sandbox module knows only the gate; Thread code
+  knows a Sandbox ID and nothing else.
 - The agent sees a machine: tools reach a Sandbox only through pi-env. Where the agent runs is a
-  deployment choice; today it runs wherever `kubectl` can reach the cluster.
+  deployment choice; it needs only HTTP and WebSocket to the gate.
 - The Sandbox image holds no credentials and knows nothing about Dorf.
 - A later trigger app (GitHub, CI) knows only the agent's Thread API.
 - Code moves into a shared package only when a second app imports it.
@@ -68,7 +70,6 @@ Substrate module and in deployment files.
 | Per-call leases | Never. The agent pauses a Sandbox a few minutes after its run ends |
 | Pausing the least recently used Sandbox to make room | A Thread actually fails for lack of a free worker |
 | Draining from outside the agent | Sandboxes can be awake while no agent runs: the agent is down during an upgrade, its host can stop it between requests, or it has more than one replica |
-| Reaching Sandboxes without `kubectl` | The agent first runs where it cannot start a process. Then follow Substrate: an existing proxy in front of its router that authenticates the agent and names the Sandbox |
 | Our own Postgres and migrations | The agent needs more than one replica |
 | App authentication, tunnels, enrolled CLIs | Access from outside the cluster; then put an existing access proxy in front |
 | Code mode | A measured need |

@@ -25,7 +25,8 @@ const model = MODEL === "faux" ? FAUX_MODEL : { provider: MODEL.slice(0, slash),
 if (MODEL === "faux") models.setProvider(scriptedModel());
 
 const registry = createRegistry();
-const sandboxes = new Sandboxes();
+// The gate's address and a file holding the agent's token (deploy/gate.yaml's dorf-agent).
+const sandboxes = new Sandboxes(process.env.DORF_GATE ?? "http://127.0.0.1:30080", process.env.DORF_TOKEN_FILE ?? "token");
 registry.install(CodingTools);
 registry.install(SandboxJobs);
 mkdirSync(DATA, { recursive: true });

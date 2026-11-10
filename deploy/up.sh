@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Prepare Dorf's Sandboxes on a cluster that runs Agent Substrate:
-# build and push the Sandbox image, then create the atespace, egress fence, worker pool and template.
+# build and push the Sandbox image, then create the atespace, egress fence, worker pool and template,
+# and the gate the agent reaches them through.
 # REGISTRY is a registry the cluster pulls from (the Substrate kind setup serves localhost:5001).
 set -euo pipefail
 shopt -s inherit_errexit
@@ -56,3 +57,20 @@ for old in $(ate get actor-templates -a dorf -o json | json 'a=>(a.actorTemplate
 	[ "$old" = "$TEMPLATE" ] || [[ " $used " == *" $old "* ]] || ate delete actor-template "$old" -a dorf >/dev/null
 done
 echo "sandbox template ready: $TEMPLATE"
+
+# The agent reaches Sandboxes only through the gate, as dorf-agent, which Substrate scopes to atespace dorf.
+grep -q 'sa/dorf-gate' <<<"$(kubectl -n ate-system get deploy atenet-router -o jsonpath='{.spec.template.spec.containers[0].args}')" ||
+	{ echo "atenet-router does not allow dorf-gate; install Substrate with deploy/substrate.sh" >&2; exit 1; }
+if ! access=$(ate get access-policy -a dorf -o yaml 2>/dev/null); then
+	printf 'metadata: {name: default}\nbindings:\n- role: editor\n  members: [user:system:serviceaccount:dorf:dorf-agent]\n' |
+		ate create access-policy -a dorf -f - >/dev/null
+elif ! grep -q 'serviceaccount:dorf:dorf-agent' <<<"$access"; then
+	echo "grant user:system:serviceaccount:dorf:dorf-agent the editor role in atespace dorf's access policy" >&2
+	exit 1
+fi
+GATE=$REGISTRY/dorf-gate:$(cat apps/gate/{Dockerfile,package.json,package-lock.json,ateapi.proto,ateapi.ts,gate.ts} | sha256sum | cut -c1-12)
+docker build -q -t "$GATE" apps/gate >/dev/null
+docker push -q "$GATE" >/dev/null
+GATE_IMAGE=$GATE envsubst <deploy/gate.yaml | kubectl apply -f - >/dev/null
+kubectl -n dorf rollout status deploy/dorf-gate --timeout=5m >/dev/null
+echo "gate ready on port 30080 of the cluster's nodes"
