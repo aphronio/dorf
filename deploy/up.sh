@@ -70,9 +70,10 @@ GATE_IMAGE=$GATE envsubst <deploy/gate.yaml | kubectl apply -f - >/dev/null
 kubectl -n dorf-gate rollout status deploy/dorf-gate --timeout=5m >/dev/null
 echo "gate ready: service dorf-gate/dorf-gate"
 
-AGENT=$REGISTRY/dorf-agent:$(cat apps/agent/{Dockerfile,.dockerignore,package.json,package-lock.json} apps/agent/src/*.ts | sha256sum | cut -c1-12)
+AGENT=$REGISTRY/dorf-agent:$(cat apps/agent/{Dockerfile,.dockerignore,package.json,package-lock.json} apps/agent/src/* | sha256sum | cut -c1-12)
 docker build -q -t "$AGENT" apps/agent >/dev/null
 docker push -q "$AGENT" >/dev/null
-AGENT_IMAGE=$AGENT DORF_MODEL=${DORF_MODEL:-claude-plan/opus} envsubst '$AGENT_IMAGE $DORF_MODEL' <deploy/agent.yaml | kubectl apply -f - >/dev/null
+AGENT_IMAGE=$AGENT DORF_MODEL=${DORF_MODEL:-claude-plan/opus} DORF_OWNER=${DORF_OWNER:?set DORF_OWNER to the Tailscale login allowed to use Dorf} \
+	envsubst '$AGENT_IMAGE $DORF_MODEL $DORF_OWNER' <deploy/agent.yaml | kubectl apply -f - >/dev/null
 kubectl -n dorf-gate rollout status deploy/dorf-agent --timeout=5m >/dev/null
 echo "agent ready: deployment dorf-gate/dorf-agent"

@@ -110,6 +110,29 @@ export class Threads {
 		return view;
 	}
 
+	async abort(id: ConversationId): Promise<boolean> {
+		const conversation = await this.#known(id);
+		if (!conversation) return false;
+		await conversation.abort(context);
+		return true;
+	}
+
+	// Pi's JSON state mode: first every entry, then per change the new entries and the live state.
+	async follow(id: ConversationId, send: (event: { entries?: readonly unknown[]; live: unknown }) => void): Promise<(() => Promise<unknown>) | undefined> {
+		const conversation = await this.#known(id);
+		if (!conversation) return undefined;
+		const watch = await conversation.watch(context);
+		let newest = watch.value.entries.at(-1)?.id ?? 0;
+		send({ entries: watch.value.entries, live: watch.value.docs["pi.live"] });
+		watch.start(async (call) => {
+			if (call.kind !== "value") return;
+			const entries = call.value.entries.filter((entry) => entry.id > newest);
+			newest = call.value.entries.at(-1)?.id ?? newest;
+			send({ ...(entries.length ? { entries } : {}), live: call.value.docs["pi.live"] });
+		});
+		return () => watch.stop();
+	}
+
 	// The Sandbox goes before the commit: a crash in between leaves a listed Thread whose
 	// retry finishes the job, never an orphan Sandbox. Pi has no way to remove a transcript.
 	async delete(id: ConversationId): Promise<boolean> {

@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { Sandboxes } from "../src/sandbox.ts";
 
 export const IDLE_MS = 10_000;
+const OWNER = "proof@example.com";
+const HEADERS = { "tailscale-user-login": OWNER, "content-type": "application/json" };
 const PORT = 8193;
 export const DATA = mkdtempSync(join(tmpdir(), "dorf-proof-"));
 const TOKEN = join(DATA, "token");
@@ -42,10 +44,10 @@ export async function fail(message: string): Promise<never> {
 
 export async function startAgent(model = "faux", idleMs = IDLE_MS): Promise<void> {
 	agent = spawn("node", [new URL("../src/main.ts", import.meta.url).pathname], {
-		env: { ...process.env, DORF_MODEL: model, DORF_DATA: DATA, DORF_PORT: String(PORT), DORF_IDLE_MS: String(idleMs), DORF_GATE: GATE, DORF_TOKEN_FILE: TOKEN },
+		env: { ...process.env, DORF_MODEL: model, DORF_DATA: DATA, DORF_PORT: String(PORT), DORF_IDLE_MS: String(idleMs), DORF_OWNER: OWNER, DORF_GATE: GATE, DORF_TOKEN_FILE: TOKEN },
 		stdio: ["ignore", "inherit", "inherit"],
 	});
-	await until("agent up", async () => (await fetch(`http://127.0.0.1:${PORT}/threads`).catch(() => undefined))?.ok);
+	await until("agent up", async () => (await fetch(`http://127.0.0.1:${PORT}/threads`, { headers: HEADERS }).catch(() => undefined))?.ok);
 	log("agent started", `data ${DATA}`);
 }
 
@@ -68,7 +70,7 @@ export async function until<T>(what: string, check: () => Promise<T | undefined 
 }
 
 export async function call(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
-	const res = await fetch(`http://127.0.0.1:${PORT}${path}`, { method, body: body === undefined ? undefined : JSON.stringify(body) });
+	const res = await fetch(`http://127.0.0.1:${PORT}${path}`, { method, headers: HEADERS, body: body === undefined ? undefined : JSON.stringify(body) });
 	const text = await res.text();
 	return { status: res.status, json: text ? JSON.parse(text) : undefined };
 }

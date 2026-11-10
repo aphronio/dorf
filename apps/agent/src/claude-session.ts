@@ -20,6 +20,7 @@ const ISOLATION_ENV = {
 };
 // An allowlist, so no API key, token or provider switch in the agent's environment reaches Claude Code.
 const PASSED_ENV = ["PATH", "HOME", "LANG", "TERM", "TMPDIR", "USER"];
+export const claudeEnv = () => Object.fromEntries(PASSED_ENV.flatMap((k) => (process.env[k] ? [[k, process.env[k]!]] : [])));
 
 export type SessionStart = {
 	executable?: string;
@@ -128,12 +129,11 @@ export class ClaudeSession {
 		const prompt = new ReadableStream<SDKUserMessage>({ start: (c) => void (input = c) });
 		this.#input = input;
 		this.id = "resume" in start ? start.resume : start.sessionId;
-		const env = Object.fromEntries(PASSED_ENV.flatMap((k) => (process.env[k] ? [[k, process.env[k]]] : [])));
 		this.#query = query({
 			prompt,
 			options: {
 				pathToClaudeCodeExecutable: start.executable,
-				env: { ...env, ...ISOLATION_ENV },
+				env: { ...claudeEnv(), ...ISOLATION_ENV },
 				cwd: start.cwd,
 				model: start.model,
 				systemPrompt: start.system,

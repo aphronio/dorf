@@ -77,6 +77,10 @@ Facts learned in one slice that a later slice must respect.
   8 GiB Sandboxes run at once; a fourth resume fails with `no worker has room for the actor`, and
   the agent makes room (`npm --prefix apps/agent run proof:make-room`). An async pause frees its
   booking before it returns, so the retry needs no wait.
+- The chat page is reached through `tailscale serve --bg --https=443 http://127.0.0.1:8091` on the
+  cluster's machine, in front of a systemd unit running `kubectl -n dorf-gate port-forward
+  deploy/dorf-agent 8091:8091` with `Restart=always`: the forward exits whenever `up.sh` replaces the
+  pod. `up.sh` needs `DORF_OWNER`, the one Tailscale login the agent serves.
 - `deploy/up.sh` gives the pool the worker image of the installed Substrate release, so only
   `deploy/substrate.sh` moves workers between releases.
 - Substrate's API speaks only gRPC: plain HTTP/1.1 does not connect and JSON gets 415, so a Worker

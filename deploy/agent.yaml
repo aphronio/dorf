@@ -5,7 +5,8 @@ spec:
   accessModes: [ReadWriteOnce]
   resources: {requests: {storage: 10Gi}}
 ---
-# No Service: the API listens on the pod's loopback, reached only through a port-forward.
+# No Service: the API listens on the pod's loopback, so only a port-forward behind `tailscale serve`
+# reaches it, and the Tailscale login header can be trusted.
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: dorf-agent, namespace: dorf-gate}
@@ -24,6 +25,7 @@ spec:
         image: ${AGENT_IMAGE}
         env:
         - {name: DORF_MODEL, value: "${DORF_MODEL}"}
+        - {name: DORF_OWNER, value: "${DORF_OWNER}"}
         - {name: DORF_GATE, value: http://dorf-gate}
         - {name: DORF_TOKEN_FILE, value: /run/dorf/token/token}
         - {name: DORF_DATA, value: /data}

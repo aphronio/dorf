@@ -1,19 +1,56 @@
+import { readFileSync } from "node:fs";
 import http from "node:http";
 import type { ConversationId } from "@earendil-works/pi-durable";
+import { type ClaudeLogin, LoginError } from "./claude-login.ts";
 import type { Threads } from "./threads.ts";
 
 type Reply = [status: number, body: unknown];
 
+const PAGE = readFileSync(new URL("./page.html", import.meta.url));
+const MAX_BODY = 1 << 20;
+// Identity comes from the network, not a cookie, so a framing site would act as the owner.
+const HEADERS = { "cache-control": "no-store", "x-frame-options": "DENY", "content-security-policy": "frame-ancestors 'none'", "x-content-type-options": "nosniff" };
+
+class BadRequest extends Error {}
+
 async function json(req: http.IncomingMessage): Promise<Record<string, unknown>> {
 	let text = "";
-	for await (const chunk of req) text += chunk;
-	return text ? JSON.parse(text) : {};
+	for await (const chunk of req) {
+		text += chunk;
+		if (text.length > MAX_BODY) throw new BadRequest("body too large");
+	}
+	try {
+		return text ? JSON.parse(text) : {};
+	} catch {
+		throw new BadRequest("body is not JSON");
+	}
 }
 
-async function route(threads: Threads, req: http.IncomingMessage): Promise<Reply> {
+// Only `tailscale serve` reaches the agent's loopback, and it sets the caller's tailnet login. A
+// change must be JSON, so a browser sends another site's request only after a preflight we never answer.
+function refused(req: http.IncomingMessage, owner: string): Reply | undefined {
+	if (req.headers["tailscale-user-login"] !== owner) return [403, { error: "not the owner" }];
+	if (req.method === "GET") return undefined;
+	if (!req.headers["content-type"]?.startsWith("application/json")) return [415, { error: "JSON only" }];
+	const site = req.headers["sec-fetch-site"];
+	if (site && site !== "same-origin" && site !== "none") return [403, { error: "cross-site request" }];
+}
+
+async function route(threads: Threads, claude: ClaudeLogin, req: http.IncomingMessage): Promise<Reply> {
 	const [, root, rawId, sub] = new URL(req.url ?? "/", "http://x").pathname.split("/");
-	const id = Number(rawId) as ConversationId;
+	if (root === "claude") {
+		switch (`${req.method} ${rawId ?? ""}`) {
+			case "GET ":
+				return [200, await claude.status()];
+			case "POST login":
+				return [200, { url: await claude.start() }];
+			case "POST code":
+				return [200, await claude.finish((await json(req)).code)];
+		}
+		return [405, { error: "method not allowed" }];
+	}
 	if (root !== "threads") return [404, { error: "not found" }];
+	const id = Number(rawId) as ConversationId;
 	const at = `${req.method} ${[rawId && ":id", sub].filter(Boolean).join("/")}`;
 	switch (at) {
 		case "GET ":
@@ -32,6 +69,8 @@ async function route(threads: Threads, req: http.IncomingMessage): Promise<Reply
 			if (typeof text !== "string" || !text) return [400, { error: "text required" }];
 			return (await threads.send(id, text)) ? [202, {}] : [404, { error: "no such thread" }];
 		}
+		case "POST :id/abort":
+			return (await threads.abort(id)) ? [202, {}] : [404, { error: "no such thread" }];
 		case "POST :id/compact":
 			return (await threads.compact(id)) ? [202, {}] : [404, { error: "no such thread" }];
 		case "DELETE :id":
@@ -40,16 +79,32 @@ async function route(threads: Threads, req: http.IncomingMessage): Promise<Reply
 	return [405, { error: "method not allowed" }];
 }
 
-export function serve(threads: Threads, port: number): http.Server {
+async function follow(threads: Threads, id: ConversationId, req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
+	const stop = await threads.follow(id, (event) => {
+		if (!res.headersSent) res.writeHead(200, { ...HEADERS, "content-type": "text/event-stream" });
+		res.write(`data: ${JSON.stringify(event)}\n\n`);
+	});
+	if (!stop) return false;
+	req.once("close", () => void stop());
+	return true;
+}
+
+export function serve(threads: Threads, claude: ClaudeLogin, owner: string, port: number): http.Server {
 	return http
 		.createServer(async (req, res) => {
-			let reply: Reply;
+			const send = ([status, body]: Reply) =>
+				res.writeHead(status, { ...HEADERS, "content-type": "application/json" }).end(status === 204 ? undefined : JSON.stringify(body));
 			try {
-				reply = await route(threads, req);
+				const denied = refused(req, owner);
+				if (denied) return send(denied);
+				const path = new URL(req.url ?? "/", "http://x").pathname;
+				if (req.method === "GET" && path === "/") return res.writeHead(200, { ...HEADERS, "content-type": "text/html; charset=utf-8" }).end(PAGE);
+				const events = req.method === "GET" && path.match(/^\/threads\/(\d+)\/events$/);
+				if (events) return (await follow(threads, Number(events[1]) as ConversationId, req, res)) || send([404, { error: "no such thread" }]);
+				send(await route(threads, claude, req));
 			} catch (e) {
-				reply = [500, { error: (e as Error).message }];
+				send([e instanceof BadRequest || e instanceof LoginError ? 400 : 500, { error: (e as Error).message }]);
 			}
-			res.writeHead(reply[0], { "content-type": "application/json" }).end(reply[0] === 204 ? undefined : JSON.stringify(reply[1]));
 		})
 		.listen(port, "127.0.0.1");
 }
