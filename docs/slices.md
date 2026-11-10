@@ -37,7 +37,9 @@ Facts learned in one slice that a later slice must respect.
   binary, signed in on the agent's machine; tools still run in the Sandbox. Claude Code keeps its own
   copy of each Thread and gets only what it has not seen; a Pi compaction starts a new copy. Claude
   Code reports extra usage only with the response that used it, so extra usage stays off in claude.ai.
-  Proof: `npm run proof:claude-plan`.
+  Proof: `npm run proof:claude-plan`. It spends the owner's plan and reads as automation, so run it
+  only when `claude-plan.ts`, `claude-session.ts` or the Agent SDK pin changes; every other proof
+  uses the faux model.
 - Known limits of jobs: `read`, `write` and `edit` calls in flight during a drain or router roll
   still fail once. A call cut off by more agent restarts than Pi's `restartLimit` (5) ends while
   its job runs on. A timeout restarts its clock after an agent restart. Output that is not UTF-8
