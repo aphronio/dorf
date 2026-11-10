@@ -32,6 +32,8 @@ async function route(threads: Threads, req: http.IncomingMessage): Promise<Reply
 			if (typeof text !== "string" || !text) return [400, { error: "text required" }];
 			return (await threads.send(id, text)) ? [202, {}] : [404, { error: "no such thread" }];
 		}
+		case "POST :id/compact":
+			return (await threads.compact(id)) ? [202, {}] : [404, { error: "no such thread" }];
 		case "DELETE :id":
 			return (await threads.delete(id)) ? [204, null] : [404, { error: "no such thread" }];
 	}

@@ -31,6 +31,11 @@ Facts learned in one slice that a later slice must respect.
   (`apps/agent/src/jobs.ts`, a wrapper around Pi's bash). pi-env's `exec` does not say which
   failures were a lost connection (earendil-works/pi#11976), so the wrapper retries every failure
   to reach the daemon except a deleted Sandbox.
+- `claude-plan/<model>` serves Claude from the owner's Claude plan through the unmodified Claude Code
+  binary, signed in on the agent's machine; tools still run in the Sandbox. Claude Code keeps its own
+  copy of each Thread and gets only what it has not seen; a Pi compaction starts a new copy. Claude
+  Code reports extra usage only with the response that used it, so extra usage stays off in claude.ai.
+  Proof: `npm run proof:claude-plan`.
 - Known limits of jobs: `read`, `write` and `edit` calls in flight during a drain or router roll
   still fail once. A call cut off by more agent restarts than Pi's `restartLimit` (5) ends while
   its job runs on. A timeout restarts its clock after an agent restart. Output that is not UTF-8

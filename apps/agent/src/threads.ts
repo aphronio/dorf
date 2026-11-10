@@ -1,5 +1,5 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { type AgentChange, type ConversationId, defineDoc, type Harness, type HarnessOptions } from "@earendil-works/pi-durable";
+import { type AgentChange, type ConversationId, defineDoc, type Harness, type HarnessOptions, ProviderDoc } from "@earendil-works/pi-durable";
 import { pauseWhenIdle } from "./idle.ts";
 import type { Sandboxes } from "./sandbox.ts";
 
@@ -30,17 +30,22 @@ export function sandboxEnv(sandboxes: Sandboxes, workspace: string): HarnessOpti
 	};
 }
 
+// A provider that keeps a process or copy per Thread, keyed by Pi's provider session id.
+export type ProviderSessions = { release(sessionId: string): Promise<void>; forget(sessionId: string): Promise<void> };
+
 export class Threads {
 	readonly #harness: Harness;
 	readonly #sandboxes: Sandboxes;
 	readonly #agent: AgentChange;
 	readonly #idleMs: number;
+	readonly #providerSessions: ProviderSessions;
 
-	constructor(harness: Harness, sandboxes: Sandboxes, agent: AgentChange, idleMs: number) {
+	constructor(harness: Harness, sandboxes: Sandboxes, agent: AgentChange, idleMs: number, providerSessions: ProviderSessions) {
 		this.#harness = harness;
 		this.#sandboxes = sandboxes;
 		this.#agent = agent;
 		this.#idleMs = idleMs;
+		this.#providerSessions = providerSessions;
 	}
 
 	async open(): Promise<void> {
@@ -87,6 +92,13 @@ export class Threads {
 		return true;
 	}
 
+	async compact(id: ConversationId): Promise<boolean> {
+		const conversation = await this.#known(id);
+		if (!conversation) return false;
+		await conversation.compact(undefined, context);
+		return true;
+	}
+
 	async read(id: ConversationId) {
 		const conversation = await this.#known(id);
 		if (!conversation) return undefined;
@@ -102,6 +114,8 @@ export class Threads {
 		const conversation = await this.#known(id);
 		if (!conversation) return false;
 		await conversation.abort(context);
+		const session = await this.#providerSession(id);
+		if (session) await this.#providerSessions.forget(session);
 		const sandbox = await this.sandbox(id);
 		if (sandbox) await this.#sandboxes.delete(sandbox);
 		await this.#harness.commit(async (tx) => {
@@ -114,10 +128,16 @@ export class Threads {
 
 	#watchIdle(id: ConversationId): Promise<void> {
 		return pauseWhenIdle(this.#harness, id, this.#idleMs, async (stillIdle) => {
+			const session = await this.#providerSession(id);
+			if (session && stillIdle()) await this.#providerSessions.release(session);
 			const name = await this.sandbox(id);
 			if (!name || (await this.#sandboxes.state(name)) !== "running" || !stillIdle()) return;
 			await this.#sandboxes.pause(name, "idle");
 		});
+	}
+
+	async #providerSession(id: ConversationId): Promise<string | undefined> {
+		return (await this.#harness.snapshot(ProviderDoc, id, context))?.sessionId;
 	}
 
 	async #known(id: ConversationId) {

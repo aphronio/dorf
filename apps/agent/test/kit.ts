@@ -8,11 +8,14 @@ import { Sandboxes } from "../src/sandbox.ts";
 
 export const IDLE_MS = 10_000;
 const PORT = 8193;
-const DATA = mkdtempSync(join(tmpdir(), "dorf-proof-"));
+export const DATA = mkdtempSync(join(tmpdir(), "dorf-proof-"));
 const TOKEN = join(DATA, "token");
 writeFileSync(TOKEN, execFileSync("kubectl", ["-n", "dorf-gate", "create", "token", "dorf-agent", "--audience", "api.ate-system.svc", "--duration", "24h"]));
 const forward = spawn("kubectl", ["-n", "dorf-gate", "port-forward", "svc/dorf-gate", "0:80"], { stdio: ["ignore", "pipe", "ignore"] });
-process.on("exit", () => forward.kill());
+process.on("exit", () => {
+	forward.kill();
+	agent?.kill("SIGKILL");
+});
 const GATE = await new Promise<string>((resolve) => {
 	createInterface({ input: forward.stdout as Readable }).on("line", (line) => {
 		const port = line.match(/^Forwarding from 127\.0\.0\.1:(\d+) /)?.[1];
@@ -37,13 +40,17 @@ export async function fail(message: string): Promise<never> {
 	process.exit(1);
 }
 
-export async function startAgent(): Promise<void> {
+export async function startAgent(model = "faux"): Promise<void> {
 	agent = spawn("node", [new URL("../src/main.ts", import.meta.url).pathname], {
-		env: { ...process.env, DORF_MODEL: "faux", DORF_DATA: DATA, DORF_PORT: String(PORT), DORF_IDLE_MS: String(IDLE_MS), DORF_GATE: GATE, DORF_TOKEN_FILE: TOKEN },
+		env: { ...process.env, DORF_MODEL: model, DORF_DATA: DATA, DORF_PORT: String(PORT), DORF_IDLE_MS: String(IDLE_MS), DORF_GATE: GATE, DORF_TOKEN_FILE: TOKEN },
 		stdio: ["ignore", "inherit", "inherit"],
 	});
 	await until("agent up", async () => (await fetch(`http://127.0.0.1:${PORT}/threads`).catch(() => undefined))?.ok);
 	log("agent started", `data ${DATA}`);
+}
+
+export function agentPid(): number | undefined {
+	return agent?.pid;
 }
 
 export function killAgent(signal: NodeJS.Signals = "SIGTERM"): void {
