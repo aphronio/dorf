@@ -4,6 +4,7 @@ set -euo pipefail
 shopt -s inherit_errexit
 cd "$(dirname "$0")/.."
 REGISTRY=${REGISTRY:-localhost:5001}
+source deploy/substrate.env
 
 PIENV=apps/agent/node_modules/@earendil-works/pi-env/bin/pi-env-linux-x64
 # Builds are not reproducible, so the tag names the inputs and the digest names the build.
@@ -62,8 +63,8 @@ elif ! grep -q 'serviceaccount:dorf-gate:dorf-agent' <<<"$access"; then
 	echo "grant user:system:serviceaccount:dorf-gate:dorf-agent the editor role in atespace dorf's access policy" >&2
 	exit 1
 fi
-GATE=$REGISTRY/dorf-gate:$(cat apps/gate/{Dockerfile,package.json,package-lock.json,ateapi.proto,ateapi.ts,gate.ts} | sha256sum | cut -c1-12)
-docker build -q -t "$GATE" apps/gate >/dev/null
+GATE=$REGISTRY/dorf-gate:$( (echo "$SUBSTRATE_VERSION"; cat apps/gate/{Dockerfile,package.json,package-lock.json,ateapi.ts,gate.ts}) | sha256sum | cut -c1-12)
+docker build -q --build-arg SUBSTRATE_VERSION="$SUBSTRATE_VERSION" -t "$GATE" apps/gate >/dev/null
 docker push -q "$GATE" >/dev/null
 GATE_IMAGE=$GATE envsubst <deploy/gate.yaml | kubectl apply -f - >/dev/null
 kubectl -n dorf-gate rollout status deploy/dorf-gate --timeout=5m >/dev/null

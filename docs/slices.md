@@ -90,8 +90,6 @@ Facts learned in one slice that a later slice must respect.
   replace it once the router accepts tokens scoped by atespace.
 - The gate checks the caller once per WebSocket, so a stream outlives its token's expiry or removal
   from the access policy until it closes.
-- `apps/gate/ateapi.proto` is a copy from the pinned Substrate release; copy it again when
-  `SUBSTRATE_VERSION` moves.
 - Before the agent can run in a Worker: pi-env's client still spawns a process (`pipe.ts`), the
   agent reads its token from a file, and ServiceAccount tokens expire, so something with the right
   to create tokens must renew an off-cluster agent's token.
