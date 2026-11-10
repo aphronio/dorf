@@ -137,9 +137,8 @@ export function subagents(catalog: Catalog): Extension {
 				return reply(`Stopped ${name}.`, agent!.conversationId);
 			}
 			if (message === undefined) return reply(`${action} needs a message.`);
-			// A subagent runs on the Thread's model and thinking level, or on the model asked for at the nearest level.
-			const thread = action === "spawn" ? await api.agent(callContext) : undefined;
-			const choice = thread && (model === undefined ? { model: thread.model, thinkingLevel: thread.thinkingLevel } : catalog.near(model, thread.thinkingLevel));
+			// A subagent starts as a copy of the Thread's agent; a model asked for runs at the level nearest the Thread's.
+			const choice = action === "spawn" && model !== undefined ? catalog.near(model, (await api.agent(callContext)).thinkingLevel) : {};
 
 			const result = await api.commit(async (tx) => {
 				const state = await tx.doc(Subagents, api.conversationId);
