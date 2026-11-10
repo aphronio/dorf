@@ -1,4 +1,4 @@
-// The agent's only view of Agent Substrate. A Sandbox is one Actor made from the `sandbox`
+// The agent's only view of Agent Substrate. A Sandbox is one Actor made from the newest `sandbox-*`
 // ActorTemplate; a request that reaches a paused Actor resumes it, so there is no resume call.
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -6,7 +6,7 @@ import { Connection, RemoteExecutionEnv } from "@earendil-works/pi-env";
 
 const ATESPACE = "dorf";
 const POOL_NAMESPACE = "dorf";
-const TEMPLATE = "sandbox";
+const TEMPLATE = "sandbox-";
 const PIPE = new URL("./pipe.ts", import.meta.url).pathname;
 // Like a machine of your own: every host, TLS passed through untouched. Substrate denies all by default.
 const OPEN_EGRESS = 'rules: [{tlsPassthrough: {hostnames: ["*"], ports: {all: {}}}}, {http: {hostnames: ["*"]}}]';
@@ -43,7 +43,14 @@ export class Sandboxes {
 	}
 
 	async create(name: string): Promise<void> {
-		await ate(name, ["create", "actor", name, "--template", TEMPLATE]);
+		const { actorTemplates = [] }: { actorTemplates?: { metadata: { name: string; createTime: string } }[] } = JSON.parse(
+			await ate("", ["get", "actor-templates"]),
+		);
+		const template = actorTemplates
+			.filter((t) => t.metadata.name.startsWith(TEMPLATE))
+			.sort((a, b) => Date.parse(b.metadata.createTime) - Date.parse(a.metadata.createTime))[0];
+		if (!template) throw new Error("No Sandbox template; run deploy/up.sh");
+		await ate(name, ["create", "actor", name, "--template", template.metadata.name]);
 		await ate(name, ["create", "egress-policy", name, "-f", "-"], OPEN_EGRESS);
 	}
 

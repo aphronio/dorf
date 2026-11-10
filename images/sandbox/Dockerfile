@@ -6,8 +6,16 @@ RUN echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/90sandbox \
  && chown -R root:root /var/cache/apt /var/lib/apt
 # The daemon comes from the agent's pinned pi-env package, so client and daemon always match.
 COPY --from=pienv pi-env /usr/local/bin/pi-env
-COPY init.mts /init.mts
+COPY package.json package-lock.json /init/
+RUN cd /init && npm ci --ignore-scripts --omit=dev --no-audit --no-fund
+COPY init.mts /init/init.mts
+# The template mounts Substrate's trust bundle here: public roots plus the egress gateway's CA,
+# which signs the hosts whose requests it rewrites, such as credential injection.
+ENV SSL_CERT_FILE=/run/ate/egress-trust-bundle/trust-bundle.pem \
+    NODE_EXTRA_CA_CERTS=/run/ate/egress-trust-bundle/trust-bundle.pem \
+    GIT_SSL_CAINFO=/run/ate/egress-trust-bundle/trust-bundle.pem \
+    REQUESTS_CA_BUNDLE=/run/ate/egress-trust-bundle/trust-bundle.pem
 WORKDIR /workspace
 # tini reaps orphans, which init.mts as PID 1 would leave as zombies.
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["node", "/init.mts"]
+CMD ["node", "/init/init.mts"]

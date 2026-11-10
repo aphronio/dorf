@@ -14,8 +14,9 @@ Each slice is the smallest demoable step. A slice is done when its proof runs fr
 
 Facts learned in one slice that a later slice must respect.
 
-- Substrate's router carries only HTTP. pi-env speaks a framed protocol over stdio, so the Sandbox
-  init bridges one upgraded HTTP request to the pi-env daemon.
+- Substrate's router carries only HTTP and WebSocket. pi-env speaks a framed protocol over stdio,
+  so the Sandbox init turns each WebSocket on `/pienv` into a fresh pi-env daemon, its bytes in
+  binary messages.
 - The Sandbox's main process must ignore `SIGTERM`; Substrate signals it when its worker goes away,
   and a process that exits cannot be paused.
 - Substrate does not pause a Sandbox when its worker terminates; it signals the Sandbox and allows
@@ -37,15 +38,18 @@ Facts learned in one slice that a later slice must respect.
   about 3 s. An idle pause closes the stream first; a drain keeps it so calls in flight reattach.
 - `init.mts` as PID 1 never reaped orphans, so finished background commands stayed zombies. The
   image runs `tini` as PID 1.
-- The pi-env daemon and the init are frozen into each Sandbox's memory snapshot at creation. Keep
-  them small and stable.
+- The init is frozen into each Sandbox's memory snapshot, and into every tag made from it, so its
+  contract (`/pienv`, the `X-Pienv-Args` header) must stay stable. The daemon is not: the init
+  starts it from disk for each connection.
 - The router passes only `Upgrade: websocket` requests; any other upgrade gets 403.
-- Sandbox image builds are not reproducible, so `deploy/up.sh` tags the image with a hash of its
-  inputs and builds only when the template lacks that tag. Replacing a template (new image for new
-  Threads) is not supported yet.
+- Sandbox image builds are not reproducible, so `deploy/up.sh` names the image and its template
+  after a hash of their inputs. A Sandbox cannot resume once its template is deleted, so each build
+  gets a new `sandbox-<hash>` template, the agent creates Sandboxes from the newest, and `up.sh`
+  deletes only templates no Sandbox uses.
 - Substrate denies all egress by default. Each Sandbox gets a policy at create that allows every
-  host, with TLS passed through untouched. An `https` rule would instead intercept TLS, which needs
-  Substrate's trust bundle in the image.
+  host, with TLS passed through untouched. An `https` rule intercepts TLS instead; the template
+  mounts Substrate's trust bundle and the image points `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`,
+  `GIT_SSL_CAINFO` and `REQUESTS_CA_BUNDLE` at it.
 - Root in a Sandbox has only three capabilities (no setuid, no DAC override), so the image runs apt
   as root and owns apt's directories. The image carries no language toolchains; the agent installs
   what a repository needs.

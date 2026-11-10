@@ -9,8 +9,9 @@ REGISTRY=${REGISTRY:-localhost:5001}
 
 PIENV=apps/agent/node_modules/@earendil-works/pi-env/bin/pi-env-linux-x64
 # Builds are not reproducible, so the tag names the inputs and the digest names the build.
-TAG=$(cat images/sandbox/Dockerfile images/sandbox/init.mts "$PIENV/pi-env" | sha256sum | cut -c1-12)
+TAG=$(cat images/sandbox/{Dockerfile,init.mts,package.json,package-lock.json} "$PIENV/pi-env" deploy/template.yaml | sha256sum | cut -c1-12)
 REPO=$REGISTRY/dorf-sandbox:$TAG
+TEMPLATE=sandbox-$TAG
 
 ate() { kubectl ate "$@" 2> >(grep -v '^Warning: no --token-file' >&2); }
 ate get atespace dorf >/dev/null 2>&1 || ate create atespace dorf >/dev/null
@@ -26,15 +27,22 @@ fi
 kubectl -n dorf rollout status deployment/sandbox --timeout=70m >/dev/null
 until [ -z "$(kubectl -n dorf get pods -l ate.dev/worker-pool -o jsonpath='{.items[?(@.metadata.deletionTimestamp)].metadata.name}')" ]; do sleep 2; done
 
-# Templates are immutable, and Sandboxes keep the template they were made from.
-current=$({ ate get actor-template sandbox -a dorf -o json | node -pe 'JSON.parse(require("fs").readFileSync(0)).containers[0].image'; } 2>/dev/null || true)
-if [ -z "$current" ]; then
+# Templates are immutable and a Sandbox cannot resume once its template is gone, so each build
+# gets its own template; the agent creates Sandboxes from the newest, and unused ones go.
+json() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(eval(process.argv[1])(JSON.parse(s))))' "$1"; }
+if ! ate get actor-template "$TEMPLATE" -a dorf >/dev/null 2>&1; then
 	docker build -q -t "$REPO" --build-context pienv="$PIENV" images/sandbox >/dev/null
 	docker push -q "$REPO" >/dev/null
-	current=$REPO@$(docker inspect --format '{{index .RepoDigests 0}}' "$REPO" | cut -d@ -f2)
-	IMAGE=$current envsubst <deploy/template.yaml | ate create actor-template -f - >/dev/null
-elif [[ "$current" != "$REPO@"* ]]; then
-	echo "template sandbox uses $current, not $REPO; replacing a template is not supported yet" >&2
-	exit 1
+	IMAGE=$REPO@$(docker inspect --format '{{index .RepoDigests 0}}' "$REPO" | cut -d@ -f2) TEMPLATE=$TEMPLATE \
+		envsubst <deploy/template.yaml | ate create actor-template -f - >/dev/null
 fi
-echo "sandbox template ready: $current"
+for i in $(seq 300); do
+	[ -n "$(ate get actor-template "$TEMPLATE" -a dorf -o json | json 't=>t.status?.goldenSnapshotStatus?.goldenTag?.name??""')" ] && break
+	[ "$i" = 300 ] && { echo "template $TEMPLATE has no golden snapshot after 10 minutes" >&2; exit 1; }
+	sleep 2
+done
+used=$(ate get actors -a dorf -o json | json 'a=>(a.actors??[]).map(x=>x.actorTemplate.name).join(" ")')
+for old in $(ate get actor-templates -a dorf -o json | json 'a=>(a.actorTemplates??[]).map(x=>x.metadata.name).join(" ")'); do
+	[ "$old" = "$TEMPLATE" ] || [[ " $used " == *" $old "* ]] || ate delete actor-template "$old" -a dorf >/dev/null
+done
+echo "sandbox template ready: $TEMPLATE"

@@ -1,8 +1,17 @@
-metadata: {atespace: dorf, name: sandbox}
+metadata: {atespace: dorf, name: "${TEMPLATE}"}
 workerSelector: {matchLabels: {workload: dorf-sandbox}}
 containers:
 - name: sandbox
   image: ${IMAGE}
   wakeupProbe: {httpGet: {path: /readyz, port: 80}}
+  volumeMounts:
+  - {name: system-info, mountPath: /run/ate/egress-trust-bundle}
+volumes:
+- name: system-info
+  systemInfo:
+    dataSources:
+    - trustBundle:
+        names: [egress-mitm.ate.dev, system-roots.ate.dev]
+        path: trust-bundle.pem
 resources: {limits: {cpuMillicores: 1000, memoryBytes: 1073741824}}
 snapshotConfig: {preferredFidelity: SNAPSHOT_FIDELITY_MEMORY}

@@ -1,8 +1,7 @@
 // pi-env transport: `node pipe.ts <atespace> <sandbox> serve --token <hex>`. Opens a
-// `kubectl ate proxy` to the Sandbox, upgrades one request to its /pienv, and splices the
-// stream onto this process's stdio. The proxy lives exactly as long as this process.
+// `kubectl ate proxy` to the Sandbox, opens a WebSocket to its /pienv, and carries this
+// process's stdio as binary messages. The proxy lives exactly as long as this process.
 import { spawn } from "node:child_process";
-import net from "node:net";
 import { createInterface } from "node:readline";
 
 const [atespace, sandbox, ...args] = process.argv.slice(2);
@@ -23,29 +22,24 @@ const port = await new Promise<number>((resolve) => {
 	});
 });
 
-// Substrate's router passes only websocket upgrades.
-const socket = net.connect(port, "127.0.0.1", () =>
-	socket.write(
-		`GET /pienv HTTP/1.1\r\nHost: sandbox\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n` +
-			`X-Pienv-Args: ${JSON.stringify(args)}\r\n\r\n`,
-	),
-);
-
-let head = Buffer.alloc(0);
-function onHead(chunk: Buffer): void {
-	head = Buffer.concat([head, chunk]);
-	const end = head.indexOf("\r\n\r\n");
-	if (end < 0) return;
-	socket.off("data", onHead);
-	const status = head.subarray(0, head.indexOf("\r\n")).toString();
-	if (!status.startsWith("HTTP/1.1 101")) exit(1, status);
-	const rest = head.subarray(end + 4);
-	if (rest.length) process.stdout.write(rest);
-	socket.pipe(process.stdout);
-	process.stdin.pipe(socket);
-}
-
-socket.on("data", onHead);
-socket.on("error", (e) => exit(1, e.message));
-socket.on("close", () => exit(0));
-process.stdin.on("end", () => socket.end());
+const BUFFERED = 1 << 20;
+const ws = new WebSocket(`ws://127.0.0.1:${port}/pienv`, { headers: { "X-Pienv-Args": JSON.stringify(args) } });
+ws.binaryType = "arraybuffer";
+let opened = false;
+ws.onopen = () => {
+	opened = true;
+	process.stdin.on("data", (chunk: Buffer) => {
+		ws.send(chunk);
+		if (ws.bufferedAmount < BUFFERED) return;
+		process.stdin.pause();
+		const wait = setInterval(() => {
+			if (ws.bufferedAmount >= BUFFERED / 2) return;
+			clearInterval(wait);
+			process.stdin.resume();
+		}, 10);
+	});
+	process.stdin.on("end", () => ws.close());
+};
+ws.onmessage = (event) => process.stdout.write(new Uint8Array(event.data as ArrayBuffer));
+ws.onclose = (event) => exit(opened ? 0 : 1, opened ? undefined : `websocket closed before open (${event.code} ${event.reason})`);
+ws.onerror = () => exit(1, opened ? "websocket error" : "websocket failed to open");
