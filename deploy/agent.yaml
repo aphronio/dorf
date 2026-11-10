@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: dorf-agent, namespace: dorf-gate}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 10Gi}}
+---
+# No Service: the API listens on the pod's loopback, reached only through a port-forward.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: dorf-agent, namespace: dorf-gate}
+spec:
+  selector: {matchLabels: {app: dorf-agent}}
+  # One SQLite file, one writer.
+  strategy: {type: Recreate}
+  template:
+    metadata: {labels: {app: dorf-agent}}
+    spec:
+      serviceAccountName: dorf-agent
+      automountServiceAccountToken: false
+      securityContext: {fsGroup: 1000}
+      containers:
+      - name: agent
+        image: ${AGENT_IMAGE}
+        env:
+        - {name: DORF_MODEL, value: "${DORF_MODEL}"}
+        - {name: DORF_GATE, value: http://dorf-gate}
+        - {name: DORF_TOKEN_FILE, value: /run/dorf/token/token}
+        - {name: DORF_DATA, value: /data}
+        - {name: HOME, value: /data}
+        volumeMounts:
+        - {name: data, mountPath: /data}
+        - {name: token, mountPath: /run/dorf/token, readOnly: true}
+      volumes:
+      - name: data
+        persistentVolumeClaim: {claimName: dorf-agent}
+      - name: token
+        projected:
+          sources:
+          - serviceAccountToken: {audience: api.ate-system.svc, expirationSeconds: 3600, path: token}

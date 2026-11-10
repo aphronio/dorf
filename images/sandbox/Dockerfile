@@ -6,7 +6,9 @@ RUN echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/90sandbox \
  && chown -R root:root /var/cache/apt /var/lib/apt
 # A placeholder the egress gateway swaps for the real token, so the Sandbox never holds it.
 RUN git config --system credential.https://github.com.helper \
-  '!f() { echo username=x-access-token; echo password=placeholder; }; f'
+  '!f() { echo username=x-access-token; echo password=placeholder; }; f' \
+ && git config --system user.name Dorf \
+ && git config --system user.email dorf@users.noreply.github.com
 COPY --from=pienv pi-env /usr/local/bin/pi-env
 COPY package.json package-lock.json /init/
 RUN cd /init && npm ci --ignore-scripts --omit=dev --no-audit --no-fund

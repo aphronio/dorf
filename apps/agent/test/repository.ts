@@ -11,7 +11,7 @@ await startAgent();
 const work = [
 	`$ git clone -q ${repo} repo && git -C repo log --oneline -1`,
 	`$ cd repo && printf 'export const product = (a, b) => a * b;\\n' >> sum.mjs && printf '%s\\n' 'import { product } from "./sum.mjs";' 'test("multiplies two numbers", () => assert.equal(product(2, 3), 6));' >> sum.test.mjs && node --test 2>&1 | grep -E ' (pass|fail) [0-9]+$'`,
-	`$ cd repo && git -c user.name=Dorf -c user.email=dorf@users.noreply.github.com commit -qam "feat: add product" && git push -q origin HEAD:refs/heads/${branch} && git rev-parse HEAD`,
+	`$ cd repo && git commit -qam "feat: add product" && git push -q origin HEAD:refs/heads/${branch} && git rev-parse HEAD`,
 	`$ cd repo && git ls-remote origin refs/heads/${branch} | cut -f1`,
 	`$ cd repo && git push -q origin --delete ${branch} && echo deleted`,
 ].join("\n");
