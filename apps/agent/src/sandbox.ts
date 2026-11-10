@@ -1,4 +1,3 @@
-// A request that reaches a paused Sandbox resumes it, so there is no resume call.
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { Connection, RemoteExecutionEnv } from "@earendil-works/pi-env";
@@ -6,6 +5,8 @@ import { Connection, RemoteExecutionEnv } from "@earendil-works/pi-env";
 // Longer than the gate's own deadline, so the gate's error arrives first.
 const GATE_TIMEOUT_MS = 6 * 60_000;
 const PIPE = new URL("./pipe.ts", import.meta.url).pathname;
+const WAIT_FOR_ROOM_MS = 10 * 60_000;
+const RETRY_ROOM_MS = 5_000;
 
 export class SandboxNotFound extends Error {
 	constructor(name: string) {
@@ -13,9 +14,13 @@ export class SandboxNotFound extends Error {
 	}
 }
 
+class NoRoom extends Error {}
+
 export class Sandboxes {
 	#gate: string;
 	#tokenFile: string;
+	// Pauses another Sandbox to free its worker memory; false when none can go.
+	makeRoom: () => Promise<boolean> = async () => false;
 	#connections = new Map<string, Connection>();
 	#pausing = new Map<string, Promise<void>>();
 
@@ -28,6 +33,7 @@ export class Sandboxes {
 		const token = readFileSync(this.#tokenFile, "utf8").trim();
 		const res = await fetch(this.#gate + path, { method, headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(GATE_TIMEOUT_MS) });
 		if (res.status === 404 && name) throw new SandboxNotFound(name);
+		if (res.status === 503) throw new NoRoom(await res.text());
 		if (!res.ok) throw new Error(`gate ${method} ${path}: ${res.status} ${await res.text()}`);
 		return res.status === 204 ? undefined : res.json();
 	}
@@ -38,6 +44,18 @@ export class Sandboxes {
 
 	async create(name: string): Promise<void> {
 		await this.#call("", "POST", `/sandboxes/${name}`);
+	}
+
+	async #resume(name: string): Promise<void> {
+		const deadline = Date.now() + WAIT_FOR_ROOM_MS;
+		for (;;) {
+			try {
+				return await this.#call(name, "POST", `/sandboxes/${name}/resume`);
+			} catch (e) {
+				if (!(e instanceof NoRoom) || Date.now() > deadline) throw e;
+			}
+			if (!(await this.makeRoom())) await new Promise((r) => setTimeout(r, RETRY_ROOM_MS));
+		}
 	}
 
 	async state(name: string): Promise<string> {
@@ -75,7 +93,7 @@ export class Sandboxes {
 			connection = new Connection({
 				command: async () => {
 					await this.#pausing.get(name)?.catch(() => {});
-					await this.state(name);
+					await this.#resume(name);
 					return ["node", PIPE, `${this.#gate.replace(/^http/, "ws")}/sandboxes/${name}/pienv`, this.#tokenFile];
 				},
 				onLog: (text) => process.stderr.write(`[pi-env ${name}] ${text}`),

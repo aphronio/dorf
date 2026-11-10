@@ -134,6 +134,10 @@ async function route(req: http.IncomingMessage): Promise<[number, unknown]> {
 		}
 		case "GET ":
 			return [200, { state: sandboxState((await call("GetActor", { actor: ref(name) }, token)).status.state) }];
+		// 503: no worker has room until a Sandbox pauses.
+		case "POST resume":
+			await call("ResumeActor", { actor: ref(name) }, token);
+			return [204, null];
 		case "POST suspend": {
 			const mode = new URL(req.url ?? "/", "http://x").searchParams.get("mode") === "sync" ? "DURABILITY_MODE_SYNCHRONOUS" : "DURABILITY_MODE_ASYNCHRONOUS";
 			await call("SuspendActor", { actor: ref(name), options: { mode } }, token);

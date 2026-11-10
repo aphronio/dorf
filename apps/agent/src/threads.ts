@@ -39,6 +39,7 @@ export class Threads {
 	readonly #agent: AgentChange;
 	readonly #idleMs: number;
 	readonly #providerSessions: ProviderSessions;
+	readonly #idleSince = new Map<ConversationId, number>();
 
 	constructor(harness: Harness, sandboxes: Sandboxes, agent: AgentChange, idleMs: number, providerSessions: ProviderSessions) {
 		this.#harness = harness;
@@ -46,6 +47,7 @@ export class Threads {
 		this.#agent = agent;
 		this.#idleMs = idleMs;
 		this.#providerSessions = providerSessions;
+		sandboxes.makeRoom = () => this.#makeRoom();
 	}
 
 	async open(): Promise<void> {
@@ -118,6 +120,7 @@ export class Threads {
 		if (session) await this.#providerSessions.forget(session);
 		const sandbox = await this.sandbox(id);
 		if (sandbox) await this.#sandboxes.delete(sandbox);
+		this.#idleSince.delete(id);
 		await this.#harness.commit(async (tx) => {
 			const list = await tx.doc(ThreadList);
 			list.items = list.items.filter((t) => t.id !== id);
@@ -127,13 +130,39 @@ export class Threads {
 	}
 
 	#watchIdle(id: ConversationId): Promise<void> {
-		return pauseWhenIdle(this.#harness, id, this.#idleMs, async (stillIdle) => {
-			const session = await this.#providerSession(id);
-			if (session && stillIdle()) await this.#providerSessions.release(session);
-			const name = await this.sandbox(id);
-			if (!name || (await this.#sandboxes.state(name)) !== "running" || !stillIdle()) return;
-			await this.#sandboxes.pause(name, "idle");
-		});
+		return pauseWhenIdle(
+			this.#harness,
+			id,
+			this.#idleMs,
+			(stillIdle) => this.#sleep(id, stillIdle),
+			(running) => (running ? this.#idleSince.delete(id) : this.#idleSince.set(id, Date.now())),
+		);
+	}
+
+	// Returns whether the Sandbox was running and is now paused.
+	async #sleep(id: ConversationId, stillIdle: () => boolean): Promise<boolean> {
+		const session = await this.#providerSession(id);
+		if (session && stillIdle()) await this.#providerSessions.release(session);
+		const name = await this.sandbox(id);
+		if (!name || (await this.#sandboxes.state(name)) !== "running" || !stillIdle()) return false;
+		await this.#sandboxes.pause(name, "idle");
+		return true;
+	}
+
+	// The worker is full: the Thread idle the longest gives up its Sandbox before its idle pause.
+	async #makeRoom(): Promise<boolean> {
+		for (const [id] of [...this.#idleSince].sort((a, b) => a[1] - b[1])) {
+			const paused = await this.#sleep(id, () => this.#idleSince.has(id)).catch((e) => {
+				console.error(`make room: Thread ${id}: ${e.message}`);
+				return false;
+			});
+			this.#idleSince.delete(id);
+			if (paused) {
+				console.log(`make room: paused the Sandbox of Thread ${id}`);
+				return true;
+			}
+		}
+		return false;
 	}
 
 	async #providerSession(id: ConversationId): Promise<string | undefined> {

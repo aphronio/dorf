@@ -43,7 +43,8 @@ harnesses. That code is frozen at the `v0.31.3` tag and is not maintained.
   stream, a pause or an agent restart reattaches instead of failing the call.
 - [Agent Substrate](https://github.com/agent-substrate/substrate) owns isolation, memory
   snapshots, routing and automatic resume. Dorf adds only what Substrate leaves to its user: when
-  to pause, and pausing Sandboxes before their worker goes away.
+  to pause, which Sandbox pauses when a worker is full, and pausing Sandboxes before their worker
+  goes away.
 - Model credentials stay in the agent process. Sandboxes hold no credentials.
 
 ## Vocabulary
@@ -52,7 +53,8 @@ harnesses. That code is frozen at the `v0.31.3` tag and is not maintained.
 | --- | --- |
 | **Thread** | One line of work: a transcript and at most one Sandbox. In Pi-facing code it is a root `Conversation`. |
 | **Sandbox** | The isolated machine where a Thread's tools run. Keeps disk, memory and processes while paused. |
-| **create, pause, delete** | The three Sandbox operations Dorf performs. A paused Sandbox resumes when a request reaches it. |
+| **create, resume, pause, delete** | The Sandbox operations Dorf performs. The agent resumes a Sandbox before it connects. |
+| **make room** | When no worker has room for a Sandbox to resume, pausing the Sandbox whose Thread has been idle the longest. With every Sandbox busy, the resume waits for a run to end. |
 | **drain** | Pausing every running Sandbox on a worker that is going away, even mid-call, so an upgrade loses no work. Substrate leaves it to the Sandbox's driver, the agent. |
 
 Substrate's own terms (Actor, Worker, Atespace, ActorTemplate) appear only in the gate and in
@@ -75,7 +77,6 @@ deployment files.
 | --- | --- |
 | A separate Sandbox service | A second app owns Sandboxes |
 | Per-call leases | Never. The agent pauses a Sandbox a few minutes after its run ends |
-| Pausing the least recently used Sandbox to make room | A Thread actually fails for lack of a free worker |
 | Draining from outside the agent | Sandboxes can be awake while no agent runs: the agent is down during an upgrade, its host can stop it between requests, or it has more than one replica |
 | Our own Postgres and migrations | The agent needs more than one replica |
 | App authentication, tunnels, enrolled CLIs | Access from outside the cluster; then put an existing access proxy in front |
