@@ -55,8 +55,9 @@ Facts learned in one slice that a later slice must respect.
   what a repository needs.
 - Substrate's egress gateway injects the GitHub token from Secret `dorf-secrets/github`, so a
   Sandbox pushes without holding it. The gateway only replaces an Authorization header the request
-  already carries, so git's credential helper sends a placeholder. Without the Secret every
-  github.com request is denied, so `deploy/up.sh` requires it.
+  already carries, so git's credential helper sends a placeholder. Without the Secret, public
+  repositories still work and only authenticated requests get 403. The Secret's key `basic` holds
+  base64 of `x-access-token:<token>`.
 - Egress rules are allow-only host names, and the gateway resolves cluster names too, so an open
   policy reached the Kubernetes API by its cluster name. `deploy/egress-fence.yaml` limits the
   gateway to public addresses, DNS and the two Substrate services it calls; it needs a CNI that

@@ -18,10 +18,6 @@ ate get atespace dorf >/dev/null 2>&1 || ate create atespace dorf >/dev/null
 kubectl apply -f deploy/egress-fence.yaml >/dev/null
 # Sandboxes may resolve Secrets only from namespaces granted to atespace dorf (see sandbox.ts).
 kubectl create namespace dorf-secrets --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-kubectl -n dorf-secrets get secret github >/dev/null 2>&1 || {
-	echo "Sandboxes reach github.com only with Secret dorf-secrets/github, key basic: base64 of x-access-token:<token>" >&2
-	exit 1
-}
 policy=$(kubectl -n ate-system get configmap k8s-credential-provider-namespace-policy -o jsonpath='{.data.namespace-policy\.yaml}')
 if ! grep -q '^- atespace: dorf$' <<<"$policy"; then
 	grep -q '^policies: \[\]$' <<<"$policy" || { echo "grant atespace dorf the namespace dorf-secrets in configmap ate-system/k8s-credential-provider-namespace-policy" >&2; exit 1; }
