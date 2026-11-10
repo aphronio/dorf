@@ -83,6 +83,11 @@ Facts learned in one slice that a later slice must respect.
   cluster's machine, in front of a systemd unit running `kubectl -n dorf-gate port-forward
   deploy/dorf-agent 8091:8091` with `Restart=always`: the forward exits whenever `up.sh` replaces the
   pod. `up.sh` needs `DORF_OWNER`, the one Tailscale login the agent serves.
+- GitHub is on when the Secret `dorf-secrets/github` exists: `up.sh` then gives the gate the egress
+  rule for github.com, api.github.com and uploads.github.com, and the agent its own copy to list
+  repositories. The gateway swaps the whole Authorization value, so `gh` works with
+  `GH_TOKEN=placeholder` on REST and GraphQL. A fine-grained token lists every public repository of
+  its owner too, not only the granted ones.
 - `deploy/up.sh` gives the pool the worker image of the installed Substrate release, so only
   `deploy/substrate.sh` moves workers between releases.
 - Substrate's API speaks only gRPC: plain HTTP/1.1 does not connect and JSON gets 415, so a Worker

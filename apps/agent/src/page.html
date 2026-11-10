@@ -25,6 +25,7 @@ h1{font-size:18px;margin:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-s
 details{color:var(--soft);font-size:13px}summary{cursor:pointer}
 .note{color:var(--soft);font-size:13px;text-align:center}
 form{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line)}
+select{font:inherit;padding:8px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);max-width:40%}
 textarea,input{flex:1;font:inherit;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);resize:none}
 button,a.btn{font:inherit;font-weight:600;border:0;border-radius:10px;padding:9px 14px;background:var(--moss);color:var(--card);cursor:pointer;text-decoration:none;display:inline-block}
 button.quiet{background:transparent;color:var(--soft);border:1px solid var(--line)}
@@ -42,7 +43,7 @@ button.quiet{background:transparent;color:var(--soft);border:1px solid var(--lin
 <main>
 	<header><h1 id="title">New Thread</h1><span id="state" class="pill" hidden></span><button id="stop" class="quiet" hidden>Stop</button><button id="delete" class="quiet" hidden>Delete</button></header>
 	<div id="log"><p class="note">Describe a coding task. It runs in a Linux machine of its own.</p></div>
-	<form id="compose"><textarea id="text" rows="2" placeholder="What should Dorf do?"></textarea><button>Send</button></form>
+	<form id="compose"><select id="repo" hidden><option value="">No repository</option></select><textarea id="text" rows="2" placeholder="What should Dorf do?"></textarea><button>Send</button></form>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -57,7 +58,7 @@ let current, stream, entries = [], live = {};
 
 async function listThreads() {
 	const items = await api("GET", "/threads");
-	$("threads").replaceChildren(...items.slice().reverse().map((t) => h("a", { href: `#${t.id}`, textContent: t.title, className: t.id === current ? "on" : "" })));
+	$("threads").replaceChildren(...items.slice().reverse().map((t) => h("a", { href: `#${t.id}`, textContent: t.repo ? `${t.repo.split("/")[1]}: ${t.title}` : t.title, className: t.id === current ? "on" : "" })));
 	return items;
 }
 
@@ -103,7 +104,8 @@ async function open() {
 	entries = []; live = {};
 	const items = await listThreads();
 	const thread = items.find((t) => t.id === current);
-	$("title").textContent = thread?.title ?? "New Thread";
+	$("title").textContent = thread ? (thread.repo ? `${thread.repo} · ${thread.title}` : thread.title) : "New Thread";
+	$("repo").hidden = Boolean(thread) || $("repo").options.length < 2;
 	$("delete").hidden = !thread;
 	$("stop").hidden = true; $("state").hidden = true;
 	$("text").placeholder = thread ? "Reply…" : "What should Dorf do?";
@@ -125,7 +127,11 @@ $("compose").onsubmit = async (ev) => {
 	$("text").value = "";
 	try {
 		if (current) await api("POST", `/threads/${current}/messages`, { text: value });
-		else location.hash = (await api("POST", "/threads", { prompt: value })).id;
+		else {
+			const repo = $("repo").value;
+			try { localStorage.setItem("dorf.repo", repo); } catch {}
+			location.hash = (await api("POST", "/threads", { prompt: value, ...(repo ? { repo } : {}) })).id;
+		}
 	} catch (e) { $("text").value = value; alert(e.message); }
 };
 $("text").onkeydown = (ev) => { if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); $("compose").requestSubmit(); } };
@@ -158,8 +164,16 @@ async function claude() {
 	};
 }
 
+async function repos() {
+	const list = await api("GET", "/repos").catch(() => []);
+	$("repo").append(...list.map((r) => h("option", { value: r.name, textContent: r.name })));
+	try { const last = localStorage.getItem("dorf.repo"); if (last && list.some((r) => r.name === last)) $("repo").value = last; } catch {}
+	$("repo").hidden = Boolean(current) || !list.length;
+}
+
 open();
 claude();
+repos();
 </script>
 </body>
 </html>

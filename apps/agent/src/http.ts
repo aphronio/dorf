@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import http from "node:http";
 import type { ConversationId } from "@earendil-works/pi-durable";
 import { type ClaudeLogin, LoginError } from "./claude-login.ts";
+import type { GitHub } from "./github.ts";
 import type { Threads } from "./threads.ts";
 
 type Reply = [status: number, body: unknown];
@@ -36,8 +37,9 @@ function refused(req: http.IncomingMessage, owner: string): Reply | undefined {
 	if (site && site !== "same-origin" && site !== "none") return [403, { error: "cross-site request" }];
 }
 
-async function route(threads: Threads, claude: ClaudeLogin, req: http.IncomingMessage): Promise<Reply> {
+async function route(threads: Threads, claude: ClaudeLogin, github: GitHub | undefined, req: http.IncomingMessage): Promise<Reply> {
 	const [, root, rawId, sub] = new URL(req.url ?? "/", "http://x").pathname.split("/");
+	if (root === "repos" && req.method === "GET" && !rawId) return [200, github ? await github.repos() : []];
 	if (root === "claude") {
 		switch (`${req.method} ${rawId ?? ""}`) {
 			case "GET ":
@@ -56,9 +58,10 @@ async function route(threads: Threads, claude: ClaudeLogin, req: http.IncomingMe
 		case "GET ":
 			return [200, await threads.list()];
 		case "POST ": {
-			const { prompt } = await json(req);
+			const { prompt, repo } = await json(req);
 			if (typeof prompt !== "string" || !prompt) return [400, { error: "prompt required" }];
-			return [201, await threads.create(prompt)];
+			if (repo !== undefined && typeof repo !== "string") return [400, { error: "repo must be owner/name" }];
+			return [201, await threads.create(prompt, repo || undefined)];
 		}
 		case "GET :id": {
 			const view = await threads.read(id);
@@ -89,7 +92,7 @@ async function follow(threads: Threads, id: ConversationId, req: http.IncomingMe
 	return true;
 }
 
-export function serve(threads: Threads, claude: ClaudeLogin, owner: string, port: number): http.Server {
+export function serve(threads: Threads, claude: ClaudeLogin, github: GitHub | undefined, owner: string, port: number): http.Server {
 	return http
 		.createServer(async (req, res) => {
 			const send = ([status, body]: Reply) =>
@@ -101,9 +104,9 @@ export function serve(threads: Threads, claude: ClaudeLogin, owner: string, port
 				if (req.method === "GET" && path === "/") return res.writeHead(200, { ...HEADERS, "content-type": "text/html; charset=utf-8" }).end(PAGE);
 				const events = req.method === "GET" && path.match(/^\/threads\/(\d+)\/events$/);
 				if (events) return (await follow(threads, Number(events[1]) as ConversationId, req, res)) || send([404, { error: "no such thread" }]);
-				send(await route(threads, claude, req));
+				send(await route(threads, claude, github, req));
 			} catch (e) {
-				send([e instanceof BadRequest || e instanceof LoginError ? 400 : 500, { error: (e as Error).message }]);
+				send([e instanceof BadRequest || e instanceof LoginError || e instanceof RangeError ? 400 : 500, { error: (e as Error).message }]);
 			}
 		})
 		.listen(port, "127.0.0.1");

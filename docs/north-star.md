@@ -45,7 +45,8 @@ harnesses. That code is frozen at the `v0.31.3` tag and is not maintained.
   snapshots, routing and automatic resume. Dorf adds only what Substrate leaves to its user: when
   to pause, which Sandbox pauses when a worker is full, and pausing Sandboxes before their worker
   goes away.
-- Model credentials stay in the agent process. Sandboxes hold no credentials.
+- Model credentials and the GitHub token stay in the agent process. Sandboxes hold no credentials:
+  the egress gateway puts the GitHub token into their requests to GitHub.
 
 ## Vocabulary
 

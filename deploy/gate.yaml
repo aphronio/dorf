@@ -39,7 +39,9 @@ spec:
       - name: gate
         image: ${GATE_IMAGE}
         ports: [{containerPort: 8080}]
-        env: [{name: NODE_EXTRA_CA_CERTS, value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt}]
+        env:
+        - {name: NODE_EXTRA_CA_CERTS, value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt}
+        - {name: DORF_GITHUB, value: "${DORF_GITHUB}"}
         readinessProbe: {tcpSocket: {port: 8080}}
         volumeMounts:
         - {name: servicedns, mountPath: /run/ate/servicedns}

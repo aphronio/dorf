@@ -66,7 +66,16 @@ fi
 GATE=$REGISTRY/dorf-gate:$( (echo "$SUBSTRATE_VERSION"; cat apps/gate/{Dockerfile,package.json,package-lock.json,ateapi.ts,gate.ts}) | sha256sum | cut -c1-12)
 docker build -q --build-arg SUBSTRATE_VERSION="$SUBSTRATE_VERSION" -t "$GATE" apps/gate >/dev/null
 docker push -q "$GATE" >/dev/null
-GATE_IMAGE=$GATE envsubst <deploy/gate.yaml | kubectl apply -f - >/dev/null
+# GitHub is on when dorf-secrets/github exists; the agent gets its own copy to list repositories.
+DORF_GITHUB=$(kubectl -n dorf-secrets get secret github >/dev/null 2>&1 && echo 1 || true)
+GATE_IMAGE=$GATE DORF_GITHUB=$DORF_GITHUB envsubst '$GATE_IMAGE $DORF_GITHUB' <deploy/gate.yaml | kubectl apply -f - >/dev/null
+if [ -n "$DORF_GITHUB" ]; then
+	kubectl -n dorf-secrets get secret github -o json |
+		json 's=>JSON.stringify({apiVersion:"v1",kind:"Secret",metadata:{name:"github",namespace:"dorf-gate"},data:{basic:s.data.basic}})' |
+		kubectl apply -f - >/dev/null
+else
+	kubectl -n dorf-gate delete secret github --ignore-not-found >/dev/null
+fi
 kubectl -n dorf-gate rollout status deploy/dorf-gate --timeout=5m >/dev/null
 echo "gate ready: service dorf-gate/dorf-gate"
 

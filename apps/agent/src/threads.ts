@@ -1,5 +1,6 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { type AgentChange, type ConversationId, defineDoc, type Harness, type HarnessOptions, ProviderDoc } from "@earendil-works/pi-durable";
+import { REPO } from "./github.ts";
 import { pauseWhenIdle } from "./idle.ts";
 import type { Sandboxes } from "./sandbox.ts";
 
@@ -13,7 +14,7 @@ const ThreadSandbox = defineDoc<{ name?: string }>({
 	checkpointWhen: () => false,
 });
 
-export type ThreadSummary = { id: ConversationId; title: string; createdAt: string };
+export type ThreadSummary = { id: ConversationId; title: string; createdAt: string; repo?: string };
 
 const ThreadList = defineDoc<{ items: ThreadSummary[] }>({
 	kind: "dorf.threads",
@@ -63,21 +64,26 @@ export class Threads {
 	}
 
 	// The Thread commits before its Sandbox exists, so no Sandbox is ever left without a Thread.
-	async create(prompt: string): Promise<{ id: ConversationId; sandbox: string }> {
+	async create(prompt: string, repo?: string): Promise<{ id: ConversationId; sandbox: string }> {
+		if (repo !== undefined && !REPO.test(repo)) throw new RangeError(`not a GitHub repository: ${repo}`);
 		const sandbox = this.#sandboxes.newName();
+		const workspace = this.#agent.cwd ?? "/";
+		const cwd = repo ? `${workspace}/${repo.split("/")[1]}` : workspace;
+		const agent = repo ? { ...this.#agent, cwd, instructions: `${this.#agent.instructions}\n\nThe repository ${repo} is cloned in ${cwd}.` } : this.#agent;
 		const conversation = await this.#harness.createConversation(
 			{
 				ownership: { kind: "ownerless" },
-				agent: this.#agent,
+				agent,
 				init: async (tx, id) => {
 					(await tx.doc(ThreadSandbox, id)).name = sandbox;
-					(await tx.doc(ThreadList)).items.push({ id, title: prompt.slice(0, 80), createdAt: new Date().toISOString() });
+					(await tx.doc(ThreadList)).items.push({ id, title: prompt.slice(0, 80), createdAt: new Date().toISOString(), ...(repo ? { repo } : {}) });
 				},
 			},
 			context,
 		);
 		try {
 			await this.#sandboxes.create(sandbox);
+			if (repo) await this.#clone(sandbox, repo, workspace, cwd);
 		} catch (e) {
 			await this.delete(conversation.id);
 			throw e;
@@ -85,6 +91,15 @@ export class Threads {
 		await this.#watchIdle(conversation.id);
 		await conversation.submit({ type: "input", content: prompt }, context);
 		return { id: conversation.id, sandbox };
+	}
+
+	async #clone(sandbox: string, repo: string, workspace: string, into: string): Promise<void> {
+		let output = "";
+		const cloned = await this.#sandboxes
+			.env(sandbox, workspace)
+			.exec(["git", "clone", "--quiet", `https://github.com/${repo}.git`, into], { onOutput: (text) => void (output += text) }, context);
+		if (!cloned.ok) throw cloned.error;
+		if (cloned.value.exitCode !== 0) throw new Error(`git clone ${repo}: ${output.trim().slice(-500)}`);
 	}
 
 	async send(id: ConversationId, text: string): Promise<boolean> {

@@ -13,16 +13,18 @@ const SERVICEDNS = "/run/ate/servicedns/trust-bundle.pem";
 const PODIDENTITY = "/run/ate/podidentity/credential-bundle.pem";
 const ROUTER = "atenet-router.ate-system.svc";
 const KUBE = "/var/run/secrets/kubernetes.io/serviceaccount";
-// GitHub is intercepted so the egress gateway can put the token from dorf-secrets/github into git's auth.
+// With GitHub on, the egress gateway swaps the token from dorf-secrets/github into git's and gh's
+// Authorization header, whatever placeholder they send.
+const GITHUB = {
+	https: {
+		hostnames: ["github.com", "api.github.com", "uploads.github.com"],
+		effects: { replaceHeaders: [{ header: "Authorization", prefix: "Basic ", credentialUri: "ate-secret://k8s.io/default/dorf-secrets/github/basic" }] },
+	},
+};
 const EGRESS = [
 	{ tlsPassthrough: { hostnames: ["*"], ports: { all: {} } } },
 	{ http: { hostnames: ["*"] } },
-	{
-		https: {
-			hostnames: ["github.com"],
-			effects: { replaceHeaders: [{ header: "Authorization", prefix: "Basic ", credentialUri: "ate-secret://k8s.io/default/dorf-secrets/github/basic" }] },
-		},
-	},
+	...(process.env.DORF_GITHUB ? [GITHUB] : []),
 ];
 
 const api: Api = connect("api.ate-system.svc:443", readFileSync(SERVICEDNS), "api.ate-system.svc");

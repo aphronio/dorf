@@ -30,6 +30,8 @@ spec:
         - {name: DORF_TOKEN_FILE, value: /run/dorf/token/token}
         - {name: DORF_DATA, value: /data}
         - {name: HOME, value: /data}
+        - name: DORF_GITHUB_BASIC
+          valueFrom: {secretKeyRef: {name: github, key: basic, optional: true}}
         volumeMounts:
         - {name: data, mountPath: /data}
         - {name: token, mountPath: /run/dorf/token, readOnly: true}
