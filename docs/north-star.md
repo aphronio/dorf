@@ -54,6 +54,8 @@ Substrate module and in deployment files.
 ## Boundaries
 
 - Only the agent's Substrate module knows Substrate. Thread code knows a Sandbox ID and nothing else.
+- The agent sees a machine: tools reach a Sandbox only through pi-env. Where the agent runs is a
+  deployment choice; today it runs wherever `kubectl` can reach the cluster.
 - The Sandbox image holds no credentials and knows nothing about Dorf.
 - A later trigger app (GitHub, CI) knows only the agent's Thread API.
 - Code moves into a shared package only when a second app imports it.
@@ -65,7 +67,8 @@ Substrate module and in deployment files.
 | A separate Sandbox service | A second app owns Sandboxes |
 | Per-call leases | Never. The agent pauses a Sandbox a few minutes after its run ends |
 | Pausing the least recently used Sandbox to make room | A Thread actually fails for lack of a free worker |
-| Draining from outside the agent | Sandboxes can be awake while no agent runs: the agent is down during an upgrade, or it has more than one replica |
+| Draining from outside the agent | Sandboxes can be awake while no agent runs: the agent is down during an upgrade, its host can stop it between requests, or it has more than one replica |
+| Reaching Sandboxes without `kubectl` | The agent first runs where it cannot start a process. Then follow Substrate: an existing proxy in front of its router that authenticates the agent and names the Sandbox |
 | Our own Postgres and migrations | The agent needs more than one replica |
 | App authentication, tunnels, enrolled CLIs | Access from outside the cluster; then put an existing access proxy in front |
 | Code mode | A measured need |
