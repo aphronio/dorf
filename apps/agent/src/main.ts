@@ -56,7 +56,7 @@ const threads = new Threads(
 	{
 		model,
 		cwd: WORKSPACE,
-		instructions: `You work in a Linux machine of your own, with internet access. The workspace is ${WORKSPACE}. Keep answers short.`,
+		instructions: `You work in a Linux machine of your own, with internet access. The workspace is ${WORKSPACE}. Git over HTTPS to github.com is already authenticated: clone and push the owner's repositories without asking for a token. Keep answers short.`,
 	},
 	IDLE_MS,
 	claudePlan,
