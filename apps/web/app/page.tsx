@@ -184,7 +184,8 @@ export default function Page() {
         )}
         {id !== undefined && !starting && <SubagentList subagents={subagents} open={panel} onOpen={setPanel} />}
 
-        <div className="mx-auto w-full max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+        {/* A subagent's view is read-only: messages go to the Thread, so the composer waits there. */}
+        <div hidden={Boolean(openSubagent)} className="mx-auto w-full max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           {error && <p className="px-2 pb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
           <InputMessage
             value={draft}
