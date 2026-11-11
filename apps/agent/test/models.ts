@@ -39,14 +39,14 @@ const changed = (await call("GET", `/threads/${id}`)).json.agent.thinkingLevel;
 if (changed !== "medium") await fail(`thinking after change: ${changed}`);
 log("3. thinking changes mid-Thread; a level the model lacks is refused");
 
-const write = "$ printf 'Run the proofs before you push.\\n' > AGENTS.md && mkdir -p .agents/skills/browser && printf -- '---\\nname: browser\\ndescription: >-\\n  Drive a browser\\n  over CDP.\\n---\\n' > .agents/skills/browser/SKILL.md";
+const write = "$ printf 'Run the proofs before you push.\\n' > AGENTS.md && mkdir -p .agents/skills/browser && printf -- '---\\nname: browser\\ndescription: >-\\n  Drive a browser: <CDP>\\n  over WebSocket.\\n---\\n' > .agents/skills/browser/SKILL.md";
 await send(id, write);
 await runEnded(id, write);
 await send(id, "?");
 await until("the project's instructions and skills", async () =>
 	((await call("GET", `/threads/${id}`)).json.entries as Entry[]).some((e) => {
 		const told = e.kind === "pi.assistant" ? text(e) : "";
-		return told.includes("/AGENTS.md\">\nRun the proofs before you push.") && told.includes("<description>Drive a browser over CDP.</description>") && told.includes("/.agents/skills/browser/SKILL.md</location>");
+		return told.includes("/AGENTS.md\">\nRun the proofs before you push.") && told.includes("<description>Drive a browser: &lt;CDP&gt; over WebSocket.</description>") && told.includes("/.agents/skills/browser/SKILL.md</location>");
 	}),
 );
 log("4. AGENTS.md and the skills in the Thread's machine reach its next request");

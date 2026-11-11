@@ -2,7 +2,9 @@
   "name": "@dorf/agent",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=26" },
+  "engines": {
+    "node": ">=26"
+  },
   "scripts": {
     "start": "node src/main.ts",
     "check": "tsc",
@@ -25,6 +27,7 @@
     "@earendil-works/pi-env": "1.5.0",
     "@earendil-works/pi-schema": "1.5.0",
     "@modelcontextprotocol/sdk": "1.32.2",
+    "yaml": "2.9.0",
     "zod": "4.6.7"
   },
   "devDependencies": {

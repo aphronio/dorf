@@ -1,24 +1,26 @@
 import { posix } from "node:path";
 import { defineExtension, section } from "@earendil-works/pi-durable";
+import { parse } from "yaml";
 import { ancestors } from "./context-files.ts";
 
-// A skill's name and description from its SKILL.md front matter; a folded or block description joins its lines.
-export function frontMatter(text: string): Record<string, string> {
-	const block = text.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "";
-	const fields: Record<string, string> = {};
-	let key: string | undefined;
-	for (const line of block.split(/\r?\n/)) {
-		const field = line.match(/^([A-Za-z][\w-]*):\s*(.*)$/);
-		if (field) {
-			key = field[1]!;
-			fields[key] = /^[>|][-+]?$/.test(field[2]!) ? "" : field[2]!.replace(/^(["'])(.*)\1$/, "$2");
-		} else if (key && /^\s+\S/.test(line)) fields[key] = `${fields[key]} ${line.trim()}`.trim();
+type Skill = { name: string; description: string; location: string };
+
+// A SKILL.md's front matter, parsed as Pi's coding agent parses it; a file without one has none.
+function frontMatter(text: string): Record<string, unknown> {
+	const normalized = text.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+	const end = normalized.startsWith("---") ? normalized.indexOf("\n---", 3) : -1;
+	if (end === -1) return {};
+	try {
+		return parse(normalized.slice(4, end)) ?? {};
+	} catch {
+		return {};
 	}
-	return fields;
 }
 
-// Skills in the Thread's machine: each `.agents/skills/<name>/SKILL.md` from the root down to the working directory,
-// listed the way Pi's coding agent lists them, for the model to read when a task matches.
+const escapeXml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+
+// The Skills extension of Pi Durable's spec, with Pi's coding agent's text: each `.agents/skills/<dir>/SKILL.md` from the root down
+// to the working directory of the Thread's machine, listed for the model to read when a task matches.
 export const Skills = defineExtension({
 	name: "skills",
 	sections: [
@@ -30,23 +32,28 @@ export const Skills = defineExtension({
 					const root = posix.join(dir, ".agents/skills");
 					const listed = await env.listDir(root, context);
 					if (!listed.ok) return [];
-					const names = listed.value.filter((f) => f.kind !== "file").map((f) => f.name).sort();
+					const dirs = listed.value.filter((f) => f.kind !== "file").map((f) => f.name).sort();
 					return Promise.all(
-						names.map(async (name) => {
-							const path = posix.join(root, name, "SKILL.md");
-							const read = await env.readTextFile(path, context);
-							const { description } = read.ok ? frontMatter(read.value) : {};
-							return description ? { name, description, path } : undefined;
+						dirs.map(async (dirName): Promise<Skill | undefined> => {
+							const location = posix.join(root, dirName, "SKILL.md");
+							const read = await env.readTextFile(location, context);
+							const front = read.ok ? frontMatter(read.value) : {};
+							if (typeof front.description !== "string" || !front.description.trim() || front["disable-model-invocation"] === true) return undefined;
+							return { name: typeof front.name === "string" && front.name ? front.name : dirName, description: front.description, location };
 						}),
 					);
 				}),
 			);
 			const skills = found.flat().filter((s) => s !== undefined);
 			if (!skills.length) return undefined;
-			const listed = skills.map((s) => `  <skill>\n    <name>${s.name}</name>\n    <description>${s.description}</description>\n    <location>${s.path}</location>\n  </skill>`);
 			return [
-				"These skills give instructions for specific tasks. When a task matches a skill's description, read its SKILL.md first, and resolve its relative paths against the skill's directory.",
-				`<available_skills>\n${listed.join("\n")}\n</available_skills>`,
+				"The following skills provide specialized instructions for specific tasks.",
+				"Use the read tool to load a skill's file when the task matches its description.",
+				"Resolve relative paths against the skill's directory (parent of SKILL.md). Use absolute paths in tool calls.",
+				"",
+				"<available_skills>",
+				...skills.flatMap((s) => ["  <skill>", `    <name>${escapeXml(s.name)}</name>`, `    <description>${escapeXml(s.description)}</description>`, `    <location>${escapeXml(s.location)}</location>`, "  </skill>"]),
+				"</available_skills>",
 			].join("\n");
 		}),
 	],

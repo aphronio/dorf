@@ -10,11 +10,11 @@ export function ancestors(cwd: string): string[] {
 	return dirs;
 }
 
-// The project's AGENTS.md files in the Thread's machine: one per directory from the root down to the working directory.
+// The ContextFiles extension of Pi Durable's spec, with Pi's coding agent's discovery and text, read from the Thread's machine.
 export const ContextFiles = defineExtension({
 	name: "context-files",
 	sections: [
-		section("project_instructions", async (input, context) => {
+		section("project_context", async (input, context) => {
 			const env = input.env;
 			if (!env) return undefined;
 			const files = await Promise.all(
@@ -25,11 +25,11 @@ export const ContextFiles = defineExtension({
 					if (!name) return undefined;
 					const path = posix.join(dir, name);
 					const read = await env.readTextFile(path, context);
-					return read.ok ? `<file path="${path}">\n${read.value.trim()}\n</file>` : undefined;
+					return read.ok ? `<project_instructions path="${path}">\n${read.value}\n</project_instructions>` : undefined;
 				}),
 			);
 			const found = files.filter((f) => f !== undefined);
-			return found.length ? `Project instructions, followed by the agent working here:\n\n${found.join("\n\n")}` : undefined;
+			return found.length ? ["Project-specific instructions and guidelines:", ...found].join("\n\n") : undefined;
 		}),
 	],
 });
