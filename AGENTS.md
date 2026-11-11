@@ -51,8 +51,9 @@ the cluster. Run `.agents/setup` first, then `bun run check` and `bun run proof`
   image, `deploy/`, CI and this file wait for the owner until staging exists.
 - End with proof anyone can check at a glance (the `show-me` skill). For a change to the page, take
   screenshots of the same view before and after with `browser-harness`, save them as `before.png`
-  and `after.png`, and read both so they show in the Thread. For other changes, show what changed
-  as a diff of the call tree, the file tree or the proof output.
+  and `after.png`, read both, and place them in your reply as `![before](before.png)` and
+  `![after](after.png)`. For other changes, show what changed as a diff of the call tree, the file
+  tree or the proof output.
 - Write the reply and commit messages with the `prose` skill.
 - When something about Dorf got in your way, or you found a problem you did not fix, file it with
   `gh issue create --label friction`, describing the behavior in generic terms.
