@@ -24,8 +24,9 @@ const TYPES: Record<string, string> = {
 	".png": "image/png",
 };
 const MAX_BODY = 1 << 20;
-// Identity comes from the network, not a cookie, so a framing site would act as the owner.
-const HEADERS = { "cache-control": "no-store", "x-frame-options": "DENY", "content-security-policy": "frame-ancestors 'none'", "x-content-type-options": "nosniff" };
+// Identity comes from the network, not a cookie, so a framing site would act as the owner. A reply is text from a
+// model that reads the internet, so the page loads no image from another origin: an image URL would carry data out.
+const HEADERS = { "cache-control": "no-store", "x-frame-options": "DENY", "content-security-policy": "frame-ancestors 'none'; img-src 'self' data:", "x-content-type-options": "nosniff" };
 
 class BadRequest extends Error {}
 
