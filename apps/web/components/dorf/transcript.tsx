@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { ChatMessage } from "@/components/ui/chat-message"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
@@ -49,6 +49,28 @@ export function Transcript({ entries, live, queued = [], onSubagent, loadEarlier
   // Set while earlier entries load: the distance from the bottom to keep once they land above.
   const fromBottom = useRef<number>(undefined)
   const oldest = useRef<number>(undefined)
+  const top = useRef<HTMLDivElement>(null)
+
+  const earlier = useCallback(async () => {
+    const el = scroller.current
+    if (!el || !loadEarlier) return
+    fromBottom.current = el.scrollHeight - el.scrollTop
+    setLoading(true)
+    setLoadFailed(false)
+    await loadEarlier().catch(() => {
+      fromBottom.current = undefined
+      setLoadFailed(true)
+    })
+    setLoading(false)
+  }, [loadEarlier])
+  // Infinite scroll upward: earlier entries load as the top comes near, and again while it stays in view.
+  useEffect(() => {
+    const el = top.current
+    if (!el || !scroller.current || !loadEarlier || loading || loadFailed) return
+    const seen = new IntersectionObserver(([e]) => e.isIntersecting && void earlier(), { root: scroller.current, rootMargin: "600px 0px 0px 0px" })
+    seen.observe(el)
+    return () => seen.disconnect()
+  }, [earlier, loadEarlier, loading, loadFailed])
 
   const outputs: Record<string, Output> = {}
   const items: Item[] = []
@@ -119,25 +141,11 @@ export function Transcript({ entries, live, queued = [], onSubagent, loadEarlier
       className="min-h-0 flex-1 overflow-y-auto"
     >
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-6">
-        {loadEarlier && (
-          <Button
-            variant="ghost"
-            size="compact"
-            className={`self-center ${loadFailed ? "text-red-600 dark:text-red-400" : ""}`}
-            loading={loading}
-            onClick={async () => {
-              const el = scroller.current!
-              fromBottom.current = el.scrollHeight - el.scrollTop
-              setLoading(true)
-              setLoadFailed(false)
-              await loadEarlier().catch(() => {
-                fromBottom.current = undefined
-                setLoadFailed(true)
-              })
-              setLoading(false)
-            }}
-          >
-            {loadFailed ? "Couldn't load earlier. Retry" : "Load earlier"}
+        {loadEarlier && <div ref={top} />}
+        {loading && <p className="text-center text-xs text-muted-foreground">Loading earlier…</p>}
+        {loadFailed && (
+          <Button variant="ghost" size="compact" className="self-center text-red-600 dark:text-red-400" onClick={() => void earlier()}>
+            Couldn&apos;t load earlier. Retry
           </Button>
         )}
         {items.map((item) => {
