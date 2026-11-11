@@ -201,7 +201,7 @@ export function Transcript({ entries, live, queued = [], onSubagent, loadEarlier
         {queued.map((text, i) => (
           <div key={`queued.${i}`} className="flex flex-col items-end gap-1">
             <ChatMessage from="user" className="whitespace-pre-wrap opacity-60">{text}</ChatMessage>
-            <p className="text-xs text-muted-foreground">Sent. Dorf reads it when the current step ends.</p>
+            <p className="text-xs text-muted-foreground">Sent. Dorf reads it when its commands finish.</p>
           </div>
         ))}
       </div>
