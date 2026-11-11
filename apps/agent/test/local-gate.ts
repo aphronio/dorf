@@ -1,6 +1,6 @@
 // The gate's routes on this machine, for proofs that test the agent rather than Substrate: each Sandbox is a
-// state, a folder its pi-env daemons start in, and those daemons. The agent's workspace is relative, so each
-// Sandbox's files land in its own folder; absolute paths and processes are shared. A pause closes the Sandbox's
+// state, a folder its pi-env daemons start in, and those daemons. Proofs set the agent's workspace to /proc/self/cwd,
+// which each daemon resolves to its own folder; other absolute paths and processes are shared. A pause closes the Sandbox's
 // connections, a full set of slots answers 503, and a deleted Sandbox answers 404, as the real gate does.
 import { type ChildProcess, spawn } from "node:child_process";
 import { mkdirSync, rmSync } from "node:fs";

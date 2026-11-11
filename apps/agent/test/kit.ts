@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { Sandboxes } from "../src/sandbox.ts";
 import { localGate } from "./local-gate.ts";
 
-export const IDLE_MS = 10_000;
 const OWNER = "proof@example.com";
 const HEADERS = { "tailscale-user-login": OWNER, "content-type": "application/json" };
 // Free when the proof starts and kept across agent restarts, so proofs can run at once.
@@ -21,6 +20,8 @@ const LOCAL_SLOTS = 3;
 export const DATA = mkdtempSync(join(tmpdir(), "dorf-proof-"));
 // The agent's own settings name a real gate (deploy/proof.sh sets them); without them, Sandboxes are local stand-ins.
 export const substrate = Boolean(process.env.DORF_GATE && process.env.DORF_TOKEN_FILE);
+// Stand-ins pause at once, so their window only needs to outlast a step; the real gate pauses asynchronously.
+export const IDLE_MS = substrate ? 10_000 : 3_000;
 const GATE = substrate ? process.env.DORF_GATE! : await localGate(LOCAL_SLOTS, join(DATA, "sandboxes"));
 const TOKEN = substrate ? process.env.DORF_TOKEN_FILE! : join(DATA, "token");
 if (!substrate) writeFileSync(TOKEN, "local");

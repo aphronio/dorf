@@ -8,7 +8,7 @@
   "scripts": {
     "start": "node src/main.ts",
     "check": "tsc",
-    "proof": "node test/all.ts history models sandbox-lifecycle make-room",
+    "proof": "bun run --parallel --no-exit-on-error proof:history proof:models proof:lifecycle proof:make-room",
     "proof:lifecycle": "node test/sandbox-lifecycle.ts",
     "proof:history": "node test/history.ts",
     "proof:models": "node test/models.ts",

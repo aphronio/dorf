@@ -95,7 +95,7 @@ if (other?.output !== "Started second." || !unknown?.error || !unknown.output.in
 	await fail(`subagent models: ${JSON.stringify({ other, unknown })}`);
 log("6. a subagent runs on an offered model however a model names it; an unknown one fails with the list");
 
-await ask(subagent({ action: "spawn", name: "sleeper", message: "$[60] sleep 16" }));
+await ask(subagent({ action: "spawn", name: "sleeper", message: `$[60] sleep ${IDLE_MS / 1000 + 6}` }));
 await new Promise((r) => setTimeout(r, IDLE_MS + 3_000));
 if ((await sandboxes.state(sandbox)) !== "running") await fail("the Sandbox paused under a working subagent");
 await until("sleeper's report", async () => (await reports("sleeper")) === 1, 30_000);
