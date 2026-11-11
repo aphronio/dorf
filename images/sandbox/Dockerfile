@@ -1,5 +1,11 @@
+# Debian's gh (2.46) fails on `gh issue view` since GitHub retired classic Projects, so take GitHub's own build.
+FROM node:26-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS gh
+ADD --checksum=sha256:4c806978ffce1cec70853302a56d70ac6da4f19bae7adca4e1a8ab00633dd91d \
+    https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_linux_amd64.tar.gz /gh.tgz
+RUN tar -xzf /gh.tgz --strip-components=2 -C /usr/local/bin gh_2.103.3_linux_amd64/bin/gh
+
 FROM node:26-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates chromium curl gh git python3 tini \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates chromium curl git python3 tini \
  && rm -rf /var/lib/apt/lists/* && mkdir /workspace
 # Root in a Sandbox lacks setuid and DAC override, so apt must not hand its dirs to _apt.
 RUN echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/90sandbox \
@@ -10,6 +16,7 @@ RUN git config --system credential.https://github.com.helper \
  && git config --system user.name Dorf \
  && git config --system user.email dorf@users.noreply.github.com
 COPY --from=pienv pi-env /usr/local/bin/pi-env
+COPY --from=gh /usr/local/bin/gh /usr/local/bin/gh
 # Browser Harness drives the headless Chromium over CDP; its skill sits where a Thread's skills section finds it.
 RUN --mount=from=ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490,source=/uv,target=/usr/local/bin/uv \
     UV_PYTHON_DOWNLOADS=never uv venv -q --python /usr/bin/python3 /opt/browser-harness \
