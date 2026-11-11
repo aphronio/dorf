@@ -71,7 +71,8 @@ const ChatMessage = forwardRef<HTMLDivElement, ChatMessageProps>(
         {children != null && children !== "" && (
           <div
             className={cn(
-              "whitespace-pre-wrap break-words",
+              // Capped, so a wide child such as a long code line scrolls inside its own box.
+              "max-w-full whitespace-pre-wrap break-words",
               compact ? "py-1.5" : "py-2",
               typeClass("subtitle", compact ? "compact" : "default"),
               // User keeps the bubble chrome (rounded fill + horizontal padding);
