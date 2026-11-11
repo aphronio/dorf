@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/main.ts",
     "check": "tsc",
-    "proof": "node test/history.ts && node test/models.ts && node test/sandbox-lifecycle.ts && node test/make-room.ts",
+    "proof": "node test/all.ts history models sandbox-lifecycle make-room",
     "proof:lifecycle": "node test/sandbox-lifecycle.ts",
     "proof:history": "node test/history.ts",
     "proof:models": "node test/models.ts",

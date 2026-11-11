@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
+import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Sandboxes } from "../src/sandbox.ts";
@@ -8,7 +9,13 @@ import { localGate } from "./local-gate.ts";
 export const IDLE_MS = 10_000;
 const OWNER = "proof@example.com";
 const HEADERS = { "tailscale-user-login": OWNER, "content-type": "application/json" };
-const PORT = 8193;
+// Free when the proof starts and kept across agent restarts, so proofs can run at once.
+const PORT = await new Promise<number>((resolve) => {
+	const probe = createServer().listen(0, "127.0.0.1", () => {
+		const { port } = probe.address() as AddressInfo;
+		probe.close(() => resolve(port));
+	});
+});
 // As many Sandboxes as the lab's worker holds at once.
 const LOCAL_SLOTS = 3;
 export const DATA = mkdtempSync(join(tmpdir(), "dorf-proof-"));
