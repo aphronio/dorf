@@ -38,10 +38,11 @@ const agentOf = async (conversation: { agent(c: typeof context): Promise<ThreadA
 
 // A provider that keeps a process or copy per Thread, keyed by Pi's provider session id.
 // Messages sent while the Thread works wait in Pi's inbox until the current step ends; the page shows them meanwhile.
-type Inbox = { items?: { mode: string; content?: string | { type: string; text?: string }[] }[] };
+// Only the user's own messages: an input placed as another entry, such as a subagent's report, shows once it lands.
+type Inbox = { items?: { mode: string; entry?: unknown; content?: string | { type: string; text?: string }[] }[] };
 const queued = (docs: Record<string, unknown>): string[] =>
 	((docs["pi.inbox"] as Inbox | undefined)?.items ?? []).flatMap((item) => {
-		if (item.mode === "write" || item.content === undefined) return [];
+		if (item.mode === "write" || item.entry !== undefined || item.content === undefined) return [];
 		return [typeof item.content === "string" ? item.content : item.content.flatMap((b) => (b.type === "text" && b.text ? [b.text] : [])).join("")];
 	});
 
