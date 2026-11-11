@@ -6,13 +6,13 @@
   "scripts": {
     "start": "node src/main.ts",
     "check": "tsc",
-    "proof:lifecycle": "../../deploy/up.sh && node test/sandbox-lifecycle.ts",
+    "proof:lifecycle": "node test/sandbox-lifecycle.ts",
     "proof:upgrade": "KIND=1 ../../deploy/substrate.sh install v1.0.0-rc.3 && ../../deploy/up.sh && node test/substrate-upgrade.ts",
-    "proof:repository": "../../deploy/up.sh && node test/repository.ts",
-    "proof:claude-plan": "../../deploy/up.sh && node test/claude-plan.ts",
-    "proof:make-room": "../../deploy/up.sh && node test/make-room.ts",
-    "proof:models": "../../deploy/up.sh && node test/models.ts",
-    "proof:history": "../../deploy/up.sh && node test/history.ts"
+    "proof:repository": "node test/repository.ts",
+    "proof:claude-plan": "node test/claude-plan.ts",
+    "proof:make-room": "node test/make-room.ts",
+    "proof:models": "node test/models.ts",
+    "proof:history": "node test/history.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.322",

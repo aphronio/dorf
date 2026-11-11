@@ -105,6 +105,9 @@ Facts learned in one slice that a later slice must respect.
   repositories. The gateway swaps the whole Authorization value, so `gh` works with
   `GH_TOKEN=placeholder` on REST and GraphQL. A fine-grained token lists every public repository of
   its owner too, not only the granted ones.
+- Proofs run the working tree's agent against what the cluster already runs; they do not deploy,
+  since `up.sh` rolls the agent the owner is using. Run `deploy/up.sh` first when the gate, the
+  Sandbox image or `deploy/` changed. `proof:upgrade` still deploys: a fresh install is its subject.
 - `deploy/up.sh` gives the pool the worker image of the installed Substrate release, so only
   `deploy/substrate.sh` moves workers between releases.
 - Substrate's API speaks only gRPC: plain HTTP/1.1 does not connect and JSON gets 415, so a Worker
