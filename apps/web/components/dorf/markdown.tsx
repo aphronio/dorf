@@ -25,10 +25,24 @@ const components: Components = {
   td: (p) => <td className="border-b border-border/50 px-2 py-1 align-top" {...p} />,
 }
 
-export function Markdown({ children }: { children: string }) {
+// An image shows only when the agent read that file in this Thread, by path or file name: the page loads nothing
+// from elsewhere, so a reply cannot leak data through an image URL. Any other image shows as its alt text.
+export function Markdown({ children, images }: { children: string; images?: Map<string, string> }) {
+  const img: Components["img"] = ({ src, alt }) => {
+    const path = typeof src === "string" ? src : ""
+    const seen = images?.get(path) ?? images?.get(path.split("/").pop() ?? "")
+    if (!seen) return <span className="text-muted-foreground">[{alt || path}]</span>
+    return (
+      <span className="my-2 block">
+        {/* eslint-disable-next-line @next/next/no-img-element -- a data URL from the transcript, not an optimizable asset */}
+        <img src={seen} alt={alt ?? ""} className="max-h-[70vh] w-full rounded-md border border-border object-contain object-top" />
+        {alt && <span className="mt-1 block font-mono text-xs text-muted-foreground">{alt}</span>}
+      </span>
+    )
+  }
   return (
     <div className="whitespace-normal">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>{children}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ ...components, img }}>{children}</ReactMarkdown>
     </div>
   )
 }

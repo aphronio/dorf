@@ -69,6 +69,15 @@ export function Transcript({ entries, live, onSubagent, loadEarlier }: Transcrip
     else if (e.kind === "pi.assistant") push(items, String(e.id), m)
     else if (e.kind === "pi.compaction") items.push({ kind: "note", key: String(e.id), text: "Earlier conversation summarized" })
   }
+  // Images the agent read, by path and by file name, for its replies to place.
+  const images = new Map<string, string>()
+  for (const item of items)
+    if (item.kind === "calls")
+      for (const c of item.calls) {
+        const src = outputs[c.id]?.images?.[0]
+        const path = String(c.arguments?.path ?? "")
+        if (src && path) images.set(path, src).set(path.split("/").pop()!, src)
+      }
   for (const t of live.tools ?? []) if (t.status !== "done") outputs[t.callId] = { text: t.output ?? "", running: true }
   const generating = live.generation?.message
   if (generating) push(items, "live", generating)
@@ -134,9 +143,9 @@ export function Transcript({ entries, live, onSubagent, loadEarlier }: Transcrip
             case "user":
               return <ChatMessage key={item.key} from="user" className="whitespace-pre-wrap">{item.text}</ChatMessage>
             case "text":
-              return <ChatMessage key={item.key} from="assistant" className="max-w-full"><Markdown>{item.text}</Markdown></ChatMessage>
+              return <ChatMessage key={item.key} from="assistant" className="max-w-full"><Markdown images={images}>{item.text}</Markdown></ChatMessage>
             case "calls": {
-              // Images a tool returned, such as screenshots the agent read, show at a glance beside each other.
+              // Images a tool returned, such as screenshots the agent read, show small here; a reply places them full size.
               const shots = item.calls.flatMap((c) => (outputs[c.id]?.images ?? []).map((src, i) => ({ src, key: `${c.id}.${i}`, name: String(c.arguments?.path ?? "").split("/").pop() })))
               return (
                 <div key={item.key} className="-mx-2">
@@ -148,7 +157,7 @@ export function Transcript({ entries, live, onSubagent, loadEarlier }: Transcrip
                       {shots.map((shot) => (
                         <figure key={shot.key} className="min-w-0">
                           {/* eslint-disable-next-line @next/next/no-img-element -- a data URL from the transcript, not an optimizable asset */}
-                          <img src={shot.src} alt={shot.name || "screenshot"} className="max-h-[70vh] w-full rounded-md border border-border object-contain object-top" />
+                          <img src={shot.src} alt={shot.name || "screenshot"} className="max-h-40 w-auto max-w-full rounded-md border border-border object-contain object-left-top" />
                           {shot.name && <figcaption className="mt-1 font-mono text-xs text-muted-foreground">{shot.name}</figcaption>}
                         </figure>
                       ))}
