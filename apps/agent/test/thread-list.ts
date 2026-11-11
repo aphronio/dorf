@@ -1,6 +1,6 @@
 import { call, createThread, fail, follow, killAgent, log, pass, startAgent, until } from "./kit.ts";
 
-type Listed = { id: number; createdAt: string; starting?: true; failure?: string; working?: true; attention?: "done" | "failed"; askedAt?: string; startedAt?: string; endedAt?: string };
+type Listed = { id: number; createdAt: string; starting?: true; failure?: string; working?: true; attention?: "done" | "failed"; askedAt?: string; startedAt?: string; endedAt?: string; ended?: "done" | "failed" | "stopped" };
 
 await startAgent();
 let list = follow("/threads/events");
@@ -18,7 +18,8 @@ log("2. once the run ends it asks for a look, with when the run started and ende
 
 if ((await call("POST", `/threads/${id}/seen`)).status !== 202) await fail("seen refused");
 await reaches("seen", id, (t) => !t.working && !t.attention);
-log("3. opening the Thread clears it");
+if (state(id)!.ended !== "done") await fail(`opening it lost how the run ended: ${JSON.stringify(state(id))}`);
+log("3. opening the Thread clears it, and the list still says how the run ended");
 
 await call("POST", `/threads/${id}/messages`, { text: "$ sleep 30" });
 await reaches("working again", id, (t) => Boolean(t.working));
@@ -27,8 +28,8 @@ log("   a message records when the owner last asked");
 await call("POST", `/threads/${id}/abort`);
 await reaches("stopped", id, (t) => !t.working);
 await new Promise((r) => setTimeout(r, 500));
-if (state(id)?.attention) await fail(`a stopped run asks for a look: ${JSON.stringify(state(id))}`);
-log("4. a run the owner stopped asks for nothing");
+if (state(id)?.attention || state(id)?.ended !== "stopped") await fail(`a stopped run: ${JSON.stringify(state(id))}`);
+log("4. a run the owner stopped asks for nothing and ended as stopped");
 
 await call("POST", `/threads/${id}/messages`, { text: "$ sleep 3 && echo after" });
 await reaches("working before the kill", id, (t) => Boolean(t.working));
@@ -40,15 +41,15 @@ await reaches("done after restart", id, (t) => !t.working && t.attention === "do
 log("5. a run cut off by a restart still ends as done in the list");
 
 const broken = await createThread("$ echo before\n! the request was malformed");
-await reaches("failed", broken.id, (t) => !t.working && t.attention === "failed");
+await reaches("failed", broken.id, (t) => !t.working && t.attention === "failed" && t.ended === "failed");
 if (!state(broken.id)!.endedAt) await fail(`a failed run has no end time: ${JSON.stringify(state(broken.id))}`);
 log("6. a run the model fails asks for a look as failed", JSON.stringify(state(broken.id)));
 
 // The stand-in's Sandboxes inherit this environment, so no clone over https gets out and the start fails offline.
 process.env.GIT_ALLOW_PROTOCOL = "file";
 const unclonable = await createThread("$ echo never", "example/unclonable");
-await reaches("start failed", unclonable.id, (t) => !t.starting && t.attention === "failed");
-if (!state(unclonable.id)!.failure?.includes("git clone example/unclonable") || state(unclonable.id)!.startedAt) await fail(`failed start: ${JSON.stringify(state(unclonable.id))}`);
+await reaches("start failed", unclonable.id, (t) => !t.starting && t.attention === "failed" && t.ended === "failed");
+if (!state(unclonable.id)!.failure?.includes("git clone example/unclonable") || state(unclonable.id)!.startedAt || !state(unclonable.id)!.endedAt) await fail(`failed start: ${JSON.stringify(state(unclonable.id))}`);
 list.close();
 log("7. a Thread whose repository fails to clone asks for a look as failed, without a run", state(unclonable.id)!.failure!.split("\n")[0]);
 

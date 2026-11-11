@@ -136,7 +136,8 @@ export class Threads {
 			delete thread.working;
 			thread.endedAt = new Date().toISOString();
 			const failure = live.runFailure?.reason;
-			if (!thread.archived && failure !== "aborted") thread.attention = failure ? "failed" : "done";
+			thread.ended = failure === "aborted" ? "stopped" : failure ? "failed" : "done";
+			if (!thread.archived && thread.ended !== "stopped") thread.attention = thread.ended;
 		}, context);
 	}
 

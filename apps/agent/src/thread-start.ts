@@ -87,7 +87,7 @@ export function threadStart(sandboxes: Sandboxes) {
 					await mark(tx, id, (t) => {
 						delete t.starting;
 						delete t.waiting;
-						if (failure) Object.assign(t, { failure, attention: "failed" });
+						if (failure) Object.assign(t, { failure, attention: "failed", ended: "failed", endedAt: new Date().toISOString() });
 					});
 					return { status: "terminal", outcome: { status: "completed", result: null } };
 				}, context);
