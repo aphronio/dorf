@@ -5,7 +5,7 @@ description: "Guidelines for prose a person will read: responses, docs, READMEs,
 
 # Prose
 
-Writing guidelines for prose a person will read: responses, docs, READMEs, PR descriptions, commit messages, comments, and RPI documents. Short, plain answers with precise names, following Orwell's six rules.
+Writing guidelines for prose a person will read: responses, docs, READMEs, PR descriptions, commit messages and comments. Short, plain answers with precise names, following Orwell's six rules.
 
 ## Response Style
 
@@ -30,4 +30,4 @@ From George Orwell, "Politics and the English Language" (1946):
 6. Break any of these rules sooner than say anything outright barbarous.
 
 
-<!-- From humanlayer/skills@701b6bcb, plugins/rpi/skills/rpi/references/prose.md. Copyright (c) 2026 HumanLayer, MIT License. -->
+<!-- Adapted from humanlayer/skills@701b6bcb, plugins/rpi/skills/rpi/references/prose.md. Copyright (c) 2026 HumanLayer, MIT License. -->
