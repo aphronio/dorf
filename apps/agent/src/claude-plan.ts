@@ -301,7 +301,10 @@ export class ClaudePlan {
 	}
 
 	#deleteTranscript(claude: string) {
-		return deleteSession(claude, { dir: this.#cwd }).catch(() => {});
+		// Already gone is fine; a transcript removed without its subagent folder is not, and a retry cannot tell.
+		return deleteSession(claude, { dir: this.#cwd }).catch((e: Error) => {
+			if (!/^Session \S+ not found/.test(e.message)) console.error(`claude-plan: deleting session ${claude}: ${e.message}`);
+		});
 	}
 
 	async #stop(thread: Thread) {
