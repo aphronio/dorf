@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { getSessionMessages } from "@anthropic-ai/claude-agent-sdk";
-import { agentPid, call, createThread, DATA, fail, IDLE_MS, killAgent, log, sandboxes, send, startAgent, until } from "./kit.ts";
+import { agentPid, call, createThread, DATA, fail, IDLE_MS, killAgent, log, pass, sandboxes, send, startAgent, until } from "./kit.ts";
 
 const MODEL = "claude-plan/opus";
 const RECORDS = `${DATA}/claude/sessions`;
@@ -151,5 +151,4 @@ if ((await call("DELETE", `/threads/${id}`)).status !== 204) await fail("delete"
 if (existsSync(RECORDS) && readdirSync(RECORDS).length) await fail("a Claude Code record of the Thread or its subagent survived its deletion");
 log("6. thread deleted with its Claude Code record");
 
-killAgent();
-console.log("PASS");
+await pass();

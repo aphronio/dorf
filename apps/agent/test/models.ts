@@ -1,6 +1,6 @@
 // Model choice, thinking levels and subagents, on the faux provider's two models.
 import { SandboxNotFound } from "../src/sandbox.ts";
-import { call, createThread, fail, follow, IDLE_MS, killAgent, log, runEnded, sandboxes, send, startAgent, until } from "./kit.ts";
+import { call, createThread, fail, follow, IDLE_MS, killAgent, log, pass, runEnded, sandboxes, send, startAgent, until } from "./kit.ts";
 
 type Choice = { ref: string; name: string; thinking: string[] };
 type Entry = { kind: string; model?: { role: string; model?: string; isError?: boolean; content?: string | { type: string; text?: string }[] }[] };
@@ -125,5 +125,4 @@ const deleting = Date.now();
 if ((await call("DELETE", `/threads/${id}`)).status !== 204) await fail("delete");
 if (!(await sandboxes.state(sandbox).then(() => false, (e) => e instanceof SandboxNotFound))) await fail("the Sandbox outlived its Thread");
 log("10. deleting a Thread stops its subagents and removes the Sandbox", `${((Date.now() - deleting) / 1000).toFixed(1)}s`);
-console.log("PASS");
-process.exit(0);
+await pass();

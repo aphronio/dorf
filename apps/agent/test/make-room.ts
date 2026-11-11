@@ -1,4 +1,4 @@
-import { call, createThread, fail, killAgent, log, runEnded, sandboxes, send, startAgent, until } from "./kit.ts";
+import { call, createThread, fail, log, pass, runEnded, sandboxes, send, startAgent, until } from "./kit.ts";
 
 // Long enough that no Sandbox pauses on its own during the proof.
 await startAgent("faux", 60 * 60_000);
@@ -44,5 +44,4 @@ log("3. with every slot busy the next Thread waited for a run to end, then took 
 for (const t of threads) if ((await call("DELETE", `/threads/${t.id}`)).status !== 204) await fail("delete");
 log("4. threads deleted");
 
-killAgent();
-console.log("PASS");
+await pass();
