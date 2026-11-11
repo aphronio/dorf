@@ -3,5 +3,5 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 for dir in apps/agent images/sandbox apps/gate apps/web; do
-	npm ci --ignore-scripts --no-audit --no-fund --prefix "$dir"
+	bun install --frozen-lockfile --ignore-scripts --cwd "$dir"
 done

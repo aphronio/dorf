@@ -8,7 +8,8 @@ it. [Slices](docs/slices.md) owns the plan, each slice's proof, and carry-over f
 
 ## Development
 
-- TypeScript on Node. Pin dependencies exactly and install with `npm ci --ignore-scripts`.
+- TypeScript on Node, with Bun for installs and scripts. Pin dependencies exactly and install with
+  `bun install --frozen-lockfile --ignore-scripts`.
 - Build on Pi Durable the way its README and `packages/durable/test/examples` do. Read the matching
   example before adding host-side state or a new mechanism.
 - Only the gate (`apps/gate`) and deployment files use Substrate terms (Actor, Worker,
@@ -27,20 +28,21 @@ Run these from the repository root. Times are from a Dorf Sandbox; a laptop is f
 | Command | What it does | Time |
 | --- | --- | --- |
 | `.agents/setup` | Installs every package from its lockfile; safe to run again | 22 s |
-| `npm run check` | Types of the agent, gate and page, and the page's lint | 17 s |
-| `npm run proof` | The agent's proofs (history, models, lifecycle, make-room) with the faux model, against local stand-ins of the gate | 2 min |
+| `bun run check` | Types of the agent, gate and page, and the page's lint | 17 s |
+| `bun run proof` | The agent's proofs (history, models, lifecycle, make-room) with the faux model, against local stand-ins of the gate | 2 min |
 | `deploy/proof.sh <name>` | One file of `apps/agent/test` against a cluster running Substrate; needs `kubectl` | 0.5 to 2 min |
 
-`npm run proof` needs no cluster and no credentials, and CI runs it on every push. Its stand-ins
-give each Sandbox a folder on one machine, so it proves the agent, not Substrate. Isolation between Sandboxes, files and
-processes surviving a pause, the egress fence, token injection and upgrades are proved only by
+`bun run proof` needs no cluster and no credentials, and CI runs it on every push. Its stand-ins
+give each Sandbox a folder on one machine, so it proves the agent, not Substrate. Isolation between
+Sandboxes, files and processes surviving a pause, the egress fence, token injection and upgrades
+are proved only by
 `deploy/proof.sh substrate`, `repository` and `substrate-upgrade`. Say which you ran.
 
 ## In a Sandbox
 
 A Thread working on Dorf runs in a gVisor Sandbox: Node, git and `gh`, no `kubectl`, no Docker and
-no namespaces, and no way into the cluster. Run `.agents/setup` first, then `npm run check` and
-`npm run proof` as you work. A change to the gate, the Sandbox image or `deploy/` needs a Substrate
+no namespaces, and no way into the cluster. Run `.agents/setup` first, then `bun run check` and
+`bun run proof` as you work. A change to the gate, the Sandbox image or `deploy/` needs a Substrate
 proof, which the owner runs until staging exists.
 
 ## Public repository confidentiality

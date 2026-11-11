@@ -14,5 +14,5 @@ The components in `components/ui` come from [Fluid Functionalism](https://www.fl
 (MIT, © Micka Touillaud). Before changing one or adding motion, read its skill at
 https://github.com/mickadesign/fluid-functionalism/tree/main/skills/fluid-functionalism and the
 section of `references/craft.md` the component's docs link to. Dorf's own parts are in
-`components/dorf`, `lib/dorf.ts` and `app/page.tsx`. `npm run build` writes the static export the
-agent serves; `DORF_AGENT=http://127.0.0.1:8091 npm run dev` proxies the API to a running agent.
+`components/dorf`, `lib/dorf.ts` and `app/page.tsx`. `bun run build` writes the static export the
+agent serves; `DORF_AGENT=http://127.0.0.1:8091 bun run dev` proxies the API to a running agent.

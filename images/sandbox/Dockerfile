@@ -10,8 +10,9 @@ RUN git config --system credential.https://github.com.helper \
  && git config --system user.name Dorf \
  && git config --system user.email dorf@users.noreply.github.com
 COPY --from=pienv pi-env /usr/local/bin/pi-env
-COPY package.json package-lock.json /init/
-RUN cd /init && npm ci --ignore-scripts --omit=dev --no-audit --no-fund
+COPY --from=oven/bun:1.4.4-slim@sha256:1846adf22496bd711036aae8be147e57bdebbaea2e5264e3e0b5af1db187d9a4 /usr/local/bin/bun /usr/local/bin/bun
+COPY package.json bun.lock /init/
+RUN cd /init && bun install --frozen-lockfile --ignore-scripts --production
 COPY init.mts /init/init.mts
 # gh needs a token to send; the egress gateway replaces it, so the Sandbox never holds the real one.
 ENV GH_TOKEN=placeholder \
