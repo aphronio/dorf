@@ -26,11 +26,11 @@ const Title = ({ thread }: { thread: Thread }) => (
   </span>
 )
 
-type ThreadSidebarProps = { threads: Thread[]; current?: number; onUnarchive: (id: number) => void; onDelete: (id: number) => void }
+type ThreadSidebarProps = { threads: Thread[]; current?: number; connection: number; onUnarchive: (id: number) => void; onDelete: (id: number) => void }
 
 // Active Threads, then the archived ones folded at the bottom. Only an archived Thread can be deleted, and the bin
 // asks once more in place: a second click deletes.
-export function ThreadSidebar({ threads, current, onUnarchive, onDelete }: ThreadSidebarProps) {
+export function ThreadSidebar({ threads, current, connection, onUnarchive, onDelete }: ThreadSidebarProps) {
   const icons = useIcons()
   const [confirming, setConfirming] = useState<number>()
   const active = threads.filter((t) => !t.archived)
@@ -97,7 +97,7 @@ export function ThreadSidebar({ threads, current, onUnarchive, onDelete }: Threa
         )}
       </SidebarContent>
       <SidebarFooter>
-        <ClaudeStatus />
+        <ClaudeStatus key={connection} />
       </SidebarFooter>
     </Sidebar>
   )

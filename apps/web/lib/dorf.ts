@@ -32,14 +32,28 @@ export type Live = {
   runFailure?: { reason: string; detail?: string }
 }
 
+export class Unreachable extends Error {
+  constructor() {
+    super("The agent is unreachable")
+  }
+}
+
+// The agent answers every call in JSON, so anything else came from in front of it: the network, a
+// proxy's error page, or the development server's 404 when it proxies to no agent.
 export async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
     headers: { "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
+  }).catch(() => {
+    throw new Unreachable()
   })
-  const data = res.status === 204 ? null : await res.json()
-  if (!res.ok) throw new Error(data?.error ?? res.statusText)
+  if (res.status === 204) return null as T
+  if (!res.headers.get("content-type")?.includes("application/json")) throw new Unreachable()
+  const data = await res.json().catch(() => {
+    throw new Unreachable()
+  })
+  if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`)
   return data as T
 }
 

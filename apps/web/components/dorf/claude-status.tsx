@@ -4,7 +4,7 @@ import { useEffect, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { api, type Claude } from "@/lib/dorf"
+import { api, type Claude, Unreachable } from "@/lib/dorf"
 
 // Claude Code's own sign-in: the page shows its URL and passes back the code; Dorf never holds the login.
 export function ClaudeStatus() {
@@ -13,7 +13,11 @@ export function ClaudeStatus() {
   const [code, setCode] = useState("")
   const [error, setError] = useState<string>()
 
-  const load = () => api<Claude>("GET", "/claude").then(setStatus).catch(() => setStatus({ loggedIn: false, plan: null, email: null }))
+  // Nothing to show while the agent is unreachable; the page mounts this again when it comes back.
+  const load = () =>
+    api<Claude>("GET", "/claude")
+      .then(setStatus)
+      .catch((e) => setStatus(e instanceof Unreachable ? undefined : { loggedIn: false, plan: null, email: null }))
   useEffect(() => void load(), [])
 
   if (!status) return null

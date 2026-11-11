@@ -15,12 +15,13 @@ import { SubagentList, SubagentView } from "@/components/dorf/subagent-panel"
 import { ThreadSidebar } from "@/components/dorf/thread-sidebar"
 import { Transcript } from "@/components/dorf/transcript"
 import { useIcons } from "@/lib/icon-context"
-import { api, lastModel, type ModelChoice, modelName, openThread, type Repo, type Thread, useHashId, useThread } from "@/lib/dorf"
+import { api, lastModel, Unreachable, type ModelChoice, modelName, openThread, type Repo, type Thread, useHashId, useThread } from "@/lib/dorf"
 
 const NO_REPO = "none"
 const REPO_KEY = "dorf.repo"
 const MODEL_KEY = "dorf.model"
 const THINKING_KEY = "dorf.thinking"
+const RETRY_MS = 3000
 
 const stored = (key: string) => {
   try {
@@ -55,8 +56,23 @@ export default function Page() {
   const thread = threads.find((t) => t.id === id)
   const running = Boolean(live.run)
 
-  const refresh = useCallback(() => api<Thread[]>("GET", "/threads").then((list) => setThreads(list.slice().reverse())).catch(() => {}), [])
+  // Whether the agent stopped answering, and how many times it came back: each return loads again
+  // what the page asked it for when it was away.
+  const [down, setDown] = useState(false)
+  const [connection, setConnection] = useState(0)
+  const fail = useCallback((e: unknown) => (e instanceof Unreachable ? setDown(true) : setError((e as Error).message)), [])
+  const lost = useCallback((e: unknown) => void (e instanceof Unreachable && setDown(true)), [])
+
+  const refresh = useCallback(
+    () => api<Thread[]>("GET", "/threads").then((list) => (setThreads(list.slice().reverse()), true), (e) => (lost(e), false)),
+    [lost],
+  )
   useEffect(() => void refresh(), [id, refresh])
+  useEffect(() => {
+    if (!down) return
+    const timer = setInterval(() => void refresh().then((ok) => ok && (setDown(false), setConnection((n) => n + 1))), RETRY_MS)
+    return () => clearInterval(timer)
+  }, [down, refresh])
   useEffect(() => {
     api<Repo[]>("GET", "/repos")
       .then((list) => {
@@ -67,8 +83,8 @@ export default function Page() {
         } catch {}
         if (last && list.some((r) => r.name === last)) setRepo(last)
       })
-      .catch(() => {})
-  }, [])
+      .catch(lost)
+  }, [connection, lost])
   useEffect(() => {
     api<ModelChoice[]>("GET", "/models")
       .then((list) => {
@@ -77,8 +93,8 @@ export default function Page() {
         setModel(list.some((m) => m.ref === last) ? last! : list[0]?.ref)
         setThinking(stored(THINKING_KEY) ?? undefined)
       })
-      .catch(() => {})
-  }, [])
+      .catch(lost)
+  }, [connection, lost])
   const [shownId, setShownId] = useState(id)
   if (shownId !== id) {
     setShownId(id)
@@ -104,17 +120,17 @@ export default function Page() {
       await refresh()
     } catch (e) {
       setDraft(value)
-      setError((e as Error).message)
+      fail(e)
     } finally {
       setStarting(undefined)
     }
   }
-  const stop = () => id !== undefined && api("POST", `/threads/${id}/abort`).catch((e) => setError(e.message))
+  const stop = () => id !== undefined && api("POST", `/threads/${id}/abort`).catch(fail)
   // Archive stops the Thread's work and pauses its machine; it stays open here so it can come straight back.
   const archive = (to: "archive" | "unarchive", thread: number) =>
-    api("POST", `/threads/${thread}/${to}`).catch((e) => setError(e.message)).then(refresh)
+    api("POST", `/threads/${thread}/${to}`).catch(fail).then(refresh)
   const remove = async (thread: number) => {
-    await api("DELETE", `/threads/${thread}`).catch((e) => setError(e.message))
+    await api("DELETE", `/threads/${thread}`).catch(fail)
     if (thread === id) openThread(undefined)
     await refresh()
   }
@@ -124,7 +140,7 @@ export default function Page() {
   const newLevel = newLevels.length ? level(newModel, thinking ?? null) : undefined
   const threadModel = agent?.model && models.find((m) => m.ref === `${agent.model!.provider}/${agent.model!.modelId}`)
   const answered = lastModel(entries)
-  const think = (next: string) => id !== undefined && api("POST", `/threads/${id}/thinking`, { level: next }).catch((e) => setError(e.message))
+  const think = (next: string) => id !== undefined && api("POST", `/threads/${id}/thinking`, { level: next }).catch(fail)
 
   const controls =
     id === undefined ? (
@@ -158,7 +174,7 @@ export default function Page() {
 
   return (
     <SidebarProvider className="h-dvh">
-      <ThreadSidebar threads={threads} current={id} onUnarchive={(t) => void archive("unarchive", t)} onDelete={(t) => void remove(t)} />
+      <ThreadSidebar threads={threads} current={id} connection={connection} onUnarchive={(t) => void archive("unarchive", t)} onDelete={(t) => void remove(t)} />
       <CommandPalette threads={threads} />
       <ThemeSync />
       <SidebarInset className="max-md:!m-0 max-md:!rounded-none">
@@ -200,7 +216,11 @@ export default function Page() {
 
         {/* A subagent's view is read-only: messages go to the Thread, so the composer waits there. */}
         <div hidden={Boolean(openSubagent)} className="mx-auto w-full max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-          {error && <p className="px-2 pb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
+          {down ? (
+            <p role="status" className="px-2 pb-2 text-xs text-red-600 dark:text-red-400">The agent is unreachable. Trying again every few seconds…</p>
+          ) : (
+            error && <p className="px-2 pb-2 text-xs text-red-600 dark:text-red-400">{error}</p>
+          )}
           <InputMessage
             value={draft}
             onValueChange={setDraft}
