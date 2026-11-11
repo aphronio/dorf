@@ -1,6 +1,6 @@
 ---
 name: prose
-description: "Guidelines for prose a person will read: responses, docs, READMEs, PR descriptions, commit messages and comments. Short, plain answers with precise names, following Orwell's six rules."
+description: "Write prose a person reads short and plain, with precise names, by Orwell's six rules. Use for the text of every reply, commit messages, issue and PR bodies, docs and comments."
 ---
 
 # Prose

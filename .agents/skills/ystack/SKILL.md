@@ -1,6 +1,6 @@
 ---
 name: ystack
-description: Stage-gated engineering and product judgment (Elon's five steps one stage at a time, five whys, delete before adding) with playbooks for slices, bugs, investigations, reviews, repo hygiene and experiments. Use for nontrivial engineering or product work such as features, bugs, refactors, architecture, reviews, investigations, recommendations, tuning or benchmarking (configs, engines, models), or when the user says /ystack or "ground yourself in our principles". Not for quick factual questions, one-line edits, running a single command or casual chat.
+description: "Engineering and product judgment one stage at a time (question, delete, simplify, speed up, automate), with playbooks for slices, bugs, investigations, reviews, repo hygiene and experiments. Use for /ystack, 'ground yourself in our principles', or nontrivial work such as a feature, bug, refactor, architecture call, review or benchmark. Not for one-line edits or quick questions."
 ---
 
 # ystack

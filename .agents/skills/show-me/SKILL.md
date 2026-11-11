@@ -1,6 +1,6 @@
 ---
 name: show-me
-description: Help the user understand the current topic visually with concise diagrams and code-shape sketches.
+description: "Show a change, a design or a finding as the smallest picture that proves it (a call or file tree, diff, Mermaid diagram, table, or before and after screenshots) with little text. Use for /show-me, 'show me', and every reply that reports finished work."
 ---
 
 Help the user understand the current topic of conversation visually. Skip the preamble and keep prose brief. Pick the smallest view that makes the key point clear.
