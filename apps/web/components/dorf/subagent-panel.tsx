@@ -7,11 +7,12 @@ import { Transcript } from "@/components/dorf/transcript"
 import { lastModel, type ModelChoice, modelName, type Subagent, useConversation } from "@/lib/dorf"
 
 // Green while it works, a hollow circle while idle.
+const state = (working: boolean) => (working ? "working" : "idle")
 const dot = (working: boolean) => `size-1.5 shrink-0 rounded-full ${working ? "animate-pulse bg-green-500" : "border border-muted-foreground/60"}`
 
 // The Thread's subagents over the conversation's right edge, so the conversation keeps its width; the open one is
-// marked. On a phone it folds to a count.
-export function SubagentList({ subagents, open, onOpen }: { subagents: Subagent[]; open?: string; onOpen: (name: string) => void }) {
+// marked, and choosing it again closes it. On a phone it folds to a count.
+export function SubagentList({ subagents, open, onOpen }: { subagents: Subagent[]; open?: string; onOpen: (name: string | undefined) => void }) {
   const [unfolded, setUnfolded] = useState(false)
   if (!subagents.length) return null
   return (
@@ -31,7 +32,8 @@ export function SubagentList({ subagents, open, onOpen }: { subagents: Subagent[
             key={s.name}
             type="button"
             aria-current={open === s.name}
-            onClick={() => (onOpen(s.name), setUnfolded(false))}
+            title={`${s.name}, ${state(s.working)}`}
+            onClick={() => (onOpen(open === s.name ? undefined : s.name), setUnfolded(false))}
             className={`flex min-w-0 shrink-0 items-center gap-2 rounded-md px-2 py-1 text-left text-xs ${open === s.name ? "bg-surface-3 text-foreground" : "text-muted-foreground hover:text-foreground"}`}
           >
             <span className={dot(s.working)} />
@@ -68,8 +70,10 @@ export function SubagentView({ thread, subagent, models, onBack }: { thread: num
           <Button variant="ghost" size="icon-compact" aria-label="Back to Thread" title="Back to Thread (Esc)" onClick={onBack}>
             <Back />
           </Button>
-          <span className={dot(subagent.working)} />
-          <span className="min-w-0 truncate font-medium text-foreground">{subagent.name}</span>
+          <span title={state(subagent.working)} className="flex min-w-0 items-center gap-2">
+            <span className={dot(subagent.working)} />
+            <span className="truncate font-medium text-foreground">{subagent.name}</span>
+          </span>
           {details && <span className="shrink-0 max-sm:hidden">{details}</span>}
         </div>
       </div>
