@@ -19,8 +19,8 @@ import { ClaudeStatus } from "@/components/dorf/claude-status"
 import { useIcons } from "@/lib/icon-context"
 import { fontWeights } from "@/lib/font-weight"
 import type { Thread } from "@/lib/dorf"
+import type { Attention } from "@/lib/attention"
 
-type Attention = NonNullable<Thread["attention"]>
 
 const MINUTE = 60_000
 const time = (iso: string | undefined) => (iso ? Date.parse(iso) : 0)
@@ -98,26 +98,16 @@ function Row({ thread, attention, now }: { thread: Thread; attention?: Attention
   )
 }
 
-type ThreadSidebarProps = { threads: Thread[]; current?: number; connection: number; onUnarchive: (id: number) => void; onDelete: (id: number) => void }
+type ThreadSidebarProps = { threads: Thread[]; attention: Map<number, Attention>; current?: number; connection: number; onUnarchive: (id: number) => void; onDelete: (id: number) => void }
 
 // Two sections, as a priority inbox: Threads whose run ended since the owner last looked, failed first, then every
 // other Thread by when the owner last asked in it. A row moves when it crosses between them or when the owner sends,
-// never because an agent made progress. The open Thread stays where it was until the owner leaves it, so it doesn't
-// jump while read. Archived Threads fold at the bottom; only they can be deleted, and the bin asks once more in place.
-export function ThreadSidebar({ threads, current, connection, onUnarchive, onDelete }: ThreadSidebarProps) {
+// never because an agent made progress; `attention` says which Threads need the owner. Archived Threads fold at the bottom; only they can be deleted, and the bin asks once more in place.
+export function ThreadSidebar({ threads, attention, current, connection, onUnarchive, onDelete }: ThreadSidebarProps) {
   const icons = useIcons()
   const now = useNow()
   const [confirming, setConfirming] = useState<number>()
-  // What the Thread asked for when the owner opened it; set only on opening, so a run ending while the owner reads
-  // the Thread doesn't move it up.
-  const [opened, setOpened] = useState<number>()
-  const [held, setHeld] = useState<{ id: number; attention: Attention }>()
-  if (opened !== current) {
-    setOpened(current)
-    const asked = threads.find((t) => t.id === current)?.attention
-    setHeld(current !== undefined && asked ? { id: current, attention: asked } : undefined)
-  }
-  const attentionOf = (t: Thread) => (t.id === held?.id ? held.attention : t.id === current ? undefined : t.attention)
+  const attentionOf = (t: Thread) => attention.get(t.id)
   const active = threads.filter((t) => !t.archived)
   const needsYou = active
     .filter((t) => attentionOf(t))

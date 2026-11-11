@@ -9,6 +9,7 @@ import { SidebarInsetTopbar } from "@/components/sidebar-app/inset-topbar"
 import { CommandPalette } from "@/components/dorf/command-palette"
 import { ThemeSync } from "@/components/dorf/theme-sync"
 import { AttentionMark } from "@/components/dorf/attention-mark"
+import { useAttention } from "@/lib/attention"
 import { Picker } from "@/components/dorf/picker"
 import { Elapsed } from "@/components/dorf/elapsed"
 import { Starting } from "@/components/dorf/starting"
@@ -71,6 +72,7 @@ export default function Page() {
 
   // The list as it changes: a Thread added, archived, deleted, starting work or ending it.
   const threads = useThreads(useCallback(() => setDown(true), []))
+  const attention = useAttention(threads, id)
   const thread = threads.find((t) => t.id === id)
   // The first message on its way in: while the page creates the Thread, then until the agent has started it.
   const mine = starting !== undefined && starting.id === id
@@ -234,10 +236,10 @@ export default function Page() {
 
   return (
     <SidebarProvider className="h-dvh">
-      <ThreadSidebar threads={threads} current={id} connection={connection} onUnarchive={(t) => void archive("unarchive", t)} onDelete={(t) => void remove(t)} />
+      <ThreadSidebar threads={threads} attention={attention} current={id} connection={connection} onUnarchive={(t) => void archive("unarchive", t)} onDelete={(t) => void remove(t)} />
       <CommandPalette threads={threads} />
       <ThemeSync />
-      <AttentionMark threads={threads} />
+      <AttentionMark attention={attention} />
       <SidebarInset className="max-md:!m-0 max-md:!rounded-none">
         <SidebarInsetTopbar>
           <span className="min-w-0 flex-1 truncate text-sm font-medium">

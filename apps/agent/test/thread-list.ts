@@ -1,6 +1,6 @@
 import { call, createThread, fail, follow, killAgent, log, pass, startAgent, until } from "./kit.ts";
 
-type Listed = { id: number; createdAt: string; working?: true; attention?: "done" | "failed"; askedAt?: string; startedAt?: string; endedAt?: string };
+type Listed = { id: number; createdAt: string; starting?: true; failure?: string; working?: true; attention?: "done" | "failed"; askedAt?: string; startedAt?: string; endedAt?: string };
 
 await startAgent();
 let list = follow("/threads/events");
@@ -37,7 +37,19 @@ killAgent("SIGKILL");
 await startAgent();
 list = follow("/threads/events");
 await reaches("done after restart", id, (t) => !t.working && t.attention === "done");
-list.close();
 log("5. a run cut off by a restart still ends as done in the list");
+
+const broken = await createThread("$ echo before\n! the request was malformed");
+await reaches("failed", broken.id, (t) => !t.working && t.attention === "failed");
+if (!state(broken.id)!.endedAt) await fail(`a failed run has no end time: ${JSON.stringify(state(broken.id))}`);
+log("6. a run the model fails asks for a look as failed", JSON.stringify(state(broken.id)));
+
+// The stand-in's Sandboxes inherit this environment, so no clone over https gets out and the start fails offline.
+process.env.GIT_ALLOW_PROTOCOL = "file";
+const unclonable = await createThread("$ echo never", "example/unclonable");
+await reaches("start failed", unclonable.id, (t) => !t.starting && t.attention === "failed");
+if (!state(unclonable.id)!.failure?.includes("git clone example/unclonable") || state(unclonable.id)!.startedAt) await fail(`failed start: ${JSON.stringify(state(unclonable.id))}`);
+list.close();
+log("7. a Thread whose repository fails to clone asks for a look as failed, without a run", state(unclonable.id)!.failure!.split("\n")[0]);
 
 await pass();

@@ -1,7 +1,8 @@
 // Each `$ ` line of the newest user message becomes a bash call (`$[5] ` sets a 5 s timeout), each `> path` line a read
 // of that file, and each `@ {...}` line a subagent call with those arguments; `@ [{...}, {...}]` makes several calls in one
 // answer, which run at once. Then "done", the text of a `= text` line, or "done, saw 2 images" when the message carried
-// images. A message of just `?` gets the system prompt's sections back, and one of just `^` the message before it.
+// images; a `! reason` line instead makes the answer a model error with that reason, which ends the run failed. A
+// message of just `?` gets the system prompt's sections back, and one of just `^` the message before it.
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 
 export const FAUX_MODEL = { provider: "faux", modelId: "faux" };
@@ -38,6 +39,8 @@ export function scriptedModel() {
 		let done = messages.slice(lastUser + 1).filter((m) => m.role === "toolResult").length;
 		const next = rounds.find((round) => (done -= round.length) < 0);
 		if (next) return fauxAssistantMessage(next, { stopReason: "toolUse" });
+		const error = text.split("\n").findLast((l) => l.startsWith("! "))?.slice(2);
+		if (error) return fauxAssistantMessage("", { stopReason: "error", errorMessage: error });
 		const answer = text.split("\n").findLast((l) => l.startsWith("= "))?.slice(2);
 		const images = typeof content === "string" ? 0 : (content ?? []).filter((c) => c.type === "image").length;
 		return fauxAssistantMessage(answer ?? (images ? `done, saw ${images} image${images > 1 ? "s" : ""}` : "done"));
