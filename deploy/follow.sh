@@ -7,9 +7,10 @@
 set -euo pipefail
 shopt -s inherit_errexit
 
-# Threads may change these; everything else (deploy/, the gate, images, dependencies, CI) needs a signature.
-SAFE='^(apps/agent/src/|apps/agent/test/|docs/|apps/web/)'
-UNSAFE='^apps/web/(package\.json|bun\.lock)$'
+# Threads may change these; everything else (deploy/, the gate, images, CI) needs a signature. A package.json may
+# change its scripts, but a dependency changes the lockfile, so any bun.lock change needs a signature.
+SAFE='^(apps/agent/src/|apps/agent/test/|apps/agent/package\.json$|docs/|apps/web/)'
+UNSAFE='(^|/)bun\.lock$'
 SIGNERS=/etc/dorf/allowed_signers
 AUTH=
 EMPTY_TREE=4b825dc642cb6eb9a060e54bf8d69288fbee4904
