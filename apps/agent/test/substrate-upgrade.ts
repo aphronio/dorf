@@ -1,6 +1,8 @@
 import { execFileSync, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { createThread, fail, killAgent, log, type Result, runEnded, sandboxes, send, startAgent, until } from "./kit.ts";
+import { createThread, fail, killAgent, log, needSubstrate, type Result, runEnded, sandboxes, send, startAgent, until } from "./kit.ts";
+
+await needSubstrate();
 
 const SUBSTRATE_SH = new URL("../../../deploy/substrate.sh", import.meta.url).pathname;
 const PINNED = readFileSync(new URL("../../../deploy/substrate.env", import.meta.url), "utf8").match(/^SUBSTRATE_VERSION=(\S+)/m)![1];

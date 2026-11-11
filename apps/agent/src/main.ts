@@ -20,7 +20,7 @@ import { sandboxEnv, Threads } from "./threads.ts";
 const DATA = process.env.DORF_DATA ?? "data";
 const PORT = Number(process.env.DORF_PORT ?? 8091);
 const IDLE_MS = Number(process.env.DORF_IDLE_MS ?? 5 * 60_000);
-const WORKSPACE = "/workspace";
+const WORKSPACE = process.env.DORF_WORKSPACE ?? "/workspace";
 const MODEL = process.env.DORF_MODEL ?? "faux";
 const OWNER = process.env.DORF_OWNER;
 if (!OWNER) throw new Error("set DORF_OWNER to the Tailscale login allowed to use this agent");

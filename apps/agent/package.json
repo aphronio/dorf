@@ -6,13 +6,15 @@
   "scripts": {
     "start": "node src/main.ts",
     "check": "tsc",
+    "proof": "node test/history.ts && node test/models.ts && node test/sandbox-lifecycle.ts && node test/make-room.ts",
     "proof:lifecycle": "node test/sandbox-lifecycle.ts",
-    "proof:upgrade": "KIND=1 ../../deploy/substrate.sh install v1.0.0-rc.3 && ../../deploy/up.sh && node test/substrate-upgrade.ts",
-    "proof:repository": "node test/repository.ts",
-    "proof:claude-plan": "node test/claude-plan.ts",
-    "proof:make-room": "node test/make-room.ts",
+    "proof:history": "node test/history.ts",
     "proof:models": "node test/models.ts",
-    "proof:history": "node test/history.ts"
+    "proof:make-room": "node test/make-room.ts",
+    "proof:claude-plan": "node test/claude-plan.ts",
+    "proof:substrate": "../../deploy/proof.sh substrate",
+    "proof:repository": "../../deploy/proof.sh repository",
+    "proof:upgrade": "KIND=1 ../../deploy/substrate.sh install v1.0.0-rc.3 && ../../deploy/up.sh && ../../deploy/proof.sh substrate-upgrade"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.322",
@@ -27,6 +29,8 @@
   },
   "devDependencies": {
     "@types/node": "26.6.6",
-    "typescript": "7.0.2"
+    "@types/ws": "8.18.2",
+    "typescript": "7.0.2",
+    "ws": "8.21.0"
   }
 }

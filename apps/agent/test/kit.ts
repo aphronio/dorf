@@ -1,39 +1,40 @@
-import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import type { Readable } from "node:stream";
-import { createInterface } from "node:readline";
+import { type ChildProcess, spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Sandboxes } from "../src/sandbox.ts";
+import { localGate } from "./local-gate.ts";
 
 export const IDLE_MS = 10_000;
 const OWNER = "proof@example.com";
 const HEADERS = { "tailscale-user-login": OWNER, "content-type": "application/json" };
 const PORT = 8193;
+// As many Sandboxes as the lab's worker holds at once.
+const LOCAL_SLOTS = 3;
 export const DATA = mkdtempSync(join(tmpdir(), "dorf-proof-"));
-const TOKEN = join(DATA, "token");
-writeFileSync(TOKEN, execFileSync("kubectl", ["-n", "dorf-gate", "create", "token", "dorf-agent", "--audience", "api.ate-system.svc", "--duration", "24h"]));
-const forward = spawn("kubectl", ["-n", "dorf-gate", "port-forward", "svc/dorf-gate", "0:80"], { stdio: ["ignore", "pipe", "ignore"] });
-process.on("exit", () => {
-	forward.kill();
-	agent?.kill("SIGKILL");
-});
-const GATE = await new Promise<string>((resolve) => {
-	createInterface({ input: forward.stdout as Readable }).on("line", (line) => {
-		const port = line.match(/^Forwarding from 127\.0\.0\.1:(\d+) /)?.[1];
-		if (port) resolve(`http://127.0.0.1:${port}`);
-	});
-});
-forward.unref();
-(forward.stdout as Readable & { unref(): void }).unref();
-// Proof Sandboxes start "p-"; one proof runs at a time, so any left are a killed run's.
+// The agent's own settings name a real gate (deploy/proof.sh sets them); without them, Sandboxes are local stand-ins.
+export const substrate = Boolean(process.env.DORF_GATE && process.env.DORF_TOKEN_FILE);
+const GATE = substrate ? process.env.DORF_GATE! : await localGate(LOCAL_SLOTS);
+const TOKEN = substrate ? process.env.DORF_TOKEN_FILE! : join(DATA, "token");
+const WORKSPACE = substrate ? undefined : join(DATA, "workspace");
+if (!substrate) {
+	writeFileSync(TOKEN, "local");
+	mkdirSync(WORKSPACE!);
+}
+process.on("exit", () => agent?.kill("SIGKILL"));
+// Proof Sandboxes start "p-"; deploy/proof.sh deletes those a killed run left.
 const PREFIX = "p-";
 export const sandboxes = new Sandboxes(GATE, TOKEN, PREFIX);
-const actors = JSON.parse(execFileSync("kubectl", ["ate", "get", "actors", "-a", "dorf", "-o", "json"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
-for (const { metadata } of actors.actors ?? []) if (metadata.name.startsWith(PREFIX)) await sandboxes.delete(metadata.name);
 const t0 = Date.now();
 const owned = new Set<string>();
 let agent: ChildProcess | undefined;
+
+console.log(substrate ? `Sandboxes on Substrate through ${GATE}` : `Sandboxes are local stand-ins sharing one filesystem: this proves the agent, not Substrate (test/substrate.ts)`);
+
+// For claims only Substrate can make good on.
+export async function needSubstrate(): Promise<void> {
+	if (!substrate) await fail("this proof needs Substrate: run it through deploy/proof.sh");
+}
 
 export function log(step: string, detail = ""): void {
 	console.log(`${((Date.now() - t0) / 1000).toFixed(1).padStart(6)}s  ${step}${detail ? `  ${detail}` : ""}`);
@@ -48,7 +49,7 @@ export async function fail(message: string): Promise<never> {
 
 export async function startAgent(model = "faux", idleMs = IDLE_MS): Promise<void> {
 	agent = spawn("node", [new URL("../src/main.ts", import.meta.url).pathname], {
-		env: { ...process.env, DORF_MODEL: model, DORF_DATA: DATA, DORF_PORT: String(PORT), DORF_IDLE_MS: String(idleMs), DORF_OWNER: OWNER, DORF_GATE: GATE, DORF_TOKEN_FILE: TOKEN, DORF_SANDBOX_PREFIX: PREFIX },
+		env: { ...process.env, DORF_MODEL: model, DORF_DATA: DATA, DORF_PORT: String(PORT), DORF_IDLE_MS: String(idleMs), DORF_OWNER: OWNER, DORF_GATE: GATE, DORF_TOKEN_FILE: TOKEN, DORF_SANDBOX_PREFIX: PREFIX, ...(WORKSPACE ? { DORF_WORKSPACE: WORKSPACE, DORF_JOBS: join(DATA, "jobs") } : {}) },
 		stdio: ["ignore", "inherit", "inherit"],
 	});
 	await until("agent up", async () => (await fetch(`http://127.0.0.1:${PORT}/threads`, { headers: HEADERS }).catch(() => undefined))?.ok);

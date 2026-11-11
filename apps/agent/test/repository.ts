@@ -1,7 +1,9 @@
 // DORF_PROOF_REPO: owner/name of a private repository with a `node --test` suite that dorf-secrets/github can push to.
 import { randomUUID } from "node:crypto";
-import { call, createThread, fail, killAgent, log, runEnded, startAgent } from "./kit.ts";
+import { call, createThread, fail, killAgent, log, needSubstrate, runEnded, startAgent } from "./kit.ts";
 
+// The gate injects the token on the way out, so only a real gate can clone a private repository.
+await needSubstrate();
 const repo = process.env.DORF_PROOF_REPO;
 if (!repo || !/^[\w.-]+\/[\w.-]+$/.test(repo)) await fail("set DORF_PROOF_REPO to the repository's owner/name");
 const branch = `proof-${randomUUID().slice(0, 8)}`;

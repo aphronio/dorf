@@ -2,7 +2,8 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { defineExtension, type ToolExecutionApi, wrapTool } from "@earendil-works/pi-durable";
 import { createBashTool } from "@earendil-works/pi-durable/tools";
 
-const JOBS = "/var/tmp/dorf-jobs";
+// In the Sandbox; proofs on local stand-ins give each run its own, apart from the machine's.
+const JOBS = process.env.DORF_JOBS ?? "/var/tmp/dorf-jobs";
 const GIVE_UP_AFTER = 120;
 // An attempt that lasted this long reached the daemon; pi-env fails a connect within 60 s.
 const CONNECTED_MS = 90_000;
