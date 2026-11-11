@@ -133,6 +133,8 @@ install() {
 		Description=Deploy the newest commit on main that passed CI
 		[Service]
 		Type=oneshot
+		# Naming the user gives the service its HOME, where kubectl and docker keep their configuration.
+		User=$(id -un)
 		TimeoutStartSec=2h
 		ExecStart=/bin/bash -lc 'exec $PWD/deploy/follow.sh'
 	EOF
