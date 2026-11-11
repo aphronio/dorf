@@ -14,7 +14,7 @@ type FollowEvent = { entries?: ConversationView["entries"]; earlier?: boolean; l
 // Entries per page: the first window, each fill of a gap, each "load earlier".
 const PAGE = 50;
 
-export type ThreadSummary = { id: ConversationId; title: string; createdAt: string; repo?: string };
+export type ThreadSummary = { id: ConversationId; title: string; createdAt: string; repo?: string; archived?: true };
 
 const ThreadList = defineDoc<{ items: ThreadSummary[] }>({
 	kind: "dorf.threads",
@@ -46,6 +46,7 @@ export class Threads {
 	readonly #idleMs: number;
 	readonly #providerSessions: ProviderSessions;
 	readonly #idleSince = new Map<ConversationId, number>();
+	readonly #idle = new Map<ConversationId, { now(): void }>();
 
 	constructor(harness: Harness, sandboxes: Sandboxes, agent: AgentChange, idleMs: number, providerSessions: ProviderSessions) {
 		this.#harness = harness;
@@ -56,8 +57,12 @@ export class Threads {
 		sandboxes.makeRoom = () => this.#makeRoom();
 	}
 
+	// An archive the agent stopped short of finishes now.
 	async open(): Promise<void> {
-		for (const thread of await this.list()) await this.#watchIdle(thread.id);
+		for (const thread of await this.list()) {
+			await this.#watchIdle(thread.id);
+			if (thread.archived) this.#idle.get(thread.id)?.now();
+		}
 	}
 
 	async list(): Promise<ThreadSummary[]> {
@@ -108,11 +113,38 @@ export class Threads {
 		if (cloned.value.exitCode !== 0) throw new Error(`git clone ${repo}: ${output.trim().slice(-500)}`);
 	}
 
+	// A message brings an archived Thread back.
 	async send(id: ConversationId, text: string): Promise<boolean> {
 		const conversation = await this.#known(id);
 		if (!conversation) return false;
+		await this.#archive(id, false);
 		await conversation.submit({ type: "input", content: text, whenBusy: "steer" }, context);
 		return true;
+	}
+
+	// As in Amp: an archived Thread leaves the list, its work and its subagents' stop, and its Sandbox pauses at once.
+	async archive(id: ConversationId): Promise<boolean> {
+		const conversation = await this.#known(id);
+		if (!conversation) return false;
+		await this.#archive(id, true);
+		await conversation.abort(context, { background: true });
+		this.#idle.get(id)?.now();
+		return true;
+	}
+
+	async unarchive(id: ConversationId): Promise<boolean> {
+		if (!(await this.#known(id))) return false;
+		await this.#archive(id, false);
+		return true;
+	}
+
+	async #archive(id: ConversationId, archived: boolean): Promise<void> {
+		if ((await this.list()).find((t) => t.id === id)?.archived === (archived || undefined)) return;
+		await this.#harness.commit(async (tx) => {
+			const thread = (await tx.doc(ThreadList)).items.find((t) => t.id === id);
+			if (thread && archived) thread.archived = true;
+			else if (thread) delete thread.archived;
+		}, context);
 	}
 
 	async agent(id: ConversationId): Promise<ThreadAgent | undefined> {
@@ -235,6 +267,7 @@ export class Threads {
 		const sandbox = await this.sandbox(id);
 		if (sandbox) await this.#sandboxes.delete(sandbox);
 		this.#idleSince.delete(id);
+		this.#idle.delete(id);
 		await this.#harness.commit(async (tx) => {
 			const list = await tx.doc(ThreadList);
 			list.items = list.items.filter((t) => t.id !== id);
@@ -243,14 +276,15 @@ export class Threads {
 		return true;
 	}
 
-	#watchIdle(id: ConversationId): Promise<void> {
-		return pauseWhenIdle(
+	async #watchIdle(id: ConversationId): Promise<void> {
+		const idle = await pauseWhenIdle(
 			this.#harness,
 			id,
 			this.#idleMs,
 			(stillIdle) => this.#sleep(id, stillIdle),
 			(running) => (running ? this.#idleSince.delete(id) : this.#idleSince.set(id, Date.now())),
 		);
+		if (idle) this.#idle.set(id, idle);
 	}
 
 	// Returns whether the Sandbox was running and is now paused; "busy" while a subagent works in it.

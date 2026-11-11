@@ -99,6 +99,10 @@ async function route(threads: Threads, catalog: Catalog, claude: ClaudeLogin, gi
 			if (typeof level !== "string") return [400, { error: "level required" }];
 			return (await threads.think(id, catalog.thinking(agent.model, level))) ? [202, {}] : [404, { error: "no such thread" }];
 		}
+		case "POST :id/archive":
+			return (await threads.archive(id)) ? [202, {}] : [404, { error: "no such thread" }];
+		case "POST :id/unarchive":
+			return (await threads.unarchive(id)) ? [202, {}] : [404, { error: "no such thread" }];
 		case "POST :id/abort":
 			return (await threads.abort(id)) ? [202, {}] : [404, { error: "no such thread" }];
 		case "POST :id/compact":

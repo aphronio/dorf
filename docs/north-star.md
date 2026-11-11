@@ -60,6 +60,7 @@ harnesses. That code is frozen at the `v0.31.3` tag and is not maintained.
 | **Sandbox** | The isolated machine where a Thread's tools run. Keeps disk, memory and processes while paused. |
 | **create, resume, pause, delete** | The Sandbox operations Dorf performs. The agent resumes a Sandbox before it connects. |
 | **make room** | When no worker has room for a Sandbox to resume, pausing the Sandbox whose Thread has been idle the longest. With every Sandbox busy, the resume waits for a run to end. |
+| **archive** | As in Amp: a Thread leaves the list, its work stops and its Sandbox pauses at once; a message brings it back. Delete removes the Thread's Sandbox; Pi keeps its transcript. |
 | **drain** | Pausing every running Sandbox on a worker that is going away, even mid-call, so an upgrade loses no work. Substrate leaves it to the Sandbox's driver, the agent. |
 
 Substrate's own terms (Actor, Worker, Atespace, ActorTemplate) appear only in the gate and in
@@ -88,7 +89,6 @@ deployment files.
 | Code mode | A measured need |
 | The microVM class and restricted egress | Running code from people we do not trust, such as pull requests from forks |
 | Silently replacing a deleted Sandbox | Never. Tools fail with "Sandbox not found" |
-| Archiving a Thread | With the chat page. Then follow Amp: archive hides the Thread and pauses its Sandbox at once; delete removes both |
 | A dashboard | Daily use asks for more than a minimal chat page |
 | Provider adapters, sessions, profiles, the Provider Gateway, durable message custody | Never as before. These served the 0.31 control plane |
 
@@ -102,7 +102,8 @@ them, not designed ahead of it.
 
 - **One Thread, one Sandbox.** A tool call writes a file and starts a background process; the
   Sandbox pauses after the run; the next message resumes it with the file and process intact; an
-  agent killed mid-call finishes after restart; deleting the Thread deletes its Sandbox.
+  agent killed mid-call finishes after restart; archiving pauses the Sandbox at once and a message
+  brings the Thread back; deleting the Thread deletes its Sandbox.
 - **Harmless upgrades.** A Substrate upgrade and rollback run with zero hand steps while a Thread
   is live, and no Sandbox loses work.
 - Tests use Pi's faux model; real model keys never appear in tests or CI.

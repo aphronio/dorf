@@ -50,6 +50,22 @@ const [stillRunning] = await runEnded(id, left);
 if (stillRunning?.output.trim() !== "0") await fail(`timed-out command still running: ${JSON.stringify(stillRunning)}`);
 log("5. timeout failed the call and killed its command");
 
+const busy = "$[60] sleep 30 && echo never";
+await send(id, busy);
+await new Promise((r) => setTimeout(r, 2_000));
+const archivedAt = Date.now();
+if ((await call("POST", `/threads/${id}/archive`)).status !== 202) await fail("archive refused");
+await until("the archive's pause", async () => (await sandboxes.state(sandbox)) === "paused", IDLE_MS / 2);
+const listed = async () => (await call("GET", "/threads")).json.find((t: { id: number }) => t.id === id);
+if (!(await listed())?.archived) await fail("the archived thread is not marked archived");
+log("6. archive stopped the work and paused the sandbox at once", `${Date.now() - archivedAt} ms, idle window ${IDLE_MS / 1000}s`);
+
+const back = "$ cat note.txt";
+await send(id, back);
+const [again] = await runEnded(id, back);
+if (again?.output.trim() !== "hello" || (await listed())?.archived) await fail(`after archive: ${JSON.stringify(again)}`);
+log("7. a message brought the archived thread back with its file");
+
 const deleted = await call("DELETE", `/threads/${id}`);
 if (deleted.status !== 204) await fail(`delete: ${deleted.status}`);
 const gone = await sandboxes.state(sandbox).then(
@@ -58,7 +74,7 @@ const gone = await sandboxes.state(sandbox).then(
 );
 if (!gone) await fail(`sandbox ${sandbox} still exists after delete`);
 if ((await call("GET", `/threads/${id}`)).status !== 404) await fail("deleted thread still readable");
-log("6. thread deleted, sandbox gone");
+log("8. thread deleted, sandbox gone");
 
 killAgent();
 console.log("PASS");
