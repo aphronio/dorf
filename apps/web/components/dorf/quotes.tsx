@@ -176,21 +176,27 @@ function CommentBox({ quote, onAdd, onCancel }: { quote: string; onAdd: (comment
   )
 }
 
-// The quotes waiting in the composer, each removable.
+// The quotes waiting in the composer: one line each, the passage then its comment, wrapping like tags.
 export function QuoteChips({ quotes, onChange, disabled }: { quotes: Quote[]; onChange: (quotes: Quote[]) => void; disabled?: boolean }) {
   const X = useIcons().x
   if (!quotes.length) return null
   return (
-    <ul className="flex flex-col gap-1 pb-1" aria-label="Quotes to send">
+    <ul className="flex flex-wrap gap-1 pb-1" aria-label="Quotes to send">
       {quotes.map((q, i) => (
-        <li key={i} className="flex items-start gap-1 rounded-lg bg-surface-1 py-1 pr-1 pl-2">
-          <div className="min-w-0 flex-1 text-xs">
-            <p className="truncate border-l-2 border-border pl-2 text-muted-foreground">{q.text}</p>
-            {q.comment && <p className="mt-0.5 line-clamp-2 whitespace-pre-wrap">{q.comment}</p>}
-          </div>
-          <Button variant="ghost" size="icon-compact" aria-label="Remove quote" disabled={disabled} onClick={() => onChange(quotes.filter((_, j) => j !== i))} className="size-6">
+        <li key={i} title={q.comment ? `“${q.text}”\n${q.comment}` : `“${q.text}”`} className="flex h-6 max-w-72 items-center rounded-md bg-surface-1 pl-2 text-xs">
+          <span className="truncate">
+            <span className="text-muted-foreground">“{q.text}”</span>
+            {q.comment && <> {q.comment}</>}
+          </span>
+          <button
+            type="button"
+            aria-label="Remove quote"
+            disabled={disabled}
+            onClick={() => onChange(quotes.filter((_, j) => j !== i))}
+            className="flex size-6 shrink-0 items-center justify-center text-muted-foreground enabled:hover:text-foreground [&_svg]:size-3"
+          >
             <X />
-          </Button>
+          </button>
         </li>
       ))}
     </ul>
