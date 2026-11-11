@@ -4,7 +4,6 @@ import { useEffect, useState } from "react"
 import {
   Sidebar,
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarGroupLabel,
   SidebarHeader,
@@ -15,7 +14,6 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
-import { ClaudeStatus } from "@/components/dorf/claude-status"
 import { useIcons } from "@/lib/icon-context"
 import { fontWeights } from "@/lib/font-weight"
 import type { Thread } from "@/lib/dorf"
@@ -103,12 +101,12 @@ function Row({ thread, attention, now }: { thread: Thread; attention?: Attention
   )
 }
 
-type ThreadSidebarProps = { threads: Thread[]; attention: Map<number, Attention>; current?: number; connection: number; onUnarchive: (id: number) => void; onDelete: (id: number) => void }
+type ThreadSidebarProps = { threads: Thread[]; attention: Map<number, Attention>; current?: number; onUnarchive: (id: number) => void; onDelete: (id: number) => void }
 
 // Two sections, as a priority inbox: Threads whose run ended since the owner last looked, failed first, then every
 // other Thread by when the owner last asked in it. A row moves when it crosses between them or when the owner sends,
 // never because an agent made progress; `attention` says which Threads need the owner. Archived Threads fold at the bottom; only they can be deleted, and the bin asks once more in place.
-export function ThreadSidebar({ threads, attention, current, connection, onUnarchive, onDelete }: ThreadSidebarProps) {
+export function ThreadSidebar({ threads, attention, current, onUnarchive, onDelete }: ThreadSidebarProps) {
   const icons = useIcons()
   const now = useNow()
   const [confirming, setConfirming] = useState<number>()
@@ -193,9 +191,6 @@ export function ThreadSidebar({ threads, attention, current, connection, onUnarc
           </SidebarGroup>
         )}
       </SidebarContent>
-      <SidebarFooter>
-        <ClaudeStatus key={connection} />
-      </SidebarFooter>
     </Sidebar>
   )
 }

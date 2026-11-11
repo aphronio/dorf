@@ -27,7 +27,6 @@ export type Thread = {
 // needs a secure context.
 export const newRequest = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, "0")).join("")
 export type Repo = { name: string; private: boolean }
-export type Claude = { loggedIn: boolean; plan: string | null; email: string | null }
 export type ModelChoice = { ref: string; name: string; thinking: string[]; defaultThinking: string }
 export type ModelRef = { provider: string; modelId: string }
 export type ThreadAgent = { model?: ModelRef; thinkingLevel: string }

@@ -1,4 +1,5 @@
 import { type EffortLevel, type ModelInfo, type Options, query, type Query, type SDKMessage, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { createRequire } from "node:module";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, type CallToolResult, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
@@ -20,7 +21,13 @@ const ISOLATION_ENV = {
 };
 // An allowlist, so no API key, token or provider switch in the agent's environment reaches Claude Code.
 const PASSED_ENV = ["PATH", "HOME", "LANG", "TERM", "TMPDIR", "USER"];
-export const claudeEnv = () => Object.fromEntries(PASSED_ENV.flatMap((k) => (process.env[k] ? [[k, process.env[k]!]] : [])));
+// Behind the broker Claude Code holds a placeholder, and the broker adds the plan's token on the way to Anthropic.
+const BROKERED = process.env.DORF_BROKER ? { ANTHROPIC_BASE_URL: process.env.DORF_BROKER, CLAUDE_CODE_OAUTH_TOKEN: "placeholder" } : {};
+const claudeEnv = () => ({ ...Object.fromEntries(PASSED_ENV.flatMap((k) => (process.env[k] ? [[k, process.env[k]!]] : []))), ...BROKERED });
+
+export function bundledClaude(): string {
+	return createRequire(import.meta.url).resolve(`@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/claude`);
+}
 
 export type SessionStart = {
 	executable?: string;
@@ -168,7 +175,8 @@ export class ClaudeSession {
 			const problems = [
 				account.apiProvider !== "firstParty" && `Claude Code uses ${account.apiProvider}, not a Claude plan`,
 				account.apiKeySource && `Claude Code uses an API key (${account.apiKeySource}), not a Claude plan`,
-				!account.subscriptionType && "Claude Code is not signed in to a Claude plan; connect Claude first",
+				// A `claude setup-token` token exists only on a Claude plan, and Claude Code reports no plan for it.
+				!account.subscriptionType && account.tokenSource !== "CLAUDE_CODE_OAUTH_TOKEN" && "Claude Code is not signed in to a Claude plan",
 				!atLeast(init.claude_code_version ?? "0", MIN_VERSION) && `Claude Code ${init.claude_code_version} is older than ${MIN_VERSION.join(".")}`,
 				!offered.includes(start.model) && `Claude Code does not offer ${start.model}; it offers ${offered.join(", ")}`,
 				start.tools.length > 0 &&

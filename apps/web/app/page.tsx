@@ -242,7 +242,7 @@ export default function Page() {
 
   return (
     <SidebarProvider className="h-dvh">
-      <ThreadSidebar threads={threads} attention={attention} current={id} connection={connection} onUnarchive={(t) => void archive("unarchive", t)} onDelete={(t) => void remove(t)} />
+      <ThreadSidebar threads={threads} attention={attention} current={id} onUnarchive={(t) => void archive("unarchive", t)} onDelete={(t) => void remove(t)} />
       <CommandPalette threads={threads} />
       <ThemeSync />
       <AttentionMark attention={attention} />

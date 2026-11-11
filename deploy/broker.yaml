@@ -1,0 +1,122 @@
+# The agent holds no key: it calls the broker, and the broker adds the Claude plan's token or the GitHub token on the
+# few routes the agent needs. Agent code can use a key through these routes but cannot read it or send it elsewhere.
+apiVersion: v1
+kind: Namespace
+metadata: {name: dorf-broker}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: broker, namespace: dorf-broker}
+data:
+  envoy.yaml: |
+    static_resources:
+      listeners:
+      - name: broker
+        address: {socket_address: {address: 0.0.0.0, port_value: 8080}}
+        filter_chains:
+        - filters:
+          - name: envoy.filters.network.http_connection_manager
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+              stat_prefix: broker
+              http_filters:
+              - name: envoy.filters.http.router
+                typed_config: {"@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router}
+              route_config:
+                virtual_hosts:
+                - name: broker
+                  domains: ["*"]
+                  routes:
+                  # Claude Code's model requests; it sends a placeholder token, replaced here.
+                  - match: {path_separated_prefix: /v1/messages, headers: [{name: ":method", string_match: {exact: POST}}]}
+                    route: {cluster: anthropic, host_rewrite_literal: api.anthropic.com, timeout: 0s}
+                    request_headers_to_add:
+                    - {header: {key: authorization, value: "Bearer %ENVIRONMENT(CLAUDE_TOKEN)%"}, append_action: OVERWRITE_IF_EXISTS_OR_ADD}
+                  # Claude Code's reachability check, without a token.
+                  - match: {path: /api/hello, headers: [{name: ":method", string_match: {exact: HEAD}}]}
+                    route: {cluster: anthropic, host_rewrite_literal: api.anthropic.com}
+                  # The repositories the page offers for a new Thread.
+                  - match: {path: /user/repos, headers: [{name: ":method", string_match: {exact: GET}}]}
+                    route: {cluster: github, host_rewrite_literal: api.github.com}
+                    request_headers_to_add:
+                    - {header: {key: authorization, value: "Basic %ENVIRONMENT(GITHUB_BASIC)%"}, append_action: OVERWRITE_IF_EXISTS_OR_ADD}
+                  - match: {prefix: /}
+                    direct_response: {status: 403, body: {inline_string: "not a brokered route\n"}}
+      clusters:
+      - name: anthropic
+        type: LOGICAL_DNS
+        dns_lookup_family: V4_PREFERRED
+        load_assignment: {cluster_name: anthropic, endpoints: [{lb_endpoints: [{endpoint: {address: {socket_address: {address: api.anthropic.com, port_value: 443}}}}]}]}
+        transport_socket:
+          name: envoy.transport_sockets.tls
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+            sni: api.anthropic.com
+            common_tls_context:
+              validation_context:
+                trusted_ca: {filename: /etc/ssl/certs/ca-certificates.crt}
+                match_typed_subject_alt_names: [{san_type: DNS, matcher: {exact: api.anthropic.com}}]
+      - name: github
+        type: LOGICAL_DNS
+        dns_lookup_family: V4_PREFERRED
+        load_assignment: {cluster_name: github, endpoints: [{lb_endpoints: [{endpoint: {address: {socket_address: {address: api.github.com, port_value: 443}}}}]}]}
+        transport_socket:
+          name: envoy.transport_sockets.tls
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+            sni: api.github.com
+            common_tls_context:
+              validation_context:
+                trusted_ca: {filename: /etc/ssl/certs/ca-certificates.crt}
+                match_typed_subject_alt_names: [{san_type: DNS, matcher: {exact: api.github.com}}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: broker, namespace: dorf-broker}
+spec:
+  selector: {matchLabels: {app: broker}}
+  template:
+    metadata:
+      labels: {app: broker}
+      # A changed key or config restarts the broker, since Envoy reads both once.
+      annotations: {dorf.dev/inputs: "${BROKER_INPUTS}"}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 101}
+      containers:
+      - name: envoy
+        image: envoyproxy/envoy:v1.36.2@sha256:4972515dd9a069b44beb43cebba7851596e72a8c61cd7a7c33d8f48efc5280ba
+        args: [-c, /etc/broker/envoy.yaml, --log-level, warn]
+        ports: [{containerPort: 8080}]
+        readinessProbe: {tcpSocket: {port: 8080}}
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true}
+        env:
+        - name: CLAUDE_TOKEN
+          valueFrom: {secretKeyRef: {name: claude, key: token, optional: true}}
+        - name: GITHUB_BASIC
+          valueFrom: {secretKeyRef: {name: github, key: basic, optional: true}}
+        volumeMounts:
+        - {name: config, mountPath: /etc/broker, readOnly: true}
+      volumes:
+      - name: config
+        configMap: {name: broker}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: broker, namespace: dorf-broker}
+spec:
+  selector: {app: broker}
+  ports: [{port: 80, targetPort: 8080}]
+---
+# Only the agent may call the broker.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: broker, namespace: dorf-broker}
+spec:
+  podSelector: {matchLabels: {app: broker}}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: dorf-gate}}
+      podSelector: {matchLabels: {app: dorf-agent}}
+    ports: [{port: 8080}]

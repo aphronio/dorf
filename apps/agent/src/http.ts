@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { ConversationId, EntryId, UserInput } from "@earendil-works/pi-durable";
 import type { ImageProcessor } from "@earendil-works/pi-durable/tools";
-import { type ClaudeLogin, LoginError } from "./claude-login.ts";
 import type { GitHub } from "./github.ts";
 import { prepareImages } from "./images.ts";
 import type { Catalog } from "./models.ts";
@@ -16,7 +15,7 @@ type Reply = [status: number, body: unknown];
 
 // The page's static export, copied in by the image build (apps/web).
 const WEB = fileURLToPath(new URL("../web/", import.meta.url));
-const API = new Set(["threads", "repos", "claude", "models"]);
+const API = new Set(["threads", "repos", "models"]);
 const TYPES: Record<string, string> = {
 	".html": "text/html; charset=utf-8",
 	".txt": "text/plain; charset=utf-8",
@@ -82,24 +81,10 @@ function refused(req: http.IncomingMessage, owner: string): Reply | undefined {
 	if (site && site !== "same-origin" && site !== "none") return [403, { error: "cross-site request" }];
 }
 
-async function route(threads: Threads, catalog: Catalog, claude: ClaudeLogin, github: GitHub | undefined, images: ImageProcessor, req: http.IncomingMessage): Promise<Reply> {
+async function route(threads: Threads, catalog: Catalog, github: GitHub | undefined, images: ImageProcessor, req: http.IncomingMessage): Promise<Reply> {
 	const [, root, rawId, sub] = new URL(req.url ?? "/", "http://x").pathname.split("/");
 	if (root === "repos" && req.method === "GET" && !rawId) return [200, github ? await github.repos() : []];
 	if (root === "models" && req.method === "GET" && !rawId) return [200, catalog.list()];
-	if (root === "claude") {
-		switch (`${req.method} ${rawId ?? ""}`) {
-			case "GET ":
-				return [200, await claude.status()];
-			case "POST login":
-				return [200, { url: await claude.start() }];
-			case "POST code": {
-				const status = await claude.finish((await json(req)).code);
-				await catalog.refresh();
-				return [200, status];
-			}
-		}
-		return [405, { error: "method not allowed" }];
-	}
 	if (root !== "threads") return [404, { error: "not found" }];
 	const id = Number(rawId) as ConversationId;
 	const at = `${req.method} ${[rawId && ":id", sub].filter(Boolean).join("/")}`;
@@ -185,7 +170,7 @@ async function follow<E extends object>(start: (after: EntryId | undefined, emit
 	return true;
 }
 
-export function serve(threads: Threads, catalog: Catalog, claude: ClaudeLogin, github: GitHub | undefined, images: ImageProcessor, owner: string, port: number): http.Server {
+export function serve(threads: Threads, catalog: Catalog, github: GitHub | undefined, images: ImageProcessor, owner: string, port: number): http.Server {
 	return http
 		.createServer(async (req, res) => {
 			const send = ([status, body]: Reply) =>
@@ -206,9 +191,9 @@ export function serve(threads: Threads, catalog: Catalog, claude: ClaudeLogin, g
 					if (!Number.isSafeInteger(before) || before < 1) return send([400, { error: "before must be an entry id" }]);
 					return send((await threads.earlier(id, name, before as EntryId).then((page) => page && ([200, page] as Reply))) ?? missing);
 				}
-				send(await route(threads, catalog, claude, github, images, req));
+				send(await route(threads, catalog, github, images, req));
 			} catch (e) {
-				send([e instanceof BadRequest ? e.status : e instanceof Starting ? 409 : e instanceof LoginError || e instanceof RangeError ? 400 : 500, { error: (e as Error).message }]);
+				send([e instanceof BadRequest ? e.status : e instanceof Starting ? 409 : e instanceof RangeError ? 400 : 500, { error: (e as Error).message }]);
 			}
 		})
 		.listen(port, "127.0.0.1");

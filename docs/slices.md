@@ -47,13 +47,19 @@ Facts learned in one slice that a later slice must respect.
   only when `claude-plan.ts`, `claude-session.ts` or the Agent SDK pin changes; every other proof
   uses the faux model.
 - The plan's models and their effort levels come from Claude Code's start-up handshake, which sends
-  no model request. Pi's `fetchModels` loads them when the agent starts, before Threads resume, and
-  after the owner signs in; only the default model's provider is offered. Pi's thinking levels are
+  no model request. Pi's `fetchModels` loads them when the agent starts, before Threads resume;
+  only the default model's provider is offered. Pi's thinking levels are
   Claude Code's effort levels, and a change reaches the running Claude Code session through
   `applyFlagSettings`, so it is not relaunched. A message sent mid-run steers: Pi places it after
   the tool round, and the provider queues it into Claude Code's running turn with `priority:
   "next"`, so the model reads it as the user's. Put inside a tool result, the model treated it as
   prompt injection and refused it.
+- The agent holds no key. Claude Code runs with `CLAUDE_CODE_OAUTH_TOKEN=placeholder` and
+  `ANTHROPIC_BASE_URL` at the broker (`deploy/broker.yaml`, Envoy). The broker adds the plan's token
+  from `claude setup-token` on `POST /v1/messages*` and the GitHub token on `GET /user/repos`,
+  refuses every other route, and admits only the agent's pod. Claude Code reports `tokenSource:
+  CLAUDE_CODE_OAUTH_TOKEN` and no `subscriptionType` for such a token, which exists only on a plan.
+  Agent code can still spend a key through those routes, but cannot read it or send it elsewhere.
 - Subagents keep Pi's example 22 anchor: each is a conversation owned by a background anchor task,
   pointed at the Thread's Sandbox. A `subagent` call steers its message to the subagent and returns
   the answer as its result, as Pi's coding agent does; calls in one round run at once. The owner's
@@ -112,8 +118,8 @@ Facts learned in one slice that a later slice must respect.
   deploy/dorf-agent 8091:8091` with `Restart=always`: the forward exits whenever `up.sh` replaces the
   pod. `up.sh` needs `DORF_OWNER`, the one Tailscale login the agent serves.
 - GitHub is on when the Secret `dorf-secrets/github` exists: `up.sh` then gives the gate the egress
-  rule for github.com, api.github.com and uploads.github.com, and the agent its own copy to list
-  repositories. The gateway swaps the whole Authorization value, so `gh` works with
+  rule for github.com, api.github.com and uploads.github.com, and the broker a copy for the
+  agent's list of repositories. The gateway swaps the whole Authorization value, so `gh` works with
   `GH_TOKEN=placeholder` on REST and GraphQL. A fine-grained token lists every public repository of
   its owner too, not only the granted ones.
 - A Sandbox has no user or mount namespaces (gVisor), so local stand-ins can't give each Sandbox
