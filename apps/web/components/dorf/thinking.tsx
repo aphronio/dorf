@@ -17,12 +17,13 @@ export function Thinking({ value, levels, onChange }: { value: string; levels: s
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger render={<Button variant="ghost" size="compact" trailingIcon={Chevron} active={open} aria-label="Thinking" />}>
-        {at < 0 ? "default" : value}
+        {value}
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Positioner side="top" align="start" sideOffset={6} className="z-[var(--z-popover,60)] outline-none">
           <Popover.Popup render={<Elevated offset={2} shadowLevel={3} className="w-60 rounded-xl px-6 pt-4 pb-2 outline-none" />}>
-            <Slider.Root value={Math.max(at, 0)} min={0} max={levels.length - 1} step={1} onValueChange={(v) => pick(levels[v as number])}>
+            {/* Saves once on release; the next agent event moves it to the saved level. */}
+            <Slider.Root key={value} defaultValue={Math.max(at, 0)} min={0} max={levels.length - 1} step={1} onValueCommitted={(v) => pick(levels[v as number])}>
               <Slider.Control className="flex h-4 cursor-pointer items-center">
                 <Slider.Track className="relative h-1 w-full rounded-full bg-muted-foreground/25">
                   <Slider.Indicator className="rounded-full bg-[var(--fluid-accent)]" />
