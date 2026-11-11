@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 
 // `starting` until the first message is in, `waiting` meanwhile while no machine is free, since when and with which
 // Threads holding the machines, and `failure` if it never got in. `working` while a run is live; `attention` once it ended, until the owner opens the Thread.
+// `askedAt` is the owner's last message, `startedAt` and `endedAt` the newest run's.
 export type Thread = {
   id: number
   title: string
@@ -15,6 +16,9 @@ export type Thread = {
   failure?: string
   working?: true
   attention?: "done" | "failed"
+  askedAt?: string
+  startedAt?: string
+  endedAt?: string
 }
 
 // Names one draft, so sending it again after a lost answer finds the Thread the first send made. Not randomUUID: that

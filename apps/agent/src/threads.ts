@@ -126,12 +126,15 @@ export class Threads {
 			if (!thread) return;
 			const live = await tx.doc(LiveDoc, id);
 			if (live.run) {
-				if (!thread.working) thread.working = true;
-				if (thread.attention) delete thread.attention;
+				if (thread.working) return;
+				thread.working = true;
+				thread.startedAt = new Date().toISOString();
+				delete thread.attention;
 				return;
 			}
 			if (!thread.working) return;
 			delete thread.working;
+			thread.endedAt = new Date().toISOString();
 			const failure = live.runFailure?.reason;
 			if (!thread.archived && failure !== "aborted") thread.attention = failure ? "failed" : "done";
 		}, context);
@@ -204,6 +207,10 @@ export class Threads {
 		if (!conversation) return false;
 		if (await this.#starting(id)) throw new Starting();
 		await this.#archive(id, false);
+		await this.#harness.commit(async (tx) => {
+			const thread = (await tx.doc(ThreadList)).items.find((t) => t.id === id);
+			if (thread) thread.askedAt = new Date().toISOString();
+		}, context);
 		await conversation.submit({ type: "input", content, whenBusy: "steer" }, context);
 		return true;
 	}

@@ -67,6 +67,7 @@ import {
   Sliders01 as UuiSliders,
   InfoCircle as UuiInfo,
   AlertCircle as UuiAlertCircle,
+  CheckCircle as UuiCheckCircle,
   File01 as UuiFile,
   Minus as UuiMinus,
   Expand01 as UuiExpand01,
@@ -89,6 +90,16 @@ function untitledui(Icon: ComponentType<{ width?: number; height?: number; strok
   return function UntitledUiAdapter({ size, strokeWidth, className }: IconComponentProps) {
     return <Icon width={size} height={size} strokeWidth={strokeWidth} className={className} />;
   };
+}
+
+// Untitled UI has no dashed circle: the circle of AlertCircle and CheckCircle, cut into eight dashes, so the three
+// line up as one family.
+function DashedCircle({ size, strokeWidth = 2, className }: IconComponentProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
+      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeDasharray="4.4 3.45" />
+    </svg>
+  )
 }
 
 export const untitleduiIcons: Record<IconName, IconComponent> = {
@@ -157,6 +168,8 @@ export const untitleduiIcons: Record<IconName, IconComponent> = {
   "sliders-horizontal": untitledui(UuiSliders),
   "info": untitledui(UuiInfo),
   "circle-alert": untitledui(UuiAlertCircle),
+  "circle-check": untitledui(UuiCheckCircle),
+  "circle-dashed": DashedCircle,
   "file": untitledui(UuiFile),
   "minus": untitledui(UuiMinus),
   "maximize": untitledui(UuiExpand01),

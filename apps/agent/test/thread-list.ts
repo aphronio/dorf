@@ -1,6 +1,6 @@
 import { call, createThread, fail, follow, killAgent, log, pass, startAgent, until } from "./kit.ts";
 
-type Listed = { id: number; working?: true; attention?: "done" | "failed" };
+type Listed = { id: number; createdAt: string; working?: true; attention?: "done" | "failed"; askedAt?: string; startedAt?: string; endedAt?: string };
 
 await startAgent();
 let list = follow("/threads/events");
@@ -12,7 +12,9 @@ await reaches("working", id, (t) => Boolean(t.working));
 log("1. the list stream shows the Thread working while its run is live");
 
 await reaches("done", id, (t) => !t.working && t.attention === "done");
-log("2. once the run ends it asks for a look", JSON.stringify(state(id)));
+const first = state(id)!;
+if (!first.startedAt || !first.endedAt || first.endedAt < first.startedAt) await fail(`run times: ${JSON.stringify(first)}`);
+log("2. once the run ends it asks for a look, with when the run started and ended", JSON.stringify(state(id)));
 
 if ((await call("POST", `/threads/${id}/seen`)).status !== 202) await fail("seen refused");
 await reaches("seen", id, (t) => !t.working && !t.attention);
@@ -20,6 +22,8 @@ log("3. opening the Thread clears it");
 
 await call("POST", `/threads/${id}/messages`, { text: "$ sleep 30" });
 await reaches("working again", id, (t) => Boolean(t.working));
+if (!state(id)!.askedAt || state(id)!.askedAt! < first.endedAt!) await fail(`a message did not set askedAt: ${JSON.stringify(state(id))}`);
+log("   a message records when the owner last asked");
 await call("POST", `/threads/${id}/abort`);
 await reaches("stopped", id, (t) => !t.working);
 await new Promise((r) => setTimeout(r, 500));

@@ -8,6 +8,7 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { SidebarInsetTopbar } from "@/components/sidebar-app/inset-topbar"
 import { CommandPalette } from "@/components/dorf/command-palette"
 import { ThemeSync } from "@/components/dorf/theme-sync"
+import { AttentionMark } from "@/components/dorf/attention-mark"
 import { Picker } from "@/components/dorf/picker"
 import { Elapsed } from "@/components/dorf/elapsed"
 import { Starting } from "@/components/dorf/starting"
@@ -236,6 +237,7 @@ export default function Page() {
       <ThreadSidebar threads={threads} current={id} connection={connection} onUnarchive={(t) => void archive("unarchive", t)} onDelete={(t) => void remove(t)} />
       <CommandPalette threads={threads} />
       <ThemeSync />
+      <AttentionMark threads={threads} />
       <SidebarInset className="max-md:!m-0 max-md:!rounded-none">
         <SidebarInsetTopbar>
           <span className="min-w-0 flex-1 truncate text-sm font-medium">

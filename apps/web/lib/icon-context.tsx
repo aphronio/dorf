@@ -78,6 +78,8 @@ import {
   SlidersHorizontal,
   Info,
   CircleAlert,
+  CircleCheck,
+  CircleDashed,
   File,
   Minus,
   Maximize2,
@@ -118,7 +120,7 @@ export type IconName =
   | "home" | "message-circle" | "inbox"
   | "pencil" | "scaling" | "skip-forward" | "corner-down-right" | "corner-down-left"
   | "panel-left" | "panel-right" | "chevrons-up-down" | "more-horizontal" | "more-vertical" | "calendar" | "folder"
-  | "sliders-horizontal" | "info" | "circle-alert" | "file" | "minus"
+  | "sliders-horizontal" | "info" | "circle-alert" | "circle-check" | "circle-dashed" | "file" | "minus"
   | "maximize" | "minimize" | "grip-vertical" | "tag"
   | "archive" | "unarchive" | "delete";
 
@@ -184,6 +186,8 @@ export const defaultIcons: Record<IconName, IconComponent> = {
   "sliders-horizontal": SlidersHorizontal,
   "info": Info,
   "circle-alert": CircleAlert,
+  "circle-check": CircleCheck,
+  "circle-dashed": CircleDashed,
   "file": File,
   "minus": Minus,
   "maximize": Maximize2,
