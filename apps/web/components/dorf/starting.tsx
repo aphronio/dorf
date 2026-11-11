@@ -3,11 +3,11 @@
 import { ChatMessage } from "@/components/ui/chat-message"
 
 // Shown while the agent starts the Thread's machine and clones its repository, before the Thread exists.
-export function Starting({ prompt, repo }: { prompt: string; repo?: string }) {
+export function Starting({ prompt, images, repo }: { prompt: string; images: File[]; repo?: string }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-6">
-        <ChatMessage from="user" className="whitespace-pre-wrap">{prompt}</ChatMessage>
+        <ChatMessage from="user" className="whitespace-pre-wrap" files={images}>{prompt}</ChatMessage>
         <p className="flex items-center gap-2 font-mono text-[13px] text-muted-foreground">
           <span className="size-1.5 animate-pulse rounded-full bg-[var(--fluid-accent)]" />
           {repo ? `Starting a machine and cloning ${repo}…` : "Starting a machine…"}

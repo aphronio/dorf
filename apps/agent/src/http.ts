@@ -2,9 +2,12 @@ import { readFile } from "node:fs/promises";
 import http from "node:http";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ConversationId, EntryId } from "@earendil-works/pi-durable";
+import type { ImageContent } from "@earendil-works/pi-ai";
+import type { ConversationId, EntryId, UserInput } from "@earendil-works/pi-durable";
+import type { ImageProcessor } from "@earendil-works/pi-durable/tools";
 import { type ClaudeLogin, LoginError } from "./claude-login.ts";
 import type { GitHub } from "./github.ts";
+import { prepareImages } from "./images.ts";
 import type { Catalog } from "./models.ts";
 import type { Threads } from "./threads.ts";
 
@@ -24,25 +27,49 @@ const TYPES: Record<string, string> = {
 	".png": "image/png",
 };
 const MAX_BODY = 1 << 20;
+// A message may carry images: their base64 within prepareImages' total, before it shrinks them.
+const MAX_MESSAGE_BODY = 16 << 20;
 // Identity comes from the network, not a cookie, so a framing site would act as the owner. A reply is text from a
 // model that reads the internet, so the page loads no image from another origin: an image URL would carry data out.
+// A blob: URL names bytes the page already holds, such as an image the owner is about to send, so it carries nothing out.
 // A reply's views run in sandboxed frames, and frame-src keeps a frame from loading a page from another origin.
-const HEADERS = { "cache-control": "no-store", "x-frame-options": "DENY", "content-security-policy": "frame-ancestors 'none'; frame-src 'self'; img-src 'self' data:", "x-content-type-options": "nosniff" };
+const HEADERS = { "cache-control": "no-store", "x-frame-options": "DENY", "content-security-policy": "frame-ancestors 'none'; frame-src 'self'; img-src 'self' data: blob:", "x-content-type-options": "nosniff" };
 
-class BadRequest extends Error {}
-
-async function json(req: http.IncomingMessage): Promise<Record<string, unknown>> {
-	let text = "";
-	for await (const chunk of req) {
-		text += chunk;
-		if (text.length > MAX_BODY) throw new BadRequest("body too large");
+class BadRequest extends Error {
+	readonly status: number;
+	constructor(message: string, status = 400) {
+		super(message);
+		this.status = status;
 	}
+}
+
+// A body past the limit is still read to its end, so the browser gets the answer instead of a reset connection.
+async function json(req: http.IncomingMessage, limit = MAX_BODY): Promise<Record<string, unknown>> {
+	const tooLarge = new BadRequest(`body larger than ${limit >> 20} MiB`, 413);
+	if (Number(req.headers["content-length"]) > limit) throw tooLarge;
+	const chunks: Buffer[] = [];
+	let size = 0;
+	for await (const chunk of req as AsyncIterable<Buffer>) {
+		size += chunk.length;
+		if (size <= limit) chunks.push(chunk);
+	}
+	if (size > limit) throw tooLarge;
 	try {
-		return text ? JSON.parse(text) : {};
+		return size ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
 	} catch {
 		throw new BadRequest("body is not JSON");
 	}
 }
+
+// The images of a message, as the page sends them: base64 strings.
+function uploads(value: unknown): string[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) throw new BadRequest("images must be base64 strings");
+	return value;
+}
+
+// Text alone stays a string, as before images; with images, Pi's content blocks, the text first.
+const input = (text: string, images: ImageContent[]): UserInput => (images.length ? [...(text ? [{ type: "text" as const, text }] : []), ...images] : text);
 
 // Only `tailscale serve` reaches the agent's loopback, and it sets the caller's tailnet login. A
 // change must be JSON, so a browser sends another site's request only after a preflight we never answer.
@@ -54,7 +81,7 @@ function refused(req: http.IncomingMessage, owner: string): Reply | undefined {
 	if (site && site !== "same-origin" && site !== "none") return [403, { error: "cross-site request" }];
 }
 
-async function route(threads: Threads, catalog: Catalog, claude: ClaudeLogin, github: GitHub | undefined, req: http.IncomingMessage): Promise<Reply> {
+async function route(threads: Threads, catalog: Catalog, claude: ClaudeLogin, github: GitHub | undefined, images: ImageProcessor, req: http.IncomingMessage): Promise<Reply> {
 	const [, root, rawId, sub] = new URL(req.url ?? "/", "http://x").pathname.split("/");
 	if (root === "repos" && req.method === "GET" && !rawId) return [200, github ? await github.repos() : []];
 	if (root === "models" && req.method === "GET" && !rawId) return [200, catalog.list()];
@@ -79,19 +106,28 @@ async function route(threads: Threads, catalog: Catalog, claude: ClaudeLogin, gi
 		case "GET ":
 			return [200, await threads.list()];
 		case "POST ": {
-			const { prompt, repo, model, thinking } = await json(req);
-			if (typeof prompt !== "string" || !prompt) return [400, { error: "prompt required" }];
+			const { prompt = "", repo, model, thinking, images: attached } = await json(req, MAX_MESSAGE_BODY);
+			if (typeof prompt !== "string") return [400, { error: "prompt must be text" }];
+			const list = uploads(attached);
+			if (!prompt && !list.length) return [400, { error: "prompt or images required" }];
 			if (repo !== undefined && typeof repo !== "string") return [400, { error: "repo must be owner/name" }];
-			return [201, await threads.create(prompt, repo || undefined, catalog.choose(model, thinking))];
+			const choice = catalog.choose(model, thinking);
+			const prepared = await prepareImages(images, catalog.imageLimits(choice.model), list);
+			return [201, await threads.create(input(prompt, prepared), prompt || "Image", repo || undefined, choice)];
 		}
 		case "GET :id": {
 			const view = await threads.read(id);
 			return view ? [200, { sandbox: await threads.sandbox(id), agent: await threads.agent(id), ...view }] : [404, { error: "no such thread" }];
 		}
 		case "POST :id/messages": {
-			const { text } = await json(req);
-			if (typeof text !== "string" || !text) return [400, { error: "text required" }];
-			return (await threads.send(id, text)) ? [202, {}] : [404, { error: "no such thread" }];
+			const { text = "", images: attached } = await json(req, MAX_MESSAGE_BODY);
+			if (typeof text !== "string") return [400, { error: "text must be text" }];
+			const list = uploads(attached);
+			if (!text && !list.length) return [400, { error: "text or images required" }];
+			const agent = await threads.agent(id);
+			if (!agent) return [404, { error: "no such thread" }];
+			const prepared = await prepareImages(images, catalog.imageLimits(agent.model), list);
+			return (await threads.send(id, input(text, prepared))) ? [202, {}] : [404, { error: "no such thread" }];
 		}
 		case "POST :id/thinking": {
 			const agent = await threads.agent(id);
@@ -142,7 +178,7 @@ async function follow(start: (after: EntryId | undefined, emit: Emit) => Promise
 	return true;
 }
 
-export function serve(threads: Threads, catalog: Catalog, claude: ClaudeLogin, github: GitHub | undefined, owner: string, port: number): http.Server {
+export function serve(threads: Threads, catalog: Catalog, claude: ClaudeLogin, github: GitHub | undefined, images: ImageProcessor, owner: string, port: number): http.Server {
 	return http
 		.createServer(async (req, res) => {
 			const send = ([status, body]: Reply) =>
@@ -162,9 +198,9 @@ export function serve(threads: Threads, catalog: Catalog, claude: ClaudeLogin, g
 					if (!Number.isSafeInteger(before) || before < 1) return send([400, { error: "before must be an entry id" }]);
 					return send((await threads.earlier(id, name, before as EntryId).then((page) => page && ([200, page] as Reply))) ?? missing);
 				}
-				send(await route(threads, catalog, claude, github, req));
+				send(await route(threads, catalog, claude, github, images, req));
 			} catch (e) {
-				send([e instanceof BadRequest || e instanceof LoginError || e instanceof RangeError ? 400 : 500, { error: (e as Error).message }]);
+				send([e instanceof BadRequest ? e.status : e instanceof LoginError || e instanceof RangeError ? 400 : 500, { error: (e as Error).message }]);
 			}
 		})
 		.listen(port, "127.0.0.1");

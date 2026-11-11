@@ -3,12 +3,14 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { CodingTools } from "@earendil-works/pi-durable/tools";
+import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
+import { createCodingTools } from "@earendil-works/pi-durable/tools";
 import { bundledClaude, ClaudeLogin } from "./claude-login.ts";
 import { ClaudePlan } from "./claude-plan.ts";
 import { FAUX_MODEL, scriptedModel } from "./faux.ts";
 import { GitHub } from "./github.ts";
 import { serve } from "./http.ts";
+import { bounded } from "./images.ts";
 import { Catalog } from "./models.ts";
 import { ContextFiles } from "./context-files.ts";
 import { prompt } from "./prompt.ts";
@@ -43,7 +45,9 @@ const sandboxes = new Sandboxes(process.env.DORF_GATE ?? "http://127.0.0.1:8080"
 registry.install(prompt(WORKSPACE, github !== undefined));
 registry.install(ContextFiles);
 registry.install(Skills);
-registry.install(CodingTools);
+// One image policy: what `read` returns and what the owner attaches are both fitted to the Thread's model.
+const images = bounded(await createNodePhotonImages());
+registry.install(createCodingTools({ images }));
 registry.install(SandboxJobs);
 const catalog = new Catalog(models, model);
 await catalog.refresh();
@@ -76,5 +80,5 @@ const threads = new Threads(
 );
 await threads.open();
 drain(sandboxes);
-serve(threads, catalog, new ClaudeLogin(CLAUDE), github, OWNER, PORT);
+serve(threads, catalog, new ClaudeLogin(CLAUDE), github, images, OWNER, PORT);
 console.log(`dorf agent on 127.0.0.1:${PORT}, model ${model.provider}/${model.modelId}`);

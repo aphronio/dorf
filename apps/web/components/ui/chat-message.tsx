@@ -7,12 +7,19 @@ import { spring } from "@/lib/springs";
 import { useShape } from "@/lib/shape-context";
 import { useSize, typeClass, type SizeVariant } from "@/lib/size-context";
 import { useTouchPrimary } from "@/hooks/use-touch-primary";
+import { FileThumbnail } from "@/components/ui/file-thumbnail";
 
 interface ChatMessageProps
   extends Omit<HTMLMotionProps<"div">, "children"> {
   /** Who sent the message. Drives alignment and bubble colour:
    *  `user` → right-aligned accent bubble, `assistant` → left-aligned plain text. */
   from: "user" | "assistant";
+  /** Optional attachments rendered as square thumbnails above the bubble. */
+  files?: File[];
+  /** Side length of each attachment thumbnail in pixels. Defaults to 64. */
+  thumbnailSize?: number;
+  /** Makes each thumbnail a button that opens its file, e.g. in a dialog. */
+  onFileOpen?: (file: File) => void;
   /** Timestamp shown in the hover-revealed meta row, before the actions.
    *  User-message only — ignored on assistant replies. Caller pre-formats it
    *  (e.g. `"Wednesday 6:08 PM"`). */
@@ -20,7 +27,7 @@ interface ChatMessageProps
   /** Icon-only action buttons shown in the hover-revealed meta row (e.g. copy,
    *  edit, regenerate). Rendered next to the timestamp. */
   actions?: ReactNode;
-  /** Message body. When omitted the text bubble is dropped. */
+  /** Message body. When omitted the text bubble is dropped (attachment-only message). */
   children?: ReactNode;
   /** Pins the message to one step of the size ladder (see /docs/sizes) —
    *  compact tightens bubble type and padding. Omitted, it follows the
@@ -37,7 +44,7 @@ interface ChatMessageProps
 // ones added later animate in.
 const ChatMessage = forwardRef<HTMLDivElement, ChatMessageProps>(
   (
-    { from, time, actions, children, size, className, ...props },
+    { from, files, thumbnailSize = 64, onFileOpen, time, actions, children, size, className, ...props },
     ref
   ) => {
     const shape = useShape();
@@ -68,6 +75,34 @@ const ChatMessage = forwardRef<HTMLDivElement, ChatMessageProps>(
         )}
         {...props}
       >
+        {files && files.length > 0 && (
+          <div
+            className={cn(
+              "flex flex-wrap gap-1.5",
+              isUser ? "justify-end" : "justify-start"
+            )}
+          >
+            {files.map((file, i) =>
+              onFileOpen ? (
+                <button
+                  key={`${file.name}-${file.size}-${file.lastModified}-${i}`}
+                  type="button"
+                  onClick={() => onFileOpen(file)}
+                  aria-label={`Open ${file.name}`}
+                  className={cn("cursor-zoom-in outline-none focus-visible:ring-1 focus-visible:ring-[color:var(--focus-ring,#6B97FF)]", shape.bg)}
+                >
+                  <FileThumbnail file={file} size={thumbnailSize} />
+                </button>
+              ) : (
+                <FileThumbnail
+                  key={`${file.name}-${file.size}-${file.lastModified}-${i}`}
+                  file={file}
+                  size={thumbnailSize}
+                />
+              )
+            )}
+          </div>
+        )}
         {children != null && children !== "" && (
           <div
             className={cn(

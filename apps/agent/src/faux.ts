@@ -1,5 +1,6 @@
-// Each `$ ` line of the newest user message becomes a bash call (`$[5] ` sets a 5 s timeout), and each `@ {...}` line
-// a subagent call with those arguments; then "done". A message of just `?` gets the system prompt's sections back.
+// Each `$ ` line of the newest user message becomes a bash call (`$[5] ` sets a 5 s timeout), each `> path` line a read
+// of that file, and each `@ {...}` line a subagent call with those arguments; then "done", or "done, saw 2 images" when the message carried images. A message
+// of just `?` gets the system prompt's sections back.
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 
 export const FAUX_MODEL = { provider: "faux", modelId: "faux" };
@@ -24,12 +25,14 @@ export function scriptedModel() {
 		const calls = text.split("\n").flatMap((l) => {
 			const bash = l.match(/^\$(?:\[(\d+)\])? (.*)$/);
 			if (bash) return [fauxToolCall("bash", { command: bash[2], ...(bash[1] ? { timeout: Number(bash[1]) } : {}) })];
+			if (l.startsWith("> ")) return [fauxToolCall("read", { path: l.slice(2) })];
 			return l.startsWith("@ ") ? [fauxToolCall("subagent", JSON.parse(l.slice(2)))] : [];
 		});
 		const done = messages.slice(lastUser + 1).filter((m) => m.role === "toolResult").length;
+		const images = typeof content === "string" ? 0 : (content ?? []).filter((c) => c.type === "image").length;
 		return done < calls.length
 			? fauxAssistantMessage(calls[done], { stopReason: "toolUse" })
-			: fauxAssistantMessage("done");
+			: fauxAssistantMessage(images ? `done, saw ${images} image${images > 1 ? "s" : ""}` : "done");
 	};
 	faux.setResponses([step]);
 	return faux.provider;

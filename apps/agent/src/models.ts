@@ -1,6 +1,7 @@
 import type { Models, ModelThinkingLevel, ThinkingLevel } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import type { ModelRef } from "@earendil-works/pi-durable";
+import { DEFAULT_IMAGE_LIMITS, type ImageLimits } from "@earendil-works/pi-durable/tools";
 
 export type ModelChoice = { ref: string; name: string; thinking: ThinkingLevel[]; defaultThinking: ModelThinkingLevel };
 
@@ -73,6 +74,16 @@ export class Catalog {
 	near(ref: string, level: ModelThinkingLevel): { model: ModelRef; thinkingLevel: ModelThinkingLevel } {
 		const { model } = this.choose(ref);
 		return { model, thinkingLevel: clampThinkingLevel(this.#models.getModel(model.provider, model.modelId)!, level) };
+	}
+
+	// The rule Pi's `read` keeps for a conversation's model: the defaults, overridden by the model's own resize limits.
+	imageLimits(model: ModelRef | undefined): ImageLimits {
+		const resize = model && this.#models.getModel(model.provider, model.modelId)?.inputLimits?.images?.resize;
+		return {
+			maxWidth: resize?.maxWidth ?? DEFAULT_IMAGE_LIMITS.maxWidth,
+			maxHeight: resize?.maxHeight ?? DEFAULT_IMAGE_LIMITS.maxHeight,
+			maxBytes: resize?.maxBytes ?? DEFAULT_IMAGE_LIMITS.maxBytes,
+		};
 	}
 
 	thinking(model: ModelRef, level?: unknown): ModelThinkingLevel {

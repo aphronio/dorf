@@ -1,6 +1,7 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { type AgentChange, type Conversation, type ConversationId, ConversationTranscript, type ConversationView, type EntryId, type ModelRef, defineDoc, type Harness, type HarnessOptions, LiveDoc, ProviderDoc } from "@earendil-works/pi-durable";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { UserInput } from "@earendil-works/pi-durable";
 import { REPO } from "./github.ts";
 import { pauseWhenIdle } from "./idle.ts";
 import type { Sandboxes } from "./sandbox.ts";
@@ -9,7 +10,7 @@ import { ThreadSandbox } from "./thread-sandbox.ts";
 
 export type ThreadAgent = { model?: ModelRef; thinkingLevel: ModelThinkingLevel };
 export type SubagentView = { name: string; model?: ModelRef; working: boolean };
-type FollowEvent = { entries?: ConversationView["entries"]; earlier?: boolean; live?: unknown; queued?: string[]; agent?: ThreadAgent; subagents?: SubagentView[] };
+type FollowEvent = { entries?: ConversationView["entries"]; earlier?: boolean; live?: unknown; queued?: Queued[]; agent?: ThreadAgent; subagents?: SubagentView[] };
 
 // Entries per page: the first window, each fill of a gap, each "load earlier".
 const PAGE = 50;
@@ -39,11 +40,15 @@ const agentOf = async (conversation: { agent(c: typeof context): Promise<ThreadA
 // A provider that keeps a process or copy per Thread, keyed by Pi's provider session id.
 // Messages sent while the Thread works wait in Pi's inbox until the current step ends; the page shows them meanwhile.
 // Only the user's own messages: an input placed as another entry, such as a subagent's report, shows once it lands.
+// Images are counted, not sent: the live state goes out with each token, and they show once the message lands.
 type Inbox = { items?: { mode: string; entry?: unknown; content?: string | { type: string; text?: string }[] }[] };
-const queued = (docs: Record<string, unknown>): string[] =>
+type Queued = { text: string; images: number };
+const queued = (docs: Record<string, unknown>): Queued[] =>
 	((docs["pi.inbox"] as Inbox | undefined)?.items ?? []).flatMap((item) => {
 		if (item.mode === "write" || item.entry !== undefined || item.content === undefined) return [];
-		return [typeof item.content === "string" ? item.content : item.content.flatMap((b) => (b.type === "text" && b.text ? [b.text] : [])).join("")];
+		if (typeof item.content === "string") return [{ text: item.content, images: 0 }];
+		const text = item.content.flatMap((b) => (b.type === "text" && b.text ? [b.text] : [])).join("");
+		return [{ text, images: item.content.filter((b) => b.type === "image").length }];
 	});
 
 export type ProviderSessions = { release(sessionId: string): Promise<void>; forget(sessionId: string): Promise<void> };
@@ -83,7 +88,7 @@ export class Threads {
 	}
 
 	// The Thread commits before its Sandbox exists, so no Sandbox is ever left without a Thread.
-	async create(prompt: string, repo: string | undefined, choice: { model: ModelRef; thinkingLevel: ModelThinkingLevel }): Promise<{ id: ConversationId; sandbox: string }> {
+	async create(content: UserInput, title: string, repo: string | undefined, choice: { model: ModelRef; thinkingLevel: ModelThinkingLevel }): Promise<{ id: ConversationId; sandbox: string }> {
 		if (repo !== undefined && !REPO.test(repo)) throw new RangeError(`not a GitHub repository: ${repo}`);
 		const sandbox = this.#sandboxes.newName();
 		const workspace = this.#agent.cwd ?? "/";
@@ -96,7 +101,7 @@ export class Threads {
 				init: async (tx, id) => {
 					Object.assign(await tx.doc(ThreadSandbox, id), { name: sandbox, ...(repo ? { repo } : {}) });
 					await tx.doc(Subagents, id);
-					(await tx.doc(ThreadList)).items.push({ id, title: prompt.slice(0, 80), createdAt: new Date().toISOString(), ...(repo ? { repo } : {}) });
+					(await tx.doc(ThreadList)).items.push({ id, title: title.slice(0, 80), createdAt: new Date().toISOString(), ...(repo ? { repo } : {}) });
 				},
 			},
 			context,
@@ -109,7 +114,7 @@ export class Threads {
 			throw e;
 		}
 		await this.#watchIdle(conversation.id);
-		await conversation.submit({ type: "input", content: prompt }, context);
+		await conversation.submit({ type: "input", content }, context);
 		return { id: conversation.id, sandbox };
 	}
 
@@ -123,11 +128,11 @@ export class Threads {
 	}
 
 	// A message brings an archived Thread back.
-	async send(id: ConversationId, text: string): Promise<boolean> {
+	async send(id: ConversationId, content: UserInput): Promise<boolean> {
 		const conversation = await this.#known(id);
 		if (!conversation) return false;
 		await this.#archive(id, false);
-		await conversation.submit({ type: "input", content: text, whenBusy: "steer" }, context);
+		await conversation.submit({ type: "input", content, whenBusy: "steer" }, context);
 		return true;
 	}
 

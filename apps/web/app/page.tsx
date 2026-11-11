@@ -14,8 +14,9 @@ import { Thinking } from "@/components/dorf/thinking"
 import { SubagentList, SubagentView } from "@/components/dorf/subagent-panel"
 import { ThreadSidebar } from "@/components/dorf/thread-sidebar"
 import { Transcript } from "@/components/dorf/transcript"
+import { ImageDialog } from "@/components/dorf/image-dialog"
 import { useIcons } from "@/lib/icon-context"
-import { api, lastModel, Unreachable, type ModelChoice, modelName, openThread, type Repo, type Thread, useHashId, useThread } from "@/lib/dorf"
+import { api, encodeImage, IMAGE_TYPES, lastModel, MAX_IMAGES, Unreachable, type ModelChoice, modelName, openThread, type Repo, type Thread, useHashId, useThread } from "@/lib/dorf"
 
 const NO_REPO = "none"
 const REPO_KEY = "dorf.repo"
@@ -45,8 +46,12 @@ export default function Page() {
   const [repos, setRepos] = useState<Repo[]>([])
   const [repo, setRepo] = useState(NO_REPO)
   const [draft, setDraft] = useState("")
+  const [images, setImages] = useState<File[]>([])
+  // Set while the attached images are prepared, before the message leaves.
+  const [preparing, setPreparing] = useState(false)
+  const [opened, setOpened] = useState<File>()
   const [error, setError] = useState<string>()
-  const [starting, setStarting] = useState<{ prompt: string; repo?: string }>()
+  const [starting, setStarting] = useState<{ prompt: string; images: File[]; repo?: string }>()
   const { entries, live, agent, subagents, queued, loadEarlier } = useThread(id)
   const [panel, setPanel] = useState<string>()
   const openSubagent = subagents.find((s) => s.name === panel)
@@ -102,24 +107,54 @@ export default function Page() {
     setPanel(undefined)
   }
 
-  const send = async (value: string) => {
-    setDraft("")
+  // A file dropped anywhere but the composer would open in the tab, leaving the Thread.
+  useEffect(() => {
+    const refuse = (e: DragEvent) => {
+      if (e.defaultPrevented || !e.dataTransfer?.types.includes("Files")) return
+      e.preventDefault()
+      if (e.type === "dragover") e.dataTransfer.dropEffect = "none"
+    }
+    window.addEventListener("dragover", refuse)
+    window.addEventListener("drop", refuse)
+    return () => {
+      window.removeEventListener("dragover", refuse)
+      window.removeEventListener("drop", refuse)
+    }
+  }, [])
+
+  const send = async (value: string, files: File[]) => {
     setError(undefined)
+    let encoded: string[] = []
+    if (files.length) {
+      setPreparing(true)
+      try {
+        encoded = await Promise.all(files.map(encodeImage))
+      } catch (e) {
+        setError((e as Error).message)
+        return
+      } finally {
+        setPreparing(false)
+      }
+    }
+    const attached = encoded.length ? { images: encoded } : {}
+    setDraft("")
+    setImages([])
     try {
       if (id !== undefined) {
-        await api("POST", `/threads/${id}/messages`, { text: value })
+        await api("POST", `/threads/${id}/messages`, { text: value, ...attached })
         // A message brings an archived Thread back.
         if (thread?.archived) await refresh()
         return
       }
       store(REPO_KEY, repo)
       const chosen = repo !== NO_REPO ? repo : undefined
-      setStarting({ prompt: value, repo: chosen })
-      const created = await api<Thread>("POST", "/threads", { prompt: value, ...(chosen ? { repo: chosen } : {}), model, thinking: newLevels.length ? newLevel : undefined })
+      setStarting({ prompt: value, images: files, repo: chosen })
+      const created = await api<Thread>("POST", "/threads", { prompt: value, ...attached, ...(chosen ? { repo: chosen } : {}), model, thinking: newLevels.length ? newLevel : undefined })
       openThread(created.id)
       await refresh()
     } catch (e) {
       setDraft(value)
+      setImages(files)
       fail(e)
     } finally {
       setStarting(undefined)
@@ -142,6 +177,11 @@ export default function Page() {
   const answered = lastModel(entries)
   const think = (next: string) => id !== undefined && api("POST", `/threads/${id}/thinking`, { level: next }).catch(fail)
 
+  const attach = (pick: () => void) => (
+    <Button variant="ghost" size="icon-compact" aria-label="Attach images" title="Attach images" onClick={pick}>
+      <icons.image />
+    </Button>
+  )
   const controls =
     id === undefined ? (
       <>
@@ -180,7 +220,7 @@ export default function Page() {
       <SidebarInset className="max-md:!m-0 max-md:!rounded-none">
         <SidebarInsetTopbar>
           <span className="min-w-0 flex-1 truncate text-sm font-medium">
-            {thread ? (thread.repo ? `${thread.repo} · ${thread.title}` : thread.title) : id === undefined ? (starting?.prompt ?? "New Thread") : ""}
+            {thread ? (thread.repo ? `${thread.repo} · ${thread.title}` : thread.title) : id === undefined ? (starting ? starting.prompt || "Image" : "New Thread") : ""}
           </span>
           {id !== undefined && (
             <>
@@ -201,7 +241,7 @@ export default function Page() {
         <div className="relative flex min-h-0 flex-1">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {starting ? (
-          <Starting prompt={starting.prompt} repo={starting.repo} />
+          <Starting prompt={starting.prompt} images={starting.images} repo={starting.repo} />
         ) : id === undefined ? (
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
             <h1 className="text-2xl font-semibold">What should Dorf do?</h1>
@@ -224,11 +264,25 @@ export default function Page() {
           <InputMessage
             value={draft}
             onValueChange={setDraft}
-            onSend={(value) => void send(value)}
+            onSend={(value, files) => void send(value, files)}
+            files={images}
+            onFilesChange={(files) => (setImages(files), setError(undefined))}
+            accept={IMAGE_TYPES}
+            maxFiles={MAX_IMAGES}
+            onFilesRejected={(files) =>
+              setError(`Not attached: ${files.map((f) => f.name).join(", ")}. A message takes up to ${MAX_IMAGES} PNG, JPEG, GIF or WebP images.`)
+            }
+            sending={preparing}
+            onFileOpen={setOpened}
             placeholder={id === undefined ? "Describe a coding task" : "Ask or tell Dorf anything"}
             status={running ? "streaming" : "idle"}
             onStop={stop}
-            leftSlot={controls}
+            leftSlot={({ openFilePicker }) => (
+              <>
+                {attach(() => openFilePicker())}
+                {controls}
+              </>
+            )}
             className="bg-surface-3 shadow-surface-3"
             minRows={id === undefined ? 3 : 1}
             maxRows={6}
@@ -237,6 +291,7 @@ export default function Page() {
         </div>
         </div>
         </div>
+        <ImageDialog file={opened} onClose={() => setOpened(undefined)} />
       </SidebarInset>
     </SidebarProvider>
   )

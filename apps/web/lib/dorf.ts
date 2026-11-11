@@ -71,13 +71,16 @@ function merge(prev: Entry[], next: Entry[]): Entry[] {
   return [...byId.values()].sort((a, b) => a.id - b.id)
 }
 
+// A message sent while the Thread works, waiting for the current step to end; its images show once it lands.
+export type Queued = { text: string; images: number }
+
 // A Thread's or a subagent's event stream.
 export function useConversation(url: string | undefined) {
   const [entries, setEntries] = useState<Entry[]>([])
   const [live, setLive] = useState<Live>({})
   const [agent, setAgent] = useState<ThreadAgent>()
   const [subagents, setSubagents] = useState<Subagent[]>([])
-  const [queued, setQueued] = useState<string[]>([])
+  const [queued, setQueued] = useState<Queued[]>([])
   const [earlier, setEarlier] = useState(false)
   const following = useRef(url)
   // Another conversation starts empty, set while rendering so its first frame shows none of the last.
@@ -96,7 +99,7 @@ export function useConversation(url: string | undefined) {
     if (url === undefined) return
     const stream = new EventSource(url)
     stream.onmessage = (m) => {
-      const event = JSON.parse(m.data) as { entries?: Entry[]; earlier?: boolean; live?: Live; agent?: ThreadAgent; subagents?: Subagent[]; queued?: string[] }
+      const event = JSON.parse(m.data) as { entries?: Entry[]; earlier?: boolean; live?: Live; agent?: ThreadAgent; subagents?: Subagent[]; queued?: Queued[] }
       if (event.entries?.length) setEntries((prev) => merge(prev, event.entries!))
       if (event.earlier !== undefined) setEarlier(event.earlier)
       if (event.agent) setAgent(event.agent)
@@ -148,4 +151,58 @@ export function useHashId(): number | undefined {
     return () => window.removeEventListener("hashchange", update)
   }, [])
   return id
+}
+
+// ─── Images ──────────────────────────────────────────────────────────────
+
+export const IMAGE_TYPES = "image/png,image/jpeg,image/gif,image/webp"
+// The agent takes 8 images in a message and fits each to the model; sending each near this size keeps a message
+// from a phone quick, and its whole body well inside the agent's limit.
+export const MAX_IMAGES = 8
+const MAX_EDGE = 2000
+const TARGET_BYTES = 1 << 20
+
+const base64 = (blob: Blob) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result).slice(String(reader.result).indexOf(",") + 1))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(blob)
+  })
+
+// An attached image as the agent takes it: base64 of the file itself when it is small enough, else drawn at most
+// 2000 px on its longer edge, as PNG if that is small enough and as JPEG of falling quality if not. The agent
+// checks the bytes and fits them to the model either way.
+export async function encodeImage(file: File): Promise<string> {
+  const bitmap = await createImageBitmap(file).catch(() => {
+    throw new Error(`${file.name} is not an image the browser can read`)
+  })
+  const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height))
+  if (scale === 1 && file.size <= TARGET_BYTES) {
+    bitmap.close()
+    return base64(file)
+  }
+  const canvas = new OffscreenCanvas(Math.round(bitmap.width * scale), Math.round(bitmap.height * scale))
+  canvas.getContext("2d")!.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+  bitmap.close()
+  let out = await canvas.convertToBlob({ type: "image/png" })
+  for (const quality of [0.92, 0.85, 0.77, 0.68]) {
+    if (out.size <= TARGET_BYTES) break
+    out = await canvas.convertToBlob({ type: "image/jpeg", quality })
+  }
+  return base64(out)
+}
+
+type Image = Extract<Block, { type: "image" }>
+const files = new WeakMap<Image, File>()
+
+// A sent image as a File, the shape the chat components show; made once per stored block.
+export function imageFile(image: Image, name: string): File {
+  let file = files.get(image)
+  if (!file) {
+    const bytes = Uint8Array.from(atob(image.data), (c) => c.charCodeAt(0))
+    file = new File([bytes], name, { type: image.mimeType, lastModified: 0 })
+    files.set(image, file)
+  }
+  return file
 }
