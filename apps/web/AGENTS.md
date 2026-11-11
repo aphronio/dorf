@@ -15,4 +15,4 @@ The components in `components/ui` come from [Fluid Functionalism](https://www.fl
 https://github.com/mickadesign/fluid-functionalism/tree/main/skills/fluid-functionalism and the
 section of `references/craft.md` the component's docs link to. Dorf's own parts are in
 `components/dorf`, `lib/dorf.ts` and `app/page.tsx`. `bun run build` writes the static export the
-agent serves; `DORF_AGENT=http://127.0.0.1:8091 bun run dev` proxies the API to a running agent.
+agent serves. `node apps/agent/test/page.ts`, from the repository root, runs the page on seeded Threads and prints its URL.

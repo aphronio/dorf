@@ -41,7 +41,7 @@ Substrate does is proved by the test files that call `needSubstrate()`. Say whic
 
 A Thread working on Dorf runs in a gVisor Sandbox: Node, Bun, git, `gh`, curl, and a headless Chromium
 that the `browser-harness` skill drives; no `kubectl`, no Docker and no namespaces, and no way into
-the cluster. Run `.agents/setup` first, then `bun run check` and `bun run proof` as you work.
+the cluster. Run `bun run check` and `bun run proof` as you work.
 
 ## Ship
 
