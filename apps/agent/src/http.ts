@@ -127,7 +127,9 @@ async function follow(start: (emit: Emit) => Promise<(() => Promise<unknown>) | 
 		res.write(`data: ${JSON.stringify(event)}\n\n`);
 	});
 	if (!stop) return false;
-	req.once("close", () => void stop());
+	// The browser may have left while the watches started.
+	if (res.closed) void stop();
+	else res.once("close", () => void stop());
 	return true;
 }
 
