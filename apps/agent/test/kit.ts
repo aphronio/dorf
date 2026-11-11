@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Sandboxes } from "../src/sandbox.ts";
@@ -14,13 +14,9 @@ const LOCAL_SLOTS = 3;
 export const DATA = mkdtempSync(join(tmpdir(), "dorf-proof-"));
 // The agent's own settings name a real gate (deploy/proof.sh sets them); without them, Sandboxes are local stand-ins.
 export const substrate = Boolean(process.env.DORF_GATE && process.env.DORF_TOKEN_FILE);
-const GATE = substrate ? process.env.DORF_GATE! : await localGate(LOCAL_SLOTS);
+const GATE = substrate ? process.env.DORF_GATE! : await localGate(LOCAL_SLOTS, join(DATA, "sandboxes"));
 const TOKEN = substrate ? process.env.DORF_TOKEN_FILE! : join(DATA, "token");
-const WORKSPACE = substrate ? undefined : join(DATA, "workspace");
-if (!substrate) {
-	writeFileSync(TOKEN, "local");
-	mkdirSync(WORKSPACE!);
-}
+if (!substrate) writeFileSync(TOKEN, "local");
 process.on("exit", () => agent?.kill("SIGKILL"));
 // Proof Sandboxes start "p-"; deploy/proof.sh deletes those a killed run left.
 const PREFIX = "p-";
@@ -29,7 +25,7 @@ const t0 = Date.now();
 const owned = new Set<string>();
 let agent: ChildProcess | undefined;
 
-console.log(substrate ? `Sandboxes on Substrate through ${GATE}` : `Sandboxes are local stand-ins sharing one filesystem: this proves the agent, not Substrate (test/substrate.ts)`);
+console.log(substrate ? `Sandboxes on Substrate through ${GATE}` : `Sandboxes are local stand-ins, each in its own folder on one machine: this proves the agent, not Substrate (test/substrate.ts)`);
 
 // For claims only Substrate can make good on.
 export async function needSubstrate(): Promise<void> {
@@ -47,9 +43,11 @@ export async function fail(message: string): Promise<never> {
 	process.exit(1);
 }
 
+// On stand-ins the workspace is /proc/self/cwd: each Sandbox's pi-env starts in that Sandbox's own folder, and
+// every command it runs resolves the path there, so files stay apart with no change to the agent or the gate.
 export async function startAgent(model = "faux", idleMs = IDLE_MS): Promise<void> {
 	agent = spawn("node", [new URL("../src/main.ts", import.meta.url).pathname], {
-		env: { ...process.env, DORF_MODEL: model, DORF_DATA: DATA, DORF_PORT: String(PORT), DORF_IDLE_MS: String(idleMs), DORF_OWNER: OWNER, DORF_GATE: GATE, DORF_TOKEN_FILE: TOKEN, DORF_SANDBOX_PREFIX: PREFIX, ...(WORKSPACE ? { DORF_WORKSPACE: WORKSPACE, DORF_JOBS: join(DATA, "jobs") } : {}) },
+		env: { ...process.env, DORF_MODEL: model, DORF_DATA: DATA, DORF_PORT: String(PORT), DORF_IDLE_MS: String(idleMs), DORF_OWNER: OWNER, DORF_GATE: GATE, DORF_TOKEN_FILE: TOKEN, DORF_SANDBOX_PREFIX: PREFIX, ...(substrate ? {} : { DORF_WORKSPACE: "/proc/self/cwd", DORF_JOBS: join(DATA, "jobs") }) },
 		stdio: ["ignore", "inherit", "inherit"],
 	});
 	await until("agent up", async () => (await fetch(`http://127.0.0.1:${PORT}/threads`, { headers: HEADERS }).catch(() => undefined))?.ok);

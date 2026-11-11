@@ -32,7 +32,7 @@ Run these from the repository root. Times are from a Dorf Sandbox; a laptop is f
 | `deploy/proof.sh <name>` | One file of `apps/agent/test` against a cluster running Substrate; needs `kubectl` | 0.5 to 2 min |
 
 `npm run proof` needs no cluster and no credentials, and CI runs it on every push. Its stand-ins
-share one filesystem, so it proves the agent, not Substrate. Isolation between Sandboxes, files and
+give each Sandbox a folder on one machine, so it proves the agent, not Substrate. Isolation between Sandboxes, files and
 processes surviving a pause, the egress fence, token injection and upgrades are proved only by
 `deploy/proof.sh substrate`, `repository` and `substrate-upgrade`. Say which you ran.
 

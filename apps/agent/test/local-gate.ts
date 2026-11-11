@@ -1,15 +1,18 @@
 // The gate's routes on this machine, for proofs that test the agent rather than Substrate: each Sandbox is a
-// state and a pi-env daemon per connection, all sharing one filesystem. A pause closes the Sandbox's
+// state, a folder its pi-env daemons start in, and those daemons. The agent's workspace is relative, so each
+// Sandbox's files land in its own folder; absolute paths and processes are shared. A pause closes the Sandbox's
 // connections, a full set of slots answers 503, and a deleted Sandbox answers 404, as the real gate does.
 import { type ChildProcess, spawn } from "node:child_process";
+import { mkdirSync, rmSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { join } from "node:path";
 import { localDaemon } from "@earendil-works/pi-env";
 import { WebSocketServer } from "ws";
 
 type Sandbox = { state: "created" | "running" | "paused"; daemons: Set<ChildProcess> };
 
-export async function localGate(slots: number): Promise<string> {
+export async function localGate(slots: number, folders: string): Promise<string> {
 	const sandboxes = new Map<string, Sandbox>();
 	const running = () => [...sandboxes.values()].filter((s) => s.state === "running").length;
 
@@ -36,6 +39,7 @@ export async function localGate(slots: number): Promise<string> {
 		switch (`${req.method} ${action ?? ""}`) {
 			case "POST ":
 				if (sandbox) return [409, { error: `${name} exists` }];
+				mkdirSync(join(folders, name), { recursive: true });
 				sandboxes.set(name, { state: "created", daemons: new Set() });
 				return [201, {}];
 			case "GET ":
@@ -51,6 +55,7 @@ export async function localGate(slots: number): Promise<string> {
 				if (!sandbox) return [404, { error: `${name} not found` }];
 				close(sandbox);
 				sandboxes.delete(name);
+				rmSync(join(folders, name), { recursive: true, force: true });
 				return [204, null];
 		}
 		return [405, { error: "method not allowed" }];
@@ -70,7 +75,7 @@ export async function localGate(slots: number): Promise<string> {
 		const sandbox = sandboxes.get(name)!;
 		const args = JSON.parse(String(req.headers["x-pienv-args"] ?? "[]"));
 		sockets.handleUpgrade(req, socket, head, (ws) => {
-			const daemon = spawn(localDaemon(), args, { stdio: ["pipe", "pipe", "inherit"] });
+			const daemon = spawn(localDaemon(), args, { cwd: join(folders, name), stdio: ["pipe", "pipe", "inherit"] });
 			sandbox.daemons.add(daemon);
 			daemon.stdin.on("error", () => {});
 			ws.on("message", (data: Buffer) => {
