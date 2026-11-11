@@ -9,7 +9,7 @@ export function prompt(workspace: string, github: boolean) {
 	return defineExtension({
 		name: "dorf",
 		sections: [
-			section("preamble", () => `You work in a Linux machine of your own, with internet access. The workspace is ${workspace}.${gh} To show an image in your reply, read its file, then place it as ![alt](path); the page shows only images you have read. Keep answers short.`, { tag: false }),
+			section("preamble", () => `You work in a Linux machine of your own, with internet access. The workspace is ${workspace}.${gh} To show an image in your reply, read its file, then place it as ![alt](path); the page shows only images you have read. To show an interactive visual, such as a chart, diagram or mockup, write one self-contained HTML fragment in a fenced code block with the language view; the page runs it in a sandboxed frame with no network, so draw by hand in inline SVG or canvas with inline script and style, and use the page's colors as var(--foreground), var(--background), var(--muted-foreground), var(--border) and var(--fluid-accent). Keep answers short.`, { tag: false }),
 			section("cwd", (input) => input.env?.cwd),
 			section("repository", async (input, context) => (await input.read.snapshot(ThreadSandbox, input.conversationId, context))?.repo),
 		],

@@ -1,6 +1,15 @@
-import ReactMarkdown, { type Components } from "react-markdown"
+import { useMemo, type ComponentProps } from "react"
+import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { Code } from "@/components/dorf/code"
+import { View, ViewPending } from "@/components/dorf/view"
+
+const code = ({ className, children, ...p }: ComponentProps<"code"> & ExtraProps) => {
+  const lang = /language-(\S+)/.exec(className ?? "")?.[1]
+  const text = String(children ?? "")
+  if (lang || text.includes("\n")) return <Code code={text.replace(/\n$/, "")} lang={lang ?? "text"} />
+  return <code className="rounded bg-surface-3 px-1 py-0.5 font-mono text-[0.9em]" {...p}>{children}</code>
+}
 
 const components: Components = {
   p: (p) => <p className="my-2 first:mt-0 last:mb-0" {...p} />,
@@ -13,12 +22,7 @@ const components: Components = {
   strong: (p) => <strong className="font-semibold text-foreground" {...p} />,
   a: (p) => <a className="text-[color:var(--fluid-accent)] underline underline-offset-2" target="_blank" rel="noopener noreferrer" {...p} />,
   blockquote: (p) => <blockquote className="my-2 border-l-2 border-border pl-3 text-muted-foreground" {...p} />,
-  code: ({ className, children, ...p }) => {
-    const lang = /language-(\S+)/.exec(className ?? "")?.[1]
-    const text = String(children ?? "")
-    if (lang || text.includes("\n")) return <Code code={text.replace(/\n$/, "")} lang={lang ?? "text"} />
-    return <code className="rounded bg-surface-3 px-1 py-0.5 font-mono text-[0.9em]" {...p}>{children}</code>
-  },
+  code,
   pre: ({ children }) => <>{children}</>,
   table: (p) => <div className="my-2 overflow-x-auto"><table className="text-left text-sm" {...p} /></div>,
   th: (p) => <th className="border-b border-border px-2 py-1 font-semibold" {...p} />,
@@ -40,9 +44,21 @@ export function Markdown({ children, images }: { children: string; images?: Map<
       </span>
     )
   }
+  // A `view` block becomes a sandboxed frame once its closing fence arrives; until then it is still streaming. The
+  // component stays the same while the text does, so React keeps each frame and its state.
+  const view = useMemo(
+    () =>
+      function ViewOrCode(p: ComponentProps<"code"> & ExtraProps) {
+        if (!/\blanguage-view\b/.test(p.className ?? "")) return code(p)
+        const at = p.node?.position
+        const raw = at ? children.slice(at.start.offset, at.end.offset) : ""
+        return /\n[ \t]*(`{3,}|~{3,})[ \t]*$/.test(raw) ? <View html={String(p.children ?? "")} /> : <ViewPending />
+      },
+    [children],
+  )
   return (
     <div className="whitespace-normal">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ ...components, img }}>{children}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ ...components, img, code: view }}>{children}</ReactMarkdown>
     </div>
   )
 }
