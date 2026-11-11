@@ -20,6 +20,29 @@ it. [Slices](docs/slices.md) owns the plan, each slice's proof, and carry-over f
 - Use `gh` for GitHub repository operations. Write Markdown issue and PR bodies to a temporary
   file and pass it with `--body-file`.
 
+## Check and prove
+
+Run these from the repository root. Times are from a Dorf Sandbox; a laptop is faster.
+
+| Command | What it does | Time |
+| --- | --- | --- |
+| `.agents/setup` | Installs every package from its lockfile; safe to run again | 22 s |
+| `npm run check` | Types of the agent, gate and page, and the page's lint | 17 s |
+| `npm run proof` | The agent's proofs (history, models, lifecycle, make-room) with the faux model, against local stand-ins of the gate | 2 min |
+| `deploy/proof.sh <name>` | One file of `apps/agent/test` against a cluster running Substrate; needs `kubectl` | 0.5 to 2 min |
+
+`npm run proof` needs no cluster and no credentials, and CI runs it on every push. Its stand-ins
+share one filesystem, so it proves the agent, not Substrate. Isolation between Sandboxes, files and
+processes surviving a pause, the egress fence, token injection and upgrades are proved only by
+`deploy/proof.sh substrate`, `repository` and `substrate-upgrade`. Say which you ran.
+
+## In a Sandbox
+
+A Thread working on Dorf runs in a gVisor Sandbox: Node, git and `gh`, no `kubectl`, no Docker and
+no namespaces, and no way into the cluster. Run `.agents/setup` first, then `npm run check` and
+`npm run proof` as you work. A change to the gate, the Sandbox image or `deploy/` needs a Substrate
+proof, which the owner runs until staging exists.
+
 ## Public repository confidentiality
 
 This repository is public. Commit only reusable product code, documentation, and synthetic
