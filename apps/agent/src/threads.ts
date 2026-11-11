@@ -176,6 +176,18 @@ export class Threads {
 		return { id, sandbox };
 	}
 
+	// The Threads whose Sandboxes run, and so hold a worker's room.
+	async holders(): Promise<ConversationId[]> {
+		const threads = await this.list();
+		const running = await Promise.all(
+			threads.map(async (t) => {
+				const name = await this.sandbox(t.id);
+				return name !== undefined && (await this.#sandboxes.state(name).catch(() => undefined)) === "running";
+			}),
+		);
+		return threads.filter((_, i) => running[i]).map((t) => t.id);
+	}
+
 	async #starting(id: ConversationId): Promise<boolean> {
 		return Boolean((await this.list()).find((t) => t.id === id)?.starting);
 	}

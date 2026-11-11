@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import { Badge } from "@/components/ui/badge"
+import { Elapsed } from "@/components/dorf/elapsed"
 import {
   Sidebar,
   SidebarContent,
@@ -36,6 +37,12 @@ const Status = ({ thread, open }: { thread: Thread; open: boolean }) => {
     <Badge variant="ghost" size="compact" color={STATUS[status].color} title={status === "waiting" ? "Waiting for a machine: the others are working" : undefined}
       className={status === "working" || status === "starting" ? "shrink-0 [&>span:first-child]:animate-pulse" : "shrink-0"}>
       {STATUS[status].label}
+      {thread.waiting && (
+        <>
+          {" "}
+          <Elapsed since={thread.waiting.since} />
+        </>
+      )}
     </Badge>
   )
 }

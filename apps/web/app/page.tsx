@@ -9,6 +9,7 @@ import { SidebarInsetTopbar } from "@/components/sidebar-app/inset-topbar"
 import { CommandPalette } from "@/components/dorf/command-palette"
 import { ThemeSync } from "@/components/dorf/theme-sync"
 import { Picker } from "@/components/dorf/picker"
+import { Elapsed } from "@/components/dorf/elapsed"
 import { Starting } from "@/components/dorf/starting"
 import { Thinking } from "@/components/dorf/thinking"
 import { SubagentList, SubagentView } from "@/components/dorf/subagent-panel"
@@ -80,6 +81,7 @@ export default function Page() {
           images: mine ? starting.images : [],
           repo: thread?.repo ?? starting?.repo,
           waiting: thread?.waiting,
+          busy: threads.filter((t) => thread?.waiting?.busy.includes(t.id)),
           failure: thread?.failure,
         }
   // Looking at a Thread whose run ended clears its mark; a tab in the background leaves it until it comes back.
@@ -242,7 +244,11 @@ export default function Page() {
           {id !== undefined && (
             <>
               <Badge color={thread?.waiting ? "amber" : running || thread?.starting ? "blue" : "gray"} size="compact">
-                {thread?.waiting ? "waiting for a machine" : thread?.starting ? "starting" : running ? "working" : "idle"}
+                {thread?.waiting ? (
+                  <>
+                    waiting for a machine · <Elapsed since={thread.waiting.since} />
+                  </>
+                ) : thread?.starting ? "starting" : running ? "working" : "idle"}
               </Badge>
               {thread?.archived ? (
                 <Button variant="ghost" size="icon-compact" aria-label="Unarchive Thread" title="Unarchive" onClick={() => void archive("unarchive", id)}>

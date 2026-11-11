@@ -1,6 +1,6 @@
 import { call, createThread, fail, follow, killAgent, log, pass, runEnded, startAgent, until } from "./kit.ts";
 
-type Listed = { id: number; title: string; starting?: true; waiting?: true; working?: true };
+type Listed = { id: number; title: string; starting?: true; waiting?: { since: string; busy: number[] }; working?: true };
 
 // Long enough that no Sandbox pauses on its own during the proof.
 await startAgent("faux", 60 * 60_000);
@@ -23,7 +23,10 @@ const answered = Date.now() - began;
 if (first.status !== 201 || answered > 2_000) await fail(`create: ${first.status} after ${answered} ms`);
 const { id } = first.json;
 await until("the new Thread to wait for a machine", async () => state(id)?.starting && state(id)?.waiting);
-log("2. POST /threads answered at once and the Thread waits for a machine", `${answered} ms, ${JSON.stringify(state(id))}`);
+const holding = holders.map((h) => h.id).join();
+await until("the waiting Thread to name the Threads holding the machines", async () => state(id)?.waiting?.busy.join() === holding);
+const since = state(id)!.waiting!.since;
+log("2. POST /threads answered at once; the Thread waits for a machine and names the Threads holding them", `${answered} ms, ${JSON.stringify(state(id))}`);
 
 const again = await create();
 if (again.status !== 201 || again.json.id !== id || again.json.sandbox !== first.json.sandbox) await fail(`repeat: ${JSON.stringify(again)}`);
@@ -35,10 +38,10 @@ killAgent("SIGKILL");
 await startAgent("faux", 60 * 60_000);
 list = follow("/threads/events");
 await until("the list after the restart", async () => state(id));
-if (!state(id)?.starting || (await call("GET", `/threads/${id}`)).json.entries.length) await fail(`after the restart: ${JSON.stringify(state(id))}`);
+if (!state(id)?.starting || state(id)?.waiting?.since !== since || (await call("GET", `/threads/${id}`)).json.entries.length) await fail(`after the restart: ${JSON.stringify(state(id))}`);
 const refused = await call("POST", `/threads/${id}/messages`, { text: "$ echo too soon" });
 if (refused.status !== 409) await fail(`a message before the first got ${refused.status}`);
-log("4. after a restart it still waits, and refuses a second message until its first is in");
+log("4. after a restart it still waits, counted from the first wait, and refuses a second message until its first is in");
 
 const [result] = await runEnded(id, waited, 90_000);
 const seconds = (Date.now() - began) / 1000;

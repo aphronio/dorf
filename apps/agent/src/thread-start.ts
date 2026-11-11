@@ -16,11 +16,15 @@ async function mark(tx: Tx, id: ConversationId, change: (thread: ThreadSummary) 
 	if (thread) change(thread);
 }
 
+// The Threads whose Sandboxes run now; set once they exist.
+type Holders = () => Promise<ConversationId[]>;
+
 // A new Thread's Sandbox, its clone of the repository and its first message, after the Thread is committed. While no
 // worker has room the task sleeps and asks again, so it waits as long as it takes, across restarts; each ask first
 // pauses the Thread idle the longest. A repeat after a restart creates and clones again, since the message is not in
 // until the last commit.
 export function threadStart(sandboxes: Sandboxes) {
+	const hooks: { holders: Holders } = { holders: async () => [] };
 	async function clone(sandbox: string, repo: string, workspace: string, into: string, context: Context): Promise<void> {
 		let output = "";
 		const script = 'rm -rf "$1" && git clone --quiet "$2" "$1"';
@@ -41,11 +45,16 @@ export function threadStart(sandboxes: Sandboxes) {
 				let failure: string | undefined;
 				try {
 					await sandboxes.create(sandbox);
-					if (!(await sandboxes.wake(sandbox)))
+					if (!(await sandboxes.wake(sandbox))) {
+						const busy = (await hooks.holders()).filter((h) => h !== id);
 						return await runtime.commit(async (tx) => {
-							await mark(tx, id, (t) => void (t.waiting ??= true));
+							await mark(tx, id, (t) => {
+								if (!t.waiting) t.waiting = { since: new Date().toISOString(), busy };
+								else if (t.waiting.busy.join() !== busy.join()) t.waiting.busy = busy;
+							});
 							return later({ phase: "start" });
 						}, context);
+					}
 					await runtime.commit(async (tx) => void (await mark(tx, id, (t) => void delete t.waiting)), context);
 					if (repo) await clone(sandbox, repo, workspace, cwd, context);
 				} catch (e) {
@@ -69,5 +78,5 @@ export function threadStart(sandboxes: Sandboxes) {
 		// Only deleting the Thread aborts its start.
 		abort: (_start, runtime, context) => runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), context),
 	});
-	return { task, extension: defineExtension({ name: "dorf.thread-start", tasks: [task] }) };
+	return Object.assign(hooks, { task, extension: defineExtension({ name: "dorf.thread-start", tasks: [task] }) });
 }

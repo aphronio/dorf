@@ -82,6 +82,7 @@ const threads = new Threads(
 	IDLE_MS,
 	claudePlan,
 );
+start.holders = () => threads.holders();
 await threads.open();
 drain(sandboxes);
 serve(threads, catalog, new ClaudeLogin(CLAUDE), github, images, OWNER, PORT);

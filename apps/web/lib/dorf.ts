@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 
-// `starting` until the first message is in, `waiting` meanwhile while no machine is free, and `failure` if it never got
-// in. `working` while a run is live; `attention` once it ended, until the owner opens the Thread.
+// `starting` until the first message is in, `waiting` meanwhile while no machine is free, since when and with which
+// Threads holding the machines, and `failure` if it never got in. `working` while a run is live; `attention` once it ended, until the owner opens the Thread.
 export type Thread = {
   id: number
   title: string
@@ -11,7 +11,7 @@ export type Thread = {
   repo?: string
   archived?: true
   starting?: true
-  waiting?: true
+  waiting?: { since: string; busy: number[] }
   failure?: string
   working?: true
   attention?: "done" | "failed"
