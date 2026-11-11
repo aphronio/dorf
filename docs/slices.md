@@ -10,7 +10,7 @@ Each slice is the smallest demoable step. A slice is done when its proof runs fr
 | S3 | A real repository, used daily | `bun run --cwd apps/agent proof:repository` with `DORF_PROOF_REPO` set to a private repository with a `node --test` suite: a Thread clones it, changes it, runs the tests, commits and pushes a branch the remote then shows, with the token injected by the egress gateway. Then one run with a real model on this repository | Done |
 | S3.5 | The agent reaches Sandboxes without `kubectl` or a cluster kubeconfig, through Dorf's gate, so it can later run on Cloudflare | `deploy/proof.sh sandbox-lifecycle`: the agent holds only a `dorf-agent` token and calls the gate over HTTP and WebSocket; every step of S1's proof still passes | Done |
 | S4 | Dogfood: build Dorf with Dorf | From a minimal chat page, start a Thread on this repository, follow its output live, reply, and get a pushed branch. The agent runs as a pod beside the gate and Substrate, on a service-account token Kubernetes renews, with Claude connected from the chat page; the chat page is reached only over Tailscale. Sandboxes commit with a default git identity. Friction found while using it is filed as `friction` issues, and those issues pick the next slice | Planned |
-| S4.1 | Pick the model and thinking per Thread, and persistent subagents (owner asked while dogfooding) | `bun run --cwd apps/agent proof:models` with the faux model: the default model leads the offered list with its thinking levels; a Thread runs on the model and level it was created with, the level changes mid-Thread, and unknown models or levels are refused; a subagent works in the Thread's Sandbox, keeps its conversation across messages and reports each answer; a working subagent keeps the Sandbox awake; stop and Thread deletion end its work. Then `proof:claude-plan`, which covers the plan's model list, a live thinking change and a steer. It needs Claude Code signed in on the machine it runs on | Built; the plan checks ran against the lab agent; the steer fix awaits a run |
+| S4.1 | Pick the model and thinking per Thread, and persistent subagents (owner asked while dogfooding) | `bun run --cwd apps/agent proof:models` with the faux model: the default model leads the offered list with its thinking levels; a Thread runs on the model and level it was created with, the level changes mid-Thread, and unknown models or levels are refused; a subagent works in the Thread's Sandbox, keeps its conversation across messages and returns each answer; a working subagent keeps the Sandbox awake; stop and Thread deletion end its work. Then `proof:claude-plan`, which covers the plan's model list, a live thinking change and a steer. It needs Claude Code signed in on the machine it runs on | Built; the plan checks ran against the lab agent; the steer fix awaits a run |
 | S4.2 | A long Thread keeps its whole history on the page (found reviewing Dorf against Pi's examples) | `bun run --cwd apps/agent proof:history` with the faux model: a Thread of about 130 entries streams its newest fifty and says earlier ones exist; loading earlier pages the rest, in order, back to its first message; a reconnect that missed 10 or nearly all entries gets exactly those | Built |
 | S4.3 | A Thread proves its own change to Dorf, with no cluster and no credentials (found reviewing Dorf for agents) | `bun run --cwd apps/agent proof` inside a Sandbox: history, models, lifecycle, make-room and images pass against local stand-ins of the gate, each Sandbox a folder of its own on one machine, and each proof says so on its first line. The same files pass through `deploy/proof.sh` on Substrate, where `deploy/proof.sh substrate` adds what only Substrate does: a file and a process survive a pause, Sandboxes don't see each other's files, the internet is reachable and the cluster is not | Built |
 | S4.4 | A Thread follows the repository's AGENTS.md and skills (found when a fresh Thread on Dorf never read AGENTS.md) | `bun run --cwd apps/agent proof:models` with the faux model: after a Thread writes an AGENTS.md and a skill in its Sandbox, its next request carries the instructions and lists the skill with its description and location | Built |
@@ -53,12 +53,16 @@ Facts learned in one slice that a later slice must respect.
   the tool round, and the provider queues it into Claude Code's running turn with `priority:
   "next"`, so the model reads it as the user's. Put inside a tool result, the model treated it as
   prompt injection and refused it.
-- Subagents follow Pi's example 22: each is a conversation owned by a background anchor task,
-  pointed at the Thread's Sandbox, and its answers come back to the Thread as follow-ups. The idle
-  pause skips a Thread while one of its subagents works; the report's Thread run arms it again.
-  Deleting a Thread aborts with `background: true`, which stops its subagents. A subagent runs on
-  the Thread's model and thinking level unless the spawn names another model. Its answers arrive as
-  `dorf.subagent-report` input entries, so the page knows their author without reading the text.
+- Subagents keep Pi's example 22 anchor: each is a conversation owned by a background anchor task,
+  pointed at the Thread's Sandbox. A `subagent` call steers its message to the subagent and returns
+  the answer as its result, as Pi's coding agent does; calls in one round run at once. The owner's
+  message ends a wait, and that answer then reaches the Thread once as a steered
+  `dorf.subagent-report` entry, so the page knows its author without reading the text. Nothing is a
+  follow-up. Pi Durable 1.5.0 has no `notify` or parked tools, so a call waits in memory and the
+  agent's restart replays it by request ID; park instead once a release has them. The idle pause
+  skips a Thread while one of its subagents works. Deleting a Thread aborts with
+  `background: true`, which stops its subagents. A subagent runs on the Thread's model and thinking
+  level unless its first call names another model.
   Pi 1.5.0's example returns `content` from the tool, but tools must return `output`.
 - Known limits of jobs: `read`, `write` and `edit` calls in flight during a drain or router roll
   still fail once. A call cut off by more agent restarts than Pi's `restartLimit` (5) ends while
