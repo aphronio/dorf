@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { createThread, fail, killAgent, log, needSubstrate, type Result, runEnded, sandboxes, send, startAgent, until } from "./kit.ts";
+import { createThread, fail, log, needSubstrate, pass, type Result, runEnded, sandboxes, send, startAgent, until } from "./kit.ts";
 
 await needSubstrate();
 
@@ -87,5 +87,4 @@ log("three Threads ready on", from);
 await roll("upgrade", a, b, c, PINNED);
 await roll("rollback", a, b, c, from);
 
-killAgent();
-console.log("PASS");
+await pass();

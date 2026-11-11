@@ -1,6 +1,6 @@
 // DORF_PROOF_REPO: owner/name of a private repository with a `node --test` suite that dorf-secrets/github can push to.
 import { randomUUID } from "node:crypto";
-import { call, createThread, fail, killAgent, log, needSubstrate, runEnded, startAgent } from "./kit.ts";
+import { call, createThread, fail, log, needSubstrate, pass, runEnded, startAgent } from "./kit.ts";
 
 // The gate injects the token on the way out, so only a real gate can clone a private repository.
 await needSubstrate();
@@ -34,5 +34,4 @@ log("4. gh's GraphQL call answered");
 if (!deleted?.output.includes("deleted")) await fail(`branch cleanup: ${JSON.stringify(deleted)}`);
 
 await call("DELETE", `/threads/${id}`);
-killAgent();
-console.log("PASS");
+await pass();

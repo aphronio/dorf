@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Sandboxes } from "../src/sandbox.ts";
@@ -17,7 +17,11 @@ export const substrate = Boolean(process.env.DORF_GATE && process.env.DORF_TOKEN
 const GATE = substrate ? process.env.DORF_GATE! : await localGate(LOCAL_SLOTS, join(DATA, "sandboxes"));
 const TOKEN = substrate ? process.env.DORF_TOKEN_FILE! : join(DATA, "token");
 if (!substrate) writeFileSync(TOKEN, "local");
-process.on("exit", () => agent?.kill("SIGKILL"));
+// A run that passes removes its folder (pass()); any other end keeps it to inspect.
+process.on("exit", (code) => {
+	agent?.kill("SIGKILL");
+	if (code !== 0) console.error(`kept ${DATA} to inspect`);
+});
 // Proof Sandboxes start "p-"; deploy/proof.sh deletes those a killed run left.
 const PREFIX = "p-";
 export const sandboxes = new Sandboxes(GATE, TOKEN, PREFIX);
@@ -34,6 +38,20 @@ export async function needSubstrate(): Promise<void> {
 
 export function log(step: string, detail = ""): void {
 	console.log(`${((Date.now() - t0) / 1000).toFixed(1).padStart(6)}s  ${step}${detail ? `  ${detail}` : ""}`);
+}
+
+// Ends a proof that held: stops the agent, removes the run's folder and exits 0.
+export async function pass(): Promise<never> {
+	if (agent && agent.exitCode === null && agent.signalCode === null) {
+		const exited = new Promise((resolve) => agent!.once("exit", resolve));
+		agent.kill("SIGTERM");
+		const late = setTimeout(() => agent?.kill("SIGKILL"), 10_000);
+		await exited;
+		clearTimeout(late);
+	}
+	rmSync(DATA, { recursive: true, force: true });
+	console.log("PASS");
+	process.exit(0);
 }
 
 export async function fail(message: string): Promise<never> {

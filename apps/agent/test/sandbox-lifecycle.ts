@@ -1,5 +1,5 @@
 import { SandboxNotFound } from "../src/sandbox.ts";
-import { call, createThread, fail, IDLE_MS, killAgent, log, runEnded, sandboxes, send, startAgent, until } from "./kit.ts";
+import { call, createThread, fail, IDLE_MS, killAgent, log, pass, runEnded, sandboxes, send, startAgent, until } from "./kit.ts";
 
 await startAgent();
 
@@ -70,5 +70,4 @@ if (!gone) await fail(`sandbox ${sandbox} still exists after delete`);
 if ((await call("GET", `/threads/${id}`)).status !== 404) await fail("deleted thread still readable");
 log("8. thread deleted, sandbox gone");
 
-killAgent();
-console.log("PASS");
+await pass();

@@ -1,4 +1,4 @@
-import { call, createThread, fail, follow, killAgent, log, runEnded, send, startAgent, until } from "./kit.ts";
+import { call, createThread, fail, follow, log, pass, runEnded, send, startAgent, until } from "./kit.ts";
 
 type Entry = { id: number; kind: string; model?: { content?: string | { text?: string }[] }[] };
 const text = (e: Entry) => [e.model?.[0]?.content ?? []].flat().map((c) => (typeof c === "string" ? c : (c.text ?? ""))).join("");
@@ -43,5 +43,4 @@ for (const missed of [10, entries.length - 3]) {
 log("2. a reconnect resumes right after the newest entry the page has, a drop longer than the window included");
 
 if ((await call("DELETE", `/threads/${id}`)).status !== 204) await fail("delete");
-killAgent();
-console.log("PASS");
+await pass();

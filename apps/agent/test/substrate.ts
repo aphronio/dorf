@@ -1,5 +1,5 @@
 // What only Substrate makes good on; the other proofs run the same agent against local stand-ins.
-import { call, createThread, fail, IDLE_MS, killAgent, log, needSubstrate, runEnded, sandboxes, send, startAgent, until } from "./kit.ts";
+import { call, createThread, fail, IDLE_MS, log, needSubstrate, pass, runEnded, sandboxes, send, startAgent, until } from "./kit.ts";
 
 await needSubstrate();
 const zombies = "grep -l 'State:.*Z' /proc/[0-9]*/status 2>/dev/null | wc -l";
@@ -30,5 +30,4 @@ if (!/hello[\s\S]*alive[\s\S]*zombies 0/.test(after?.output ?? "")) await fail(`
 log("3. paused and resumed with file and process intact, no zombies");
 
 for (const t of [id, other.id]) if ((await call("DELETE", `/threads/${t}`)).status !== 204) await fail("delete");
-killAgent();
-console.log("PASS");
+await pass();
