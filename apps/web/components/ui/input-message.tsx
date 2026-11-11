@@ -513,12 +513,14 @@ const InputMessage = forwardRef<HTMLDivElement, InputMessageProps>(
     );
 
     // A pasted screenshot, image or copied file attaches, even when the
-    // clipboard also names it in text. Rich text stays text: cells copied
-    // from a spreadsheet bring an image of themselves along with their HTML.
+    // clipboard also names it in text or wraps it in HTML ("Copy image").
+    // Rich text stays text: cells copied from a spreadsheet bring an image of
+    // themselves along with both their text and their HTML.
     const handlePaste = useCallback(
       (e: ReactClipboardEvent<HTMLTextAreaElement>) => {
         if (!supportsFiles || disabled) return;
-        if (e.clipboardData.types.includes("text/html")) return;
+        const data = e.clipboardData;
+        if (data.types.includes("text/html") && data.getData("text/plain")) return;
         const pasted = Array.from(e.clipboardData.files);
         if (!pasted.some(matchesAccept)) return;
         e.preventDefault();
