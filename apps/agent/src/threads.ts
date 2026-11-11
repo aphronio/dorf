@@ -1,9 +1,10 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { type AgentChange, type Conversation, type ConversationId, ConversationTranscript, type ConversationView, type EntryId, type ModelRef, type Harness, type HarnessOptions, LiveDoc, ProviderDoc } from "@earendil-works/pi-durable";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import type { UserInput } from "@earendil-works/pi-durable";
+import type { InputEntry, UserInput } from "@earendil-works/pi-durable";
 import { REPO } from "./github.ts";
 import { pauseWhenIdle } from "./idle.ts";
+import { Quoted, type QuotedData } from "./quotes.ts";
 import type { Sandboxes } from "./sandbox.ts";
 import { placeStopped, Subagents, subagentsOf } from "./subagent.ts";
 import { ThreadList, type ThreadSummary } from "./thread-list.ts";
@@ -50,15 +51,18 @@ const agentOf = async (conversation: { agent(c: typeof context): Promise<ThreadA
 // A provider that keeps a process or copy per Thread, keyed by Pi's provider session id.
 // Messages sent while the Thread works wait in Pi's inbox until the current step ends; the page shows them meanwhile.
 // Only the user's own messages: an input placed as another entry, such as a subagent's report, shows once it lands.
-// Images are counted, not sent: the live state goes out with each token, and they show once the message lands.
-type Inbox = { items?: { mode: string; entry?: unknown; content?: string | { type: string; text?: string }[] }[] };
-type Queued = { text: string; images: number };
+// A message with quotes shows its own text. Images and quotes are counted, not sent: the live state goes out with each
+// token, and they show once the message lands.
+type Inbox = { items?: { mode: string; entry?: { kind: string; data?: unknown }; content?: string | { type: string; text?: string }[] }[] };
+type Queued = { text: string; images: number; quotes?: number };
 const queued = (docs: Record<string, unknown>): Queued[] =>
 	((docs["pi.inbox"] as Inbox | undefined)?.items ?? []).flatMap((item) => {
-		if (item.mode === "write" || item.entry !== undefined || item.content === undefined) return [];
-		if (typeof item.content === "string") return [{ text: item.content, images: 0 }];
-		const text = item.content.flatMap((b) => (b.type === "text" && b.text ? [b.text] : [])).join("");
-		return [{ text, images: item.content.filter((b) => b.type === "image").length }];
+		const quoted = item.entry?.kind === Quoted.kind ? (item.entry.data as QuotedData) : undefined;
+		if (item.mode === "write" || (item.entry !== undefined && !quoted) || item.content === undefined) return [];
+		const images = typeof item.content === "string" ? 0 : item.content.filter((b) => b.type === "image").length;
+		if (quoted) return [{ text: quoted.text, images, quotes: quoted.quotes.length }];
+		if (typeof item.content === "string") return [{ text: item.content, images }];
+		return [{ text: item.content.flatMap((b) => (b.type === "text" && b.text ? [b.text] : [])).join(""), images }];
 	});
 
 export type ProviderSessions = { release(sessionId: string): Promise<void>; forget(sessionId: string): Promise<void> };
@@ -203,7 +207,7 @@ export class Threads {
 	}
 
 	// A message brings an archived Thread back.
-	async send(id: ConversationId, content: UserInput): Promise<boolean> {
+	async send(id: ConversationId, content: UserInput, entry?: InputEntry): Promise<boolean> {
 		const conversation = await this.#known(id);
 		if (!conversation) return false;
 		if (await this.#starting(id)) throw new Starting();
@@ -212,7 +216,7 @@ export class Threads {
 			const thread = (await tx.doc(ThreadList)).items.find((t) => t.id === id);
 			if (thread) thread.askedAt = new Date().toISOString();
 		}, context);
-		await conversation.submit({ type: "input", content, whenBusy: "steer" }, context);
+		await conversation.submit({ type: "input", content, ...(entry ? { entry } : {}), whenBusy: "steer" }, context);
 		return true;
 	}
 

@@ -9,6 +9,7 @@ import { type ClaudeLogin, LoginError } from "./claude-login.ts";
 import type { GitHub } from "./github.ts";
 import { prepareImages } from "./images.ts";
 import type { Catalog } from "./models.ts";
+import { Quoted, quotedText, quotes } from "./quotes.ts";
 import { Starting, type Threads } from "./threads.ts";
 
 type Reply = [status: number, body: unknown];
@@ -121,14 +122,18 @@ async function route(threads: Threads, catalog: Catalog, claude: ClaudeLogin, gi
 			return view ? [200, { sandbox: await threads.sandbox(id), agent: await threads.agent(id), ...view }] : [404, { error: "no such thread" }];
 		}
 		case "POST :id/messages": {
-			const { text = "", images: attached } = await json(req, MAX_MESSAGE_BODY);
+			const { text = "", images: attached, quotes: quoting } = await json(req, MAX_MESSAGE_BODY);
 			if (typeof text !== "string") return [400, { error: "text must be text" }];
 			const list = uploads(attached);
-			if (!text && !list.length) return [400, { error: "text or images required" }];
+			const quoted = quotes(quoting);
+			if (!text && !list.length && !quoted.length) return [400, { error: "text, images or quotes required" }];
 			const agent = await threads.agent(id);
 			if (!agent) return [404, { error: "no such thread" }];
 			const prepared = await prepareImages(images, catalog.imageLimits(agent.model), list);
-			return (await threads.send(id, input(text, prepared))) ? [202, {}] : [404, { error: "no such thread" }];
+			// With quotes, the model reads them before the text, and the page shows them from the entry.
+			const content = input(quoted.length ? quotedText(quoted, text) : text, prepared);
+			const entry = quoted.length ? { kind: Quoted.kind, data: { text, quotes: quoted } } : undefined;
+			return (await threads.send(id, content, entry)) ? [202, {}] : [404, { error: "no such thread" }];
 		}
 		case "POST :id/thinking": {
 			const agent = await threads.agent(id);

@@ -156,6 +156,12 @@ interface InputMessageProps
   /** While the consumer prepares the message: the draft stays and keeps the
    *  focus, read-only, and nothing can be sent, added or removed. */
   sending?: boolean;
+  /** Content above the attachments, inside the composer, such as quotes to
+   *  send along. */
+  header?: ReactNode;
+  /** Allows sending an empty value with no files, when `header` holds
+   *  something to send. */
+  sendable?: boolean;
 }
 
 // ─── File preview tile ────────────────────────────────────────────────────
@@ -272,6 +278,8 @@ const InputMessage = forwardRef<HTMLDivElement, InputMessageProps>(
       filePreviewSize = 64,
       onFileOpen,
       sending = false,
+      header,
+      sendable = false,
       className,
       style,
       ...props
@@ -348,7 +356,7 @@ const InputMessage = forwardRef<HTMLDivElement, InputMessageProps>(
     }, [resizeTextarea]);
 
     const trimmed = value.trim();
-    const canSend = !disabled && !sending && (trimmed.length > 0 || filesArr.length > 0);
+    const canSend = !disabled && !sending && (trimmed.length > 0 || filesArr.length > 0 || sendable);
 
     // Edge = the box-shadow's 1px ring, recoloured in place per state so the
     // stroke gains contrast without ever appearing to thicken (no second
@@ -566,6 +574,8 @@ const InputMessage = forwardRef<HTMLDivElement, InputMessageProps>(
               tabIndex={-1}
             />
           )}
+
+          {header}
 
           {/* Attached files preview row — sits above the textarea.
               The outer motion.div animates the row's height (collapsing the

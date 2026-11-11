@@ -17,6 +17,7 @@ import { Thinking } from "@/components/dorf/thinking"
 import { SubagentList, SubagentView } from "@/components/dorf/subagent-panel"
 import { ThreadSidebar } from "@/components/dorf/thread-sidebar"
 import { Transcript } from "@/components/dorf/transcript"
+import { QuoteChips, useQuotes } from "@/components/dorf/quotes"
 import { ImageDialog } from "@/components/dorf/image-dialog"
 import { useIcons } from "@/lib/icon-context"
 import { api, encodeImage, IMAGE_TYPES, lastModel, MAX_IMAGES, Unreachable, type ModelChoice, modelName, newRequest, openThread, type Repo, RETRY_MS, type Thread, useHashId, useThread, useThreads } from "@/lib/dorf"
@@ -48,6 +49,8 @@ export default function Page() {
   const [repo, setRepo] = useState(NO_REPO)
   const [draft, setDraft] = useState("")
   const [images, setImages] = useState<File[]>([])
+  // Passages quoted from replies, waiting for the next message.
+  const [quotes, setQuotes] = useQuotes(id)
   // Set while the attached images are prepared, before the message leaves.
   const [preparing, setPreparing] = useState(false)
   const [opened, setOpened] = useState<File>()
@@ -163,11 +166,13 @@ export default function Page() {
       }
     }
     const attached = encoded.length ? { images: encoded } : {}
+    const quoting = id !== undefined ? quotes : []
     setDraft("")
     setImages([])
+    if (quoting.length) setQuotes([])
     try {
       if (id !== undefined) {
-        await api("POST", `/threads/${id}/messages`, { text: value, ...attached })
+        await api("POST", `/threads/${id}/messages`, { text: value, ...attached, ...(quoting.length ? { quotes: quoting } : {}) })
         return
       }
       store(REPO_KEY, repo)
@@ -181,6 +186,7 @@ export default function Page() {
       setStarting(undefined)
       setDraft(value)
       setImages(files)
+      if (quoting.length) setQuotes(quoting)
       fail(e)
     }
   }
@@ -279,7 +285,7 @@ export default function Page() {
         ) : openSubagent ? (
           <SubagentView thread={id} subagent={openSubagent} models={models} onBack={() => setPanel(undefined)} />
         ) : (
-          <Transcript entries={entries} live={live} queued={queued} onSubagent={setPanel} loadEarlier={loadEarlier} />
+          <Transcript entries={entries} live={live} queued={queued} onSubagent={setPanel} loadEarlier={loadEarlier} onQuote={(q) => setQuotes([...quotes, q])} />
         )}
         {id !== undefined && !first && <SubagentList subagents={subagents} open={panel} onOpen={setPanel} />}
 
@@ -302,6 +308,8 @@ export default function Page() {
               setError(`Not attached: ${files.map((f) => f.name).join(", ")}. A message takes up to ${MAX_IMAGES} PNG, JPEG, GIF or WebP images.`)
             }
             sending={preparing}
+            header={id !== undefined && <QuoteChips quotes={quotes} onChange={setQuotes} disabled={preparing} />}
+            sendable={id !== undefined && quotes.length > 0}
             onFileOpen={setOpened}
             placeholder={id === undefined ? "Describe a coding task" : "Ask or tell Dorf anything"}
             status={running ? "streaming" : "idle"}

@@ -131,8 +131,8 @@ function merge(prev: Entry[], next: Entry[]): Entry[] {
   return [...byId.values()].sort((a, b) => a.id - b.id)
 }
 
-// A message sent while the Thread works, waiting for the current step to end; its images show once it lands.
-export type Queued = { text: string; images: number }
+// A message sent while the Thread works, waiting for the current step to end; its images and quotes show once it lands.
+export type Queued = { text: string; images: number; quotes?: number }
 
 // A Thread's or a subagent's event stream.
 export function useConversation(url: string | undefined) {

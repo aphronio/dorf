@@ -10,12 +10,13 @@ import { useIcons } from "@/lib/icon-context"
 import { cn } from "@/lib/utils"
 import { ImageDialog, type Viewed } from "@/components/dorf/image-dialog"
 import { type Block, type Entry, imageFile, type Live, type Message, type Queued, text } from "@/lib/dorf"
+import { type Quote, QuoteSelection, quoteCount, SentQuotes, showReply } from "@/components/dorf/quotes"
 
 type Call = Extract<Block, { type: "toolCall" }>
 type Output = { text: string; error?: boolean; running?: boolean; images?: string[] }
 type Item =
-  | { kind: "user"; key: string; text: string; files: File[] }
-  | { kind: "text"; key: string; text: string; images?: Map<string, string> }
+  | { kind: "user"; key: string; text: string; files: File[]; quotes?: Quote[] }
+  | { kind: "text"; key: string; text: string; images?: Map<string, string>; entry?: number }
   | { kind: "calls"; key: string; calls: Call[] }
   | { kind: "note"; key: string; text: string; error?: boolean }
   | { kind: "subagent"; key: string; name: string; text: string; error?: boolean }
@@ -30,14 +31,14 @@ const command = (c: Call) => {
 
 // Consecutive commands form one block, even across the assistant messages Pi splits them into. The items before are
 // left as they are: they may be the settled ones, kept from render to render.
-function push(items: Item[], key: string, message: Message) {
+function push(items: Item[], key: string, message: Message, entry?: number) {
   const blocks = typeof message.content === "string" ? [{ type: "text", text: message.content } as Block] : message.content
   blocks.forEach((b, i) => {
     const last = items.at(-1)
     if (b.type === "toolCall") {
       if (last?.kind === "calls") items[items.length - 1] = { ...last, calls: [...last.calls, b] }
       else items.push({ kind: "calls", key: `${key}.${i}`, calls: [b] })
-    } else if (b.type === "text" && b.text.trim()) items.push({ kind: "text", key: `${key}.${i}`, text: b.text })
+    } else if (b.type === "text" && b.text.trim()) items.push({ kind: "text", key: `${key}.${i}`, text: b.text, entry })
   })
   if (message.stopReason === "error") items.push({ kind: "note", key: `${key}.e`, text: message.errorMessage ?? "The model failed.", error: true })
 }
@@ -70,10 +71,12 @@ function settle(entries: Entry[]) {
       const images = typeof m.content === "string" ? [] : m.content.flatMap((b) => (b.type === "image" ? [`data:${b.mimeType};base64,${b.data}`] : []))
       outputs[m.toolCallId] = { text: text(m.content), error: m.isError, images }
     }
-    else if (e.kind === "pi.user") {
+    else if (e.kind === "pi.user" || e.kind === "dorf.quoted") {
       const sent = typeof m.content === "string" ? [] : m.content.flatMap((b) => (b.type === "image" ? [b] : []))
       const files = sent.map((b, i) => imageFile(b, `image ${i + 1}.${EXTENSION[b.mimeType] ?? "png"}`))
-      items.push({ kind: "user", key: String(e.id), text: text(m.content), files })
+      // The model reads the quotes before the text; the page shows them from the entry's data.
+      const quoted = e.kind === "dorf.quoted" ? (e.data as { text: string; quotes: Quote[] }) : undefined
+      items.push({ kind: "user", key: String(e.id), text: quoted ? quoted.text : text(m.content), files, quotes: quoted?.quotes })
     }
     else if (e.kind === "dorf.subagent-report") {
       // The model reads "[subagent name answered…] text"; the page shows the author once.
@@ -81,15 +84,16 @@ function settle(entries: Entry[]) {
       const body = text(m.content)
       items.push({ kind: "subagent", key: String(e.id), name, text: failed ? body : body.slice(body.indexOf("] ") + 2), error: failed })
     }
-    else if (e.kind === "pi.assistant") push(items, String(e.id), m)
+    else if (e.kind === "pi.assistant") push(items, String(e.id), m, e.id)
     else if (e.kind === "pi.compaction") items.push({ kind: "note", key: String(e.id), text: "Earlier conversation summarized" })
   }
   return { outputs, items, images: place(items, 0, outputs, new Map()) }
 }
 
-type TranscriptProps = { entries: Entry[]; live: Live; queued?: Queued[]; onSubagent?: (name: string) => void; loadEarlier?: () => Promise<void> }
+// With `onQuote`, selecting text in a reply offers to quote it in the next message.
+type TranscriptProps = { entries: Entry[]; live: Live; queued?: Queued[]; onSubagent?: (name: string) => void; loadEarlier?: () => Promise<void>; onQuote?: (quote: Quote) => void }
 
-export function Transcript({ entries, live, queued = [], onSubagent, loadEarlier }: TranscriptProps) {
+export function Transcript({ entries, live, queued = [], onSubagent, loadEarlier, onQuote }: TranscriptProps) {
   const [opened, setOpened] = useState<Viewed>()
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
@@ -176,15 +180,23 @@ export function Transcript({ entries, live, queued = [], onSubagent, loadEarlier
         )}
         {items.map((item) => {
           switch (item.kind) {
-            case "user":
-              return (
+            case "user": {
+              const message = (item.text || item.files.length > 0) && (
                 <ChatMessage key={item.key} from="user" className="whitespace-pre-wrap" files={item.files} onFileOpen={setOpened}>
                   {item.text}
                 </ChatMessage>
               )
+              if (!item.quotes?.length) return message
+              return (
+                <div key={item.key} className="flex flex-col gap-2">
+                  <SentQuotes quotes={item.quotes} onOpen={(entry) => showReply(scroller.current, entry)} />
+                  {message}
+                </div>
+              )
+            }
             case "text":
               // A reply spans the column, so a view in it does too, however short its text.
-              return <ChatMessage key={item.key} from="assistant" className="max-w-full self-stretch items-stretch"><Markdown images={item.images} onImageOpen={setOpened}>{item.text}</Markdown></ChatMessage>
+              return <ChatMessage key={item.key} from="assistant" data-entry={item.entry} className="max-w-full self-stretch items-stretch rounded-lg"><Markdown images={item.images} onImageOpen={setOpened}>{item.text}</Markdown></ChatMessage>
             case "calls": {
               // Images a tool returned, such as screenshots the agent read, show small here; a reply places them wider, and
               // a click on either opens the viewer.
@@ -231,15 +243,16 @@ export function Transcript({ entries, live, queued = [], onSubagent, loadEarlier
               )
           }
         })}
-        {queued.map(({ text, images }, i) => (
+        {queued.map(({ text, images, quotes }, i) => (
           <div key={`queued.${i}`} className="flex flex-col items-end gap-1">
             {text && <ChatMessage from="user" className="whitespace-pre-wrap opacity-60">{text}</ChatMessage>}
             <p className="text-xs text-muted-foreground">
-              Sent{images ? ` with ${images} image${images > 1 ? "s" : ""}` : ""}. Dorf reads it when its commands finish.
+              Sent{images || quotes ? ` with ${[images ? `${images} image${images > 1 ? "s" : ""}` : "", quoteCount(quotes)].filter(Boolean).join(" and ")}` : ""}. Dorf reads it when its commands finish.
             </p>
           </div>
         ))}
       </div>
+      {onQuote && <QuoteSelection container={scroller} onQuote={onQuote} />}
       <ImageDialog image={opened} onClose={() => setOpened(undefined)} />
     </div>
   )
