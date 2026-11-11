@@ -163,9 +163,10 @@ async function asset(path: string, res: http.ServerResponse): Promise<boolean> {
 	return true;
 }
 
-// Server-sent events, each id the newest entry so far: the browser's reconnect sends it back as Last-Event-ID.
+// Server-sent events. An event with entries takes the newest one's id, which the browser's reconnect sends back as
+// Last-Event-ID; a page that opens the stream again itself sends it as `after`, since it cannot set that header.
 async function follow<E extends object>(start: (after: EntryId | undefined, emit: (event: E) => void) => Promise<(() => Promise<unknown>) | undefined>, req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
-	const last = Number(req.headers["last-event-id"]);
+	const last = Number(req.headers["last-event-id"] ?? new URL(req.url ?? "/", "http://x").searchParams.get("after"));
 	const stop = await start(Number.isSafeInteger(last) && last > 0 ? (last as EntryId) : undefined, (event) => {
 		if (!res.headersSent) res.writeHead(200, { ...HEADERS, "cache-control": "no-store, no-transform", "content-type": "text/event-stream" });
 		const newest = (event as { entries?: readonly { id: EntryId }[] }).entries?.at(-1)?.id;

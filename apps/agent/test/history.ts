@@ -42,5 +42,26 @@ for (const missed of [10, entries.length - 3]) {
 }
 log("2. a reconnect resumes right after the newest entry the page has, a drop longer than the window included");
 
+// The list stream sends the list on connect, then each change: a Thread created elsewhere, its work starting and ending.
+type Listed = { id: number; title: string; working?: true };
+const list = follow("/threads/events");
+const now: { threads: Listed[] } = await until("the list on connect", async () => list.events[0]);
+if (now.threads.map((t) => t.id).join() !== String(id) || now.threads[0]!.working) await fail(`list on connect: ${JSON.stringify(now.threads)}`);
+const started = await createThread("$ sleep 1");
+// The new Thread's state in each event after the first, repeats folded: "idle → working → idle → gone".
+const trail = () =>
+	list.events
+		.slice(1)
+		.map((e) => e.threads.find((t: Listed) => t.id === started.id))
+		.map((t) => (t === undefined ? "gone" : t.working ? "working" : "idle"))
+		.filter((state, i, all) => i === 0 || state !== all[i - 1])
+		.join(" → ");
+await until("the new Thread listed, working, then idle", async () => /^(idle → )?working → idle$/.test(trail()));
+if (!list.events.slice(1).some((e) => e.threads.some((t: Listed) => t.id === started.id && t.title === "$ sleep 1"))) await fail("the new Thread's title");
+if ((await call("DELETE", `/threads/${started.id}`)).status !== 204) await fail("delete");
+await until("the deleted Thread to leave the list", async () => trail().endsWith("idle → gone"));
+list.close();
+log("3. the list stream sends the list on connect, a Thread created through POST /threads, its work starting and ending, and its deletion", trail());
+
 if ((await call("DELETE", `/threads/${id}`)).status !== 204) await fail("delete");
 await pass();

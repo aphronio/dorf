@@ -16,13 +16,12 @@ import { ThreadSidebar } from "@/components/dorf/thread-sidebar"
 import { Transcript } from "@/components/dorf/transcript"
 import { ImageDialog } from "@/components/dorf/image-dialog"
 import { useIcons } from "@/lib/icon-context"
-import { api, encodeImage, IMAGE_TYPES, lastModel, MAX_IMAGES, Unreachable, type ModelChoice, modelName, openThread, type Repo, type Thread, useHashId, useThread } from "@/lib/dorf"
+import { api, encodeImage, IMAGE_TYPES, lastModel, MAX_IMAGES, Unreachable, type ModelChoice, modelName, openThread, type Repo, RETRY_MS, type Thread, useHashId, useThread, useThreads } from "@/lib/dorf"
 
 const NO_REPO = "none"
 const REPO_KEY = "dorf.repo"
 const MODEL_KEY = "dorf.model"
 const THINKING_KEY = "dorf.thinking"
-const RETRY_MS = 3000
 
 const stored = (key: string) => {
   try {
@@ -42,7 +41,6 @@ const level = (m: ModelChoice | undefined, wanted: string | null) => (wanted && 
 export default function Page() {
   const id = useHashId()
   const icons = useIcons()
-  const [threads, setThreads] = useState<Thread[]>([])
   const [repos, setRepos] = useState<Repo[]>([])
   const [repo, setRepo] = useState(NO_REPO)
   const [draft, setDraft] = useState("")
@@ -58,29 +56,18 @@ export default function Page() {
   const [models, setModels] = useState<ModelChoice[]>([])
   const [model, setModel] = useState<string>()
   const [thinking, setThinking] = useState<string>()
-  const thread = threads.find((t) => t.id === id)
   const running = Boolean(live.run)
 
   // Whether the agent stopped answering, and how many times it came back: each return loads again
-  // what the page asked it for when it was away.
+  // what the page asked it for when it was away. The streams open again by themselves.
   const [down, setDown] = useState(false)
   const [connection, setConnection] = useState(0)
   const fail = useCallback((e: unknown) => (e instanceof Unreachable ? setDown(true) : setError((e as Error).message)), [])
   const lost = useCallback((e: unknown) => void (e instanceof Unreachable && setDown(true)), [])
 
-  const refresh = useCallback(
-    () => api<Thread[]>("GET", "/threads").then((list) => (setThreads(list.slice().reverse()), true), (e) => (lost(e), false)),
-    [lost],
-  )
-  useEffect(() => void refresh(), [refresh])
-  // The list as it changes: a Thread added, archived, deleted, starting work or ending it. It opens again each time
-  // the agent comes back, since a browser gives up on a stream whose answer was an error page.
-  useEffect(() => {
-    const stream = new EventSource("/threads/events")
-    stream.onmessage = (m) => setThreads((JSON.parse(m.data) as { threads: Thread[] }).threads.slice().reverse())
-    stream.onerror = () => stream.readyState === EventSource.CLOSED && setDown(true)
-    return () => stream.close()
-  }, [connection])
+  // The list as it changes: a Thread added, archived, deleted, starting work or ending it.
+  const threads = useThreads(useCallback(() => setDown(true), []))
+  const thread = threads.find((t) => t.id === id)
   // Looking at a Thread whose run ended clears its mark; a tab in the background leaves it until it comes back.
   const unseen = Boolean(thread?.attention)
   useEffect(() => {
@@ -92,9 +79,12 @@ export default function Page() {
   }, [id, unseen, lost])
   useEffect(() => {
     if (!down) return
-    const timer = setInterval(() => void refresh().then((ok) => ok && (setDown(false), setConnection((n) => n + 1))), RETRY_MS)
+    const timer = setInterval(
+      () => void api("GET", "/threads").then(() => (setDown(false), setConnection((n) => n + 1)), () => {}),
+      RETRY_MS,
+    )
     return () => clearInterval(timer)
-  }, [down, refresh])
+  }, [down])
   useEffect(() => {
     api<Repo[]>("GET", "/repos")
       .then((list) => {
@@ -159,8 +149,6 @@ export default function Page() {
     try {
       if (id !== undefined) {
         await api("POST", `/threads/${id}/messages`, { text: value, ...attached })
-        // A message brings an archived Thread back.
-        if (thread?.archived) await refresh()
         return
       }
       store(REPO_KEY, repo)
@@ -168,7 +156,6 @@ export default function Page() {
       setStarting({ prompt: value, images: files, repo: chosen })
       const created = await api<Thread>("POST", "/threads", { prompt: value, ...attached, ...(chosen ? { repo: chosen } : {}), model, thinking: newLevels.length ? newLevel : undefined })
       openThread(created.id)
-      await refresh()
     } catch (e) {
       setDraft(value)
       setImages(files)
@@ -179,12 +166,10 @@ export default function Page() {
   }
   const stop = () => id !== undefined && api("POST", `/threads/${id}/abort`).catch(fail)
   // Archive stops the Thread's work and pauses its machine; it stays open here so it can come straight back.
-  const archive = (to: "archive" | "unarchive", thread: number) =>
-    api("POST", `/threads/${thread}/${to}`).catch(fail).then(refresh)
+  const archive = (to: "archive" | "unarchive", thread: number) => api("POST", `/threads/${thread}/${to}`).catch(fail)
   const remove = async (thread: number) => {
     await api("DELETE", `/threads/${thread}`).catch(fail)
     if (thread === id) openThread(undefined)
-    await refresh()
   }
 
   const newModel = models.find((m) => m.ref === model)

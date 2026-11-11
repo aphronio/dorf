@@ -59,13 +59,50 @@ export async function api<T>(method: string, path: string, body?: unknown): Prom
   return data as T
 }
 
+// How long the page waits, at most, before it asks an unreachable agent again.
+export const RETRY_MS = 3000
+
+// An event stream that stays open. EventSource retries a dropped connection itself, but gives up for good on an answer
+// other than 200, such as a proxy's 502 while the agent restarts; this opens it again after a wait that grows to RETRY_MS.
+// `url` is asked again at each reopen, so it can say where to resume; `lost` hears of each answer the browser gave up on.
+function stream<E>(url: () => string, on: { event: (event: E) => void; lost?: () => void }): () => void {
+  let source: EventSource | undefined
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let wait = 500
+  const open = () => {
+    source = new EventSource(url())
+    source.onopen = () => void (wait = 500)
+    source.onmessage = (m) => on.event(JSON.parse(m.data) as E)
+    source.onerror = () => {
+      if (source!.readyState !== EventSource.CLOSED) return
+      on.lost?.()
+      timer = setTimeout(open, wait)
+      wait = Math.min(wait * 2, RETRY_MS)
+    }
+  }
+  open()
+  return () => {
+    clearTimeout(timer)
+    source?.close()
+  }
+}
+
+// The Thread list, newest first, as the agent pushes it: on connect, and whenever a Thread is added, archived, deleted,
+// starts working or ends it.
+export function useThreads(lost: () => void): Thread[] {
+  const [threads, setThreads] = useState<Thread[]>([])
+  useEffect(() => stream<{ threads: Thread[] }>(() => "/threads/events", { event: (e) => setThreads(e.threads.slice().reverse()), lost }), [lost])
+  return threads
+}
+
 export const text = (content: Message["content"] | undefined) =>
   typeof content === "string"
     ? content
     : (content ?? []).flatMap((c) => (c.type === "text" ? [c.text] : [])).join("")
 
 // Pi's JSON state stream: the first event holds the newest entries and whether earlier ones exist,
-// later ones the new entries. A reconnect sends the newest entry it has and gets the ones it missed.
+// later ones the new entries. A reconnect sends the newest entry it has and gets the ones it missed, however many, so
+// merging by id keeps the transcript whole and in order.
 function merge(prev: Entry[], next: Entry[]): Entry[] {
   const byId = new Map(prev.map((e) => [e.id, e]))
   for (const e of next) byId.set(e.id, e)
@@ -98,17 +135,22 @@ export function useConversation(url: string | undefined) {
   useEffect(() => {
     following.current = url
     if (url === undefined) return
-    const stream = new EventSource(url)
-    stream.onmessage = (m) => {
-      const event = JSON.parse(m.data) as { entries?: Entry[]; earlier?: boolean; live?: Live; agent?: ThreadAgent; subagents?: Subagent[]; queued?: Queued[] }
-      if (event.entries?.length) setEntries((prev) => merge(prev, event.entries!))
-      if (event.earlier !== undefined) setEarlier(event.earlier)
-      if (event.agent) setAgent(event.agent)
-      if (event.subagents) setSubagents(event.subagents)
-      if (event.live) setLive(event.live)
-      if (event.queued) setQueued(event.queued)
-    }
-    return () => stream.close()
+    // A reopened stream resumes after the newest entry the page has, as the browser's own reconnect does.
+    let newest: number | undefined
+    type Event = { entries?: Entry[]; earlier?: boolean; live?: Live; agent?: ThreadAgent; subagents?: Subagent[]; queued?: Queued[] }
+    return stream<Event>(() => (newest === undefined ? url : `${url}?after=${newest}`), {
+      event: (event) => {
+        if (event.entries?.length) {
+          newest = Math.max(newest ?? 0, ...event.entries.map((e) => e.id))
+          setEntries((prev) => merge(prev, event.entries!))
+        }
+        if (event.earlier !== undefined) setEarlier(event.earlier)
+        if (event.agent) setAgent(event.agent)
+        if (event.subagents) setSubagents(event.subagents)
+        if (event.live) setLive(event.live)
+        if (event.queued) setQueued(event.queued)
+      },
+    })
   }, [url])
   const loadEarlier = useCallback(async () => {
     const oldest = entries[0]
