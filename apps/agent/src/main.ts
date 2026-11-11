@@ -51,7 +51,8 @@ registry.install(createCodingTools({ images }));
 registry.install(SandboxJobs);
 const catalog = new Catalog(models, model);
 await catalog.refresh();
-registry.install(subagents(catalog));
+// The subagent tool reaches the Harness to stop a subagent when the stop button aborts a call waiting for it.
+registry.install(subagents(catalog, () => harness));
 const harness = await Harness.open(
 	await openNodeSqliteStorage(`${DATA}/agent.sqlite`),
 	{

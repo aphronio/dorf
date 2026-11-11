@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { ChatMessage } from "@/components/ui/chat-message"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
@@ -22,7 +22,7 @@ type Item =
 const command = (c: Call) => {
   const a = c.arguments ?? {}
   if (c.name === "bash") return String(a.command ?? "")
-  if (c.name === "subagent") return [`subagent ${a.action}`, a.name, a.message && `: ${a.message}`].filter(Boolean).join(" ")
+  if (c.name === "subagent") return `subagent ${a.name}${a.message ? `: ${a.message}` : ""}`
   return `${c.name} ${JSON.stringify(a)}`
 }
 
@@ -89,7 +89,6 @@ function settle(entries: Entry[]) {
 type TranscriptProps = { entries: Entry[]; live: Live; queued?: Queued[]; onSubagent?: (name: string) => void; loadEarlier?: () => Promise<void> }
 
 export function Transcript({ entries, live, queued = [], onSubagent, loadEarlier }: TranscriptProps) {
-  const Chevron = useIcons()["chevron-right"]
   const [opened, setOpened] = useState<File>()
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
@@ -187,12 +186,19 @@ export function Transcript({ entries, live, queued = [], onSubagent, loadEarlier
               return <ChatMessage key={item.key} from="assistant" className="max-w-full self-stretch items-stretch"><Markdown images={item.images}>{item.text}</Markdown></ChatMessage>
             case "calls": {
               // Images a tool returned, such as screenshots the agent read, show small here; a reply places them full size.
+              // A subagent call waits for the subagent's answer; its link opens the subagent's transcript.
+              const waiting = item.calls.filter((c) => c.name === "subagent" && outputs[c.id]?.running)
               const shots = item.calls.flatMap((c) => (outputs[c.id]?.images ?? []).map((src, i) => ({ src, key: `${c.id}.${i}`, name: String(c.arguments?.path ?? "").split("/").pop() })))
               return (
                 <div key={item.key} className="-mx-2">
                   <ToolCalls
                     calls={item.calls.map((c) => ({ id: c.id, command: command(c), shell: c.name === "bash", ...outputs[c.id], output: outputs[c.id]?.text }))}
                   />
+                  {waiting.map((c) => (
+                    <SubagentLink key={c.id} name={String(c.arguments?.name)} onSubagent={onSubagent} className="px-2 py-1 text-xs">
+                      waiting on {String(c.arguments?.name)}
+                    </SubagentLink>
+                  ))}
                   {shots.length > 0 && (
                     <div className={`mt-2 grid gap-2 px-2 ${shots.length > 1 ? "sm:grid-cols-2" : ""}`}>
                       {shots.map((shot) => (
@@ -209,16 +215,9 @@ export function Transcript({ entries, live, queued = [], onSubagent, loadEarlier
             }
             case "subagent":
               return (
-                <button
-                  key={item.key}
-                  type="button"
-                  disabled={!onSubagent}
-                  onClick={() => onSubagent?.(item.name)}
-                  className={`flex items-center gap-1 self-start font-mono text-[13px] ${item.error ? "text-red-600 dark:text-red-400" : "text-muted-foreground"} enabled:hover:text-foreground`}
-                >
+                <SubagentLink key={item.key} name={item.name} error={item.error} onSubagent={onSubagent}>
                   {item.name} {item.error ? "failed" : "answered"}
-                  {onSubagent && <Chevron className="size-3.5" />}
-                </button>
+                </SubagentLink>
               )
             case "note":
               return item.key === "thinking" ? (
@@ -239,5 +238,22 @@ export function Transcript({ entries, live, queued = [], onSubagent, loadEarlier
       </div>
       <ImageDialog file={opened} onClose={() => setOpened(undefined)} />
     </div>
+  )
+}
+
+type SubagentLinkProps = { name: string; error?: boolean; onSubagent?: (name: string) => void; className?: string; children: ReactNode }
+
+function SubagentLink({ name, error, onSubagent, className = "text-[13px]", children }: SubagentLinkProps) {
+  const Chevron = useIcons()["chevron-right"]
+  return (
+    <button
+      type="button"
+      disabled={!onSubagent}
+      onClick={() => onSubagent?.(name)}
+      className={`flex items-center gap-1 self-start font-mono ${className} ${error ? "text-red-600 dark:text-red-400" : "text-muted-foreground"} enabled:hover:text-foreground`}
+    >
+      {children}
+      {onSubagent && <Chevron className="size-3.5" />}
+    </button>
   )
 }
