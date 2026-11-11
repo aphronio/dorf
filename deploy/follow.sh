@@ -53,7 +53,7 @@ backup() {
 		const fs = require("node:fs"), { DatabaseSync } = require("node:sqlite")
 		const dir = `${process.env.DORF_DATA}/backups`
 		fs.mkdirSync(dir, { recursive: true })
-		new DatabaseSync(`${process.env.DORF_DATA}/agent.sqlite`).exec(`VACUUM INTO "${dir}/${process.argv[1]}.sqlite"`)
+		new DatabaseSync(`${process.env.DORF_DATA}/agent.sqlite`).prepare("VACUUM INTO ?").run(`${dir}/${process.argv[1]}.sqlite`)
 		for (const old of fs.readdirSync(dir).sort().slice(0, -10)) fs.rmSync(`${dir}/${old}`)' "$(date -u +%Y%m%dT%H%M%SZ)-$1"
 }
 
@@ -96,7 +96,7 @@ follow() {
 		record "$tip" failure "held: main no longer contains the live commit"
 		return 0
 	fi
-	signed=$(git log --topo-order --format='%H %G?' "$tip" | awk '$2 == "G" { print $1; exit }')
+	signed=$(git log --topo-order --format='%H %G?' "$tip" | awk '$2 == "G" && !found { print $1; found = 1 }')
 	changed=$(git diff --name-only "${signed:-$EMPTY_TREE}" "$tip")
 	unsafe=$({ grep -Ev "$SAFE" <<<"$changed" || true; grep -E "$UNSAFE" <<<"$changed" || true; } | grep . || true)
 	if [ -n "$unsafe" ]; then
