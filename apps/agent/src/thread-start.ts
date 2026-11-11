@@ -8,6 +8,8 @@ type StartState = { phase: "start"; tries?: number };
 
 // Errors other than a failed clone, such as the gate restarting, are tried again this many times.
 const TRIES = 5;
+// A repository's setup that runs longer is stopped, so a hung install cannot hold the first message forever.
+const SETUP_SECONDS = 15 * 60;
 
 class CloneFailed extends Error {}
 
@@ -19,10 +21,10 @@ async function mark(tx: Tx, id: ConversationId, change: (thread: ThreadSummary) 
 // The Threads whose Sandboxes run now; set once they exist.
 type Holders = () => Promise<ConversationId[]>;
 
-// A new Thread's Sandbox, its clone of the repository and its first message, after the Thread is committed. While no
-// worker has room the task sleeps and asks again, so it waits as long as it takes, across restarts; each ask first
-// pauses the Thread idle the longest. A repeat after a restart creates and clones again, since the message is not in
-// until the last commit.
+// A new Thread's Sandbox, its clone of the repository with the clone's setup run, and its first message, after the
+// Thread is committed. While no worker has room the task sleeps and asks again, so it waits as long as it takes, across
+// restarts; each ask first pauses the Thread idle the longest. A repeat after a restart creates, clones and sets up
+// again, since the message is not in until the last commit.
 export function threadStart(sandboxes: Sandboxes) {
 	const hooks: { holders: Holders } = { holders: async () => [] };
 	async function clone(sandbox: string, repo: string, workspace: string, into: string, context: Context): Promise<void> {
@@ -31,6 +33,19 @@ export function threadStart(sandboxes: Sandboxes) {
 		const cloned = await sandboxes.env(sandbox, workspace).exec(["sh", "-c", script, "_", into, `https://github.com/${repo}.git`], { onOutput: (text) => void (output += text) }, context);
 		if (!cloned.ok) throw cloned.error;
 		if (cloned.value.exitCode !== 0) throw new CloneFailed(`git clone ${repo}: ${output.trim().slice(-500)}`);
+	}
+
+	// Runs the clone's `.agents/setup`, if it is executable, so the agent finds its repository installed. A setup that
+	// fails or runs too long is logged and the Thread starts anyway: the agent finds out when it runs its checks. The
+	// path is relative, since on stand-ins the clone sits under /proc/self/cwd, which the script itself would resolve.
+	async function setup(sandbox: string, repo: string, into: string, context: Context): Promise<void> {
+		let output = "";
+		const script = "[ -x .agents/setup ] || exit 0; exec .agents/setup";
+		const ran = await sandboxes.env(sandbox, into).exec(["sh", "-c", script], { timeout: SETUP_SECONDS, onOutput: (text) => void (output += text) }, context);
+		const tail = output.trim().slice(-500);
+		if (!ran.ok && ran.error.code !== "timeout") throw ran.error;
+		if (!ran.ok) console.error(`${repo}/.agents/setup ran past ${SETUP_SECONDS} s and was stopped: ${tail}`);
+		else if (ran.value.exitCode !== 0) console.error(`${repo}/.agents/setup exited ${ran.value.exitCode}: ${tail}`);
 	}
 
 	const task = defineTask<StartInput, StartState, null>({
@@ -56,7 +71,10 @@ export function threadStart(sandboxes: Sandboxes) {
 						}, context);
 					}
 					await runtime.commit(async (tx) => void (await mark(tx, id, (t) => void delete t.waiting)), context);
-					if (repo) await clone(sandbox, repo, workspace, cwd, context);
+					if (repo) {
+						await clone(sandbox, repo, workspace, cwd, context);
+						await setup(sandbox, repo, cwd, context);
+					}
 				} catch (e) {
 					const tries = (start.state.checkpoint.tries ?? 0) + 1;
 					console.error(`start Thread ${id}: ${(e as Error).message}`);
