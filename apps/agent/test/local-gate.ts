@@ -1,9 +1,11 @@
 // The gate's routes on this machine, for proofs that test the agent rather than Substrate: each Sandbox is a
 // state, a folder its pi-env daemons start in, and those daemons. Proofs set the agent's workspace to /proc/self/cwd,
 // which each daemon resolves to its own folder; other absolute paths and processes are shared. A pause closes the Sandbox's
-// connections, a full set of slots answers 503, and a deleted Sandbox answers 404, as the real gate does.
+// connections, a full set of slots answers 503, and a deleted Sandbox answers 404, as the real gate does. A snapshot
+// is a copy of a paused Sandbox's folder, and a Sandbox created from one starts with a copy of that; one that does not
+// exist answers 412. Copies borrow nothing, so no snapshot is ever borrowed.
 import { type ChildProcess, spawn } from "node:child_process";
-import { mkdirSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -30,15 +32,37 @@ export async function localGate(slots: number, folders: string): Promise<string>
 		sandbox.daemons.clear();
 	}
 
+	const snapshots = join(folders, "..", "snapshots");
+	mkdirSync(snapshots, { recursive: true });
+	function snapshot(method: string | undefined, name: string | undefined, from: string | null): [number, unknown] {
+		if (method === "GET" && name === undefined) return [200, readdirSync(snapshots).map((n) => ({ name: n, ready: true, borrowed: false }))];
+		if (!/^[a-z0-9-]+$/.test(name ?? "")) return [400, { error: "no such route" }];
+		const path = join(snapshots, name!);
+		if (method === "DELETE") {
+			if (!existsSync(path)) return [404, { error: `snapshot ${name} not found` }];
+			rmSync(path, { recursive: true, force: true });
+			return [204, null];
+		}
+		if (method !== "POST" || !from) return [405, { error: "method not allowed" }];
+		if (existsSync(path)) return [409, { error: `snapshot ${name} exists` }];
+		if (sandboxes.get(from)?.state !== "paused") return [409, { error: `${from} is not paused` }];
+		cpSync(join(folders, from), path, { recursive: true, verbatimSymlinks: true });
+		return [201, {}];
+	}
+
 	function route(req: http.IncomingMessage): [number, unknown] {
 		const url = new URL(req.url ?? "/", "http://x");
 		const [, root, name, action] = url.pathname.split("/");
+		const from = url.searchParams.get("from");
 		if (root === "draining" && req.method === "GET") return [200, []];
+		if (root === "snapshots") return snapshot(req.method, name, from);
 		if (root !== "sandboxes" || !/^[a-z0-9-]+$/.test(name ?? "")) return [400, { error: "no such route" }];
 		const sandbox = sandboxes.get(name);
 		switch (`${req.method} ${action ?? ""}`) {
 			case "POST ":
 				if (sandbox) return [409, { error: `${name} exists` }];
+				if (from && !existsSync(join(snapshots, from))) return [412, { error: `snapshot ${from} not found` }];
+				if (from) cpSync(join(snapshots, from), join(folders, name), { recursive: true, verbatimSymlinks: true });
 				mkdirSync(join(folders, name), { recursive: true });
 				sandboxes.set(name, { state: "created", daemons: new Set() });
 				return [201, {}];

@@ -1,23 +1,4 @@
-import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { call, createThread, DATA, fail, follow, killAgent, log, pass, runEnded, startAgent, until } from "./kit.ts";
-
-// Repositories on this machine that the stand-ins' git clones in place of github.com's, each with this `.agents/setup`.
-const REPOS = join(DATA, "repos");
-function repository(name: string, setup: string): string {
-	const dir = join(REPOS, "work", name);
-	mkdirSync(join(dir, ".agents"), { recursive: true });
-	writeFileSync(join(dir, ".agents", "setup"), `#!/bin/sh\n${setup}\n`);
-	chmodSync(join(dir, ".agents", "setup"), 0o755);
-	const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=proof", "-c", "user.email=proof@example.com", ...args], { cwd: dir, stdio: "ignore" });
-	git("init", "-q");
-	git("add", ".");
-	git("commit", "-qm", "setup");
-	git("clone", "-q", "--bare", dir, join(REPOS, "proof", `${name}.git`));
-	return `proof/${name}`;
-}
-Object.assign(process.env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: `url.${REPOS}/.insteadOf`, GIT_CONFIG_VALUE_0: "https://github.com/" });
+import { call, createThread, fail, follow, killAgent, log, pass, repository, runEnded, startAgent, until } from "./kit.ts";
 
 type Listed = { id: number; title: string; starting?: true; waiting?: { since: string; busy: number[] }; working?: true };
 
@@ -72,8 +53,8 @@ list.close();
 for (const t of [...holders, { id }]) if ((await call("DELETE", `/threads/${t.id}`)).status !== 204) await fail("delete");
 log("6. threads deleted");
 
-const ready = await createThread("$ cat installed", repository("ready", "echo by setup > installed"));
-const broken = await createThread("$ echo started", repository("broken", "echo setup broke >&2; exit 3"));
+const ready = await createThread("$ cat installed", repository("ready", { ".agents/setup": "#!/bin/sh\necho by setup > installed\n" }).repo);
+const broken = await createThread("$ echo started", repository("broken", { ".agents/setup": "#!/bin/sh\necho setup broke >&2; exit 3\n" }).repo);
 const [installed] = await runEnded(ready.id, "$ cat installed");
 if (installed?.error || installed?.output.trim() !== "by setup") await fail(`after setup: ${JSON.stringify(installed)}`);
 log("7. a repository's .agents/setup ran in its clone before the first message", installed.output.trim());

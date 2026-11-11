@@ -15,6 +15,7 @@ Each slice is the smallest demoable step. A slice is done when its proof runs fr
 | S4.3 | A Thread proves its own change to Dorf, with no cluster and no credentials (found reviewing Dorf for agents) | `bun run --cwd apps/agent proof` inside a Sandbox: history, models, lifecycle, make-room and images pass against local stand-ins of the gate, each Sandbox a folder of its own on one machine, and each proof says so on its first line. The same files pass through `deploy/proof.sh` on Substrate, where `deploy/proof.sh substrate` adds what only Substrate does: a file and a process survive a pause, Sandboxes don't see each other's files, the internet is reachable and the cluster is not | Built |
 | S4.4 | A Thread follows the repository's AGENTS.md and skills (found when a fresh Thread on Dorf never read AGENTS.md) | `bun run --cwd apps/agent proof:models` with the faux model: after a Thread writes an AGENTS.md and a skill in its Sandbox, its next request carries the instructions and lists the skill with its description and location | Built |
 | S4.5 | Images in a message: paste, drop or attach them when starting a Thread, sending, or steering a run (owner asked) | `bun run --cwd apps/agent proof:images` with the faux model: a Thread starts from text and an image and the model sees it fitted to its limits; a message of only images carries no empty text; an image sent mid-run lands after the running tool call; `read` fits a wide image the same way and refuses one whose header claims more pixels than the bound, before decoding it; every image survives an agent restart; bad, corrupt, too many or too large images get a plain error and create no Thread | Built |
+| S4.6 | Repository snapshots: a new Thread on a repository starts from a saved Sandbox that already holds the clone with its `.agents/setup` run, as Amp's orbs do (owner asked) | `bun run --cwd apps/agent proof:repo-snapshots` with the faux model against the stand-ins: a second Thread starts from the snapshot and its setup installs nothing; a commit that makes catch-up slow builds a newer snapshot in the background, one that keeps it fast does not; an agent killed mid-build finishes it; a refused snapshot falls back to a plain Sandbox and starts a rebuild; a failed setup saves nothing. Then `deploy/proof.sh snapshots`: a tag holds files and processes; a fork borrows its tag, which the reaper spares until the fork's first sync pause; a newer template refuses an older tag with 412 | Built; the Substrate proof awaits a run |
 | S5 | Execution nodes anywhere | The lab moves from kind to k3s meshed over Tailscale (Headscale for self-hosters); a machine on another network joins as a node, a Thread's Sandbox runs there, and its tool-call latency is measured against a local Sandbox | Planned after S4 |
 | S6 | GitHub triggers | A mention or failing check starts or continues a Thread | Deferred until dogfooding asks for it |
 | S7 | Agent off-site | The agent runs outside the cluster: the gate is exposed and the agent proves its identity from outside | Deferred until a host cannot join the cluster |
@@ -22,6 +23,21 @@ Each slice is the smallest demoable step. A slice is done when its proof runs fr
 ## Carry-over
 
 Facts learned in one slice that a later slice must respect.
+
+- Repository snapshots (`apps/agent/src/repo-snapshots.ts`). The session doc `dorf.repo-snapshots`
+  holds, per repository, the snapshot new Threads start from, its commit, and the build task running.
+  A Thread's start fetches and resets the clone to the default branch's tip and runs setup again, so a
+  stale snapshot costs only the catch-up. A build starts, in the commit that submits the first
+  message, when the Thread did not start from the snapshot, or caught up from another commit in more
+  than `DORF_SLOW_CATCH_UP_MS` (10 s). The build reaps first, never last, then sets up a builder
+  Sandbox `g-<repo hash>` that never makes room, pauses it sync and tags it.
+- A Substrate tag is a snapshot. CreateTag is synchronous and not idempotent, so a cut-off try leaves
+  a tag that is not ready and goes first. A Sandbox created from a tag has only the tag's snapshot
+  until its first pause finishes uploading; deleting the tag before then loses it. The gate reports a
+  tag borrowed while some Sandbox's newest finished snapshot is the tag's; matching any listed
+  snapshot would overcount, since the entry lingers. Substrate refuses a tag from another template or
+  being deleted with FailedPrecondition, which the gate answers 412, and the agent then creates a
+  plain Sandbox.
 
 - Substrate's router carries only HTTP and WebSocket. pi-env speaks a framed protocol over stdio,
   so the Sandbox init turns each WebSocket on `/pienv` into a fresh pi-env daemon, its bytes in

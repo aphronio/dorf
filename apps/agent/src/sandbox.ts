@@ -13,8 +13,14 @@ export class SandboxNotFound extends Error {
 	}
 }
 
+// Substrate would not make a Sandbox from the snapshot: it was taken under an older template, or is being deleted.
+export class SnapshotRefused extends Error {}
+
+export type Snapshot = { name: string; ready: boolean; borrowed: boolean };
+
 class NoRoom extends Error {}
 class Exists extends Error {}
+class Gone extends Error {}
 
 export class Sandboxes {
 	#gate: string;
@@ -36,9 +42,10 @@ export class Sandboxes {
 	async #call(name: string, method: string, path: string): Promise<any> {
 		const token = readFileSync(this.#tokenFile, "utf8").trim();
 		const res = await fetch(this.#gate + path, { method, headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(GATE_TIMEOUT_MS) });
-		if (res.status === 404 && name) throw new SandboxNotFound(name);
+		if (res.status === 404) throw name ? new SandboxNotFound(name) : new Gone(await res.text());
 		if (res.status === 503) throw new NoRoom(await res.text());
 		if (res.status === 409) throw new Exists(await res.text());
+		if (res.status === 412) throw new SnapshotRefused(await res.text());
 		if (!res.ok) throw new Error(`gate ${method} ${path}: ${res.status} ${await res.text()}`);
 		return res.status === 204 ? undefined : res.json();
 	}
@@ -47,15 +54,22 @@ export class Sandboxes {
 		return `${this.#prefix}${randomUUID().slice(0, 8)}`;
 	}
 
-	// One that exists already counts as created, so a start cut off by a restart can create it again.
-	async create(name: string): Promise<void> {
-		await this.#call("", "POST", `/sandboxes/${name}`).catch((e) => {
+	// A name of this agent's own, as for a snapshot or a Sandbox that is not a Thread's.
+	named(suffix: string): string {
+		return `${this.#prefix}${suffix}`;
+	}
+
+	// One that exists already counts as created, so a start cut off by a restart can create it again. `from` names a
+	// snapshot to start from; Substrate's refusal throws SnapshotRefused.
+	async create(name: string, from?: string): Promise<void> {
+		await this.#call("", "POST", `/sandboxes/${name}${from ? `?from=${from}` : ""}`).catch((e) => {
 			if (!(e instanceof Exists)) throw e;
 		});
 	}
 
-	// Starts the Sandbox, first pausing others while that makes room; false when no worker has room.
-	async wake(name: string): Promise<boolean> {
+	// Starts the Sandbox, first pausing others while that makes room unless `makeRoom` is false; false when no worker
+	// has room.
+	async wake(name: string, makeRoom = true): Promise<boolean> {
 		for (;;) {
 			try {
 				await this.#call(name, "POST", `/sandboxes/${name}/resume`);
@@ -63,12 +77,27 @@ export class Sandboxes {
 			} catch (e) {
 				if (!(e instanceof NoRoom)) throw e;
 			}
-			if (!(await this.makeRoom())) return false;
+			if (!makeRoom || !(await this.makeRoom())) return false;
 		}
 	}
 
-	async #resume(name: string): Promise<void> {
-		while (!(await this.wake(name))) await new Promise((r) => setTimeout(r, RETRY_ROOM_MS));
+	async #resume(name: string, makeRoom: boolean): Promise<void> {
+		while (!(await this.wake(name, makeRoom))) await new Promise((r) => setTimeout(r, RETRY_ROOM_MS));
+	}
+
+	// Saves a paused Sandbox's disk and memory under `name`; returns once the snapshot is ready.
+	async snapshot(name: string, from: string): Promise<void> {
+		await this.#call("", "POST", `/snapshots/${name}?from=${from}`);
+	}
+
+	snapshots(): Promise<Snapshot[]> {
+		return this.#call("", "GET", "/snapshots");
+	}
+
+	async deleteSnapshot(name: string): Promise<void> {
+		await this.#call("", "DELETE", `/snapshots/${name}`).catch((e) => {
+			if (!(e instanceof Gone)) throw e;
+		});
 	}
 
 	async state(name: string): Promise<string> {
@@ -80,11 +109,12 @@ export class Sandboxes {
 	}
 
 	// An idle pause closes the stream so the next call opens a fresh one at once; a drain keeps it
-	// for the calls in flight to reattach, and waits until the snapshot survives losing the node.
-	pause(name: string, reason: "idle" | "drain"): Promise<void> {
+	// for the calls in flight to reattach, and waits until the snapshot survives losing the node. A pause to save
+	// the Sandbox as a snapshot does both: no stream is left in the memory it saves.
+	pause(name: string, reason: "idle" | "drain" | "save"): Promise<void> {
 		let pausing = this.#pausing.get(name);
 		if (!pausing) {
-			if (reason === "idle") this.#close(name);
+			if (reason !== "drain") this.#close(name);
 			pausing = this.#call(name, "POST", `/sandboxes/${name}/suspend?mode=${reason === "idle" ? "async" : "sync"}`)
 				.then(() => {})
 				.finally(() => this.#pausing.delete(name));
@@ -100,13 +130,14 @@ export class Sandboxes {
 		});
 	}
 
-	env(name: string, cwd: string): RemoteExecutionEnv {
+	// `makeRoom` false never pauses another Sandbox to resume this one: it waits for room instead.
+	env(name: string, cwd: string, makeRoom = true): RemoteExecutionEnv {
 		let connection = this.#connections.get(name);
 		if (!connection) {
 			connection = new Connection({
 				command: async () => {
 					await this.#pausing.get(name)?.catch(() => {});
-					await this.#resume(name);
+					await this.#resume(name, makeRoom);
 					return ["node", PIPE, `${this.#gate.replace(/^http/, "ws")}/sandboxes/${name}/pienv`, this.#tokenFile];
 				},
 				onLog: (text) => process.stderr.write(`[pi-env ${name}] ${text}`),
