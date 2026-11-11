@@ -49,7 +49,12 @@ the cluster. Run `.agents/setup` first, then `bun run check` and `bun run proof`
   to `main` and follow its CI run with `gh run watch`. If CI fails, fix it forward at once.
 - Push any other change to a branch and say which Substrate proof it needs: the gate, the Sandbox
   image, `deploy/`, CI and this file wait for the owner until staging exists.
-- When something about Dorf itself got in your way, file it with
+- End with proof anyone can check at a glance (the `show-me` skill). For a change to the page, take
+  screenshots of the same view before and after with `browser-harness`, save them as `before.png`
+  and `after.png`, and read both so they show in the Thread. For other changes, show what changed
+  as a diff of the call tree, the file tree or the proof output.
+- Write the reply and commit messages with the `prose` skill.
+- When something about Dorf got in your way, or you found a problem you did not fix, file it with
   `gh issue create --label friction`, describing the behavior in generic terms.
 
 ## Public repository confidentiality
