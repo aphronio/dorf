@@ -19,6 +19,10 @@ data:
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
               stat_prefix: broker
+              # Routes match the path Anthropic and GitHub will see, so dot segments or encoded slashes cannot widen one.
+              normalize_path: true
+              merge_slashes: true
+              path_with_escaped_slashes_action: REJECT_REQUEST
               http_filters:
               - name: envoy.filters.http.router
                 typed_config: {"@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router}
@@ -28,8 +32,12 @@ data:
                   domains: ["*"]
                   routes:
                   # Claude Code's model requests; it sends a placeholder token, replaced here.
-                  - match: {path_separated_prefix: /v1/messages, headers: [{name: ":method", string_match: {exact: POST}}]}
+                  - match: {path: /v1/messages, headers: [{name: ":method", string_match: {exact: POST}}]}
                     route: {cluster: anthropic, host_rewrite_literal: api.anthropic.com, timeout: 0s}
+                    request_headers_to_add:
+                    - {header: {key: authorization, value: "Bearer %ENVIRONMENT(CLAUDE_TOKEN)%"}, append_action: OVERWRITE_IF_EXISTS_OR_ADD}
+                  - match: {path: /v1/messages/count_tokens, headers: [{name: ":method", string_match: {exact: POST}}]}
+                    route: {cluster: anthropic, host_rewrite_literal: api.anthropic.com}
                     request_headers_to_add:
                     - {header: {key: authorization, value: "Bearer %ENVIRONMENT(CLAUDE_TOKEN)%"}, append_action: OVERWRITE_IF_EXISTS_OR_ADD}
                   # Claude Code's reachability check, without a token.
