@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 
-export type Thread = { id: number; title: string; createdAt: string; repo?: string; archived?: true }
+// `working` while a run is live; `attention` once it ended, until the owner opens the Thread.
+export type Thread = { id: number; title: string; createdAt: string; repo?: string; archived?: true; working?: true; attention?: "done" | "failed" }
 export type Repo = { name: string; private: boolean }
 export type Claude = { loggedIn: boolean; plan: string | null; email: string | null }
 export type ModelChoice = { ref: string; name: string; thinking: string[]; defaultThinking: string }

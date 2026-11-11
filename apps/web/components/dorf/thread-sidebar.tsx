@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { Badge } from "@/components/ui/badge"
 import {
   Sidebar,
   SidebarContent,
@@ -18,6 +19,23 @@ import {
 import { ClaudeStatus } from "@/components/dorf/claude-status"
 import { useIcons } from "@/lib/icon-context"
 import type { Thread } from "@/lib/dorf"
+
+// As in T3 Code: a colored dot and a word before the title, only while the Thread works or has news. The open
+// Thread shows no news, since the owner is looking at it.
+const STATUS = {
+  working: { color: "blue", label: "Working" },
+  failed: { color: "red", label: "Failed" },
+  done: { color: "emerald", label: "Completed" },
+} as const
+const Status = ({ thread, open }: { thread: Thread; open: boolean }) => {
+  const status = thread.working ? "working" : open ? undefined : thread.attention
+  if (!status) return null
+  return (
+    <Badge variant="ghost" size="compact" color={STATUS[status].color} className={status === "working" ? "shrink-0 [&>span:first-child]:animate-pulse" : "shrink-0"}>
+      {STATUS[status].label}
+    </Badge>
+  )
+}
 
 const Title = ({ thread }: { thread: Thread }) => (
   <span className="truncate">
@@ -60,6 +78,7 @@ export function ThreadSidebar({ threads, current, connection, onUnarchive, onDel
               {active.map((t) => (
                 <SidebarMenuItem key={t.id}>
                   <SidebarMenuButton isActive={t.id === current} onClick={() => go(String(t.id))}>
+                    <Status thread={t} open={t.id === current} />
                     <Title thread={t} />
                   </SidebarMenuButton>
                 </SidebarMenuItem>

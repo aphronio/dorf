@@ -72,7 +72,24 @@ export default function Page() {
     () => api<Thread[]>("GET", "/threads").then((list) => (setThreads(list.slice().reverse()), true), (e) => (lost(e), false)),
     [lost],
   )
-  useEffect(() => void refresh(), [id, refresh])
+  useEffect(() => void refresh(), [refresh])
+  // The list as it changes: a Thread added, archived, deleted, starting work or ending it. It opens again each time
+  // the agent comes back, since a browser gives up on a stream whose answer was an error page.
+  useEffect(() => {
+    const stream = new EventSource("/threads/events")
+    stream.onmessage = (m) => setThreads((JSON.parse(m.data) as { threads: Thread[] }).threads.slice().reverse())
+    stream.onerror = () => stream.readyState === EventSource.CLOSED && setDown(true)
+    return () => stream.close()
+  }, [connection])
+  // Looking at a Thread whose run ended clears its mark; a tab in the background leaves it until it comes back.
+  const unseen = Boolean(thread?.attention)
+  useEffect(() => {
+    if (id === undefined || !unseen) return
+    const look = () => void (document.visibilityState === "visible" && api("POST", `/threads/${id}/seen`).catch(lost))
+    look()
+    document.addEventListener("visibilitychange", look)
+    return () => document.removeEventListener("visibilitychange", look)
+  }, [id, unseen, lost])
   useEffect(() => {
     if (!down) return
     const timer = setInterval(() => void refresh().then((ok) => ok && (setDown(false), setConnection((n) => n + 1))), RETRY_MS)
@@ -224,7 +241,7 @@ export default function Page() {
           </span>
           {id !== undefined && (
             <>
-              <Badge color={running ? "amber" : "gray"} size="compact">{running ? "working" : "idle"}</Badge>
+              <Badge color={running ? "blue" : "gray"} size="compact">{running ? "working" : "idle"}</Badge>
               {thread?.archived ? (
                 <Button variant="ghost" size="icon-compact" aria-label="Unarchive Thread" title="Unarchive" onClick={() => void archive("unarchive", id)}>
                   <icons.unarchive />

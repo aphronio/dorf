@@ -141,6 +141,8 @@ async function route(threads: Threads, catalog: Catalog, claude: ClaudeLogin, gi
 			return (await threads.archive(id)) ? [202, {}] : [404, { error: "no such thread" }];
 		case "POST :id/unarchive":
 			return (await threads.unarchive(id)) ? [202, {}] : [404, { error: "no such thread" }];
+		case "POST :id/seen":
+			return (await threads.seen(id)) ? [202, {}] : [404, { error: "no such thread" }];
 		case "POST :id/abort":
 			return (await threads.abort(id)) ? [202, {}] : [404, { error: "no such thread" }];
 		case "POST :id/compact":
@@ -161,14 +163,12 @@ async function asset(path: string, res: http.ServerResponse): Promise<boolean> {
 	return true;
 }
 
-type Emit = Parameters<Threads["follow"]>[3];
-
 // Server-sent events, each id the newest entry so far: the browser's reconnect sends it back as Last-Event-ID.
-async function follow(start: (after: EntryId | undefined, emit: Emit) => Promise<(() => Promise<unknown>) | undefined>, req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
+async function follow<E extends object>(start: (after: EntryId | undefined, emit: (event: E) => void) => Promise<(() => Promise<unknown>) | undefined>, req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
 	const last = Number(req.headers["last-event-id"]);
 	const stop = await start(Number.isSafeInteger(last) && last > 0 ? (last as EntryId) : undefined, (event) => {
 		if (!res.headersSent) res.writeHead(200, { ...HEADERS, "cache-control": "no-store, no-transform", "content-type": "text/event-stream" });
-		const newest = event.entries?.at(-1)?.id;
+		const newest = (event as { entries?: readonly { id: EntryId }[] }).entries?.at(-1)?.id;
 		res.write(`${newest === undefined ? "" : `id: ${newest}\n`}data: ${JSON.stringify(event)}\n\n`);
 	});
 	if (!stop) return false;
@@ -188,6 +188,7 @@ export function serve(threads: Threads, catalog: Catalog, claude: ClaudeLogin, g
 				if (denied) return send(denied);
 				const path = new URL(req.url ?? "/", "http://x").pathname;
 				if (req.method === "GET" && !API.has(path.split("/")[1])) return (await asset(path, res)) || send([404, { error: "not found" }]);
+				if (req.method === "GET" && path === "/threads/events") return (await follow((_, emit) => threads.followList(emit), req, res)) || send([503, { error: "no thread list" }]);
 				const stream = req.method === "GET" && path.match(/^\/threads\/(\d+)(?:\/subagents\/([^/]+))?\/(events|entries)$/);
 				if (stream) {
 					const id = Number(stream[1]) as ConversationId;

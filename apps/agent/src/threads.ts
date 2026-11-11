@@ -15,7 +15,8 @@ type FollowEvent = { entries?: ConversationView["entries"]; earlier?: boolean; l
 // Entries per page: the first window, each fill of a gap, each "load earlier".
 const PAGE = 50;
 
-export type ThreadSummary = { id: ConversationId; title: string; createdAt: string; repo?: string; archived?: true };
+// `working` while a run is live; `attention` once it ended, until the owner opens the Thread.
+export type ThreadSummary = { id: ConversationId; title: string; createdAt: string; repo?: string; archived?: true; working?: true; attention?: "done" | "failed" };
 
 const ThreadList = defineDoc<{ items: ThreadSummary[] }>({
 	kind: "dorf.threads",
@@ -71,8 +72,9 @@ export class Threads {
 		sandboxes.makeRoom = () => this.#makeRoom();
 	}
 
-	// An archive the agent stopped short of finishes now.
+	// An archive the agent stopped short of finishes now. The list exists before the page follows it.
 	async open(): Promise<void> {
+		await this.#harness.commit((tx) => tx.doc(ThreadList), context);
 		for (const thread of await this.list()) {
 			await this.#watchIdle(thread.id);
 			if (thread.archived) this.#idle.get(thread.id)?.now();
@@ -81,6 +83,47 @@ export class Threads {
 
 	async list(): Promise<ThreadSummary[]> {
 		return (await this.#harness.snapshot(ThreadList, context))?.items ?? [];
+	}
+
+	// The list now, then again whenever a Thread is added, archived, deleted, starts working or stops.
+	async followList(send: (event: { threads: readonly ThreadSummary[] }) => void): Promise<(() => Promise<unknown>) | undefined> {
+		const watch = await this.#harness.watchDoc(ThreadList, context);
+		if (!watch) return undefined;
+		send({ threads: watch.value.items });
+		watch.start(async (call) => {
+			if (call.kind === "value") send({ threads: call.value.items });
+		});
+		return () => watch.stop();
+	}
+
+	// The owner looked at the Thread's last run.
+	async seen(id: ConversationId): Promise<boolean> {
+		const thread = (await this.list()).find((t) => t.id === id);
+		if (!thread) return false;
+		if (thread.attention)
+			await this.#harness.commit(async (tx) => {
+				delete (await tx.doc(ThreadList)).items.find((t) => t.id === id)?.attention;
+			}, context);
+		return true;
+	}
+
+	// The list follows the Thread's run, read in the same commit so the newest state wins. A run that ends asks for the
+	// owner's look unless the owner stopped it or archived the Thread.
+	async #mark(id: ConversationId): Promise<void> {
+		await this.#harness.commit(async (tx) => {
+			const thread = (await tx.doc(ThreadList)).items.find((t) => t.id === id);
+			if (!thread) return;
+			const live = await tx.doc(LiveDoc, id);
+			if (live.run) {
+				if (!thread.working) thread.working = true;
+				if (thread.attention) delete thread.attention;
+				return;
+			}
+			if (!thread.working) return;
+			delete thread.working;
+			const failure = live.runFailure?.reason;
+			if (!thread.archived && failure !== "aborted") thread.attention = failure ? "failed" : "done";
+		}, context);
 	}
 
 	async sandbox(id: ConversationId): Promise<string | undefined> {
@@ -299,7 +342,11 @@ export class Threads {
 			id,
 			this.#idleMs,
 			(stillIdle) => this.#sleep(id, stillIdle),
-			(running) => (running ? this.#idleSince.delete(id) : this.#idleSince.set(id, Date.now())),
+			(running) => {
+				if (running) this.#idleSince.delete(id);
+				else this.#idleSince.set(id, Date.now());
+				this.#mark(id).catch((e) => console.error(`mark Thread ${id}: ${e.message}`));
+			},
 		);
 		if (idle) this.#idle.set(id, idle);
 	}
