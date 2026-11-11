@@ -8,10 +8,11 @@ set -euo pipefail
 shopt -s inherit_errexit
 
 # Threads may change these; everything else (deploy/, the gate, images, CI) needs a signature. A package.json may
-# change its scripts, but a dependency changes the lockfile, so any bun.lock change needs a signature. Skills are text
-# later Threads read; `.agents/setup` is not, since a deploy runs it here.
+# change its scripts, but a dependency changes the lockfile, so any bun.lock change needs a signature, and so does
+# a bunfig.toml or .npmrc, which could point the install elsewhere. Skills are text later Threads read; `.agents/setup`
+# is not, since a deploy runs it here.
 SAFE='^(apps/agent/src/|apps/agent/test/|apps/agent/package\.json$|docs/|apps/web/|\.agents/skills/)'
-UNSAFE='(^|/)bun\.lock$'
+UNSAFE='(^|/)(bun\.lock|bunfig\.toml|\.npmrc)$'
 SIGNERS=/etc/dorf/allowed_signers
 AUTH=
 EMPTY_TREE=4b825dc642cb6eb9a060e54bf8d69288fbee4904
@@ -98,7 +99,7 @@ follow() {
 		record "$tip" failure "held: main no longer contains the live commit"
 		return 0
 	fi
-	signed=$(git log --topo-order --format='%H %G?' "$tip" | awk '$2 == "G" && !found { print $1; found = 1 }')
+	signed=$(git log --first-parent --format='%H %G?' "$tip" | awk '$2 == "G" && !found { print $1; found = 1 }')
 	changed=$(git diff --name-only "${signed:-$EMPTY_TREE}" "$tip")
 	unsafe=$({ grep -Ev "$SAFE" <<<"$changed" || true; grep -E "$UNSAFE" <<<"$changed" || true; } | grep . || true)
 	if [ -n "$unsafe" ]; then
