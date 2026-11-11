@@ -57,7 +57,11 @@ sequenceDiagram
 
 - Compare options, measurements or states in a table.
 
-- Show a visible change to a page as two screenshots of the same view, before and after, taken with the `browser-harness` skill and saved outside the repository. Place each with its absolute path, as `![after](/tmp/after.png)`.
+- Show a visible change to a page as two screenshots of the same view, before and after, taken with the `browser-harness` skill and saved outside the repository. Place each with its absolute path, as `![after](/tmp/after.png)`. Before the first, set the tab to twice the pixels, so the owner's high-density screen shows it sharp, and at most 1000 CSS pixels a side, so `read` keeps it under 2000 pixels and does not shrink it:
+
+  ```python
+  cdp("Emulation.setDeviceMetricsOverride", width=1000, height=640, deviceScaleFactor=2, mobile=False)
+  ```
 
 - Use `diff` when the point is what changes and the surrounding shape already exists. Match the diff shape to the topic.
 
