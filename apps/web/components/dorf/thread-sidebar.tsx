@@ -58,12 +58,14 @@ function stateOf(thread: Thread, attention: Attention | undefined, now: number) 
   return { since, state, said }
 }
 
-// The right-hand column: the time, then the state's icon in a fixed slot, so times end on one line and icons stand
-// in one column. Shape and color both carry the state.
+// The right-hand column: the state's icon in a fixed slot, so icons stand in one column, and before it a time only
+// while something is under way, counting up. A number there always means "still going, for this long"; when a run
+// ended is in the row's tooltip. Shape and color both carry the state.
 function Row({ thread, attention, now }: { thread: Thread; attention?: Attention; now: number }) {
   const icons = useIcons()
   const repo = thread.repo?.split("/")[1]
-  const { since, state, said } = stateOf(thread, attention, now)
+  const { since, state } = stateOf(thread, attention, now)
+  const live = state === "working" || state === "starting" || state === "waiting"
   const Icon = state === "waiting" ? icons.clock : state === "working" || state === "starting" ? icons["circle-dashed"] : state === "failed" ? icons["circle-alert"] : state === "done" ? icons["circle-check"] : undefined
   return (
     <span className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] grid-rows-2 items-center gap-x-3" aria-hidden>
@@ -73,8 +75,8 @@ function Row({ thread, attention, now }: { thread: Thread; attention?: Attention
       >
         {thread.title}
       </span>
-      <span className="flex items-center justify-end gap-1.5 text-[length:var(--fs-caption,12px)] tabular-nums text-muted-foreground" title={said}>
-        {short(since)}
+      <span className="flex items-center justify-end gap-1.5 text-[length:var(--fs-caption,12px)] tabular-nums text-muted-foreground">
+        {live && short(since)}
         <span className="flex size-3.5 items-center justify-center" aria-hidden>
           {Icon && (
             <Icon
@@ -119,11 +121,11 @@ export function ThreadSidebar({ threads, attention, current, connection, onUnarc
     window.location.hash = hash
     if (isMobile) setOpenMobile(false)
   }
-  // Hovering shows what the row cuts off; a screen reader hears the row as one sentence.
-  const label = (t: Thread, attention: Attention | undefined) => ({
-    title: `${t.title}\n${t.repo ?? "No repository"}`,
-    "aria-label": `${t.title}, ${t.repo ?? "no repository"}, ${stateOf(t, attention, now).said}`,
-  })
+  // Hovering shows what the row cuts off and its state in words; a screen reader hears the row as one sentence.
+  const label = (t: Thread, attention: Attention | undefined) => {
+    const { said } = stateOf(t, attention, now)
+    return { title: `${t.title}\n${t.repo ?? "No repository"}\n${said}`, "aria-label": `${t.title}, ${t.repo ?? "no repository"}, ${said}` }
+  }
   const row = (t: Thread) => (
     <SidebarMenuItem key={t.id}>
       <SidebarMenuButton size="lg" isActive={t.id === current} onClick={() => go(String(t.id))} {...label(t, attentionOf(t))}>
