@@ -16,10 +16,21 @@ const CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-i
 // The tallest a view stands in the Thread; past it, the frame scrolls.
 const MAX_HEIGHT = 640
 
-// Runs in the frame before the fragment: keeps links from leaving the view, reports its height and takes the page's
-// theme as it changes. A frame sized to its content hides its scrollbar, which would narrow the content and change
-// its height again.
+// Runs in the frame before the fragment: keeps links from leaving the view, shows the first uncaught script error as
+// one line at its top, so a blank view says why, reports its height and takes the page's theme as it changes. A frame
+// sized to its content hides its scrollbar, which would narrow the content and change its height again.
 const script = (fit: boolean) => `(() => {
+  let shown = false
+  const fail = (what) => {
+    if (shown || !document.body || /^ResizeObserver loop/.test(what)) return
+    shown = true
+    const line = document.createElement("div")
+    line.style.cssText = "padding:6px 12px;font:12px/1.4 ui-monospace,monospace;color:var(--destructive);border-bottom:1px solid var(--border)"
+    line.textContent = "Script error: " + what
+    document.documentElement.insertBefore(line, document.body)
+  }
+  addEventListener("error", (e) => e instanceof ErrorEvent && fail(e.message.replace(/^Uncaught /, "")))
+  addEventListener("unhandledrejection", (e) => fail(e.reason?.message ?? String(e.reason)))
   addEventListener("click", (e) => e.target.closest?.("a[href]") && e.preventDefault(), true)
   const post = () => {
     const height = Math.ceil(document.documentElement.getBoundingClientRect().height)

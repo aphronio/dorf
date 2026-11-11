@@ -145,7 +145,8 @@ export function Transcript({ entries, live, onSubagent, loadEarlier }: Transcrip
             case "user":
               return <ChatMessage key={item.key} from="user" className="whitespace-pre-wrap">{item.text}</ChatMessage>
             case "text":
-              return <ChatMessage key={item.key} from="assistant" className="max-w-full"><Markdown images={item.images}>{item.text}</Markdown></ChatMessage>
+              // A reply spans the column, so a view in it does too, however short its text.
+              return <ChatMessage key={item.key} from="assistant" className="max-w-full self-stretch items-stretch"><Markdown images={item.images}>{item.text}</Markdown></ChatMessage>
             case "calls": {
               // Images a tool returned, such as screenshots the agent read, show small here; a reply places them full size.
               const shots = item.calls.flatMap((c) => (outputs[c.id]?.images ?? []).map((src, i) => ({ src, key: `${c.id}.${i}`, name: String(c.arguments?.path ?? "").split("/").pop() })))
