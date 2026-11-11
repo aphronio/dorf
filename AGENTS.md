@@ -46,7 +46,10 @@ the cluster. Run `.agents/setup` first, then `bun run check` and `bun run proof`
 
 - Commit with the Sandbox's git identity, in Conventional Commits whose subject states the impact.
 - When the change touches only `apps/agent`, `apps/web` or `docs`, and check and proof pass, push
-  to `main` and follow its CI run with `gh run watch`. If CI fails, fix it forward at once.
+  to `main` and follow its CI run with `gh run watch`. If CI fails, fix it forward at once. Main
+  deploys on its own a minute or two after CI passes; the newest of
+  `gh api repos/{owner}/{repo}/deployments` and its statuses say whether your commit is live, held or
+  rolled back.
 - Push any other change to a branch and say which Substrate proof it needs: the gate, the Sandbox
   image, `deploy/`, CI and this file wait for the owner until staging exists.
 - End with proof anyone can check at a glance (the `show-me` skill). For a change to the page, take
