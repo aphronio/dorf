@@ -8,7 +8,7 @@ source deploy/substrate.env
 
 PIENV=apps/agent/node_modules/@earendil-works/pi-env/bin/pi-env-linux-x64
 # Builds are not reproducible, so the tag names the inputs and the digest names the build.
-TAG=$(cat images/sandbox/{Dockerfile,init.mts,package.json,package-lock.json} "$PIENV/pi-env" deploy/template.yaml | sha256sum | cut -c1-12)
+TAG=$(cat images/sandbox/{Dockerfile,init.mts,package.json,bun.lock,browser-harness} "$PIENV/pi-env" deploy/template.yaml | sha256sum | cut -c1-12)
 REPO=$REGISTRY/dorf-sandbox:$TAG
 TEMPLATE=sandbox-$TAG
 
@@ -68,7 +68,7 @@ elif ! grep -q 'serviceaccount:dorf-gate:dorf-agent' <<<"$access"; then
 	echo "grant user:system:serviceaccount:dorf-gate:dorf-agent the editor role in atespace dorf's access policy" >&2
 	exit 1
 fi
-GATE=$REGISTRY/dorf-gate:$( (echo "$SUBSTRATE_VERSION"; cat apps/gate/{Dockerfile,package.json,package-lock.json,ateapi.ts,gate.ts}) | sha256sum | cut -c1-12)
+GATE=$REGISTRY/dorf-gate:$( (echo "$SUBSTRATE_VERSION"; cat apps/gate/{Dockerfile,package.json,bun.lock,ateapi.ts,gate.ts}) | sha256sum | cut -c1-12)
 docker build -q --build-arg SUBSTRATE_VERSION="$SUBSTRATE_VERSION" -t "$GATE" apps/gate >/dev/null
 docker push -q "$GATE" >/dev/null
 # GitHub is on when dorf-secrets/github exists; the agent gets its own copy to list repositories.
@@ -84,7 +84,7 @@ fi
 kubectl -n dorf-gate rollout status deploy/dorf-gate --timeout=5m >/dev/null
 echo "gate ready: service dorf-gate/dorf-gate"
 
-AGENT=$REGISTRY/dorf-agent:$(find apps/agent/{Dockerfile,Dockerfile.dockerignore,package.json,package-lock.json,src} apps/web -path apps/web/node_modules -prune -o -path apps/web/.next -prune -o -path apps/web/out -prune -o -type f -print | sort | xargs cat | sha256sum | cut -c1-12)
+AGENT=$REGISTRY/dorf-agent:$(find apps/agent/{Dockerfile,Dockerfile.dockerignore,package.json,bun.lock,src} apps/web -path apps/web/node_modules -prune -o -path apps/web/.next -prune -o -path apps/web/out -prune -o -type f -print | sort | xargs cat | sha256sum | cut -c1-12)
 docker build -q -f apps/agent/Dockerfile -t "$AGENT" apps >/dev/null
 docker push -q "$AGENT" >/dev/null
 AGENT_IMAGE=$AGENT DORF_MODEL=${DORF_MODEL:-claude-plan/opus} DORF_OWNER=${DORF_OWNER:?set DORF_OWNER to the Tailscale login allowed to use Dorf} \

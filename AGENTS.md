@@ -40,8 +40,9 @@ are proved only by
 
 ## In a Sandbox
 
-A Thread working on Dorf runs in a gVisor Sandbox: Node, git and `gh`, no `kubectl`, no Docker and
-no namespaces, and no way into the cluster. Run `.agents/setup` first, then `bun run check` and
+A Thread working on Dorf runs in a gVisor Sandbox: Node, Bun, git, `gh`, and a headless Chromium
+that the `browser-harness` skill drives; no `kubectl`, no Docker and no namespaces, and no way into
+the cluster. Run `.agents/setup` first, then `bun run check` and
 `bun run proof` as you work. A change to the gate, the Sandbox image or `deploy/` needs a Substrate
 proof, which the owner runs until staging exists.
 

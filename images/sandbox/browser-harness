@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Starts the Sandbox's headless Chromium on first use, so an idle Sandbox snapshots no browser, then runs Browser Harness.
+if ! (: </dev/tcp/127.0.0.1/9222) 2>/dev/null; then
+	setsid chromium --headless --no-sandbox --disable-dev-shm-usage --remote-debugging-port=9222 \
+		--user-data-dir=/root/.cache/chromium-cdp about:blank </dev/null >/tmp/chromium.log 2>&1 &
+fi
+exec /opt/browser-harness/bin/browser-harness "$@"
