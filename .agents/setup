@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Installs what Dorf's checks and proofs need, from the lockfiles; safe to run again.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+for dir in apps/agent images/sandbox apps/gate apps/web; do
+	npm ci --ignore-scripts --no-audit --no-fund --prefix "$dir"
+done

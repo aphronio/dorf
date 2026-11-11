@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "scripts": {
+    "check": "npm --prefix apps/agent run check && npm --prefix apps/gate run check && npm --prefix apps/web run typecheck && npm --prefix apps/web run lint",
+    "proof": "npm --prefix apps/agent run proof"
+  }
+}
