@@ -1,5 +1,5 @@
 FROM node:26-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates chromium gh git python3 tini \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates chromium curl gh git python3 tini \
  && rm -rf /var/lib/apt/lists/* && mkdir /workspace
 # Root in a Sandbox lacks setuid and DAC override, so apt must not hand its dirs to _apt.
 RUN echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/90sandbox \
