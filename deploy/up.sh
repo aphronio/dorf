@@ -61,22 +61,18 @@ echo "sandbox template ready: $TEMPLATE"
 
 grep -q 'ns/dorf-gate/sa/dorf-gate' <<<"$(kubectl -n ate-system get deploy atenet-router -o jsonpath='{.spec.template.spec.containers[0].args}')" ||
 	{ echo "atenet-router does not allow dorf-gate; install Substrate with deploy/substrate.sh" >&2; exit 1; }
-# Atespace dorf's Substrate rights belong to the gate alone; the agent's token is only good for the gate. `editors` sets
-# who holds them, keeping the policy's guards.
+# Atespace dorf's Substrate rights belong to the gate alone; the agent's token is only good for the gate.
 GATE_SA=user:system:serviceaccount:dorf-gate:dorf-gate
-editors() {
-	local policy
-	if ! policy=$(ate get access-policy -a dorf -o json 2>/dev/null); then
-		json "_=>JSON.stringify({metadata:{name:'default'},bindings:[{role:'editor',members:'$1'.split(',')}]})" <<<'{}' | ate create access-policy -a dorf -f - >/dev/null
-	elif [ "$(json 'p=>p.bindings.map(b=>b.role+":"+b.members.join(",")).join(" ")' <<<"$policy")" != "editor:$1" ]; then
-		json "p=>JSON.stringify({metadata:{name:'default',uid:p.metadata.uid,version:p.metadata.version},bindings:[{role:'editor',members:'$1'.split(',')}]})" <<<"$policy" | ate update access-policy -a dorf -f - >/dev/null
-	fi
-}
-# Until the gate holds them, keep whoever does, so the running gate keeps working while the new one rolls out.
-grep -q "$GATE_SA" <<<"$(ate get access-policy -a dorf -o json 2>/dev/null)" || editors "$GATE_SA,user:system:serviceaccount:dorf-gate:dorf-agent"
+if ! policy=$(ate get access-policy -a dorf -o json 2>/dev/null); then
+	json "_=>JSON.stringify({metadata:{name:'default'},bindings:[{role:'editor',members:['$GATE_SA']}]})" <<<'{}' | ate create access-policy -a dorf -f - >/dev/null
+elif [ "$(json 'p=>p.bindings.map(b=>b.role+":"+b.members.join(",")).join(" ")' <<<"$policy")" != "editor:$GATE_SA" ]; then
+	json "p=>JSON.stringify({metadata:{name:'default',uid:p.metadata.uid,version:p.metadata.version},bindings:[{role:'editor',members:['$GATE_SA']}]})" <<<"$policy" | ate update access-policy -a dorf -f - >/dev/null
+fi
+# Pods run images by digest, so a push to the registry's tag never changes what runs.
+pushed() { docker push -q "$1" >/dev/null && echo "${1%:*}@$(docker inspect --format '{{index .RepoDigests 0}}' "$1" | cut -d@ -f2)"; }
 GATE=$REGISTRY/dorf-gate:$( (echo "$SUBSTRATE_VERSION"; cat apps/gate/{Dockerfile,package.json,bun.lock,ateapi.ts,gate.ts}) | sha256sum | cut -c1-12)
 docker build -q --build-arg SUBSTRATE_VERSION="$SUBSTRATE_VERSION" -t "$GATE" apps/gate >/dev/null
-docker push -q "$GATE" >/dev/null
+GATE=$(pushed "$GATE")
 # GitHub is on when dorf-secrets/github exists.
 DORF_GITHUB=$(kubectl -n dorf-secrets get secret github >/dev/null 2>&1 && echo 1 || true)
 GATE_IMAGE=$GATE DORF_GITHUB=$DORF_GITHUB envsubst '$GATE_IMAGE $DORF_GITHUB' <deploy/gate.yaml | kubectl apply -f - >/dev/null
@@ -100,11 +96,10 @@ BROKER_INPUTS=$BROKER_INPUTS envsubst '$BROKER_INPUTS' <deploy/broker.yaml | kub
 kubectl -n dorf-broker rollout status deploy/broker --timeout=5m >/dev/null
 echo "broker ready: service dorf-broker/broker"
 
-AGENT=$REGISTRY/dorf-agent:$(find apps/agent/{Dockerfile,Dockerfile.dockerignore,package.json,bun.lock,src} apps/web -path apps/web/node_modules -prune -o -path apps/web/.next -prune -o -path apps/web/out -prune -o -type f -print | sort | xargs cat | sha256sum | cut -c1-12)
+AGENT=$REGISTRY/dorf-agent:$(find apps/agent/{Dockerfile,Dockerfile.dockerignore,package.json,bun.lock,src} apps/web -path apps/web/node_modules -prune -o -path apps/web/.next -prune -o -path apps/web/out -prune -o -type f -print0 | sort -z | xargs -0 cat | sha256sum | cut -c1-12)
 docker build -q -f apps/agent/Dockerfile -t "$AGENT" apps >/dev/null
-docker push -q "$AGENT" >/dev/null
+AGENT=$(pushed "$AGENT")
 AGENT_IMAGE=$AGENT DORF_MODEL=${DORF_MODEL:-claude-plan/opus} DORF_OWNER=${DORF_OWNER:?set DORF_OWNER to the Tailscale login allowed to use Dorf} DORF_GITHUB=$DORF_GITHUB \
 	envsubst '$AGENT_IMAGE $DORF_MODEL $DORF_OWNER $DORF_GITHUB' <deploy/agent.yaml | kubectl apply -f - >/dev/null
 kubectl -n dorf-gate rollout status deploy/dorf-agent --timeout=5m >/dev/null
-editors "$GATE_SA"
 echo "agent ready: deployment dorf-gate/dorf-agent"
