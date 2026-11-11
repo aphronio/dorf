@@ -92,6 +92,7 @@ deployment files.
 | The microVM class and restricted egress | Running code from people we do not trust, such as pull requests from forks |
 | Silently replacing a deleted Sandbox | Never. Tools fail with "Sandbox not found" |
 | A dashboard | Daily use asks for more than a minimal chat page |
+| Golden snapshots: new Sandboxes forked from a tagged one that already ran setup | A repository's setup takes more than a minute. Dorf's own takes about 8 s |
 | Provider adapters, sessions, profiles, the Provider Gateway, durable message custody | Never as before. These served the 0.31 control plane |
 
 ## Non-goals
