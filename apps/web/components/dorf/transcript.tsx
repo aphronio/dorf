@@ -4,10 +4,11 @@ import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { Button } from "@/components/ui/button"
 import { ChatMessage } from "@/components/ui/chat-message"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-import { Markdown } from "@/components/dorf/markdown"
+import { Markdown, OPENS } from "@/components/dorf/markdown"
 import { ToolCalls } from "@/components/dorf/tool-call"
 import { useIcons } from "@/lib/icon-context"
-import { ImageDialog } from "@/components/dorf/image-dialog"
+import { cn } from "@/lib/utils"
+import { ImageDialog, type Viewed } from "@/components/dorf/image-dialog"
 import { type Block, type Entry, imageFile, type Live, type Message, type Queued, text } from "@/lib/dorf"
 
 type Call = Extract<Block, { type: "toolCall" }>
@@ -89,7 +90,7 @@ function settle(entries: Entry[]) {
 type TranscriptProps = { entries: Entry[]; live: Live; queued?: Queued[]; onSubagent?: (name: string) => void; loadEarlier?: () => Promise<void> }
 
 export function Transcript({ entries, live, queued = [], onSubagent, loadEarlier }: TranscriptProps) {
-  const [opened, setOpened] = useState<File>()
+  const [opened, setOpened] = useState<Viewed>()
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
   const [loading, setLoading] = useState(false)
@@ -183,9 +184,10 @@ export function Transcript({ entries, live, queued = [], onSubagent, loadEarlier
               )
             case "text":
               // A reply spans the column, so a view in it does too, however short its text.
-              return <ChatMessage key={item.key} from="assistant" className="max-w-full self-stretch items-stretch"><Markdown images={item.images}>{item.text}</Markdown></ChatMessage>
+              return <ChatMessage key={item.key} from="assistant" className="max-w-full self-stretch items-stretch"><Markdown images={item.images} onImageOpen={setOpened}>{item.text}</Markdown></ChatMessage>
             case "calls": {
-              // Images a tool returned, such as screenshots the agent read, show small here; a reply places them full size.
+              // Images a tool returned, such as screenshots the agent read, show small here; a reply places them wider, and
+              // a click on either opens the viewer.
               // A subagent call waits for the subagent's answer; its link opens the subagent's transcript.
               const waiting = item.calls.filter((c) => c.name === "subagent" && outputs[c.id]?.running)
               const shots = item.calls.flatMap((c) => (outputs[c.id]?.images ?? []).map((src, i) => ({ src, key: `${c.id}.${i}`, name: String(c.arguments?.path ?? "").split("/").pop() })))
@@ -203,8 +205,10 @@ export function Transcript({ entries, live, queued = [], onSubagent, loadEarlier
                     <div className={`mt-2 grid gap-2 px-2 ${shots.length > 1 ? "sm:grid-cols-2" : ""}`}>
                       {shots.map((shot) => (
                         <figure key={shot.key} className="min-w-0">
-                          {/* eslint-disable-next-line @next/next/no-img-element -- a data URL from the transcript, not an optimizable asset */}
-                          <img src={shot.src} alt={shot.name || "screenshot"} className="max-h-40 w-auto max-w-full rounded-md border border-border object-contain object-left-top" />
+                          <button type="button" onClick={() => setOpened({ src: shot.src, name: shot.name || "screenshot" })} aria-label={`Open ${shot.name || "screenshot"}`} className={cn(OPENS, "w-fit max-w-full")}>
+                            {/* eslint-disable-next-line @next/next/no-img-element -- a data URL from the transcript, not an optimizable asset */}
+                            <img src={shot.src} alt={shot.name || "screenshot"} className="max-h-40 w-auto max-w-full rounded-md border border-border object-contain object-left-top" />
+                          </button>
                           {shot.name && <figcaption className="mt-1 font-mono text-xs text-muted-foreground">{shot.name}</figcaption>}
                         </figure>
                       ))}
@@ -236,7 +240,7 @@ export function Transcript({ entries, live, queued = [], onSubagent, loadEarlier
           </div>
         ))}
       </div>
-      <ImageDialog file={opened} onClose={() => setOpened(undefined)} />
+      <ImageDialog image={opened} onClose={() => setOpened(undefined)} />
     </div>
   )
 }

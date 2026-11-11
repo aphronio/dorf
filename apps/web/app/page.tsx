@@ -293,7 +293,7 @@ export default function Page() {
         </div>
         </div>
         </div>
-        <ImageDialog file={opened} onClose={() => setOpened(undefined)} />
+        <ImageDialog image={opened} onClose={() => setOpened(undefined)} />
       </SidebarInset>
     </SidebarProvider>
   )

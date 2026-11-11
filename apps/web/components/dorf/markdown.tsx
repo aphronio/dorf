@@ -2,6 +2,7 @@ import { useMemo, type ComponentProps } from "react"
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { Code } from "@/components/dorf/code"
+import type { Picture } from "@/components/dorf/image-dialog"
 import { View, ViewPending } from "@/components/dorf/view"
 
 const code = ({ className, children, ...p }: ComponentProps<"code"> & ExtraProps) => {
@@ -29,17 +30,24 @@ const components: Components = {
   td: (p) => <td className="border-b border-border/50 px-2 py-1 align-top" {...p} />,
 }
 
+// The image opens in the viewer, focused the way an attachment's thumbnail is.
+export const OPENS = "block w-full cursor-zoom-in rounded-md outline-none focus-visible:ring-1 focus-visible:ring-[color:var(--focus-ring,#6B97FF)]"
+
 // An image shows only when the agent read that file in this Thread, by path or file name: the page loads nothing
-// from elsewhere, so a reply cannot leak data through an image URL. Any other image shows as its alt text.
-export function Markdown({ children, images }: { children: string; images?: Map<string, string> }) {
+// from elsewhere, so a reply cannot leak data through an image URL. Any other image shows as its alt text. A click
+// opens the image in the viewer.
+export function Markdown({ children, images, onImageOpen }: { children: string; images?: Map<string, string>; onImageOpen?: (image: Picture) => void }) {
   const img: Components["img"] = ({ src, alt }) => {
     const path = typeof src === "string" ? src : ""
     const seen = images?.get(path) ?? images?.get(path.split("/").pop() ?? "")
     if (!seen) return <span className="text-muted-foreground">[{alt || path}]</span>
+    const name = alt || path.split("/").pop() || "image"
     return (
       <span className="my-2 block">
-        {/* eslint-disable-next-line @next/next/no-img-element -- a data URL from the transcript, not an optimizable asset */}
-        <img src={seen} alt={alt ?? ""} className="max-h-[70vh] w-full rounded-md border border-border object-contain object-top" />
+        <button type="button" onClick={() => onImageOpen?.({ src: seen, name })} aria-label={`Open ${name}`} className={OPENS}>
+          {/* eslint-disable-next-line @next/next/no-img-element -- a data URL from the transcript, not an optimizable asset */}
+          <img src={seen} alt={alt ?? ""} className="max-h-[70vh] w-full rounded-md border border-border object-contain object-top" />
+        </button>
         {alt && <span className="mt-1 block font-mono text-xs text-muted-foreground">{alt}</span>}
       </span>
     )
