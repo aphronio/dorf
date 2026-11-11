@@ -42,6 +42,8 @@ harnesses. That code is frozen at the `v0.31.3` tag and is not maintained.
 - A Thread runs on the model and thinking level picked when it starts; the thinking level can change
   later. It can start persistent subagents, Pi's pattern, that share its Sandbox and may run on
   another offered model.
+- A Thread reads the AGENTS.md files and `.agents/skills` in its Sandbox, from the root down to its
+  working directory, before each request, as Pi's coding agent does.
 - Each bash call is a job the Sandbox owns; the agent's stream is only a view of it, so a lost
   stream, a pause or an agent restart reattaches instead of failing the call.
 - [Agent Substrate](https://github.com/agent-substrate/substrate) owns isolation, memory

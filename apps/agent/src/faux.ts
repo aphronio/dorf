@@ -19,8 +19,8 @@ export function scriptedModel() {
 		const lastUser = messages.findLastIndex((m) => m.role === "user");
 		const content = messages[lastUser]?.content;
 		const text = typeof content === "string" ? content : (content ?? []).map((c) => (c.type === "text" ? c.text : "")).join("");
-		const system = messages.find((m) => m.role === "system");
-		if (text === "?") return fauxAssistantMessage(Object.values(system?.sections ?? {}).join("\n"));
+		const sections = Object.assign({}, ...messages.map((m) => (m.role === "system" ? m.sections : undefined)));
+		if (text === "?") return fauxAssistantMessage(Object.values(sections).filter(Boolean).join("\n"));
 		const calls = text.split("\n").flatMap((l) => {
 			const bash = l.match(/^\$(?:\[(\d+)\])? (.*)$/);
 			if (bash) return [fauxToolCall("bash", { command: bash[2], ...(bash[1] ? { timeout: Number(bash[1]) } : {}) })];

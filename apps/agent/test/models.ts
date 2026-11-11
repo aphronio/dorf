@@ -39,6 +39,18 @@ const changed = (await call("GET", `/threads/${id}`)).json.agent.thinkingLevel;
 if (changed !== "medium") await fail(`thinking after change: ${changed}`);
 log("3. thinking changes mid-Thread; a level the model lacks is refused");
 
+const write = "$ printf 'Run the proofs before you push.\\n' > AGENTS.md && mkdir -p .agents/skills/browser && printf -- '---\\nname: browser\\ndescription: >-\\n  Drive a browser\\n  over CDP.\\n---\\n' > .agents/skills/browser/SKILL.md";
+await send(id, write);
+await runEnded(id, write);
+await send(id, "?");
+await until("the project's instructions and skills", async () =>
+	((await call("GET", `/threads/${id}`)).json.entries as Entry[]).some((e) => {
+		const told = e.kind === "pi.assistant" ? text(e) : "";
+		return told.includes("/AGENTS.md\">\nRun the proofs before you push.") && told.includes("<description>Drive a browser over CDP.</description>") && told.includes("/.agents/skills/browser/SKILL.md</location>");
+	}),
+);
+log("4. AGENTS.md and the skills in the Thread's machine reach its next request");
+
 // Reports from subagents arrive as user messages, so an answer is found by its message, not as the newest one.
 async function answered(message: string): Promise<{ output: string; error: boolean }[]> {
 	return until(`the answer to ${JSON.stringify(message.slice(0, 50))}`, async () => {
@@ -75,20 +87,20 @@ const [file] = await ask("$ cat child.txt");
 const [status] = await ask(subagent({ action: "status" }));
 if (!again?.output.includes("already exists") || file?.output.trim() !== "from-child\nagain" || status?.output.split("\n")[0] !== "helper: idle")
 	await fail(`persistent subagent: ${JSON.stringify({ again, file, status })}`);
-log("4. a subagent works in the Thread's machine, keeps its conversation across messages, and reports each answer; the Thread's stream lists it live");
+log("5. a subagent works in the Thread's machine, keeps its conversation across messages, and reports each answer; the Thread's stream lists it live");
 
 const [other] = await ask(subagent({ action: "spawn", name: "second", model: "other/claude-Faux-2", message: "$ true" }));
 const [unknown] = await ask(subagent({ action: "spawn", name: "third", model: "anthropic/nope", message: "$ true" }));
 if (other?.output !== "Started second." || !unknown?.error || !unknown.output.includes("faux-2"))
 	await fail(`subagent models: ${JSON.stringify({ other, unknown })}`);
-log("5. a subagent runs on an offered model however a model names it; an unknown one fails with the list");
+log("6. a subagent runs on an offered model however a model names it; an unknown one fails with the list");
 
 await ask(subagent({ action: "spawn", name: "sleeper", message: "$[60] sleep 16" }));
 await new Promise((r) => setTimeout(r, IDLE_MS + 3_000));
 if ((await sandboxes.state(sandbox)) !== "running") await fail("the Sandbox paused under a working subagent");
 await until("sleeper's report", async () => (await reports("sleeper")) === 1, 30_000);
 await until("the idle pause after the report", async () => (await sandboxes.state(sandbox)) === "paused", IDLE_MS + 30_000);
-log("6. a working subagent keeps the Sandbox awake; the Thread pauses once its report is in");
+log("7. a working subagent keeps the Sandbox awake; the Thread pauses once its report is in");
 
 await ask(subagent({ action: "spawn", name: "long", message: "$[120] sleep 120" }));
 await until("long to wake the paused Sandbox", async () => (await sandboxes.state(sandbox)) === "running", 30_000);
@@ -97,7 +109,7 @@ const [stopped] = await ask(subagent({ action: "stop", name: "long" }));
 await until("long to stop", async () => (await ask(subagent({ action: "status", name: "long" })))[0]?.output === "long: idle", 30_000);
 if (stopped?.output !== "Stopped long.") await fail(`stop: ${JSON.stringify(stopped)}`);
 await until("the idle pause after a stop, which sends no report", async () => (await sandboxes.state(sandbox)) === "paused", 2 * IDLE_MS + 30_000);
-log("7. a subagent wakes the paused Sandbox; stop ends its work, leaves it usable, and the Thread still pauses");
+log("8. a subagent wakes the paused Sandbox; stop ends its work, leaves it usable, and the Thread still pauses");
 
 await ask(subagent({ action: "spawn", name: "worker", message: "$[60] sleep 6 && echo ran >> runs" }));
 await new Promise((r) => setTimeout(r, 2_000));
@@ -106,12 +118,12 @@ await startAgent();
 await until("worker's report after the restart", async () => (await reports("worker")) === 1, 60_000);
 const [runs] = await ask("$ wc -l < runs");
 if (runs?.output.trim() !== "1") await fail(`the subagent's command ran ${runs?.output.trim()} times`);
-log("8. an agent killed while a subagent works resumes it; the command ran once and the report arrived");
+log("9. an agent killed while a subagent works resumes it; the command ran once and the report arrived");
 
 await ask(subagent({ action: "spawn", name: "busy", message: "$[120] sleep 120" }));
 const deleting = Date.now();
 if ((await call("DELETE", `/threads/${id}`)).status !== 204) await fail("delete");
 if (!(await sandboxes.state(sandbox).then(() => false, (e) => e instanceof SandboxNotFound))) await fail("the Sandbox outlived its Thread");
-log("9. deleting a Thread stops its subagents and removes the Sandbox", `${((Date.now() - deleting) / 1000).toFixed(1)}s`);
+log("10. deleting a Thread stops its subagents and removes the Sandbox", `${((Date.now() - deleting) / 1000).toFixed(1)}s`);
 console.log("PASS");
 process.exit(0);
