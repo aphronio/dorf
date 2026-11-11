@@ -64,13 +64,18 @@ export function useConversation(url: string | undefined) {
   const [subagents, setSubagents] = useState<Subagent[]>([])
   const [earlier, setEarlier] = useState(false)
   const following = useRef(url)
-  useEffect(() => {
-    following.current = url
+  // Another conversation starts empty, set while rendering so its first frame shows none of the last.
+  const [shown, setShown] = useState(url)
+  if (shown !== url) {
+    setShown(url)
     setEntries([])
     setEarlier(false)
     setLive({})
     setAgent(undefined)
     setSubagents([])
+  }
+  useEffect(() => {
+    following.current = url
     if (url === undefined) return
     const stream = new EventSource(url)
     stream.onmessage = (m) => {
@@ -109,6 +114,10 @@ export function lastModel(entries: Entry[]): string | undefined {
     const m = entries[i].model?.[0]
     if (m?.role === "assistant" && (m.responseModel ?? m.model)) return m.responseModel ?? m.model
   }
+}
+
+export function openThread(id: number | undefined): void {
+  window.location.hash = id === undefined ? "" : String(id)
 }
 
 export function useHashId(): number | undefined {

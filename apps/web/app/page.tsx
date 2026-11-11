@@ -15,7 +15,7 @@ import { SubagentList, SubagentView } from "@/components/dorf/subagent-panel"
 import { ThreadSidebar } from "@/components/dorf/thread-sidebar"
 import { Transcript } from "@/components/dorf/transcript"
 import { useIcons } from "@/lib/icon-context"
-import { api, lastModel, type ModelChoice, modelName, type Repo, type Thread, useHashId, useThread } from "@/lib/dorf"
+import { api, lastModel, type ModelChoice, modelName, openThread, type Repo, type Thread, useHashId, useThread } from "@/lib/dorf"
 
 const NO_REPO = "none"
 const REPO_KEY = "dorf.repo"
@@ -79,10 +79,12 @@ export default function Page() {
       })
       .catch(() => {})
   }, [])
-  useEffect(() => {
+  const [shownId, setShownId] = useState(id)
+  if (shownId !== id) {
+    setShownId(id)
     setError(undefined)
     setPanel(undefined)
-  }, [id])
+  }
 
   const send = async (value: string) => {
     setDraft("")
@@ -98,7 +100,7 @@ export default function Page() {
       const chosen = repo !== NO_REPO ? repo : undefined
       setStarting({ prompt: value, repo: chosen })
       const created = await api<Thread>("POST", "/threads", { prompt: value, ...(chosen ? { repo: chosen } : {}), model, thinking: newLevels.length ? newLevel : undefined })
-      window.location.hash = String(created.id)
+      openThread(created.id)
       await refresh()
     } catch (e) {
       setDraft(value)
@@ -113,7 +115,7 @@ export default function Page() {
     api("POST", `/threads/${thread}/${to}`).catch((e) => setError(e.message)).then(refresh)
   const remove = async (thread: number) => {
     await api("DELETE", `/threads/${thread}`).catch((e) => setError(e.message))
-    if (thread === id) window.location.hash = ""
+    if (thread === id) openThread(undefined)
     await refresh()
   }
 
