@@ -23,9 +23,13 @@ export class Sandboxes {
 	#connections = new Map<string, Connection>();
 	#pausing = new Map<string, Promise<void>>();
 
-	constructor(gate: string, tokenFile: string) {
+	readonly #prefix: string;
+
+	// Proofs name their Sandboxes apart, so a run can delete what a killed run left.
+	constructor(gate: string, tokenFile: string, prefix = "s-") {
 		this.#gate = gate;
 		this.#tokenFile = tokenFile;
+		this.#prefix = prefix;
 	}
 
 	async #call(name: string, method: string, path: string): Promise<any> {
@@ -38,7 +42,7 @@ export class Sandboxes {
 	}
 
 	newName(): string {
-		return `s-${randomUUID().slice(0, 8)}`;
+		return `${this.#prefix}${randomUUID().slice(0, 8)}`;
 	}
 
 	async create(name: string): Promise<void> {

@@ -37,7 +37,7 @@ const claudePlan = new ClaudePlan(`${DATA}/claude`, CLAUDE);
 models.setProvider(claudePlan.provider);
 
 const registry = createRegistry();
-const sandboxes = new Sandboxes(process.env.DORF_GATE ?? "http://127.0.0.1:8080", process.env.DORF_TOKEN_FILE ?? "token");
+const sandboxes = new Sandboxes(process.env.DORF_GATE ?? "http://127.0.0.1:8080", process.env.DORF_TOKEN_FILE ?? "token", process.env.DORF_SANDBOX_PREFIX);
 registry.install(prompt(WORKSPACE, github !== undefined));
 registry.install(CodingTools);
 registry.install(SandboxJobs);

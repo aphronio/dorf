@@ -26,7 +26,11 @@ const GATE = await new Promise<string>((resolve) => {
 });
 forward.unref();
 (forward.stdout as Readable & { unref(): void }).unref();
-export const sandboxes = new Sandboxes(GATE, TOKEN);
+// Proof Sandboxes start "p-"; one proof runs at a time, so any left are a killed run's.
+const PREFIX = "p-";
+export const sandboxes = new Sandboxes(GATE, TOKEN, PREFIX);
+const actors = JSON.parse(execFileSync("kubectl", ["ate", "get", "actors", "-a", "dorf", "-o", "json"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+for (const { metadata } of actors.actors ?? []) if (metadata.name.startsWith(PREFIX)) await sandboxes.delete(metadata.name);
 const t0 = Date.now();
 const owned = new Set<string>();
 let agent: ChildProcess | undefined;
@@ -44,7 +48,7 @@ export async function fail(message: string): Promise<never> {
 
 export async function startAgent(model = "faux", idleMs = IDLE_MS): Promise<void> {
 	agent = spawn("node", [new URL("../src/main.ts", import.meta.url).pathname], {
-		env: { ...process.env, DORF_MODEL: model, DORF_DATA: DATA, DORF_PORT: String(PORT), DORF_IDLE_MS: String(idleMs), DORF_OWNER: OWNER, DORF_GATE: GATE, DORF_TOKEN_FILE: TOKEN },
+		env: { ...process.env, DORF_MODEL: model, DORF_DATA: DATA, DORF_PORT: String(PORT), DORF_IDLE_MS: String(idleMs), DORF_OWNER: OWNER, DORF_GATE: GATE, DORF_TOKEN_FILE: TOKEN, DORF_SANDBOX_PREFIX: PREFIX },
 		stdio: ["ignore", "inherit", "inherit"],
 	});
 	await until("agent up", async () => (await fetch(`http://127.0.0.1:${PORT}/threads`, { headers: HEADERS }).catch(() => undefined))?.ok);
