@@ -52,6 +52,11 @@ used=$(ate get actors -a dorf -o json | json 'a=>(a.actors??[]).map(x=>x.actorTe
 for old in $(ate get actor-templates -a dorf -o json | json 'a=>(a.actorTemplates??[]).map(x=>x.metadata.name).join(" ")'); do
 	[ "$old" = "$TEMPLATE" ] || [[ " $used " == *" $old "* ]] || ate delete actor-template "$old" -a dorf >/dev/null
 done
+# The local build of a template that is gone goes too; the registry keeps what it holds.
+kept=$(ate get actor-templates -a dorf -o json | json 'a=>(a.actorTemplates??[]).map(x=>x.metadata.name).join(" ")')
+for tag in $(docker images --format '{{.Tag}}' "$REGISTRY/dorf-sandbox"); do
+	[[ " $kept " == *" sandbox-$tag "* ]] || docker image rm "$REGISTRY/dorf-sandbox:$tag" >/dev/null
+done
 echo "sandbox template ready: $TEMPLATE"
 
 grep -q 'ns/dorf-gate/sa/dorf-gate' <<<"$(kubectl -n ate-system get deploy atenet-router -o jsonpath='{.spec.template.spec.containers[0].args}')" ||
