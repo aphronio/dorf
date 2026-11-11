@@ -52,12 +52,8 @@ the cluster. Run `.agents/setup` first, then `bun run check` and `bun run proof`
   rolled back.
 - Push any other change to a branch and say which Substrate proof it needs: the gate, the Sandbox
   image, `deploy/`, CI and this file wait for the owner until staging exists.
-- End with proof anyone can check at a glance (the `show-me` skill). For a change to the page, take
-  a screenshot of the same view before the change and after it with `browser-harness`, save them
-  outside the repository as `/tmp/before.png` and `/tmp/after.png`, read both, and place them in
-  your reply as `![before](/tmp/before.png)` and `![after](/tmp/after.png)`. For other changes, show
-  what changed as a diff of the call tree, the file tree or the proof output.
-- Write the reply and commit messages with the `prose` skill.
+- Reply with the `show-me` skill: the smallest picture that proves the change, sized to it, with as
+  little text as it needs. Write commit messages with the `prose` skill.
 - When something about Dorf got in your way, or you found a problem you did not fix, file it with
   `gh issue create --label friction`, describing the behavior in generic terms.
 

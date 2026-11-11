@@ -55,6 +55,10 @@ sequenceDiagram
     Daemon-->>UI: stream result
 ```
 
+- Compare options, measurements or states in a table.
+
+- Show a visible change to a page as two screenshots of the same view, before and after, taken with the `browser-harness` skill and saved outside the repository. Place each with its absolute path, as `![after](/tmp/after.png)`.
+
 - Use `diff` when the point is what changes and the surrounding shape already exists. Match the diff shape to the topic.
 
 For a component change:
@@ -118,7 +122,7 @@ function expandSkill(command: string): string {
 
 Place each visual next to the short text it supports. Keep only the calls, files, props, states, and boundaries needed to answer the user's current question or the options to resolve the current discussion point.
 
-You may use one of these, you may use several, it is unlikely you will use all of them. Use your judgement and don't overwhelm the user.
+You may use one of these, you may use several, it is unlikely you will use all of them. Use your judgement and don't overwhelm the user. Size the proof to the change: a one-line fix needs one line, not a diagram.
 
 
-<!-- From humanlayer/skills@701b6bcb, plugins/rpi/skills/rpi/references/show-me.md, without the HTML file a Sandbox cannot open. Copyright (c) 2026 HumanLayer, MIT License; see ../LICENSE-humanlayer. -->
+<!-- From humanlayer/skills@701b6bcb, plugins/rpi/skills/rpi/references/show-me.md, without the HTML file a Sandbox cannot open, and with tables, screenshots and sizing added. Copyright (c) 2026 HumanLayer, MIT License; see ../LICENSE-humanlayer. -->
