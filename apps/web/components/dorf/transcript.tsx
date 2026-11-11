@@ -10,7 +10,7 @@ import { useIcons } from "@/lib/icon-context"
 import { type Block, type Entry, type Live, type Message, text } from "@/lib/dorf"
 
 type Call = Extract<Block, { type: "toolCall" }>
-type Output = { text: string; error?: boolean; running?: boolean }
+type Output = { text: string; error?: boolean; running?: boolean; images?: string[] }
 type Item =
   | { kind: "user" | "text"; key: string; text: string }
   | { kind: "calls"; key: string; calls: Call[] }
@@ -55,7 +55,10 @@ export function Transcript({ entries, live, onSubagent, loadEarlier }: Transcrip
   for (const e of entries) {
     const m = e.model?.[0]
     if (!m) continue
-    if (e.kind === "pi.tool-result" && m.toolCallId) outputs[m.toolCallId] = { text: text(m.content), error: m.isError }
+    if (e.kind === "pi.tool-result" && m.toolCallId) {
+      const images = typeof m.content === "string" ? [] : m.content.flatMap((b) => (b.type === "image" ? [`data:${b.mimeType};base64,${b.data}`] : []))
+      outputs[m.toolCallId] = { text: text(m.content), error: m.isError, images }
+    }
     else if (e.kind === "pi.user") items.push({ kind: "user", key: String(e.id), text: text(m.content) })
     else if (e.kind === "dorf.subagent-report") {
       // The model reads "[subagent name answered…] text"; the page shows the author once.
@@ -132,14 +135,28 @@ export function Transcript({ entries, live, onSubagent, loadEarlier }: Transcrip
               return <ChatMessage key={item.key} from="user" className="whitespace-pre-wrap">{item.text}</ChatMessage>
             case "text":
               return <ChatMessage key={item.key} from="assistant" className="max-w-full"><Markdown>{item.text}</Markdown></ChatMessage>
-            case "calls":
+            case "calls": {
+              // Images a tool returned, such as screenshots the agent read, show at a glance beside each other.
+              const shots = item.calls.flatMap((c) => (outputs[c.id]?.images ?? []).map((src, i) => ({ src, key: `${c.id}.${i}`, name: String(c.arguments?.path ?? "").split("/").pop() })))
               return (
                 <div key={item.key} className="-mx-2">
                   <ToolCalls
                     calls={item.calls.map((c) => ({ id: c.id, command: command(c), shell: c.name === "bash", ...outputs[c.id], output: outputs[c.id]?.text }))}
                   />
+                  {shots.length > 0 && (
+                    <div className={`mt-2 grid gap-2 px-2 ${shots.length > 1 ? "sm:grid-cols-2" : ""}`}>
+                      {shots.map((shot) => (
+                        <figure key={shot.key} className="min-w-0">
+                          {/* eslint-disable-next-line @next/next/no-img-element -- a data URL from the transcript, not an optimizable asset */}
+                          <img src={shot.src} alt={shot.name || "screenshot"} className="max-h-[70vh] w-full rounded-md border border-border object-contain object-top" />
+                          {shot.name && <figcaption className="mt-1 font-mono text-xs text-muted-foreground">{shot.name}</figcaption>}
+                        </figure>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )
+            }
             case "subagent":
               return (
                 <button

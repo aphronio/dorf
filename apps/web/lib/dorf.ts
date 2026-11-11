@@ -14,6 +14,7 @@ export type Block =
   | { type: "text"; text: string }
   | { type: "thinking"; thinking: string }
   | { type: "toolCall"; id: string; name: string; arguments?: Record<string, unknown> }
+  | { type: "image"; data: string; mimeType: string }
 export type Message = {
   role: "user" | "assistant" | "toolResult"
   content: string | Block[]
