@@ -98,8 +98,8 @@ export function subagents(catalog: Catalog): Extension {
 			"optional model: another offered model's id or name, e.g. a stronger one for a hard question), send (name, " +
 			"message; followUp: true queues it after the current answer instead of steering), stop (name: aborts its current " +
 			"work), status (name, or all subagents without one). Each subagent remembers its earlier " +
-				"messages. Answers are " +
-			"reported back to you when they arrive.",
+				"messages. Each answer reaches you as a new message after your current answer ends, so to wait " +
+			"for one, end your answer: never sleep or poll for it.",
 		parameters: obj({
 			action: oneOf(["spawn", "send", "stop", "status"]),
 			name: opt(str()),
