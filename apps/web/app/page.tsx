@@ -88,7 +88,12 @@ export default function Page() {
     setDraft("")
     setError(undefined)
     try {
-      if (id !== undefined) return void (await api("POST", `/threads/${id}/messages`, { text: value }))
+      if (id !== undefined) {
+        await api("POST", `/threads/${id}/messages`, { text: value })
+        // A message brings an archived Thread back.
+        if (thread?.archived) await refresh()
+        return
+      }
       store(REPO_KEY, repo)
       const chosen = repo !== NO_REPO ? repo : undefined
       setStarting({ prompt: value, repo: chosen })
@@ -103,13 +108,14 @@ export default function Page() {
     }
   }
   const stop = () => id !== undefined && api("POST", `/threads/${id}/abort`).catch((e) => setError(e.message))
-  const remove = async () => {
-    if (id === undefined || !confirm("Delete this Thread and its machine?")) return
-    await api("DELETE", `/threads/${id}`).catch((e) => setError(e.message))
-    window.location.hash = ""
+  // Archive stops the Thread's work and pauses its machine; it stays open here so it can come straight back.
+  const archive = (to: "archive" | "unarchive", thread: number) =>
+    api("POST", `/threads/${thread}/${to}`).catch((e) => setError(e.message)).then(refresh)
+  const remove = async (thread: number) => {
+    await api("DELETE", `/threads/${thread}`).catch((e) => setError(e.message))
+    if (thread === id) window.location.hash = ""
     await refresh()
   }
-  const DeleteIcon = icons.x
 
   const newModel = models.find((m) => m.ref === model)
   const newLevels = newModel?.thinking ?? []
@@ -150,7 +156,7 @@ export default function Page() {
 
   return (
     <SidebarProvider className="h-dvh">
-      <ThreadSidebar threads={threads} current={id} />
+      <ThreadSidebar threads={threads} current={id} onUnarchive={(t) => void archive("unarchive", t)} onDelete={(t) => void remove(t)} />
       <CommandPalette threads={threads} />
       <ThemeSync />
       <SidebarInset className="max-md:!m-0 max-md:!rounded-none">
@@ -161,9 +167,15 @@ export default function Page() {
           {id !== undefined && (
             <>
               <Badge color={running ? "amber" : "gray"} size="compact">{running ? "working" : "idle"}</Badge>
-              <Button variant="ghost" size="icon-compact" aria-label="Delete Thread" onClick={remove}>
-                <DeleteIcon />
-              </Button>
+              {thread?.archived ? (
+                <Button variant="ghost" size="icon-compact" aria-label="Unarchive Thread" title="Unarchive" onClick={() => void archive("unarchive", id)}>
+                  <icons.unarchive />
+                </Button>
+              ) : (
+                <Button variant="ghost" size="icon-compact" aria-label="Archive Thread" title="Archive" onClick={() => void archive("archive", id)}>
+                  <icons.archive />
+                </Button>
+              )}
             </>
           )}
         </SidebarInsetTopbar>

@@ -1,5 +1,6 @@
 "use client"
 
+import { useState } from "react"
 import {
   Sidebar,
   SidebarContent,
@@ -8,6 +9,8 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuAction,
+  SidebarMenuActions,
   SidebarMenuButton,
   SidebarMenuItem,
   useSidebar,
@@ -16,8 +19,22 @@ import { ClaudeStatus } from "@/components/dorf/claude-status"
 import { useIcons } from "@/lib/icon-context"
 import type { Thread } from "@/lib/dorf"
 
-export function ThreadSidebar({ threads, current }: { threads: Thread[]; current?: number }) {
+const Title = ({ thread }: { thread: Thread }) => (
+  <span className="truncate">
+    {thread.repo && <span className="text-muted-foreground">{thread.repo.split("/")[1]} · </span>}
+    {thread.title}
+  </span>
+)
+
+type ThreadSidebarProps = { threads: Thread[]; current?: number; onUnarchive: (id: number) => void; onDelete: (id: number) => void }
+
+// Active Threads, then the archived ones folded at the bottom. Only an archived Thread can be deleted, and the bin
+// asks once more in place: a second click deletes.
+export function ThreadSidebar({ threads, current, onUnarchive, onDelete }: ThreadSidebarProps) {
   const icons = useIcons()
+  const [confirming, setConfirming] = useState<number>()
+  const active = threads.filter((t) => !t.archived)
+  const archived = threads.filter((t) => t.archived)
   const { isMobile, setOpenMobile } = useSidebar()
   const go = (hash: string) => {
     window.location.hash = hash
@@ -36,18 +53,43 @@ export function ThreadSidebar({ threads, current }: { threads: Thread[]; current
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        {threads.length > 0 && (
+        {active.length > 0 && (
           <SidebarGroup>
             <SidebarGroupLabel>Threads</SidebarGroupLabel>
             <SidebarMenu>
-              {threads.map((t) => (
+              {active.map((t) => (
                 <SidebarMenuItem key={t.id}>
                   <SidebarMenuButton isActive={t.id === current} onClick={() => go(String(t.id))}>
-                    <span className="truncate">
-                      {t.repo && <span className="text-muted-foreground">{t.repo.split("/")[1]} · </span>}
-                      {t.title}
-                    </span>
+                    <Title thread={t} />
                   </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroup>
+        )}
+        {archived.length > 0 && (
+          <SidebarGroup collapsible defaultOpen={false}>
+            <SidebarGroupLabel>Archived</SidebarGroupLabel>
+            <SidebarMenu>
+              {archived.map((t) => (
+                <SidebarMenuItem key={t.id}>
+                  <SidebarMenuButton isActive={t.id === current} onClick={() => go(String(t.id))}>
+                    {confirming === t.id ? <span className="truncate text-red-600 dark:text-red-400">Delete for good?</span> : <Title thread={t} />}
+                  </SidebarMenuButton>
+                  <SidebarMenuActions>
+                    <SidebarMenuAction aria-label="Unarchive" title="Unarchive" onClick={() => onUnarchive(t.id)}>
+                      <icons.unarchive />
+                    </SidebarMenuAction>
+                    <SidebarMenuAction
+                      aria-label={confirming === t.id ? "Delete for good" : "Delete"}
+                      title={confirming === t.id ? "Click again to delete" : "Delete"}
+                      className={confirming === t.id ? "!text-red-600 dark:!text-red-400" : undefined}
+                      onBlur={() => setConfirming(undefined)}
+                      onClick={() => (confirming === t.id ? (setConfirming(undefined), onDelete(t.id)) : setConfirming(t.id))}
+                    >
+                      <icons.delete />
+                    </SidebarMenuAction>
+                  </SidebarMenuActions>
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>

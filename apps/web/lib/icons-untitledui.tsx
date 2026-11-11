@@ -75,6 +75,9 @@ import {
   Tag01 as UuiTag,
   Calendar as UuiCalendar,
   Folder as UuiFolder,
+  Archive as UuiArchive,
+  ReverseLeft as UuiReverseLeft,
+  Trash01 as UuiTrash,
 } from "@untitledui/icons";
 import { Play, Pause } from "lucide-react";
 import type { ComponentType } from "react";
@@ -161,4 +164,8 @@ export const untitleduiIcons: Record<IconName, IconComponent> = {
   // Untitled UI has no six-dot grip; the nine-dot grid is its drag handle.
   "grip-vertical": untitledui(UuiDotsGrid),
   tag: untitledui(UuiTag),
+  "archive": untitledui(UuiArchive),
+  // No archive-restore in the set: the undo arrow takes it back out.
+  "unarchive": untitledui(UuiReverseLeft),
+  "delete": untitledui(UuiTrash),
 };

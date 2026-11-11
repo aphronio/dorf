@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 
-export type Thread = { id: number; title: string; createdAt: string; repo?: string }
+export type Thread = { id: number; title: string; createdAt: string; repo?: string; archived?: true }
 export type Repo = { name: string; private: boolean }
 export type Claude = { loggedIn: boolean; plan: string | null; email: string | null }
 export type ModelChoice = { ref: string; name: string; thinking: string[]; defaultThinking: string }
