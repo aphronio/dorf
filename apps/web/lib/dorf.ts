@@ -49,7 +49,7 @@ export const text = (content: Message["content"] | undefined) =>
     : (content ?? []).flatMap((c) => (c.type === "text" ? [c.text] : [])).join("")
 
 // Pi's JSON state stream: the first event holds the newest entries and whether earlier ones exist,
-// later ones the new entries. A reconnect starts over from its first event.
+// later ones the new entries. A reconnect sends the newest entry it has and gets the ones it missed.
 function merge(prev: Entry[], next: Entry[]): Entry[] {
   const byId = new Map(prev.map((e) => [e.id, e]))
   for (const e of next) byId.set(e.id, e)
@@ -73,10 +73,8 @@ export function useConversation(url: string | undefined) {
     const stream = new EventSource(url)
     stream.onmessage = (m) => {
       const event = JSON.parse(m.data) as { entries?: Entry[]; earlier?: boolean; live?: Live; agent?: ThreadAgent; subagents?: Subagent[] }
-      if (event.earlier !== undefined) {
-        setEntries(event.entries ?? [])
-        setEarlier(event.earlier)
-      } else if (event.entries?.length) setEntries((prev) => merge(prev, event.entries!))
+      if (event.entries?.length) setEntries((prev) => merge(prev, event.entries!))
+      if (event.earlier !== undefined) setEarlier(event.earlier)
       if (event.agent) setAgent(event.agent)
       if (event.subagents) setSubagents(event.subagents)
       setLive(event.live ?? {})

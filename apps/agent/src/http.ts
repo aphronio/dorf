@@ -119,12 +119,15 @@ async function asset(path: string, res: http.ServerResponse): Promise<boolean> {
 	return true;
 }
 
-type Emit = Parameters<Threads["follow"]>[2];
+type Emit = Parameters<Threads["follow"]>[3];
 
-async function follow(start: (emit: Emit) => Promise<(() => Promise<unknown>) | undefined>, req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
-	const stop = await start((event) => {
+// Server-sent events, each id the newest entry so far: the browser's reconnect sends it back as Last-Event-ID.
+async function follow(start: (after: EntryId | undefined, emit: Emit) => Promise<(() => Promise<unknown>) | undefined>, req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
+	const last = Number(req.headers["last-event-id"]);
+	const stop = await start(Number.isSafeInteger(last) && last > 0 ? (last as EntryId) : undefined, (event) => {
 		if (!res.headersSent) res.writeHead(200, { ...HEADERS, "cache-control": "no-store, no-transform", "content-type": "text/event-stream" });
-		res.write(`data: ${JSON.stringify(event)}\n\n`);
+		const newest = event.entries?.at(-1)?.id;
+		res.write(`${newest === undefined ? "" : `id: ${newest}\n`}data: ${JSON.stringify(event)}\n\n`);
 	});
 	if (!stop) return false;
 	// The browser may have left while the watches started.
@@ -148,7 +151,7 @@ export function serve(threads: Threads, catalog: Catalog, claude: ClaudeLogin, g
 					const id = Number(stream[1]) as ConversationId;
 					const name = stream[2] ? decodeURIComponent(stream[2]) : undefined;
 					const missing: Reply = [404, { error: name ? "no such subagent" : "no such thread" }];
-					if (stream[3] === "events") return (await follow((emit) => threads.follow(id, name, emit), req, res)) || send(missing);
+					if (stream[3] === "events") return (await follow((after, emit) => threads.follow(id, name, after, emit), req, res)) || send(missing);
 					const before = Number(new URL(req.url ?? "/", "http://x").searchParams.get("before"));
 					if (!Number.isSafeInteger(before) || before < 1) return send([400, { error: "before must be an entry id" }]);
 					return send((await threads.earlier(id, name, before as EntryId).then((page) => page && ([200, page] as Reply))) ?? missing);

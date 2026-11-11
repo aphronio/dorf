@@ -9,7 +9,7 @@ import { ThreadSandbox } from "./thread-sandbox.ts";
 
 export type ThreadAgent = { model?: ModelRef; thinkingLevel: ModelThinkingLevel };
 export type SubagentView = { name: string; model?: ModelRef; working: boolean };
-type FollowEvent = { entries?: readonly unknown[]; earlier?: boolean; live: unknown; agent?: ThreadAgent; subagents?: SubagentView[] };
+type FollowEvent = { entries?: ConversationView["entries"]; earlier?: boolean; live: unknown; agent?: ThreadAgent; subagents?: SubagentView[] };
 
 // Entries per page: the first window, each fill of a gap, each "load earlier".
 const PAGE = 50;
@@ -152,11 +152,11 @@ export class Threads {
 	}
 
 	// Pi's JSON state mode over a Thread or, by name, its subagent: first the newest entries and whether earlier ones
-	// exist, then per change the new entries and the live state. The agent goes along when it changes, and for a Thread
-	// the list of its subagents when one starts or one's work starts or ends.
-	async follow(id: ConversationId, name: string | undefined, send: (event: FollowEvent) => void): Promise<(() => Promise<unknown>) | undefined> {
+	// exist, or after `after` the entries the page missed, then per change the new entries and the live state. The agent
+	// goes along when it changes, and for a Thread the list of its subagents when one starts or one's work starts or ends.
+	async follow(id: ConversationId, name: string | undefined, after: EntryId | undefined, send: (event: FollowEvent) => void): Promise<(() => Promise<unknown>) | undefined> {
 		const conversation = await this.#conversation(id, name);
-		return conversation && this.#follow(conversation, send, name === undefined);
+		return conversation && this.#follow(conversation, after, send, name === undefined);
 	}
 
 	// The page of entries before `before`, oldest first, and whether earlier ones remain.
@@ -167,15 +167,19 @@ export class Threads {
 		return { entries: [...page.items].reverse(), earlier: page.next !== undefined };
 	}
 
-	async #follow(conversation: Conversation, send: (event: FollowEvent) => void, withSubagents: boolean): Promise<() => Promise<unknown>> {
-		const watch = await conversation.watch(context);
+	async #follow(conversation: Conversation, after: EntryId | undefined, send: (event: FollowEvent) => void, withSubagents: boolean): Promise<() => Promise<unknown>> {
+		// A reconnect resumes right after the page's newest entry, as Pi's `ConversationTranscript.resume` does.
+		const watch = await conversation.watch(context, after === undefined ? undefined : { from: (after + 1) as EntryId });
 		// Pi's client transcript over the windowed view: a gap that a stall left is filled before anything is sent, so
 		// the page gets every entry after the first window, and pages earlier ones in itself.
 		const transcript = new ConversationTranscript((query, limit, ctx) => conversation.entries(query, limit, undefined, ctx), { pageSize: PAGE });
-		let sent: EntryId | undefined;
+		let sent = after;
 		const fresh = async (view: ConversationView) => {
 			let { items } = transcript.merge(view);
 			for (let gap = items.find((i) => i.kind === "gap"); gap?.kind === "gap"; gap = items.find((i) => i.kind === "gap")) ({ items } = await transcript.fillGap(gap, context));
+			// A drop longer than the window resumes at the newest entries; the ones before reach back to the page's.
+			const oldest = () => items.find((i) => i.kind === "entry")?.entry.id;
+			while (sent !== undefined && items[0]?.kind === "earlier" && (oldest() ?? 0) > sent + 1) ({ items } = await transcript.loadEarlier(context));
 			const entries = items.flatMap((i) => (i.kind === "entry" && (sent === undefined || i.entry.id > sent) ? [i.entry] : []));
 			sent = transcript.newest ?? sent;
 			return { entries, earlier: items[0]?.kind === "earlier" };
@@ -203,7 +207,8 @@ export class Threads {
 		const registry = withSubagents ? await this.#harness.watchDoc(Subagents, conversation.id, context) : undefined;
 		if (registry) await watchChildren(registry.value.agents);
 		let agent = watch.value.docs["pi.agent"];
-		send({ ...(await fresh(watch.value)), live, agent: await agentOf(conversation), ...(withSubagents ? { subagents: subagents() } : {}) });
+		const { entries, earlier } = await fresh(watch.value);
+		send({ entries, ...(after === undefined ? { earlier } : {}), live, agent: await agentOf(conversation), ...(withSubagents ? { subagents: subagents() } : {}) });
 		watch.start(async (call) => {
 			if (call.kind !== "value") return;
 			const { entries } = await fresh(call.value);

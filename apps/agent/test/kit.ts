@@ -110,18 +110,23 @@ export async function send(id: number, message: string): Promise<void> {
 	if (sent.status !== 202) await fail(`send: ${sent.status}`);
 }
 
-// A Thread's event stream, as the page reads it.
-export function follow(path: string): { events: any[]; close: () => void } {
+// A Thread's event stream, as the page reads it; each event carries its SSE id. A reconnect sends the last one.
+export function follow(path: string, lastEventId?: number): { events: any[]; close: () => void } {
 	const events: any[] = [];
 	const abort = new AbortController();
-	void fetch(`http://127.0.0.1:${PORT}${path}`, { headers: HEADERS, signal: abort.signal })
+	const headers = lastEventId === undefined ? HEADERS : { ...HEADERS, "last-event-id": String(lastEventId) };
+	void fetch(`http://127.0.0.1:${PORT}${path}`, { headers, signal: abort.signal })
 		.then(async (res) => {
 			let buffer = "";
 			for await (const chunk of res.body!.pipeThrough(new TextDecoderStream())) {
 				buffer += chunk;
 				const parts = buffer.split("\n\n");
 				buffer = parts.pop()!;
-				for (const part of parts) if (part.startsWith("data: ")) events.push(JSON.parse(part.slice(6)));
+				for (const part of parts) {
+					const field = (name: string) => part.split("\n").find((l) => l.startsWith(`${name}: `))?.slice(name.length + 2);
+					const data = field("data");
+					if (data) events.push({ ...JSON.parse(data), ...(field("id") ? { id: Number(field("id")) } : {}) });
+				}
 			}
 		})
 		.catch(() => {});
