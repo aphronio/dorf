@@ -77,12 +77,11 @@ if (!again?.output.includes("already exists") || file?.output.trim() !== "from-c
 	await fail(`persistent subagent: ${JSON.stringify({ again, file, status })}`);
 log("4. a subagent works in the Thread's machine, keeps its conversation across messages, and reports each answer; the Thread's stream lists it live");
 
-const [listed] = await ask(subagent({ action: "status" }));
 const [other] = await ask(subagent({ action: "spawn", name: "second", model: "other/claude-Faux-2", message: "$ true" }));
 const [unknown] = await ask(subagent({ action: "spawn", name: "third", model: "anthropic/nope", message: "$ true" }));
-if (!listed?.output.includes("Offered models: faux") || other?.output !== "Started second." || !unknown?.error || !unknown.output.includes("faux-2"))
-	await fail(`subagent models: ${JSON.stringify({ listed, other, unknown })}`);
-log("5. status lists the offered models; a subagent runs on one however a model names it; an unknown one fails with the list");
+if (other?.output !== "Started second." || !unknown?.error || !unknown.output.includes("faux-2"))
+	await fail(`subagent models: ${JSON.stringify({ other, unknown })}`);
+log("5. a subagent runs on an offered model however a model names it; an unknown one fails with the list");
 
 await ask(subagent({ action: "spawn", name: "sleeper", message: "$[60] sleep 16" }));
 await new Promise((r) => setTimeout(r, IDLE_MS + 3_000));

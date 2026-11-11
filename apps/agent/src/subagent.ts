@@ -14,7 +14,6 @@ import {
 	type Harness,
 	LiveDoc,
 	section,
-	type TaskId,
 } from "@earendil-works/pi-durable";
 import { bool, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 import type { Catalog } from "./models.ts";
@@ -26,14 +25,14 @@ type Subagent = { conversationId: ConversationId; reported: EntryId[] };
 // A subagent's answer in the Thread: the model reads its text, the page its author.
 export const SubagentReport = defineEntry<{ name: string; failed?: true }>("dorf.subagent-report");
 // Created with its Thread, so the page can follow it from the start: a watch never creates a document.
-export const Subagents = defineDoc<{ agents: Record<string, Subagent>; reporters: Record<string, TaskId> }>({
+export const Subagents = defineDoc<{ agents: Record<string, Subagent> }>({
 	checkpointWhen: () => false,
 	kind: "dorf.subagents",
 	version: 1,
 	scope: "conversation",
 	history: "latest",
 	fork: "initial",
-	initial: () => ({ agents: {}, reporters: {} }),
+	initial: () => ({ agents: {} }),
 });
 
 export async function subagentsOf(harness: Harness, id: ConversationId): Promise<{ name: string; conversationId: ConversationId }[]> {
@@ -98,7 +97,7 @@ export function subagents(catalog: Catalog): Extension {
 			"Manage persistent subagents that work in the background in this Thread's machine. Actions: spawn (name, message, " +
 			"optional model: another offered model's id or name, e.g. a stronger one for a hard question), send (name, " +
 			"message; followUp: true queues it after the current answer instead of steering), stop (name: aborts its current " +
-			"work), status (name, or all subagents and the offered models without one). Each subagent remembers its earlier " +
+			"work), status (name, or all subagents without one). Each subagent remembers its earlier " +
 				"messages. Answers are " +
 			"reported back to you when they arrive.",
 		parameters: obj({
@@ -116,7 +115,7 @@ export function subagents(catalog: Catalog): Extension {
 				output: [{ type: "text" as const, text }],
 				...(conversationId === undefined || name === undefined ? {} : { details: { name, conversationId } }),
 			});
-			const registry = (await api.snapshot(Subagents, api.conversationId, callContext)) ?? { agents: {}, reporters: {} };
+			const registry = (await api.snapshot(Subagents, api.conversationId, callContext)) ?? { agents: {} };
 
 			if (action === "status") {
 				const lines: string[] = [];
@@ -126,8 +125,7 @@ export function subagents(catalog: Catalog): Extension {
 					const busy = (await api.snapshot(LiveDoc, found.conversationId, callContext))?.run !== undefined;
 					lines.push(`${each}: ${busy ? "working" : "idle"}`);
 				}
-				if (name === undefined) lines.push(`${lines.length ? "" : "No subagents.\n"}Offered models: ${catalog.offered()}`);
-				return reply(lines.join("\n"));
+				return reply(lines.join("\n") || "No subagents.");
 			}
 			if (name === undefined) return reply(`${action} needs a name.`);
 			const agent = Object.hasOwn(registry.agents, name) ? registry.agents[name] : undefined;
@@ -156,7 +154,7 @@ export function subagents(catalog: Catalog): Extension {
 					state.agents[name] = { conversationId: child.id, reported: [] };
 				}
 				const conversationId = state.agents[name]!.conversationId;
-				state.reporters[api.taskId] = await tx.createTask(Reporter, { name, conversationId, message, followUp: action === "send" && followUp === true }, background);
+				await tx.createTask(Reporter, { name, conversationId, message, followUp: action === "send" && followUp === true }, background);
 				return action === "send" ? `Sent to ${name}.` : `Started ${name}.`;
 			}, callContext);
 			return reply(result, (await api.snapshot(Subagents, api.conversationId, callContext))?.agents[name]?.conversationId);
