@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 export type Thread = { id: number; title: string; createdAt: string; repo?: string }
 export type Repo = { name: string; private: boolean }
@@ -63,7 +63,9 @@ export function useConversation(url: string | undefined) {
   const [agent, setAgent] = useState<ThreadAgent>()
   const [subagents, setSubagents] = useState<Subagent[]>([])
   const [earlier, setEarlier] = useState(false)
+  const following = useRef(url)
   useEffect(() => {
+    following.current = url
     setEntries([])
     setEarlier(false)
     setLive({})
@@ -84,7 +86,9 @@ export function useConversation(url: string | undefined) {
   const loadEarlier = useCallback(async () => {
     const oldest = entries[0]
     if (!url || !oldest) return
-    const page = (await (await fetch(`${url.replace(/\/events$/, "/entries")}?before=${oldest.id}`)).json()) as { entries: Entry[]; earlier: boolean }
+    const page = await api<{ entries: Entry[]; earlier: boolean }>("GET", `${url.replace(/\/events$/, "/entries")}?before=${oldest.id}`)
+    // The page may have moved to another conversation meanwhile.
+    if (following.current !== url) return
     setEntries((prev) => merge(page.entries, prev))
     setEarlier(page.earlier)
   }, [url, entries])

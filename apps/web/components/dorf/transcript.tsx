@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useLayoutEffect, useRef } from "react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { ChatMessage } from "@/components/ui/chat-message"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
@@ -44,6 +44,11 @@ export function Transcript({ entries, live, onSubagent, loadEarlier }: Transcrip
   const Chevron = useIcons()["chevron-right"]
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
+  const [loading, setLoading] = useState(false)
+  const [loadFailed, setLoadFailed] = useState(false)
+  // Set while earlier entries load: the distance from the bottom to keep once they land above.
+  const fromBottom = useRef<number>(undefined)
+  const oldest = useRef<number>(undefined)
 
   const outputs: Record<string, Output> = {}
   const items: Item[] = []
@@ -72,7 +77,12 @@ export function Transcript({ entries, live, onSubagent, loadEarlier }: Transcrip
 
   useLayoutEffect(() => {
     const el = scroller.current
-    if (el && pinned.current) el.scrollTop = el.scrollHeight
+    if (!el) return
+    if (fromBottom.current !== undefined && entries[0]?.id !== oldest.current) {
+      el.scrollTop = el.scrollHeight - fromBottom.current
+      fromBottom.current = undefined
+    } else if (pinned.current) el.scrollTop = el.scrollHeight
+    oldest.current = entries[0]?.id
   })
   // The composer growing shrinks this area; stay at the bottom if already there.
   useEffect(() => {
@@ -99,16 +109,21 @@ export function Transcript({ entries, live, onSubagent, loadEarlier }: Transcrip
           <Button
             variant="ghost"
             size="compact"
-            className="self-center"
+            className={`self-center ${loadFailed ? "text-red-600 dark:text-red-400" : ""}`}
+            loading={loading}
             onClick={async () => {
-              // Keep the reader where they were as the earlier entries land above.
               const el = scroller.current!
-              const fromBottom = el.scrollHeight - el.scrollTop
-              await loadEarlier()
-              requestAnimationFrame(() => (el.scrollTop = el.scrollHeight - fromBottom))
+              fromBottom.current = el.scrollHeight - el.scrollTop
+              setLoading(true)
+              setLoadFailed(false)
+              await loadEarlier().catch(() => {
+                fromBottom.current = undefined
+                setLoadFailed(true)
+              })
+              setLoading(false)
             }}
           >
-            Load earlier
+            {loadFailed ? "Couldn't load earlier. Retry" : "Load earlier"}
           </Button>
         )}
         {items.map((item) => {
