@@ -11,7 +11,8 @@ it. [Slices](docs/slices.md) owns the plan, each slice's proof, and carry-over f
 - TypeScript on Node, with Bun for installs and scripts. Pin dependencies exactly and install with
   `bun install --frozen-lockfile --ignore-scripts`.
 - Build on Pi Durable the way its README and `packages/durable/test/examples` do. Read the matching
-  example before adding host-side state or a new mechanism.
+  example before adding host-side state or a new mechanism. The package ships no examples; read them
+  in `earendil-works/pi` at the tag of the pinned version, since `main` has features it lacks.
 - Only the gate (`apps/gate`) and deployment files use Substrate terms (Actor, Worker,
   Atespace, ActorTemplate).
 - One concept per file. Keep a module as a file until a second caller needs it; extract a package
