@@ -41,4 +41,4 @@ spec:
       - name: token
         projected:
           sources:
-          - serviceAccountToken: {audience: api.ate-system.svc, expirationSeconds: 3600, path: token}
+          - serviceAccountToken: {audience: dorf-gate, expirationSeconds: 3600, path: token}

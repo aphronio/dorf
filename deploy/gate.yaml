@@ -26,6 +26,14 @@ roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: dorf-gate}
 subjects:
 - {kind: ServiceAccount, name: dorf-gate, namespace: dorf-gate}
 ---
+# The gate checks that a caller's token is the agent's.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: dorf-gate-token-review}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: system:auth-delegator}
+subjects:
+- {kind: ServiceAccount, name: dorf-gate, namespace: dorf-gate}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: dorf-gate, namespace: dorf-gate}
@@ -46,7 +54,12 @@ spec:
         volumeMounts:
         - {name: servicedns, mountPath: /run/ate/servicedns}
         - {name: podidentity, mountPath: /run/ate/podidentity}
+        - {name: substrate, mountPath: /run/dorf/substrate, readOnly: true}
       volumes:
+      - name: substrate
+        projected:
+          sources:
+          - serviceAccountToken: {audience: api.ate-system.svc, expirationSeconds: 3600, path: token}
       - name: servicedns
         projected:
           sources:

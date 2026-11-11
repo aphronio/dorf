@@ -135,12 +135,16 @@ Facts learned in one slice that a later slice must respect.
   API itself (with a door only for bytes) was as fast but cannot run in a Worker, and its token
   also had to work at the Kubernetes API.
 - Substrate scopes a ServiceAccount token to one atespace through that atespace's access policy
-  (`editor`); the token's audience must be `api.ate-system.svc`. The `dorf-agent` token is denied
-  other atespaces, global calls and changing its own policy. The gate forwards it on every call and
-  holds no rights over Sandboxes itself.
+  (`editor`); the token's audience must be `api.ate-system.svc`. That right sits with the
+  `dorf-gate` token, which is denied other atespaces, global calls and changing its own policy. An
+  editor may also write a Sandbox's egress rules, and Substrate's credential provider never checks
+  where a rule sends a secret: with the agent as editor, agent code created a Sandbox whose rule
+  sent a `dorf-secrets` canary to an outside host (tested). So the agent holds no Substrate right.
+  Its token's audience is `dorf-gate`, which Substrate refuses, and the gate admits it by a
+  Kubernetes TokenReview, then spends its own right only on its routes and fixed egress rules.
 - Substrate's router accepts clients by an exact SPIFFE allow-list and checks no atespace, so the
   gate's pod certificate could reach every Sandbox. The gate therefore opens a WebSocket only after
-  `ResumeActor` succeeds with the caller's token (it needs `editor` and is harmless on a running
+  `ResumeActor` succeeds with its own atespace-scoped token (it needs `editor` and is harmless on a running
   Sandbox). `deploy/substrate.sh` puts `dorf-gate` on the allow-list at install; the install record
   keeps it across upgrades. The gate runs in its own namespace so that identity stays apart from the
   Sandboxes' pool, and has only a ClusterIP: anything outside the cluster reaches it through a port

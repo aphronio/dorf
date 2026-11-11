@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 proof=${1:?name a proof in apps/agent/test, such as substrate}
 dir=$(mktemp -d)
-kubectl -n dorf-gate create token dorf-agent --audience api.ate-system.svc --duration 24h >"$dir/token"
+kubectl -n dorf-gate create token dorf-agent --audience dorf-gate --duration 24h >"$dir/token"
 kubectl -n dorf-gate port-forward svc/dorf-gate 0:80 >"$dir/forward" 2>/dev/null &
 forward=$!
 trap 'kill $forward; rm -rf "$dir"' EXIT

@@ -61,13 +61,19 @@ echo "sandbox template ready: $TEMPLATE"
 
 grep -q 'ns/dorf-gate/sa/dorf-gate' <<<"$(kubectl -n ate-system get deploy atenet-router -o jsonpath='{.spec.template.spec.containers[0].args}')" ||
 	{ echo "atenet-router does not allow dorf-gate; install Substrate with deploy/substrate.sh" >&2; exit 1; }
-if ! access=$(ate get access-policy -a dorf -o yaml 2>/dev/null); then
-	printf 'metadata: {name: default}\nbindings:\n- role: editor\n  members: [user:system:serviceaccount:dorf-gate:dorf-agent]\n' |
-		ate create access-policy -a dorf -f - >/dev/null
-elif ! grep -q 'serviceaccount:dorf-gate:dorf-agent' <<<"$access"; then
-	echo "grant user:system:serviceaccount:dorf-gate:dorf-agent the editor role in atespace dorf's access policy" >&2
-	exit 1
-fi
+# Atespace dorf's Substrate rights belong to the gate alone; the agent's token is only good for the gate. `editors` sets
+# who holds them, keeping the policy's guards.
+GATE_SA=user:system:serviceaccount:dorf-gate:dorf-gate
+editors() {
+	local policy
+	if ! policy=$(ate get access-policy -a dorf -o json 2>/dev/null); then
+		json "_=>JSON.stringify({metadata:{name:'default'},bindings:[{role:'editor',members:'$1'.split(',')}]})" <<<'{}' | ate create access-policy -a dorf -f - >/dev/null
+	elif [ "$(json 'p=>p.bindings.map(b=>b.role+":"+b.members.join(",")).join(" ")' <<<"$policy")" != "editor:$1" ]; then
+		json "p=>JSON.stringify({metadata:{name:'default',uid:p.metadata.uid,version:p.metadata.version},bindings:[{role:'editor',members:'$1'.split(',')}]})" <<<"$policy" | ate update access-policy -a dorf -f - >/dev/null
+	fi
+}
+# Until the gate holds them, keep whoever does, so the running gate keeps working while the new one rolls out.
+grep -q "$GATE_SA" <<<"$(ate get access-policy -a dorf -o json 2>/dev/null)" || editors "$GATE_SA,user:system:serviceaccount:dorf-gate:dorf-agent"
 GATE=$REGISTRY/dorf-gate:$( (echo "$SUBSTRATE_VERSION"; cat apps/gate/{Dockerfile,package.json,bun.lock,ateapi.ts,gate.ts}) | sha256sum | cut -c1-12)
 docker build -q --build-arg SUBSTRATE_VERSION="$SUBSTRATE_VERSION" -t "$GATE" apps/gate >/dev/null
 docker push -q "$GATE" >/dev/null
@@ -90,4 +96,5 @@ docker push -q "$AGENT" >/dev/null
 AGENT_IMAGE=$AGENT DORF_MODEL=${DORF_MODEL:-claude-plan/opus} DORF_OWNER=${DORF_OWNER:?set DORF_OWNER to the Tailscale login allowed to use Dorf} \
 	envsubst '$AGENT_IMAGE $DORF_MODEL $DORF_OWNER' <deploy/agent.yaml | kubectl apply -f - >/dev/null
 kubectl -n dorf-gate rollout status deploy/dorf-agent --timeout=5m >/dev/null
+editors "$GATE_SA"
 echo "agent ready: deployment dorf-gate/dorf-agent"
