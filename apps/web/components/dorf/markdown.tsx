@@ -2,6 +2,7 @@ import { useMemo, type ComponentProps } from "react"
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { Code } from "@/components/dorf/code"
+import { Mermaid } from "@/components/dorf/mermaid"
 import type { Picture } from "@/components/dorf/image-dialog"
 import { View, ViewPending } from "@/components/dorf/view"
 
@@ -52,15 +53,20 @@ export function Markdown({ children, images, onImageOpen }: { children: string; 
       </span>
     )
   }
-  // A `view` block becomes a sandboxed frame once its closing fence arrives; until then it is still streaming. The
-  // component stays the same while the text does, so React keeps each frame and its state.
+  // A `view` block becomes a sandboxed frame, and a `mermaid` block a diagram, once its closing fence arrives; until
+  // then it is still streaming. The component stays the same while the text does, so React keeps each frame and its
+  // state.
   const view = useMemo(
     () =>
       function ViewOrCode(p: ComponentProps<"code"> & ExtraProps) {
-        if (!/\blanguage-view\b/.test(p.className ?? "")) return code(p)
+        const lang = /\blanguage-(view|mermaid)\b/.exec(p.className ?? "")?.[1]
+        if (!lang) return code(p)
         const at = p.node?.position
         const raw = at ? children.slice(at.start.offset, at.end.offset) : ""
-        return /\n[ \t]*(`{3,}|~{3,})[ \t]*$/.test(raw) ? <View html={String(p.children ?? "")} /> : <ViewPending />
+        const closed = /\n[ \t]*(`{3,}|~{3,})[ \t]*$/.test(raw)
+        const text = String(p.children ?? "")
+        if (lang === "mermaid") return closed ? <Mermaid code={text.replace(/\n$/, "")} /> : code(p)
+        return closed ? <View html={text} /> : <ViewPending />
       },
     [children],
   )
