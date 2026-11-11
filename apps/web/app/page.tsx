@@ -16,7 +16,7 @@ import { ThreadSidebar } from "@/components/dorf/thread-sidebar"
 import { Transcript } from "@/components/dorf/transcript"
 import { ImageDialog } from "@/components/dorf/image-dialog"
 import { useIcons } from "@/lib/icon-context"
-import { api, encodeImage, IMAGE_TYPES, lastModel, MAX_IMAGES, Unreachable, type ModelChoice, modelName, openThread, type Repo, RETRY_MS, type Thread, useHashId, useThread, useThreads } from "@/lib/dorf"
+import { api, encodeImage, IMAGE_TYPES, lastModel, MAX_IMAGES, Unreachable, type ModelChoice, modelName, newRequest, openThread, type Repo, RETRY_MS, type Thread, useHashId, useThread, useThreads } from "@/lib/dorf"
 
 const NO_REPO = "none"
 const REPO_KEY = "dorf.repo"
@@ -49,7 +49,9 @@ export default function Page() {
   const [preparing, setPreparing] = useState(false)
   const [opened, setOpened] = useState<File>()
   const [error, setError] = useState<string>()
-  const [starting, setStarting] = useState<{ prompt: string; images: File[]; repo?: string }>()
+  // The first message the page sent, kept to show with its images while the Thread starts.
+  const [starting, setStarting] = useState<{ prompt: string; images: File[]; repo?: string; id?: number }>()
+  const [request, setRequest] = useState(newRequest)
   const { entries, live, agent, subagents, queued, loadEarlier } = useThread(id)
   const [panel, setPanel] = useState<string>()
   const openSubagent = subagents.find((s) => s.name === panel)
@@ -68,6 +70,18 @@ export default function Page() {
   // The list as it changes: a Thread added, archived, deleted, starting work or ending it.
   const threads = useThreads(useCallback(() => setDown(true), []))
   const thread = threads.find((t) => t.id === id)
+  // The first message on its way in: while the page creates the Thread, then until the agent has started it.
+  const mine = starting !== undefined && starting.id === id
+  const first =
+    id === undefined
+      ? starting && starting.id === undefined && { ...starting }
+      : (thread?.starting || thread?.failure || (mine && !thread)) && {
+          prompt: mine ? starting.prompt : (thread?.title ?? ""),
+          images: mine ? starting.images : [],
+          repo: thread?.repo ?? starting?.repo,
+          waiting: thread?.waiting,
+          failure: thread?.failure,
+        }
   // Looking at a Thread whose run ended clears its mark; a tab in the background leaves it until it comes back.
   const unseen = Boolean(thread?.attention)
   useEffect(() => {
@@ -154,14 +168,15 @@ export default function Page() {
       store(REPO_KEY, repo)
       const chosen = repo !== NO_REPO ? repo : undefined
       setStarting({ prompt: value, images: files, repo: chosen })
-      const created = await api<Thread>("POST", "/threads", { prompt: value, ...attached, ...(chosen ? { repo: chosen } : {}), model, thinking: newLevels.length ? newLevel : undefined })
+      const created = await api<Thread>("POST", "/threads", { prompt: value, ...attached, ...(chosen ? { repo: chosen } : {}), model, thinking: newLevels.length ? newLevel : undefined, request })
+      setStarting({ prompt: value, images: files, repo: chosen, id: created.id })
+      setRequest(newRequest())
       openThread(created.id)
     } catch (e) {
+      setStarting(undefined)
       setDraft(value)
       setImages(files)
       fail(e)
-    } finally {
-      setStarting(undefined)
     }
   }
   const stop = () => id !== undefined && api("POST", `/threads/${id}/abort`).catch(fail)
@@ -222,11 +237,13 @@ export default function Page() {
       <SidebarInset className="max-md:!m-0 max-md:!rounded-none">
         <SidebarInsetTopbar>
           <span className="min-w-0 flex-1 truncate text-sm font-medium">
-            {thread ? (thread.repo ? `${thread.repo} · ${thread.title}` : thread.title) : id === undefined ? (starting ? starting.prompt || "Image" : "New Thread") : ""}
+            {thread ? (thread.repo ? `${thread.repo} · ${thread.title}` : thread.title) : id === undefined ? (first ? first.prompt || "Image" : "New Thread") : ""}
           </span>
           {id !== undefined && (
             <>
-              <Badge color={running ? "blue" : "gray"} size="compact">{running ? "working" : "idle"}</Badge>
+              <Badge color={thread?.waiting ? "amber" : running || thread?.starting ? "blue" : "gray"} size="compact">
+                {thread?.waiting ? "waiting for a machine" : thread?.starting ? "starting" : running ? "working" : "idle"}
+              </Badge>
               {thread?.archived ? (
                 <Button variant="ghost" size="icon-compact" aria-label="Unarchive Thread" title="Unarchive" onClick={() => void archive("unarchive", id)}>
                   <icons.unarchive />
@@ -242,8 +259,8 @@ export default function Page() {
 
         <div className="relative flex min-h-0 flex-1">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {starting ? (
-          <Starting prompt={starting.prompt} images={starting.images} repo={starting.repo} />
+        {first ? (
+          <Starting {...first} />
         ) : id === undefined ? (
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
             <h1 className="text-2xl font-semibold">What should Dorf do?</h1>
@@ -254,7 +271,7 @@ export default function Page() {
         ) : (
           <Transcript entries={entries} live={live} queued={queued} onSubagent={setPanel} loadEarlier={loadEarlier} />
         )}
-        {id !== undefined && !starting && <SubagentList subagents={subagents} open={panel} onOpen={setPanel} />}
+        {id !== undefined && !first && <SubagentList subagents={subagents} open={panel} onOpen={setPanel} />}
 
         {/* A subagent's view is read-only: messages go to the Thread, so the composer waits there. */}
         <div hidden={Boolean(openSubagent)} className="mx-auto w-full max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">

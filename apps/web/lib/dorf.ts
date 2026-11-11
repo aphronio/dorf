@@ -2,8 +2,24 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 
-// `working` while a run is live; `attention` once it ended, until the owner opens the Thread.
-export type Thread = { id: number; title: string; createdAt: string; repo?: string; archived?: true; working?: true; attention?: "done" | "failed" }
+// `starting` until the first message is in, `waiting` meanwhile while no machine is free, and `failure` if it never got
+// in. `working` while a run is live; `attention` once it ended, until the owner opens the Thread.
+export type Thread = {
+  id: number
+  title: string
+  createdAt: string
+  repo?: string
+  archived?: true
+  starting?: true
+  waiting?: true
+  failure?: string
+  working?: true
+  attention?: "done" | "failed"
+}
+
+// Names one draft, so sending it again after a lost answer finds the Thread the first send made. Not randomUUID: that
+// needs a secure context.
+export const newRequest = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, "0")).join("")
 export type Repo = { name: string; private: boolean }
 export type Claude = { loggedIn: boolean; plan: string | null; email: string | null }
 export type ModelChoice = { ref: string; name: string; thinking: string[]; defaultThinking: string }

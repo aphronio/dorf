@@ -19,6 +19,7 @@ import { Skills } from "./skills.ts";
 import { subagents } from "./subagent.ts";
 import { drain } from "./drain.ts";
 import { SandboxJobs } from "./jobs.ts";
+import { threadStart } from "./thread-start.ts";
 import { sandboxEnv, Threads } from "./threads.ts";
 
 const DATA = process.env.DORF_DATA ?? "data";
@@ -52,6 +53,8 @@ registry.install(SandboxJobs);
 const catalog = new Catalog(models, model);
 await catalog.refresh();
 registry.install(subagents(catalog));
+const start = threadStart(sandboxes);
+registry.install(start.extension);
 const harness = await Harness.open(
 	await openNodeSqliteStorage(`${DATA}/agent.sqlite`),
 	{
@@ -70,6 +73,7 @@ harness.resume();
 const threads = new Threads(
 	harness,
 	sandboxes,
+	start.task,
 	{
 		model,
 		thinkingLevel: catalog.thinking(model),

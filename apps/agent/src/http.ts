@@ -9,7 +9,7 @@ import { type ClaudeLogin, LoginError } from "./claude-login.ts";
 import type { GitHub } from "./github.ts";
 import { prepareImages } from "./images.ts";
 import type { Catalog } from "./models.ts";
-import type { Threads } from "./threads.ts";
+import { Starting, type Threads } from "./threads.ts";
 
 type Reply = [status: number, body: unknown];
 
@@ -106,14 +106,15 @@ async function route(threads: Threads, catalog: Catalog, claude: ClaudeLogin, gi
 		case "GET ":
 			return [200, await threads.list()];
 		case "POST ": {
-			const { prompt = "", repo, model, thinking, images: attached } = await json(req, MAX_MESSAGE_BODY);
+			const { prompt = "", repo, model, thinking, images: attached, request } = await json(req, MAX_MESSAGE_BODY);
 			if (typeof prompt !== "string") return [400, { error: "prompt must be text" }];
 			const list = uploads(attached);
 			if (!prompt && !list.length) return [400, { error: "prompt or images required" }];
 			if (repo !== undefined && typeof repo !== "string") return [400, { error: "repo must be owner/name" }];
+			if (request !== undefined && (typeof request !== "string" || !/^[\w-]{1,64}$/.test(request))) return [400, { error: "request must be up to 64 letters, digits, - or _" }];
 			const choice = catalog.choose(model, thinking);
 			const prepared = await prepareImages(images, catalog.imageLimits(choice.model), list);
-			return [201, await threads.create(input(prompt, prepared), prompt || "Image", repo || undefined, choice)];
+			return [201, await threads.create(input(prompt, prepared), prompt || "Image", repo || undefined, choice, request)];
 		}
 		case "GET :id": {
 			const view = await threads.read(id);
@@ -202,7 +203,7 @@ export function serve(threads: Threads, catalog: Catalog, claude: ClaudeLogin, g
 				}
 				send(await route(threads, catalog, claude, github, images, req));
 			} catch (e) {
-				send([e instanceof BadRequest ? e.status : e instanceof LoginError || e instanceof RangeError ? 400 : 500, { error: (e as Error).message }]);
+				send([e instanceof BadRequest ? e.status : e instanceof Starting ? 409 : e instanceof LoginError || e instanceof RangeError ? 400 : 500, { error: (e as Error).message }]);
 			}
 		})
 		.listen(port, "127.0.0.1");

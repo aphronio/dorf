@@ -5,7 +5,7 @@ import { Connection, RemoteExecutionEnv } from "@earendil-works/pi-env";
 // Longer than the gate's own deadline, so the gate's error arrives first.
 const GATE_TIMEOUT_MS = 6 * 60_000;
 const PIPE = new URL("./pipe.ts", import.meta.url).pathname;
-const RETRY_ROOM_MS = 5_000;
+export const RETRY_ROOM_MS = 5_000;
 
 export class SandboxNotFound extends Error {
 	constructor(name: string) {
@@ -14,6 +14,7 @@ export class SandboxNotFound extends Error {
 }
 
 class NoRoom extends Error {}
+class Exists extends Error {}
 
 export class Sandboxes {
 	#gate: string;
@@ -37,6 +38,7 @@ export class Sandboxes {
 		const res = await fetch(this.#gate + path, { method, headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(GATE_TIMEOUT_MS) });
 		if (res.status === 404 && name) throw new SandboxNotFound(name);
 		if (res.status === 503) throw new NoRoom(await res.text());
+		if (res.status === 409) throw new Exists(await res.text());
 		if (!res.ok) throw new Error(`gate ${method} ${path}: ${res.status} ${await res.text()}`);
 		return res.status === 204 ? undefined : res.json();
 	}
@@ -45,19 +47,28 @@ export class Sandboxes {
 		return `${this.#prefix}${randomUUID().slice(0, 8)}`;
 	}
 
+	// One that exists already counts as created, so a start cut off by a restart can create it again.
 	async create(name: string): Promise<void> {
-		await this.#call("", "POST", `/sandboxes/${name}`);
+		await this.#call("", "POST", `/sandboxes/${name}`).catch((e) => {
+			if (!(e instanceof Exists)) throw e;
+		});
 	}
 
-	async #resume(name: string): Promise<void> {
+	// Starts the Sandbox, first pausing others while that makes room; false when no worker has room.
+	async wake(name: string): Promise<boolean> {
 		for (;;) {
 			try {
-				return await this.#call(name, "POST", `/sandboxes/${name}/resume`);
+				await this.#call(name, "POST", `/sandboxes/${name}/resume`);
+				return true;
 			} catch (e) {
 				if (!(e instanceof NoRoom)) throw e;
 			}
-			if (!(await this.makeRoom())) await new Promise((r) => setTimeout(r, RETRY_ROOM_MS));
+			if (!(await this.makeRoom())) return false;
 		}
+	}
+
+	async #resume(name: string): Promise<void> {
+		while (!(await this.wake(name))) await new Promise((r) => setTimeout(r, RETRY_ROOM_MS));
 	}
 
 	async state(name: string): Promise<string> {

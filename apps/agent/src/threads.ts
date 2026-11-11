@@ -1,12 +1,14 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { type AgentChange, type Conversation, type ConversationId, ConversationTranscript, type ConversationView, type EntryId, type ModelRef, defineDoc, type Harness, type HarnessOptions, LiveDoc, ProviderDoc } from "@earendil-works/pi-durable";
+import { type AgentChange, type Conversation, type ConversationId, ConversationTranscript, type ConversationView, type EntryId, type ModelRef, type Harness, type HarnessOptions, LiveDoc, ProviderDoc } from "@earendil-works/pi-durable";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { UserInput } from "@earendil-works/pi-durable";
 import { REPO } from "./github.ts";
 import { pauseWhenIdle } from "./idle.ts";
 import type { Sandboxes } from "./sandbox.ts";
 import { placeStopped, Subagents, subagentsOf } from "./subagent.ts";
+import { ThreadList, type ThreadSummary } from "./thread-list.ts";
 import { ThreadSandbox } from "./thread-sandbox.ts";
+import type { threadStart } from "./thread-start.ts";
 
 export type ThreadAgent = { model?: ModelRef; thinkingLevel: ModelThinkingLevel };
 export type SubagentView = { name: string; model?: ModelRef; working: boolean };
@@ -15,16 +17,23 @@ type FollowEvent = { entries?: ConversationView["entries"]; earlier?: boolean; l
 // Entries per page: the first window, each fill of a gap, each "load earlier".
 const PAGE = 50;
 
-// `working` while a run is live; `attention` once it ended, until the owner opens the Thread.
-export type ThreadSummary = { id: ConversationId; title: string; createdAt: string; repo?: string; archived?: true; working?: true; attention?: "done" | "failed" };
+export type { ThreadSummary };
 
-const ThreadList = defineDoc<{ items: ThreadSummary[] }>({
-	kind: "dorf.threads",
-	version: 1,
-	scope: "session",
-	initial: () => ({ items: [] }),
-	checkpointWhen: () => false,
-});
+// A repeat of a creation the agent already committed, found by the page's request id.
+class Created extends Error {
+	readonly id: ConversationId;
+	constructor(id: ConversationId) {
+		super(`Thread ${id} exists`);
+		this.id = id;
+	}
+}
+
+// Sent to a Thread whose first message is not in yet.
+export class Starting extends Error {
+	constructor() {
+		super("the Thread is still starting; send once its first message is in");
+	}
+}
 
 export function sandboxEnv(sandboxes: Sandboxes, workspace: string): HarnessOptions["env"] {
 	return async ({ conversationId, cwd, read }, envContext) => {
@@ -60,10 +69,12 @@ export class Threads {
 	readonly #agent: AgentChange;
 	readonly #idleMs: number;
 	readonly #providerSessions: ProviderSessions;
+	readonly #start: ReturnType<typeof threadStart>["task"];
 	readonly #idleSince = new Map<ConversationId, number>();
 	readonly #idle = new Map<ConversationId, { now(): void }>();
 
-	constructor(harness: Harness, sandboxes: Sandboxes, agent: AgentChange, idleMs: number, providerSessions: ProviderSessions) {
+	constructor(harness: Harness, sandboxes: Sandboxes, start: ReturnType<typeof threadStart>["task"], agent: AgentChange, idleMs: number, providerSessions: ProviderSessions) {
+		this.#start = start;
 		this.#harness = harness;
 		this.#sandboxes = sandboxes;
 		this.#agent = agent;
@@ -130,50 +141,56 @@ export class Threads {
 		return (await this.#harness.snapshot(ThreadSandbox, id, context))?.name;
 	}
 
-	// The Thread commits before its Sandbox exists, so no Sandbox is ever left without a Thread.
-	async create(content: UserInput, title: string, repo: string | undefined, choice: { model: ModelRef; thinkingLevel: ModelThinkingLevel }): Promise<{ id: ConversationId; sandbox: string }> {
+	// Answers once the Thread is committed: a background task then starts its Sandbox, clones the repository and sends
+	// the first message, waiting for a worker with room as long as it takes. The Thread exists before its Sandbox, so no
+	// Sandbox is ever left without a Thread. A repeat with the same `request` returns the Thread the first one made.
+	async create(content: UserInput, title: string, repo: string | undefined, choice: { model: ModelRef; thinkingLevel: ModelThinkingLevel }, request?: string): Promise<{ id: ConversationId; sandbox: string }> {
 		if (repo !== undefined && !REPO.test(repo)) throw new RangeError(`not a GitHub repository: ${repo}`);
 		const sandbox = this.#sandboxes.newName();
 		const workspace = this.#agent.cwd ?? "/";
 		const cwd = repo ? `${workspace}/${repo.split("/")[1]}` : workspace;
 		const agent = { ...this.#agent, ...choice, cwd };
-		const conversation = await this.#harness.createConversation(
-			{
-				ownership: { kind: "ownerless" },
-				agent,
-				init: async (tx, id) => {
-					Object.assign(await tx.doc(ThreadSandbox, id), { name: sandbox, ...(repo ? { repo } : {}) });
-					await tx.doc(Subagents, id);
-					(await tx.doc(ThreadList)).items.push({ id, title: title.slice(0, 80), createdAt: new Date().toISOString(), ...(repo ? { repo } : {}) });
-				},
-			},
-			context,
-		);
+		let id: ConversationId;
 		try {
-			await this.#sandboxes.create(sandbox);
-			if (repo) await this.#clone(sandbox, repo, workspace, cwd);
+			({ id } = await this.#harness.createConversation(
+				{
+					ownership: { kind: "ownerless" },
+					agent,
+					init: async (tx, id) => {
+						const list = await tx.doc(ThreadList);
+						const first = request === undefined ? undefined : list.items.find((t) => t.request === request);
+						if (first) throw new Created(first.id);
+						Object.assign(await tx.doc(ThreadSandbox, id), { name: sandbox, ...(repo ? { repo } : {}) });
+						await tx.doc(Subagents, id);
+						list.items.push({ id, title: title.slice(0, 80), createdAt: new Date().toISOString(), ...(repo ? { repo } : {}), starting: true, ...(request ? { request } : {}) });
+						await tx.createTask(this.#start, { sandbox, repo, workspace, cwd, content }, { ownership: { kind: "conversation" }, conversationId: id, background: true });
+					},
+				},
+				context,
+			));
 		} catch (e) {
-			await this.delete(conversation.id);
-			throw e;
+			if (!(e instanceof Created)) throw e;
+			return { id: e.id, sandbox: (await this.sandbox(e.id))! };
 		}
-		await this.#watchIdle(conversation.id);
-		await conversation.submit({ type: "input", content }, context);
-		return { id: conversation.id, sandbox };
+		await this.#watchIdle(id);
+		return { id, sandbox };
 	}
 
-	async #clone(sandbox: string, repo: string, workspace: string, into: string): Promise<void> {
-		let output = "";
-		const cloned = await this.#sandboxes
-			.env(sandbox, workspace)
-			.exec(["git", "clone", "--quiet", `https://github.com/${repo}.git`, into], { onOutput: (text) => void (output += text) }, context);
-		if (!cloned.ok) throw cloned.error;
-		if (cloned.value.exitCode !== 0) throw new Error(`git clone ${repo}: ${output.trim().slice(-500)}`);
+	async #starting(id: ConversationId): Promise<boolean> {
+		return Boolean((await this.list()).find((t) => t.id === id)?.starting);
+	}
+
+	// Stops the Thread's work and its subagents', but not its start: only deleting the Thread ends that.
+	async #stop(conversation: Conversation): Promise<void> {
+		await conversation.abort(context, (await this.#starting(conversation.id)) ? undefined : { background: true });
+		await placeStopped(conversation, context);
 	}
 
 	// A message brings an archived Thread back.
 	async send(id: ConversationId, content: UserInput): Promise<boolean> {
 		const conversation = await this.#known(id);
 		if (!conversation) return false;
+		if (await this.#starting(id)) throw new Starting();
 		await this.#archive(id, false);
 		await conversation.submit({ type: "input", content, whenBusy: "steer" }, context);
 		return true;
@@ -184,8 +201,7 @@ export class Threads {
 		const conversation = await this.#known(id);
 		if (!conversation) return false;
 		await this.#archive(id, true);
-		await conversation.abort(context, { background: true });
-		await placeStopped(conversation, context);
+		await this.#stop(conversation);
 		this.#idle.get(id)?.now();
 		return true;
 	}
@@ -238,8 +254,7 @@ export class Threads {
 		const conversation = await this.#known(id);
 		if (!conversation) return false;
 		// Stop ends everything the Thread started: its run, its subagents' work and their reporters.
-		await conversation.abort(context, { background: true });
-		await placeStopped(conversation, context);
+		await this.#stop(conversation);
 		return true;
 	}
 
@@ -351,8 +366,10 @@ export class Threads {
 		if (idle) this.#idle.set(id, idle);
 	}
 
-	// Returns whether the Sandbox was running and is now paused; "busy" while a subagent works in it.
+	// Returns whether the Sandbox was running and is now paused; "busy" while a subagent works in it. A Sandbox still
+	// being started waits for its first message.
 	async #sleep(id: ConversationId, stillIdle: () => boolean): Promise<boolean | "busy"> {
+		if (await this.#starting(id)) return false;
 		const children = (await subagentsOf(this.#harness, id)).map((s) => s.conversationId);
 		for (const child of children) if ((await this.#harness.snapshot(LiveDoc, child, context))?.run) return "busy";
 		for (const each of [id, ...children]) {

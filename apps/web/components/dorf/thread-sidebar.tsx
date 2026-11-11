@@ -23,15 +23,18 @@ import type { Thread } from "@/lib/dorf"
 // As in T3 Code: a colored dot and a word before the title, only while the Thread works or has news. The open
 // Thread shows no news, since the owner is looking at it.
 const STATUS = {
+  waiting: { color: "amber", label: "Waiting" },
+  starting: { color: "blue", label: "Starting" },
   working: { color: "blue", label: "Working" },
   failed: { color: "red", label: "Failed" },
   done: { color: "emerald", label: "Completed" },
 } as const
 const Status = ({ thread, open }: { thread: Thread; open: boolean }) => {
-  const status = thread.working ? "working" : open ? undefined : thread.attention
+  const status = thread.waiting ? "waiting" : thread.starting ? "starting" : thread.working ? "working" : open ? undefined : thread.attention
   if (!status) return null
   return (
-    <Badge variant="ghost" size="compact" color={STATUS[status].color} className={status === "working" ? "shrink-0 [&>span:first-child]:animate-pulse" : "shrink-0"}>
+    <Badge variant="ghost" size="compact" color={STATUS[status].color} title={status === "waiting" ? "Waiting for a machine: the others are working" : undefined}
+      className={status === "working" || status === "starting" ? "shrink-0 [&>span:first-child]:animate-pulse" : "shrink-0"}>
       {STATUS[status].label}
     </Badge>
   )
