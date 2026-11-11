@@ -121,4 +121,4 @@ Place each visual next to the short text it supports. Keep only the calls, files
 You may use one of these, you may use several, it is unlikely you will use all of them. Use your judgement and don't overwhelm the user.
 
 
-<!-- From humanlayer/skills@701b6bcb, plugins/rpi/skills/rpi/references/show-me.md, without the HTML file a Sandbox cannot open. Copyright (c) 2026 HumanLayer, MIT License. -->
+<!-- From humanlayer/skills@701b6bcb, plugins/rpi/skills/rpi/references/show-me.md, without the HTML file a Sandbox cannot open. Copyright (c) 2026 HumanLayer, MIT License; see ../LICENSE-humanlayer. -->

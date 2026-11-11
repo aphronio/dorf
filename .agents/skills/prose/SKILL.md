@@ -30,4 +30,4 @@ From George Orwell, "Politics and the English Language" (1946):
 6. Break any of these rules sooner than say anything outright barbarous.
 
 
-<!-- Adapted from humanlayer/skills@701b6bcb, plugins/rpi/skills/rpi/references/prose.md. Copyright (c) 2026 HumanLayer, MIT License. -->
+<!-- Adapted from humanlayer/skills@701b6bcb, plugins/rpi/skills/rpi/references/prose.md. Copyright (c) 2026 HumanLayer, MIT License; see ../LICENSE-humanlayer. -->
