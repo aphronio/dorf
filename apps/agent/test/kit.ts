@@ -7,7 +7,7 @@ import { Sandboxes } from "../src/sandbox.ts";
 import { localGate } from "./local-gate.ts";
 
 const OWNER = "proof@example.com";
-const HEADERS = { "tailscale-user-login": OWNER, "content-type": "application/json" };
+export const HEADERS = { "tailscale-user-login": OWNER, "content-type": "application/json" };
 // Free when the proof starts and kept across agent restarts, so proofs can run at once.
 const PORT = await new Promise<number>((resolve) => {
 	const probe = createServer().listen(0, "127.0.0.1", () => {
@@ -15,6 +15,7 @@ const PORT = await new Promise<number>((resolve) => {
 		probe.close(() => resolve(port));
 	});
 });
+export const AGENT = `http://127.0.0.1:${PORT}`;
 // As many Sandboxes as the lab's worker holds at once.
 const LOCAL_SLOTS = 3;
 export const DATA = mkdtempSync(join(tmpdir(), "dorf-proof-"));
