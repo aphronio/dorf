@@ -27,9 +27,9 @@ Run these from the repository root. Times are from a Dorf Sandbox; a laptop is f
 
 | Command | What it does | Time |
 | --- | --- | --- |
-| `.agents/setup` | Installs every package from its lockfile; safe to run again | 22 s |
-| `bun run check` | Types of the agent, gate and page, and the page's lint | 17 s |
-| `bun run proof` | The agent's proofs (history, models, lifecycle, make-room) with the faux model, against local stand-ins of the gate | 2 min |
+| `.agents/setup` | Installs every package from its lockfile; safe to run again | 7 s |
+| `bun run check` | Types of the agent, gate and page, and the page's lint | 10 s |
+| `bun run proof` | The agent's proofs (history, models, lifecycle, make-room) with the faux model, against local stand-ins of the gate, all at once | 1 min |
 | `deploy/proof.sh <name>` | One file of `apps/agent/test` against a cluster running Substrate; needs `kubectl` | 0.5 to 2 min |
 
 `bun run proof` needs no cluster and no credentials, and CI runs it on every push. Its stand-ins
