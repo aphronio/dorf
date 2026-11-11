@@ -12,7 +12,7 @@ import { type Block, type Entry, type Live, type Message, text } from "@/lib/dor
 type Call = Extract<Block, { type: "toolCall" }>
 type Output = { text: string; error?: boolean; running?: boolean; images?: string[] }
 type Item =
-  | { kind: "user" | "text"; key: string; text: string }
+  | { kind: "user" | "text"; key: string; text: string; images?: Map<string, string> }
   | { kind: "calls"; key: string; calls: Call[] }
   | { kind: "note"; key: string; text: string; error?: boolean }
   | { kind: "subagent"; key: string; name: string; text: string; error?: boolean }
@@ -69,18 +69,20 @@ export function Transcript({ entries, live, onSubagent, loadEarlier }: Transcrip
     else if (e.kind === "pi.assistant") push(items, String(e.id), m)
     else if (e.kind === "pi.compaction") items.push({ kind: "note", key: String(e.id), text: "Earlier conversation summarized" })
   }
-  // Images the agent read, by path and by file name, for its replies to place.
-  const images = new Map<string, string>()
-  for (const item of items)
-    if (item.kind === "calls")
-      for (const c of item.calls) {
-        const src = outputs[c.id]?.images?.[0]
-        const path = String(c.arguments?.path ?? "")
-        if (src && path) images.set(path, src).set(path.split("/").pop()!, src)
-      }
   for (const t of live.tools ?? []) if (t.status !== "done") outputs[t.callId] = { text: t.output ?? "", running: true }
   const generating = live.generation?.message
   if (generating) push(items, "live", generating)
+  // A reply places the images read before it, by path and by file name; a later read of the same name leaves it as it was.
+  let images = new Map<string, string>()
+  for (const item of items) {
+    if (item.kind === "text") item.images = images
+    if (item.kind !== "calls") continue
+    for (const c of item.calls) {
+      const src = outputs[c.id]?.images?.[0]
+      const path = String(c.arguments?.path ?? "")
+      if (src && path) images = new Map(images).set(path, src).set(path.split("/").pop()!, src)
+    }
+  }
   if (live.run && !text(generating?.content).trim() && !Object.values(outputs).some((o) => o.running))
     items.push({ kind: "note", key: "thinking", text: "" })
   if (live.generation?.retry) items.push({ kind: "note", key: "retry", text: `Retrying: ${live.generation.retry.error}` })
@@ -143,7 +145,7 @@ export function Transcript({ entries, live, onSubagent, loadEarlier }: Transcrip
             case "user":
               return <ChatMessage key={item.key} from="user" className="whitespace-pre-wrap">{item.text}</ChatMessage>
             case "text":
-              return <ChatMessage key={item.key} from="assistant" className="max-w-full"><Markdown images={images}>{item.text}</Markdown></ChatMessage>
+              return <ChatMessage key={item.key} from="assistant" className="max-w-full"><Markdown images={item.images}>{item.text}</Markdown></ChatMessage>
             case "calls": {
               // Images a tool returned, such as screenshots the agent read, show small here; a reply places them full size.
               const shots = item.calls.flatMap((c) => (outputs[c.id]?.images ?? []).map((src, i) => ({ src, key: `${c.id}.${i}`, name: String(c.arguments?.path ?? "").split("/").pop() })))
