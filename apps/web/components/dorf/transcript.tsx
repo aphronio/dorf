@@ -38,9 +38,9 @@ function push(items: Item[], key: string, message: Message) {
   if (message.stopReason === "error") items.push({ kind: "note", key: `${key}.e`, text: message.errorMessage ?? "The model failed.", error: true })
 }
 
-type TranscriptProps = { entries: Entry[]; live: Live; onSubagent?: (name: string) => void; loadEarlier?: () => Promise<void> }
+type TranscriptProps = { entries: Entry[]; live: Live; queued?: string[]; onSubagent?: (name: string) => void; loadEarlier?: () => Promise<void> }
 
-export function Transcript({ entries, live, onSubagent, loadEarlier }: TranscriptProps) {
+export function Transcript({ entries, live, queued = [], onSubagent, loadEarlier }: TranscriptProps) {
   const Chevron = useIcons()["chevron-right"]
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
@@ -190,6 +190,12 @@ export function Transcript({ entries, live, onSubagent, loadEarlier }: Transcrip
               )
           }
         })}
+        {queued.map((text, i) => (
+          <div key={`queued.${i}`} className="flex flex-col items-end gap-1">
+            <ChatMessage from="user" className="whitespace-pre-wrap opacity-60">{text}</ChatMessage>
+            <p className="text-xs text-muted-foreground">Sent. Dorf reads it when the current step ends.</p>
+          </div>
+        ))}
       </div>
     </div>
   )

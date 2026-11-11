@@ -77,6 +77,7 @@ export function useConversation(url: string | undefined) {
   const [live, setLive] = useState<Live>({})
   const [agent, setAgent] = useState<ThreadAgent>()
   const [subagents, setSubagents] = useState<Subagent[]>([])
+  const [queued, setQueued] = useState<string[]>([])
   const [earlier, setEarlier] = useState(false)
   const following = useRef(url)
   // Another conversation starts empty, set while rendering so its first frame shows none of the last.
@@ -88,18 +89,20 @@ export function useConversation(url: string | undefined) {
     setLive({})
     setAgent(undefined)
     setSubagents([])
+    setQueued([])
   }
   useEffect(() => {
     following.current = url
     if (url === undefined) return
     const stream = new EventSource(url)
     stream.onmessage = (m) => {
-      const event = JSON.parse(m.data) as { entries?: Entry[]; earlier?: boolean; live?: Live; agent?: ThreadAgent; subagents?: Subagent[] }
+      const event = JSON.parse(m.data) as { entries?: Entry[]; earlier?: boolean; live?: Live; agent?: ThreadAgent; subagents?: Subagent[]; queued?: string[] }
       if (event.entries?.length) setEntries((prev) => merge(prev, event.entries!))
       if (event.earlier !== undefined) setEarlier(event.earlier)
       if (event.agent) setAgent(event.agent)
       if (event.subagents) setSubagents(event.subagents)
       if (event.live) setLive(event.live)
+      if (event.queued) setQueued(event.queued)
     }
     return () => stream.close()
   }, [url])
@@ -112,7 +115,7 @@ export function useConversation(url: string | undefined) {
     setEntries((prev) => merge(page.entries, prev))
     setEarlier(page.earlier)
   }, [url, entries])
-  return { entries, live, agent, subagents, loadEarlier: earlier ? loadEarlier : undefined }
+  return { entries, live, agent, subagents, queued, loadEarlier: earlier ? loadEarlier : undefined }
 }
 
 export const useThread = (id: number | undefined) => useConversation(id === undefined ? undefined : `/threads/${id}/events`)

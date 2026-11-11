@@ -47,7 +47,7 @@ export default function Page() {
   const [draft, setDraft] = useState("")
   const [error, setError] = useState<string>()
   const [starting, setStarting] = useState<{ prompt: string; repo?: string }>()
-  const { entries, live, agent, subagents, loadEarlier } = useThread(id)
+  const { entries, live, agent, subagents, queued, loadEarlier } = useThread(id)
   const [panel, setPanel] = useState<string>()
   const openSubagent = subagents.find((s) => s.name === panel)
   const [models, setModels] = useState<ModelChoice[]>([])
@@ -210,7 +210,7 @@ export default function Page() {
         ) : openSubagent ? (
           <SubagentView thread={id} subagent={openSubagent} models={models} onBack={() => setPanel(undefined)} />
         ) : (
-          <Transcript entries={entries} live={live} onSubagent={setPanel} loadEarlier={loadEarlier} />
+          <Transcript entries={entries} live={live} queued={queued} onSubagent={setPanel} loadEarlier={loadEarlier} />
         )}
         {id !== undefined && !starting && <SubagentList subagents={subagents} open={panel} onOpen={setPanel} />}
 

@@ -9,7 +9,7 @@ import { ThreadSandbox } from "./thread-sandbox.ts";
 
 export type ThreadAgent = { model?: ModelRef; thinkingLevel: ModelThinkingLevel };
 export type SubagentView = { name: string; model?: ModelRef; working: boolean };
-type FollowEvent = { entries?: ConversationView["entries"]; earlier?: boolean; live?: unknown; agent?: ThreadAgent; subagents?: SubagentView[] };
+type FollowEvent = { entries?: ConversationView["entries"]; earlier?: boolean; live?: unknown; queued?: string[]; agent?: ThreadAgent; subagents?: SubagentView[] };
 
 // Entries per page: the first window, each fill of a gap, each "load earlier".
 const PAGE = 50;
@@ -37,6 +37,14 @@ const agentOf = async (conversation: { agent(c: typeof context): Promise<ThreadA
 };
 
 // A provider that keeps a process or copy per Thread, keyed by Pi's provider session id.
+// Messages sent while the Thread works wait in Pi's inbox until the current step ends; the page shows them meanwhile.
+type Inbox = { items?: { mode: string; content?: string | { type: string; text?: string }[] }[] };
+const queued = (docs: Record<string, unknown>): string[] =>
+	((docs["pi.inbox"] as Inbox | undefined)?.items ?? []).flatMap((item) => {
+		if (item.mode === "write" || item.content === undefined) return [];
+		return [typeof item.content === "string" ? item.content : item.content.flatMap((b) => (b.type === "text" && b.text ? [b.text] : [])).join("")];
+	});
+
 export type ProviderSessions = { release(sessionId: string): Promise<void>; forget(sessionId: string): Promise<void> };
 
 export class Threads {
@@ -239,13 +247,13 @@ export class Threads {
 		if (registry) await watchChildren(registry.value.agents);
 		let agent = watch.value.docs["pi.agent"];
 		const { entries, earlier } = await fresh(watch.value);
-		send({ entries, ...(after === undefined ? { earlier } : {}), live: watch.value.docs["pi.live"] ?? {}, agent: await agentOf(conversation), ...(withSubagents ? { subagents: subagents() } : {}) });
+		send({ entries, ...(after === undefined ? { earlier } : {}), live: watch.value.docs["pi.live"] ?? {}, queued: queued(watch.value.docs), agent: await agentOf(conversation), ...(withSubagents ? { subagents: subagents() } : {}) });
 		watch.start(async (call) => {
 			if (call.kind !== "value") return;
 			const { entries } = await fresh(call.value);
 			const agentChanged = call.value.docs["pi.agent"] !== agent;
 			agent = call.value.docs["pi.agent"];
-			send({ ...(entries.length ? { entries } : {}), live: call.value.docs["pi.live"] ?? {}, ...(agentChanged ? { agent: await agentOf(conversation) } : {}) });
+			send({ ...(entries.length ? { entries } : {}), live: call.value.docs["pi.live"] ?? {}, queued: queued(call.value.docs), ...(agentChanged ? { agent: await agentOf(conversation) } : {}) });
 		});
 		registry?.start(async (call) => {
 			if (call.kind === "value" && (await watchChildren(call.value.agents))) send({ subagents: subagents() });
