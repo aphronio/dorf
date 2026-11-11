@@ -77,7 +77,7 @@ export function useConversation(url: string | undefined) {
       if (event.earlier !== undefined) setEarlier(event.earlier)
       if (event.agent) setAgent(event.agent)
       if (event.subagents) setSubagents(event.subagents)
-      setLive(event.live ?? {})
+      if (event.live) setLive(event.live)
     }
     return () => stream.close()
   }, [url])

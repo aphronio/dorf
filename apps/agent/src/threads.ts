@@ -9,7 +9,7 @@ import { ThreadSandbox } from "./thread-sandbox.ts";
 
 export type ThreadAgent = { model?: ModelRef; thinkingLevel: ModelThinkingLevel };
 export type SubagentView = { name: string; model?: ModelRef; working: boolean };
-type FollowEvent = { entries?: ConversationView["entries"]; earlier?: boolean; live: unknown; agent?: ThreadAgent; subagents?: SubagentView[] };
+type FollowEvent = { entries?: ConversationView["entries"]; earlier?: boolean; live?: unknown; agent?: ThreadAgent; subagents?: SubagentView[] };
 
 // Entries per page: the first window, each fill of a gap, each "load earlier".
 const PAGE = 50;
@@ -186,7 +186,6 @@ export class Threads {
 		};
 		const children = new Map<ConversationId, SubagentView & { stop: () => Promise<unknown> }>();
 		const subagents = () => [...children.values()].map(({ name, model, working }) => ({ name, model, working }));
-		let live = watch.value.docs["pi.live"];
 		const watchChildren = async (agents: Record<string, { conversationId: ConversationId }>) => {
 			let started = false;
 			for (const [name, { conversationId }] of Object.entries(agents)) {
@@ -199,7 +198,7 @@ export class Threads {
 				childLive.start(async (call) => {
 					if (call.kind !== "value" || Boolean(call.value.run) === view.working) return;
 					view.working = Boolean(call.value.run);
-					send({ live, subagents: subagents() });
+					send({ subagents: subagents() });
 				});
 			}
 			return started;
@@ -208,17 +207,16 @@ export class Threads {
 		if (registry) await watchChildren(registry.value.agents);
 		let agent = watch.value.docs["pi.agent"];
 		const { entries, earlier } = await fresh(watch.value);
-		send({ entries, ...(after === undefined ? { earlier } : {}), live, agent: await agentOf(conversation), ...(withSubagents ? { subagents: subagents() } : {}) });
+		send({ entries, ...(after === undefined ? { earlier } : {}), live: watch.value.docs["pi.live"] ?? {}, agent: await agentOf(conversation), ...(withSubagents ? { subagents: subagents() } : {}) });
 		watch.start(async (call) => {
 			if (call.kind !== "value") return;
 			const { entries } = await fresh(call.value);
-			live = call.value.docs["pi.live"];
 			const agentChanged = call.value.docs["pi.agent"] !== agent;
 			agent = call.value.docs["pi.agent"];
-			send({ ...(entries.length ? { entries } : {}), live, ...(agentChanged ? { agent: await agentOf(conversation) } : {}) });
+			send({ ...(entries.length ? { entries } : {}), live: call.value.docs["pi.live"] ?? {}, ...(agentChanged ? { agent: await agentOf(conversation) } : {}) });
 		});
 		registry?.start(async (call) => {
-			if (call.kind === "value" && (await watchChildren(call.value.agents))) send({ live, subagents: subagents() });
+			if (call.kind === "value" && (await watchChildren(call.value.agents))) send({ subagents: subagents() });
 		});
 		return () => Promise.all([watch.stop(), registry?.stop(), ...[...children.values()].map((c) => c.stop())]);
 	}
