@@ -5,7 +5,7 @@ import type { UserInput } from "@earendil-works/pi-durable";
 import { REPO } from "./github.ts";
 import { pauseWhenIdle } from "./idle.ts";
 import type { Sandboxes } from "./sandbox.ts";
-import { Subagents, subagentsOf } from "./subagent.ts";
+import { placeStopped, Subagents, subagentsOf } from "./subagent.ts";
 import { ThreadSandbox } from "./thread-sandbox.ts";
 
 export type ThreadAgent = { model?: ModelRef; thinkingLevel: ModelThinkingLevel };
@@ -142,6 +142,7 @@ export class Threads {
 		if (!conversation) return false;
 		await this.#archive(id, true);
 		await conversation.abort(context, { background: true });
+		await placeStopped(conversation, context);
 		this.#idle.get(id)?.now();
 		return true;
 	}
@@ -193,7 +194,9 @@ export class Threads {
 	async abort(id: ConversationId): Promise<boolean> {
 		const conversation = await this.#known(id);
 		if (!conversation) return false;
-		await conversation.abort(context);
+		// Stop ends everything the Thread started: its run, its subagents' work and their reporters.
+		await conversation.abort(context, { background: true });
+		await placeStopped(conversation, context);
 		return true;
 	}
 
