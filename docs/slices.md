@@ -100,10 +100,12 @@ Facts learned in one slice that a later slice must respect.
   enforces NetworkPolicy (kind's does). It cannot fence the gateway's own loopback, so keep the
   `http` rule on port 80 (agent-substrate/substrate#2086, #1736).
 - A gVisor worker hosts as many Sandboxes as its memory limit books, less a 64 MiB reserve
-  (Substrate's `cmd/ateworker-gvisor/memory.go`). The pool runs one worker of 25 GiB, so three
-  8 GiB Sandboxes run at once; a fourth resume fails with `no worker has room for the actor`, and
-  the agent makes room (`bun run --cwd apps/agent proof:make-room`). An async pause frees its
-  booking before it returns, so the retry needs no wait.
+  (Substrate's `cmd/ateworker-gvisor/memory.go`). The pool runs one worker of 12 CPU and 25 GiB,
+  so its limits book six Sandboxes of 2 CPU and 4 GiB at once; Dorf's heaviest work (`bun run proof`, a page
+  build, Chromium) peaked at 2.1 GiB in one, measured from inside, and ran 8% slower than at 4 CPU.
+  A seventh resume fails with `no worker has room for the actor`, and the agent makes room
+  (`bun run --cwd apps/agent proof:make-room`). An async pause frees its booking before it
+  returns, so the retry needs no wait.
 - The chat page is reached through `tailscale serve --bg --https=443 http://127.0.0.1:8091` on the
   cluster's machine, in front of a systemd unit running `kubectl -n dorf-gate port-forward
   deploy/dorf-agent 8091:8091` with `Restart=always`: the forward exits whenever `up.sh` replaces the
