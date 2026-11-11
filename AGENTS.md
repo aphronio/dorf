@@ -23,28 +23,34 @@ it. [Slices](docs/slices.md) owns the plan, each slice's proof, and carry-over f
 
 ## Check and prove
 
-Run these from the repository root. Times are from a Dorf Sandbox; a laptop is faster.
+Run these from the repository root.
 
-| Command | What it does | Time |
+| Command | What it does | Time in a Sandbox |
 | --- | --- | --- |
-| `.agents/setup` | Installs every package from its lockfile; safe to run again | 7 s |
-| `bun run check` | Types of the agent, gate and page, and the page's lint | 10 s |
-| `bun run proof` | The agent's proofs (history, models, lifecycle, make-room) with the faux model, against local stand-ins of the gate, all at once | 1 min |
-| `deploy/proof.sh <name>` | One file of `apps/agent/test` against a cluster running Substrate; needs `kubectl` | 0.5 to 2 min |
+| `.agents/setup` | Installs every package from its lockfile; safe to run again | seconds |
+| `bun run check` | Types of the agent, gate and page, and the page's lint | seconds |
+| `bun run proof` | The proofs its script in `apps/agent/package.json` names, with the faux model, against local stand-ins of the gate | under a minute |
+| `deploy/proof.sh <name>` | One file of `apps/agent/test` against a cluster running Substrate; needs `kubectl` | minutes |
 
 `bun run proof` needs no cluster and no credentials, and CI runs it on every push. Its stand-ins
-give each Sandbox a folder on one machine, so it proves the agent, not Substrate. Isolation between
-Sandboxes, files and processes surviving a pause, the egress fence, token injection and upgrades
-are proved only by
-`deploy/proof.sh substrate`, `repository` and `substrate-upgrade`. Say which you ran.
+give each Sandbox a folder on one machine, so it proves the agent, not Substrate. What only
+Substrate does is proved by the test files that call `needSubstrate()`. Say which you ran.
 
 ## In a Sandbox
 
 A Thread working on Dorf runs in a gVisor Sandbox: Node, Bun, git, `gh`, and a headless Chromium
 that the `browser-harness` skill drives; no `kubectl`, no Docker and no namespaces, and no way into
-the cluster. Run `.agents/setup` first, then `bun run check` and
-`bun run proof` as you work. A change to the gate, the Sandbox image or `deploy/` needs a Substrate
-proof, which the owner runs until staging exists.
+the cluster. Run `.agents/setup` first, then `bun run check` and `bun run proof` as you work.
+
+## Ship
+
+- Commit with the Sandbox's git identity, in Conventional Commits whose subject states the impact.
+- When the change touches only `apps/agent`, `apps/web` or `docs`, and check and proof pass, push
+  to `main` and follow its CI run with `gh run watch`. If CI fails, fix it forward at once.
+- Push any other change to a branch and say which Substrate proof it needs: the gate, the Sandbox
+  image, `deploy/`, CI and this file wait for the owner until staging exists.
+- When something about Dorf itself got in your way, file it with
+  `gh issue create --label friction`, describing the behavior in generic terms.
 
 ## Public repository confidentiality
 

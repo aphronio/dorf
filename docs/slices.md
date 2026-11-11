@@ -81,8 +81,9 @@ Facts learned in one slice that a later slice must respect.
   mounts Substrate's trust bundle and the image points `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`,
   `GIT_SSL_CAINFO` and `REQUESTS_CA_BUNDLE` at it.
 - Root in a Sandbox has only three capabilities (no setuid, no DAC override), so the image runs apt
-  as root and owns apt's directories. The image carries no language toolchains; the agent installs
-  what a repository needs.
+  as root and owns apt's directories. The image carries Node and Bun, Dorf's own toolchain, and
+  Chromium with the Python that Browser Harness runs on; the agent installs any other toolchain a
+  repository needs.
 - Substrate's egress gateway injects the GitHub token from Secret `dorf-secrets/github`, so a
   Sandbox pushes without holding it. The gateway only replaces an Authorization header the request
   already carries, so git's credential helper sends a placeholder. Without the Secret, public
