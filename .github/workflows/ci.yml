@@ -46,13 +46,14 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      # A change to docs/ alone cannot change what the proofs prove. The job still passes, so the commit deploys.
+      # The proofs read only apps/agent and how CI installs and runs them; a change anywhere else cannot change
+      # what they prove. The job still passes, so the commit deploys.
       - id: scope
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          if git cat-file -e "$BASE^{commit}" 2>/dev/null && git diff --quiet "$BASE" HEAD -- . ':!docs/'; then
-            echo "Only docs/ changed; the proofs are skipped."
+          if git cat-file -e "$BASE^{commit}" 2>/dev/null && git diff --quiet "$BASE" HEAD -- apps/agent package.json .agents/setup .github/workflows/ci.yml; then
+            echo "Nothing the proofs read changed; they are skipped."
             echo skip=true >>"$GITHUB_OUTPUT"
           fi
       - if: steps.scope.outputs.skip != 'true'
