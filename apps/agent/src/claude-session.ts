@@ -1,10 +1,11 @@
-import { type EffortLevel, type ModelInfo, type Options, query, type Query, type SDKMessage, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { type EffortLevel, type ModelInfo, type Options, query, type Query, type SDKControlInterruptResponse, type SDKMessage, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createRequire } from "node:module";
+import type { JsonObject } from "@earendil-works/pi-ai";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, type CallToolResult, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 export type UserContent = Exclude<SDKUserMessage["message"]["content"], string>[number][];
-export type ToolDeclaration = { name: string; description: string; parameters: object };
+export type ToolDeclaration = { name: string; description: string; parameters: JsonObject };
 
 export const TOOL_SERVER = "dorf";
 const MIN_VERSION = [2, 1, 248];
@@ -158,7 +159,7 @@ export class ClaudeSession {
 				hooks: { PreToolUse: [{ hooks: [async (i) => (i.hook_event_name === "PreToolUse" && this.pending.before(i.tool_use_id), {})] }] },
 				verbatimPrompts: true,
 				thinking: { type: "adaptive", display: "summarized" },
-				...(start.effort ? { effort: start.effort } : {}),
+				effort: start.effort,
 				includePartialMessages: true,
 				persistSession: start.persist,
 				...("resume" in start ? { resume: start.resume } : { sessionId: start.sessionId }),
@@ -267,8 +268,8 @@ export class ClaudeSession {
 		return this.#query.applyFlagSettings({ effortLevel: effort ?? null });
 	}
 
-	interrupt(): Promise<unknown> {
-		return this.#turn ? this.#query.interrupt() : Promise.resolve();
+	interrupt(): Promise<SDKControlInterruptResponse | undefined> {
+		return this.#turn ? this.#query.interrupt() : Promise.resolve(undefined);
 	}
 
 	// Interrupting first keeps a pending tool call from turning into a "declined" reply that costs a model call.

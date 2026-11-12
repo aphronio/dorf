@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { deleteSession, type EffortLevel, getSessionInfo, type ModelInfo, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { Api, AssistantMessage, ImageContent, Message, Model, SimpleStreamOptions, TextContent, ToolResultMessage, TranscriptContext } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, ImageContent, JsonObject, JsonValue, Message, Model, SimpleStreamOptions, TextContent, ToolResultMessage, TranscriptContext } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, createProvider } from "@earendil-works/pi-ai/models";
 import { type AssistantMessageEventStream, createAssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
@@ -24,22 +24,24 @@ type Group = { role: Role; hash: string; start: number; end: number };
 type Saved = { claude: string; hashes: string[] };
 type Thread = { saved?: Saved; session?: ClaudeSession; launch?: string; effort?: EffortLevel };
 
-const canonical = (v: unknown): string =>
-	Array.isArray(v)
-		? `[${v.map(canonical).join(",")}]`
-		: v !== null && typeof v === "object"
-			? `{${Object.keys(v)
-					.sort()
-					.filter((k) => (v as Record<string, unknown>)[k] !== undefined)
-					.map((k) => `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`)
-					.join(",")}}`
-			: (JSON.stringify(v) ?? "null");
-const hash = (v: unknown) => createHash("sha256").update(canonical(v)).digest("hex");
+// Array.isArray leaves JsonValue's readonly arrays in the other branch.
+const isList = (v: JsonValue): v is readonly JsonValue[] => Array.isArray(v);
+function canonical(v: JsonValue): string {
+	if (isList(v)) return `[${v.map(canonical).join(",")}]`;
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- v is parsed JSON already; typeof tells its objects from its primitives
+	if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
+	return `{${Object.keys(v)
+		.sort()
+		.filter((k) => v[k] !== undefined)
+		.map((k) => `${JSON.stringify(k)}:${canonical(v[k])}`)
+		.join(",")}}`;
+}
+const hash = (v: JsonValue) => createHash("sha256").update(canonical(v)).digest("hex");
 
-const blocks = (content: string | (TextContent | ImageContent)[]) => (typeof content === "string" ? [{ type: "text" as const, text: content }] : content);
+const blocks = (content: string | (TextContent | ImageContent)[]) => (Array.isArray(content) ? content : [{ type: "text" as const, text: content }]);
 
 // Thinking is display only and not sent back to Claude Code, so it does not count.
-function visible(m: Exclude<Message, { role: "system" }>): unknown {
+function visible(m: Exclude<Message, { role: "system" }>): JsonValue {
 	if (m.role === "assistant") return m.content.filter((c) => c.type !== "thinking").map((c) => (c.type === "toolCall" ? { id: c.id, name: c.name, arguments: c.arguments } : c.text));
 	const content = blocks(m.content).map((c) => (c.type === "text" ? c.text : { image: c.mimeType, data: hash(c.data) }));
 	return m.role === "toolResult" ? { id: m.toolCallId, name: m.toolName, isError: m.isError, content } : content;
@@ -197,9 +199,9 @@ class Reply {
 		this.#stream.push({ type: "done", reason, message: this.message });
 	}
 
-	fail(error: unknown, aborted: boolean) {
+	fail(error: Error, aborted: boolean) {
 		this.message.stopReason = aborted ? "aborted" : "error";
-		this.message.errorMessage = (error as Error).message;
+		this.message.errorMessage = error.message;
 		this.#stream.push({ type: "error", reason: this.message.stopReason, error: this.message });
 	}
 }
@@ -329,7 +331,7 @@ export class ClaudePlan {
 	#stream(model: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions): AssistantMessageEventStream {
 		const stream = createAssistantMessageEventStream();
 		const reply = new Reply(stream, model);
-		const tools = getCurrentTools(context.messages).map((t): ToolDeclaration => ({ name: t.name, description: t.description, parameters: t.parameters }));
+		const tools = getCurrentTools(context.messages).map((t): ToolDeclaration => ({ name: t.name, description: t.description, parameters: t.parameters as JsonObject }));
 		const system = getCurrentSystemPrompt(context.messages);
 		const sessionId = options?.sessionId;
 		const signal = options?.signal;

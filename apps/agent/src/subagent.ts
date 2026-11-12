@@ -31,7 +31,8 @@ import { ThreadSandbox } from "./thread-sandbox.ts";
 type Work = { requestId: string; message: string; waiter?: TaskId; reporter?: TaskId };
 type Subagent = { conversationId: ConversationId; reported: EntryId[]; claims?: Record<string, TaskId>; work?: Work[] };
 // A subagent's answer in the Thread: the model reads its text, the page its author.
-export const SubagentReport = defineEntry<{ name: string; failed?: true }>("dorf.subagent-report");
+type Report = { name: string; failed?: true };
+export const SubagentReport = defineEntry<Report>("dorf.subagent-report");
 // Created with its Thread, so the page can follow it from the start: a watch never creates a document.
 export const Subagents = defineDoc<{ agents: Record<string, Subagent> }>({
 	checkpointWhen: () => false,
@@ -104,7 +105,11 @@ function keep(agent: Subagent, taken: Taken, by: TaskId | undefined, requestId: 
 // submission the call made. A reporter from before waiting calls has no `requestId` and may be in `report`.
 type ReporterInput = { name: string; conversationId: ConversationId; message: string; requestId?: string };
 type ReporterState = { phase: "deliver" } | { phase: "report"; report?: string; failed?: true };
-const reportEntry = (name: string, failed?: true) => ({ kind: SubagentReport.kind, data: { name, ...(failed ? { failed } : {}) } });
+const reportEntry = (name: string, failed?: true) => {
+	const data: Report = { name };
+	if (failed) data.failed = failed;
+	return { kind: SubagentReport.kind, data };
+};
 const Reporter = defineTask<ReporterInput, ReporterState, null>({
 	name: REPORTER,
 	version: 1,
@@ -182,7 +187,12 @@ async function ownerWrites(api: { conversationId: ConversationId; watchDoc: Harn
 	}
 }
 
-const result = ({ text, isError }: { text: string; isError?: boolean }) => ({ output: [{ type: "text" as const, text }], ...(isError ? { isError } : {}) });
+type Result = { output: { type: "text"; text: string }[]; isError?: boolean };
+const result = ({ text, isError }: { text: string; isError?: boolean }) => {
+	const out: Result = { output: [{ type: "text", text }] };
+	if (isError) out.isError = isError;
+	return out;
+};
 type Target = { conversationId: ConversationId; requestId: string; message: string };
 
 export function subagents(catalog: Catalog): Extension {

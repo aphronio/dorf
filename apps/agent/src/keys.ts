@@ -7,6 +7,7 @@ export class Keys {
 		this.#url = url;
 	}
 
+	// oxlint-disable-next-line anti-slop/no-unknown-parameters -- the page's body passes through unread; the keys service parses it
 	async relay(method: "GET" | "POST", path: `/${"claude" | "github"}${"" | "/start" | "/code" | "/disconnect"}`, body?: unknown): Promise<[number, unknown]> {
 		const res = await fetch(`${this.#url}${path}`, {
 			method,
