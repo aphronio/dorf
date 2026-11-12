@@ -1,5 +1,6 @@
-# Connects the owner's Claude plan from a page: it runs `claude setup-token` and writes the token into the Secret the
-# broker reads (deploy/broker.yaml). It may change only that Secret, and the agent cannot reach it.
+# Connects the owner's Claude plan from the chat page, through the agent: it runs `claude setup-token` and writes the
+# token into the Secret the broker reads (deploy/broker.yaml). It may change only that Secret, and only the agent may
+# call it.
 apiVersion: v1
 kind: ServiceAccount
 metadata: {name: keys, namespace: dorf-broker}
@@ -17,8 +18,6 @@ roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: keys}
 subjects:
 - {kind: ServiceAccount, name: keys, namespace: dorf-broker}
 ---
-# No Service: the page listens on the pod's loopback, so only a port-forward behind `tailscale serve` on its own port
-# reaches it, and the Tailscale login header can be trusted.
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: keys, namespace: dorf-broker}
@@ -33,7 +32,6 @@ spec:
       - name: keys
         image: ${KEYS_IMAGE}
         env:
-        - {name: DORF_OWNER, value: "${DORF_OWNER}"}
         - {name: NODE_EXTRA_CA_CERTS, value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt}
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true}
         volumeMounts:
@@ -41,3 +39,22 @@ spec:
       volumes:
       - name: tmp
         emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: keys, namespace: dorf-broker}
+spec:
+  selector: {app: keys}
+  ports: [{port: 80, targetPort: 8092}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: keys, namespace: dorf-broker}
+spec:
+  podSelector: {matchLabels: {app: keys}}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: dorf-gate}}
+      podSelector: {matchLabels: {app: dorf-agent}}
+    ports: [{port: 8092}]

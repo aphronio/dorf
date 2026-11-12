@@ -94,10 +94,9 @@ BROKER_CONFIG=$(sha256sum deploy/broker.yaml | cut -c1-12) envsubst '$BROKER_CON
 kubectl -n dorf-broker rollout status deploy/broker --timeout=5m >/dev/null
 echo "broker ready: service dorf-broker/broker"
 
-KEYS=$REGISTRY/dorf-keys:$(cat apps/keys/{Dockerfile,package.json,bun.lock,keys.ts,page.html,page.js} | sha256sum | cut -c1-12)
+KEYS=$REGISTRY/dorf-keys:$(cat apps/keys/{Dockerfile,package.json,bun.lock,keys.ts} | sha256sum | cut -c1-12)
 docker build -q -t "$KEYS" apps/keys >/dev/null
-KEYS_IMAGE=$(pushed "$KEYS") DORF_OWNER=${DORF_OWNER:?set DORF_OWNER to the Tailscale login allowed to use Dorf} \
-	envsubst '$KEYS_IMAGE $DORF_OWNER' <deploy/keys.yaml | kubectl apply -f - >/dev/null
+KEYS_IMAGE=$(pushed "$KEYS") envsubst '$KEYS_IMAGE' <deploy/keys.yaml | kubectl apply -f - >/dev/null
 kubectl -n dorf-broker rollout status deploy/keys --timeout=5m >/dev/null
 echo "keys ready: deployment dorf-broker/keys"
 

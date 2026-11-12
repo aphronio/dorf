@@ -6,13 +6,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // Connects the owner's Claude plan to the broker: it runs Claude Code's own `claude setup-token` and writes the token
-// into the Secret the broker reads; no route returns it. It listens on the pod's loopback, so only a
-// port-forward behind `tailscale serve` on its own port reaches it: the agent cannot, and the Tailscale login header can
-// be trusted. Its own origin keeps the agent's page from driving it.
+// into the Secret the broker reads. The chat page drives it through the agent, the only caller its NetworkPolicy
+// admits, and no route returns the token.
 
 const PORT = 8092;
-const OWNER = process.env.DORF_OWNER;
-if (!OWNER) throw new Error("set DORF_OWNER to the Tailscale login allowed to connect keys");
 const CLAUDE = createRequire(import.meta.url).resolve(`@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/claude`);
 const KUBE = "/var/run/secrets/kubernetes.io/serviceaccount";
 const SECRET = "https://kubernetes.default.svc/api/v1/namespaces/dorf-broker/secrets/claude";
@@ -21,13 +18,6 @@ const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\x1b[()][0-9A-Za-z]/g
 const LINK = /https:\/\/claude\.com\/cai\/oauth\/authorize\?[^\s"'<>]+/;
 const TOKEN = /sk-ant-oat01-[\w-]{80,}(?=\s)/;
 const CODE = /^[\w#.~-]{8,512}$/;
-const PAGE = { "/": ["page.html", "text/html; charset=utf-8"], "/page.js": ["page.js", "text/javascript"] } as const;
-const HEADERS = {
-	"content-security-policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
-	"x-content-type-options": "nosniff",
-	"referrer-policy": "no-referrer",
-	"cache-control": "no-store",
-};
 
 class Refused extends Error {}
 
@@ -88,7 +78,6 @@ async function store(token: string): Promise<void> {
 }
 
 async function body(req: http.IncomingMessage): Promise<Record<string, unknown>> {
-	if (req.headers["content-type"] !== "application/json") throw new Refused("send JSON");
 	let text = "";
 	for await (const chunk of req) if ((text += chunk).length > 4096) throw new Refused("too long");
 	try {
@@ -124,17 +113,13 @@ async function route(req: http.IncomingMessage): Promise<[number, unknown]> {
 
 http
 	.createServer(async (req, res) => {
-		const send = (status: number, value: unknown) => res.writeHead(status, { ...HEADERS, "content-type": "application/json" }).end(JSON.stringify(value));
+		const send = (status: number, value: unknown) => res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(value));
 		try {
-			if (req.headers["tailscale-user-login"] !== OWNER) return send(403, { error: "not the owner" });
-			const page = req.method === "GET" ? PAGE[new URL(req.url ?? "/", "http://x").pathname as keyof typeof PAGE] : undefined;
-			if (page) return res.writeHead(200, { ...HEADERS, "content-type": page[1] }).end(readFileSync(new URL(page[0], import.meta.url)));
-			if (req.method !== "GET" && req.headers["sec-fetch-site"] !== "same-origin") return send(403, { error: "only this page may connect keys" });
 			send(...(await route(req)));
 		} catch (e) {
 			send(e instanceof Refused ? 400 : 500, { error: e instanceof Refused ? e.message : "the keys service failed; see its log" });
 			if (!(e instanceof Refused)) console.error((e as Error).message);
 		}
 	})
-	.listen(PORT, "127.0.0.1");
-console.log(`dorf keys on 127.0.0.1:${PORT}`);
+	.listen(PORT);
+console.log(`dorf keys on port ${PORT}`);

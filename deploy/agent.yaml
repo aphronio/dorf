@@ -31,6 +31,7 @@ spec:
         - {name: DORF_DATA, value: /data}
         - {name: HOME, value: /data}
         - {name: DORF_BROKER, value: http://broker.dorf-broker}
+        - {name: DORF_KEYS, value: http://keys.dorf-broker}
         - {name: DORF_GITHUB, value: "${DORF_GITHUB}"}
         volumeMounts:
         - {name: data, mountPath: /data}
@@ -43,7 +44,7 @@ spec:
           sources:
           - serviceAccountToken: {audience: dorf-gate, expirationSeconds: 3600, path: token}
 ---
-# The agent reaches only DNS, the gate and the broker: Thread-written code runs here, and the cluster's image registry
+# The agent reaches only DNS, the gate, the broker and the keys service: Thread-written code runs here, and the cluster's image registry
 # and every other in-cluster service would otherwise be one request away.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -58,3 +59,5 @@ spec:
     ports: [{port: 8080}]
   - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: dorf-broker}}, podSelector: {matchLabels: {app: broker}}}]
     ports: [{port: 8080}]
+  - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: dorf-broker}}, podSelector: {matchLabels: {app: keys}}}]
+    ports: [{port: 8092}]

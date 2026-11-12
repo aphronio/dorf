@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupLabel,
   SidebarHeader,
@@ -101,7 +102,7 @@ function Row({ thread, attention, now }: { thread: Thread; attention?: Attention
   )
 }
 
-type ThreadSidebarProps = { threads: Thread[]; attention: Map<number, Attention>; current?: number; onUnarchive: (id: number) => void; onDelete: (id: number) => void }
+type ThreadSidebarProps = { threads: Thread[]; attention: Map<number, Attention>; current?: number | "settings"; onUnarchive: (id: number) => void; onDelete: (id: number) => void }
 
 // Two sections, as a priority inbox: Threads whose run ended since the owner last looked, failed first, then every
 // other Thread by when the owner last asked in it. A row moves when it crosses between them or when the owner sends,
@@ -191,6 +192,15 @@ export function ThreadSidebar({ threads, attention, current, onUnarchive, onDele
           </SidebarGroup>
         )}
       </SidebarContent>
+      <SidebarFooter>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton icon={icons.settings} isActive={current === "settings"} onClick={() => go("settings")}>
+              Settings
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarFooter>
     </Sidebar>
   )
 }

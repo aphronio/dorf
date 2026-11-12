@@ -6,6 +6,7 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import type { ConversationId, EntryId, UserInput } from "@earendil-works/pi-durable";
 import type { ImageProcessor } from "@earendil-works/pi-durable/tools";
 import type { GitHub } from "./github.ts";
+import type { Keys } from "./keys.ts";
 import { prepareImages } from "./images.ts";
 import type { Catalog } from "./models.ts";
 import { Quoted, quotedText, quotes } from "./quotes.ts";
@@ -15,7 +16,7 @@ type Reply = [status: number, body: unknown];
 
 // The page's static export, copied in by the image build (apps/web).
 const WEB = fileURLToPath(new URL("../web/", import.meta.url));
-const API = new Set(["threads", "repos", "models"]);
+const API = new Set(["threads", "repos", "models", "claude"]);
 const TYPES: Record<string, string> = {
 	".html": "text/html; charset=utf-8",
 	".txt": "text/plain; charset=utf-8",
@@ -81,10 +82,15 @@ function refused(req: http.IncomingMessage, owner: string): Reply | undefined {
 	if (site && site !== "same-origin" && site !== "none") return [403, { error: "cross-site request" }];
 }
 
-async function route(threads: Threads, catalog: Catalog, github: GitHub | undefined, images: ImageProcessor, req: http.IncomingMessage): Promise<Reply> {
+async function route(threads: Threads, catalog: Catalog, github: GitHub | undefined, keys: Keys | undefined, images: ImageProcessor, req: http.IncomingMessage): Promise<Reply> {
 	const [, root, rawId, sub] = new URL(req.url ?? "/", "http://x").pathname.split("/");
 	if (root === "repos" && req.method === "GET" && !rawId) return [200, github ? await github.repos() : []];
 	if (root === "models" && req.method === "GET" && !rawId) return [200, catalog.list()];
+	if (root === "claude" && !keys) return [404, { error: "This deployment has no keys service." }];
+	if (root === "claude" && keys && !sub) {
+		if (req.method === "GET" && !rawId) return keys.relay("GET", "/claude");
+		if (req.method === "POST" && (rawId === "start" || rawId === "code")) return keys.relay("POST", `/claude/${rawId}`, await json(req));
+	}
 	if (root !== "threads") return [404, { error: "not found" }];
 	const id = Number(rawId) as ConversationId;
 	const at = `${req.method} ${[rawId && ":id", sub].filter(Boolean).join("/")}`;
@@ -170,7 +176,7 @@ async function follow<E extends object>(start: (after: EntryId | undefined, emit
 	return true;
 }
 
-export function serve(threads: Threads, catalog: Catalog, github: GitHub | undefined, images: ImageProcessor, owner: string, port: number): http.Server {
+export function serve(threads: Threads, catalog: Catalog, github: GitHub | undefined, keys: Keys | undefined, images: ImageProcessor, owner: string, port: number): http.Server {
 	return http
 		.createServer(async (req, res) => {
 			const send = ([status, body]: Reply) =>
@@ -191,7 +197,7 @@ export function serve(threads: Threads, catalog: Catalog, github: GitHub | undef
 					if (!Number.isSafeInteger(before) || before < 1) return send([400, { error: "before must be an entry id" }]);
 					return send((await threads.earlier(id, name, before as EntryId).then((page) => page && ([200, page] as Reply))) ?? missing);
 				}
-				send(await route(threads, catalog, github, images, req));
+				send(await route(threads, catalog, github, keys, images, req));
 			} catch (e) {
 				send([e instanceof BadRequest ? e.status : e instanceof Starting ? 409 : e instanceof RangeError ? 400 : 500, { error: (e as Error).message }]);
 			}

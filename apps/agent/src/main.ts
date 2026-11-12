@@ -9,6 +9,7 @@ import { ClaudePlan } from "./claude-plan.ts";
 import { bundledClaude } from "./claude-session.ts";
 import { FAUX_MODEL, scriptedModel } from "./faux.ts";
 import { GitHub } from "./github.ts";
+import { Keys } from "./keys.ts";
 import { serve } from "./http.ts";
 import { bounded } from "./images.ts";
 import { Catalog } from "./models.ts";
@@ -85,5 +86,5 @@ const threads = new Threads(
 start.holders = () => threads.holders();
 await threads.open();
 drain(sandboxes);
-serve(threads, catalog, github, images, OWNER, PORT);
+serve(threads, catalog, github, process.env.DORF_KEYS ? new Keys(process.env.DORF_KEYS) : undefined, images, OWNER, PORT);
 console.log(`dorf agent on 127.0.0.1:${PORT}, model ${model.provider}/${model.modelId}`);

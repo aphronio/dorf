@@ -1,0 +1,107 @@
+"use client"
+
+import { useEffect, useState } from "react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { api, type Claude } from "@/lib/dorf"
+
+// The deployment's connections. No key reaches this page or the agent: the keys service keeps each one and the broker
+// adds it to the agent's requests.
+export function Settings() {
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto flex w-full max-w-2xl flex-col gap-8 px-6 py-10">
+        <h1 className="text-xl font-semibold">Settings</h1>
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-medium text-muted-foreground">AI subscriptions</h2>
+          <ClaudePlan />
+        </section>
+      </div>
+    </div>
+  )
+}
+
+// Claude Code's own `claude setup-token`, run by the keys service: the owner signs in on claude.com and pastes the
+// code back. Each connect mints a new token and leaves the old one live, so the card links to where tokens are revoked.
+const REVOKE = "https://claude.ai/settings/claude-code"
+function ClaudePlan() {
+  const [status, setStatus] = useState<Claude | { error: string }>()
+  const [url, setUrl] = useState<string>()
+  const [code, setCode] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+
+  useEffect(() => {
+    api<Claude>("GET", "/claude").then(setStatus, (e: Error) => setStatus({ error: e.message }))
+  }, [])
+
+  const step = async (run: () => Promise<void>) => {
+    setError(undefined)
+    setBusy(true)
+    try {
+      await run()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const start = () => step(async () => setUrl((await api<{ url: string }>("POST", "/claude/start")).url))
+  // A wrong or expired code ends the sign-in, so either way the next try starts from Connect.
+  const finish = () =>
+    step(async () => {
+      setCode("")
+      setUrl(undefined)
+      setStatus(await api<Claude>("POST", "/claude/code", { code: code.trim() }))
+    })
+
+  const ready = status && "connected" in status
+  const connected = ready ? status.connected : null
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border border-border p-4">
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium">Claude</p>
+          <p className="text-xs text-muted-foreground">
+            {status === undefined
+              ? "Checking…"
+              : !ready
+                ? status.error
+                : connected
+                  ? `Connected on ${new Date(connected).toLocaleDateString()}; Threads use it within a minute. It lasts a year.`
+                  : "Not connected. Threads on the Claude plan fail until you connect."}
+          </p>
+        </div>
+        {ready && !url && (
+          <Button size="compact" variant={connected ? "secondary" : "primary"} disabled={busy} onClick={() => void start()}>
+            {connected ? "Connect again" : "Connect"}
+          </Button>
+        )}
+      </div>
+      {ready && (
+        <p className="text-xs text-muted-foreground">
+          {connected && url && `Connecting again adds a new token; revoke the one from ${new Date(connected).toLocaleDateString()} afterwards. `}
+          Tokens are listed, by date, and revoked at{" "}
+          <a className="underline" href={REVOKE} target="_blank" rel="noopener noreferrer">
+            claude.ai › Settings › Claude Code
+          </a>
+          .
+        </p>
+      )}
+      {url && (
+        <div className="flex flex-col gap-2">
+          <Button size="compact" variant="secondary" onClick={() => window.open(url, "_blank", "noopener,noreferrer")}>
+            1. Sign in on claude.com
+          </Button>
+          <form className="flex gap-1.5" onSubmit={(e) => (e.preventDefault(), void finish())}>
+            <Input size="compact" placeholder="2. Paste the code claude.com shows" autoComplete="off" value={code} onChange={(e) => setCode(e.target.value)} />
+            <Button size="compact" type="submit" disabled={busy || !code.trim()}>
+              Finish
+            </Button>
+          </form>
+        </div>
+      )}
+      {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
+    </div>
+  )
+}

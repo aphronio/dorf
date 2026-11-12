@@ -9,7 +9,7 @@ Each slice is the smallest demoable step. A slice is done when its proof runs fr
 | S2 | Harmless Substrate upgrades | `bun run --cwd apps/agent proof:upgrade` on a fresh machine: installs the previous Substrate release on kind, then upgrades to the pinned one and rolls back with no hand steps while two Threads run tool calls and a third is paused. No tool call fails, no Sandbox crashes, busy Sandboxes move workers, and every Thread keeps its files and processes | Done |
 | S3 | A real repository, used daily | `bun run --cwd apps/agent proof:repository` with `DORF_PROOF_REPO` set to a private repository with a `node --test` suite: a Thread clones it, changes it, runs the tests, commits and pushes a branch the remote then shows, with the token injected by the egress gateway. Then one run with a real model on this repository | Done |
 | S3.5 | The agent reaches Sandboxes without `kubectl` or a cluster kubeconfig, through Dorf's gate, so it can later run on Cloudflare | `deploy/proof.sh sandbox-lifecycle`: the agent holds only a `dorf-agent` token and calls the gate over HTTP and WebSocket; every step of S1's proof still passes | Done |
-| S4 | Dogfood: build Dorf with Dorf | From a minimal chat page, start a Thread on this repository, follow its output live, reply, and get a pushed branch. The agent runs as a pod beside the gate and Substrate, on a service-account token Kubernetes renews, with Claude connected from the keys page; both pages are reached only over Tailscale. Sandboxes commit with a default git identity. Friction found while using it is filed as `friction` issues, and those issues pick the next slice | Planned |
+| S4 | Dogfood: build Dorf with Dorf | From a minimal chat page, start a Thread on this repository, follow its output live, reply, and get a pushed branch. The agent runs as a pod beside the gate and Substrate, on a service-account token Kubernetes renews, with Claude connected from the chat page's Settings; the chat page is reached only over Tailscale. Sandboxes commit with a default git identity. Friction found while using it is filed as `friction` issues, and those issues pick the next slice | Planned |
 | S4.1 | Pick the model and thinking per Thread, and persistent subagents (owner asked while dogfooding) | `bun run --cwd apps/agent proof:models` with the faux model: the default model leads the offered list with its thinking levels; a Thread runs on the model and level it was created with, the level changes mid-Thread, and unknown models or levels are refused; a subagent works in the Thread's Sandbox, keeps its conversation across messages and returns each answer; a working subagent keeps the Sandbox awake; stop and Thread deletion end its work. Then `proof:claude-plan`, which covers the plan's model list, a live thinking change and a steer. It needs Claude Code signed in on the machine it runs on | Built; the plan checks ran against the lab agent; the steer fix awaits a run |
 | S4.2 | A long Thread keeps its whole history on the page (found reviewing Dorf against Pi's examples) | `bun run --cwd apps/agent proof:history` with the faux model: a Thread of about 130 entries streams its newest fifty and says earlier ones exist; loading earlier pages the rest, in order, back to its first message; a reconnect that missed 10 or nearly all entries gets exactly those | Built |
 | S4.3 | A Thread proves its own change to Dorf, with no cluster and no credentials (found reviewing Dorf for agents) | `bun run --cwd apps/agent proof` inside a Sandbox: history, models, lifecycle, make-room and images pass against local stand-ins of the gate, each Sandbox a folder of its own on one machine, and each proof says so on its first line. The same files pass through `deploy/proof.sh` on Substrate, where `deploy/proof.sh substrate` adds what only Substrate does: a file and a process survive a pause, Sandboxes don't see each other's files, the internet is reachable and the cluster is not | Built |
@@ -61,13 +61,15 @@ Facts learned in one slice that a later slice must respect.
   in a Secret, which Envoy reloads within about a minute of a change, as the Secret's files update. Claude Code reports `tokenSource:
   CLAUDE_CODE_OAUTH_TOKEN` and no `subscriptionType` for such a token, which exists only on a plan.
   Agent code can still spend a key through those routes, but cannot read it or send it elsewhere.
-- The owner connects the plan on the keys page (`apps/keys`): it runs Claude Code's own `claude
-  setup-token` under `script`, since the command prints only to a terminal, and writes the one-year
-  token into `dorf-broker/claude`, the one Secret its Role may change. It listens on its pod's
-  loopback and is reached like the chat page, on its own port so the agent's page cannot script it:
-  `tailscale serve --bg --https=8443 http://127.0.0.1:8092` in front of a unit running `kubectl -n
-  dorf-broker port-forward deploy/keys 8092:8092` with `Restart=always`. A Sandbox could start its own sign-in and an agent
-  page could ask for its code, so a code is pasted only on the keys page.
+- The owner connects the plan under Settings, AI subscriptions. The agent relays those calls to the keys
+  service (`apps/keys`), the one caller its NetworkPolicy admits. The service runs Claude Code's own
+  `claude setup-token` under `script`, since the command prints only to a terminal, and writes the
+  one-year token into `dorf-broker/claude`, the one Secret its Role may change; no route returns it.
+  Agent code that a Thread pushed could show a link from its own sign-in instead and keep the token
+  the owner's code completes; that is accepted, like spending the plan through the broker, because
+  the owner revokes a token at claude.ai › Settings › Claude Code. Revoking one there stopped it
+  within minutes in a public report. A new `setup-token` leaves the old token live, so Settings
+  shows the connect date to find it by, and links there.
 - Subagents keep Pi's example 22 anchor: each is a conversation owned by a background anchor task,
   pointed at the Thread's Sandbox. A `subagent` call steers its message to the subagent and returns
   the answer as its result, as Pi's coding agent does; calls in one round run at once. The owner's

@@ -27,6 +27,8 @@ export type Thread = {
 // needs a secure context.
 export const newRequest = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, "0")).join("")
 export type Repo = { name: string; private: boolean }
+// When the owner last connected the Claude plan; null until then.
+export type Claude = { connected: string | null }
 export type ModelChoice = { ref: string; name: string; thinking: string[]; defaultThinking: string }
 export type ModelRef = { provider: string; modelId: string }
 export type ThreadAgent = { model?: ModelRef; thinkingLevel: string }
@@ -205,16 +207,16 @@ export function openThread(id: number | undefined): void {
   window.location.hash = id === undefined ? "" : String(id)
 }
 
-export function useHashId(): number | undefined {
-  const read = () => Number(window.location.hash.slice(1)) || undefined
-  const [id, setId] = useState<number | undefined>(undefined)
+// What the page shows: "" for a new Thread, a Thread's id, or "settings".
+export function useHash(): string {
+  const [hash, setHash] = useState("")
   useEffect(() => {
-    const update = () => setId(read())
+    const update = () => setHash(window.location.hash.slice(1))
     update()
     window.addEventListener("hashchange", update)
     return () => window.removeEventListener("hashchange", update)
   }, [])
-  return id
+  return hash
 }
 
 // ─── Images ──────────────────────────────────────────────────────────────
