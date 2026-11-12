@@ -37,11 +37,11 @@ export type ModelRef = { provider: string; modelId: string }
 export type ThreadAgent = { model?: ModelRef; thinkingLevel: string }
 export type Subagent = { name: string; model?: ModelRef; working: boolean }
 
-export type Json = string | number | boolean | null | Json[] | { [key: string]: Json | undefined }
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue | undefined }
 export type Block =
   | { type: "text"; text: string }
   | { type: "thinking"; thinking: string }
-  | { type: "toolCall"; id: string; name: string; arguments?: Record<string, Json> }
+  | { type: "toolCall"; id: string; name: string; arguments?: Record<string, JsonValue> }
   | { type: "image"; data: string; mimeType: string }
 export type Message = {
   role: "user" | "assistant" | "toolResult"
@@ -69,7 +69,7 @@ export class Unreachable extends Error {
 
 // The agent answers every call in JSON, so anything else came from in front of it: the network, a
 // proxy's error page, or the development server's 404 when it proxies to no agent.
-export async function api<T>(method: string, path: string, body?: Json): Promise<T> {
+export async function api<T>(method: string, path: string, body?: JsonValue): Promise<T> {
   const res = await fetch(path, {
     method,
     headers: { "content-type": "application/json" },

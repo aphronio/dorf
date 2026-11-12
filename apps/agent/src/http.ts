@@ -2,16 +2,15 @@ import { readFile } from "node:fs/promises";
 import http from "node:http";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { JsonValue } from "@earendil-works/chord";
-import type { ImageContent } from "@earendil-works/pi-ai";
-import type { ConversationId, EntryId, JsonObject, UserInput } from "@earendil-works/pi-durable";
+import type { ImageContent, JsonObject, JsonValue } from "@earendil-works/pi-ai";
+import type { ConversationId, EntryId, UserInput } from "@earendil-works/pi-durable";
 import type { ImageProcessor } from "@earendil-works/pi-durable/tools";
-import { arr, compile, str } from "@earendil-works/pi-schema";
+import { arr, compile, int, map, obj, opt, str, unknown } from "@earendil-works/pi-schema";
 import type { GitHub } from "./github.ts";
 import type { Keys } from "./keys.ts";
 import { prepareImages } from "./images.ts";
 import type { Catalog } from "./models.ts";
-import { Quoted, quotedText, quotes } from "./quotes.ts";
+import { MAX_QUOTE_LENGTH, MAX_QUOTES, type Quote, Quoted, quotedText } from "./quotes.ts";
 import { Starting, type Stop, type Threads } from "./threads.ts";
 
 type Reply = [status: number, body: unknown];
@@ -46,6 +45,13 @@ class BadRequest extends Error {
 	}
 }
 
+const isObject = compile(map(unknown())).check;
+const isText = compile(str()).check;
+const isTextList = compile(arr(str())).check;
+const isQuoteList = compile(arr(unknown(), { maxItems: MAX_QUOTES })).check;
+const isQuoteFields = compile(obj({ entry: opt(unknown()), text: opt(unknown()), comment: opt(unknown()) }, { open: true })).check;
+const isEntryId = compile(int({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })).check;
+
 // A body past the limit is still read to its end, so the browser gets the answer instead of a reset connection.
 async function json(req: http.IncomingMessage, limit = MAX_BODY): Promise<JsonObject> {
 	const tooLarge = new BadRequest(`body larger than ${limit >> 20} MiB`, 413);
@@ -57,21 +63,36 @@ async function json(req: http.IncomingMessage, limit = MAX_BODY): Promise<JsonOb
 		if (size <= limit) chunks.push(chunk);
 	}
 	if (size > limit) throw tooLarge;
+	let body: JsonValue;
 	try {
-		return size ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
+		body = size ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
 	} catch {
 		throw new BadRequest("body is not JSON");
 	}
+	if (!isObject(body)) throw new BadRequest("body is not JSON");
+	return body;
 }
-
-const isText = compile(str()).check;
-const isTextList = compile(arr(str())).check;
 
 // The images of a message, as the page sends them: base64 strings.
 function uploads(value: JsonValue | undefined): string[] {
 	if (value === undefined) return [];
 	if (!isTextList(value)) throw new BadRequest("images must be base64 strings");
 	return value;
+}
+
+// The quotes of a message; none when it has none.
+function quotes(value: JsonValue | undefined): Quote[] {
+	if (value === undefined) return [];
+	if (!isQuoteList(value)) throw new BadRequest(`quotes must be a list of up to ${MAX_QUOTES}`);
+	return value.map((q) => {
+		const { entry, text, comment } = isQuoteFields(q) ? q : {};
+		if (!isEntryId(entry)) throw new BadRequest("a quote's entry must be an entry id");
+		if (!isText(text) || !text.trim() || text.length > MAX_QUOTE_LENGTH) throw new BadRequest(`a quote's text must be 1 to ${MAX_QUOTE_LENGTH} characters`);
+		if (comment !== undefined && (!isText(comment) || comment.length > MAX_QUOTE_LENGTH)) throw new BadRequest(`a quote's comment must be up to ${MAX_QUOTE_LENGTH} characters`);
+		const quote: Quote = { entry, text };
+		if (comment?.trim()) quote.comment = comment.trim();
+		return quote;
+	});
 }
 
 // Text alone stays a string, as before images; with images, Pi's content blocks, the text first.
@@ -109,6 +130,8 @@ async function route(threads: Threads, catalog: Catalog, github: GitHub | undefi
 			if (!prompt && !list.length) return [400, { error: "prompt or images required" }];
 			if (repo !== undefined && !isText(repo)) return [400, { error: "repo must be owner/name" }];
 			if (request !== undefined && (!isText(request) || !/^[\w-]{1,64}$/.test(request))) return [400, { error: "request must be up to 64 letters, digits, - or _" }];
+			if (model !== undefined && !isText(model)) return [400, { error: "model must be a model id" }];
+			if (thinking !== undefined && !isText(thinking)) return [400, { error: "thinking level must be a string" }];
 			const choice = catalog.choose(model, thinking);
 			const prepared = await prepareImages(images, catalog.imageLimits(choice.model), list);
 			return [201, await threads.create(input(prompt, prepared), prompt || "Image", repo || undefined, choice, request)];

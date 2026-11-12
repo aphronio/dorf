@@ -1,3 +1,5 @@
+import type { JsonObject } from "@earendil-works/pi-ai";
+
 // The keys service (apps/keys) holds the Claude plan's and GitHub's tokens; no route returns one. The agent only relays
 // the chat page's connect calls.
 export class Keys {
@@ -7,8 +9,7 @@ export class Keys {
 		this.#url = url;
 	}
 
-	// oxlint-disable-next-line anti-slop/no-unknown-parameters -- the page's body passes through unread; the keys service parses it
-	async relay(method: "GET" | "POST", path: `/${"claude" | "github"}${"" | "/start" | "/code" | "/disconnect"}`, body?: unknown): Promise<[number, unknown]> {
+	async relay(method: "GET" | "POST", path: `/${"claude" | "github"}${"" | "/start" | "/code" | "/disconnect"}`, body?: JsonObject): Promise<[number, unknown]> {
 		const res = await fetch(`${this.#url}${path}`, {
 			method,
 			headers: body === undefined ? {} : { "content-type": "application/json" },

@@ -155,7 +155,7 @@ export class Threads {
 	// Answers once the Thread is committed: a background task then starts its Sandbox, clones the repository and sends
 	// the first message, waiting for a worker with room as long as it takes. The Thread exists before its Sandbox, so no
 	// Sandbox is ever left without a Thread. A repeat with the same `request` returns the Thread the first one made.
-	async create(content: UserInput, title: string, repo: string | undefined, choice: { model: ModelRef; thinkingLevel: ModelThinkingLevel }, request?: string): Promise<{ id: ConversationId; sandbox: string }> {
+	async create(content: UserInput, title: string, repo: string | undefined, choice: Required<ThreadAgent>, request?: string): Promise<{ id: ConversationId; sandbox: string }> {
 		if (repo !== undefined && !REPO.test(repo)) throw new RangeError(`not a GitHub repository: ${repo}`);
 		const sandbox = this.#sandboxes.newName();
 		const workspace = this.#agent.cwd ?? "/";
@@ -332,7 +332,14 @@ export class Threads {
 				started = true;
 				const child = (await this.#harness.conversation(conversationId, context))!;
 				const childLive = (await this.#harness.watchDoc(LiveDoc, conversationId, context))!;
-				const view = { name, model: (await child.agent(context)).model, working: Boolean(childLive.value.run), stop: async () => void (await childLive.stop()) };
+				const view = {
+					name,
+					model: (await child.agent(context)).model,
+					working: Boolean(childLive.value.run),
+					stop: async () => {
+						await childLive.stop();
+					},
+				};
 				children.set(conversationId, view);
 				childLive.start(async (call) => {
 					if (call.kind !== "value" || Boolean(call.value.run) === view.working) return;

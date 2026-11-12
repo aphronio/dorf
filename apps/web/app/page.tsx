@@ -73,7 +73,8 @@ export default function Page() {
   // what the page asked it for when it was away. The streams open again by themselves.
   const [down, setDown] = useState(false)
   const [connection, setConnection] = useState(0)
-  const fail = useCallback((e: Error) => (e instanceof Unreachable ? setDown(true) : setError(e.message)), [])
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- it takes what a catch caught, which can be anything thrown
+  const fail = useCallback((e: unknown) => (e instanceof Unreachable ? setDown(true) : setError(e instanceof Error ? e.message : String(e))), [])
   const lost = useCallback((e: Error) => void (e instanceof Unreachable && setDown(true)), [])
 
   // The list as it changes: a Thread added, archived, deleted, starting work or ending it.
@@ -190,7 +191,7 @@ export default function Page() {
       setDraft(value)
       setImages(files)
       if (quoting.length) setQuotes(quoting)
-      fail(e as Error)
+      fail(e)
     }
   }
   const stop = () => id !== undefined && api("POST", `/threads/${id}/abort`).catch(fail)

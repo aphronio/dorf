@@ -3,7 +3,6 @@ import { call, fail, follow, killAgent, send, startAgent, until } from "./kit.ts
 
 export type Entry = { kind: string; data?: { name: string; failed?: true }; model?: { role: string; model?: string; isError?: boolean; content?: string | { type: string; text?: string }[] }[] };
 
-// The subagent tool's parameters.
 type SubagentCall = { name: string; message?: string; model?: string };
 
 export const text = (e: Entry) => (e.model ?? []).flatMap((m) => (Array.isArray(m.content) ? m.content.map((c) => c.text ?? "") : [m.content ?? ""])).join("");

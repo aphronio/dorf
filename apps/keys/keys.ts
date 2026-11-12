@@ -23,6 +23,9 @@ const ROUTES = new Map(
 	}),
 );
 
+// What a route answers, or the error a request gets.
+type Reply = Awaited<ReturnType<NonNullable<ReturnType<typeof ROUTES.get>>>> | { error: string };
+
 async function body(req: http.IncomingMessage): Promise<Body> {
 	let text = "";
 	for await (const chunk of req) if ((text += chunk).length > 4096) throw new Refused("too long");
@@ -38,13 +41,13 @@ async function body(req: http.IncomingMessage): Promise<Body> {
 
 http
 	.createServer(async (req, res) => {
-		const send = (status: number, json: string) => res.writeHead(status, { "content-type": "application/json" }).end(json);
+		const send = (status: number, reply: Reply) => res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(reply));
 		const route = ROUTES.get(`${req.method} ${new URL(req.url ?? "/", "http://x").pathname}`);
 		try {
-			if (!route) return send(404, JSON.stringify({ error: "not found" }));
-			send(200, JSON.stringify(await route(await body(req))));
+			if (!route) return send(404, { error: "not found" });
+			send(200, await route(await body(req)));
 		} catch (e) {
-			send(e instanceof Refused ? 400 : 500, JSON.stringify({ error: e instanceof Refused ? e.message : "the keys service failed; see its log" }));
+			send(e instanceof Refused ? 400 : 500, { error: e instanceof Refused ? e.message : "the keys service failed; see its log" });
 			if (!(e instanceof Refused)) console.error((e as Error).message);
 		}
 	})

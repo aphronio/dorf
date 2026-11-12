@@ -5,9 +5,9 @@ import { parse } from "yaml";
 import { ancestors } from "./context-files.ts";
 
 type Skill = { name: string; description: string; location: string };
-type FrontMatter = { name?: string; description?: string; disabled?: boolean };
+const isText = compile(str()).check;
 
-const Text = compile(str());
+type FrontMatter = { name?: string; description?: string; disabled?: boolean };
 
 // A SKILL.md's front matter, parsed as Pi's coding agent parses it; a file without one has none.
 function frontMatter(text: string): FrontMatter {
@@ -16,7 +16,7 @@ function frontMatter(text: string): FrontMatter {
 	if (end === -1) return {};
 	try {
 		const { name, description, "disable-model-invocation": disabled } = parse(normalized.slice(4, end)) ?? {};
-		return { name: Text.check(name) ? name : undefined, description: Text.check(description) ? description : undefined, disabled: disabled === true };
+		return { name: isText(name) ? name : undefined, description: isText(description) ? description : undefined, disabled: disabled === true };
 	} catch {
 		return {};
 	}

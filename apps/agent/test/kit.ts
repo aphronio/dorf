@@ -105,8 +105,8 @@ export async function until<T>(what: string, check: () => Promise<T | undefined 
 }
 
 // A request body as proofs send it, malformed ones included; JSON.stringify drops undefined fields.
-type Json = string | number | boolean | null | undefined | readonly Json[] | { [field: string]: Json };
-export type Body = { [field: string]: Json };
+type JsonValue = string | number | boolean | null | undefined | readonly JsonValue[] | { [field: string]: JsonValue };
+export type Body = { [field: string]: JsonValue };
 
 export async function call(method: string, path: string, body?: Body): Promise<{ status: number; json: any }> {
 	const res = await fetch(`http://127.0.0.1:${PORT}${path}`, { method, headers: HEADERS, body: body === undefined ? undefined : JSON.stringify(body) });

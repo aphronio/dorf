@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { deleteSession, type EffortLevel, getSessionInfo, type ModelInfo, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { Api, AssistantMessage, ImageContent, JsonObject, JsonValue, Message, Model, SimpleStreamOptions, TextContent, ToolResultMessage, TranscriptContext } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, ImageContent, JsonValue, Message, Model, SimpleStreamOptions, TextContent, Tool, ToolResultMessage, TranscriptContext } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, createProvider } from "@earendil-works/pi-ai/models";
 import { type AssistantMessageEventStream, createAssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
@@ -24,19 +24,16 @@ type Group = { role: Role; hash: string; start: number; end: number };
 type Saved = { claude: string; hashes: string[] };
 type Thread = { saved?: Saved; session?: ClaudeSession; launch?: string; effort?: EffortLevel };
 
-// Array.isArray leaves JsonValue's readonly arrays in the other branch.
-const isList = (v: JsonValue): v is readonly JsonValue[] => Array.isArray(v);
-function canonical(v: JsonValue): string {
-	if (isList(v)) return `[${v.map(canonical).join(",")}]`;
-	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- v is parsed JSON already; typeof tells its objects from its primitives
+function canonical(v: JsonValue | Tool["parameters"]): string {
+	if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- it tells JSON objects from primitives in a JsonValue
 	if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
-	return `{${Object.keys(v)
-		.sort()
-		.filter((k) => v[k] !== undefined)
-		.map((k) => `${JSON.stringify(k)}:${canonical(v[k])}`)
+	return `{${Object.entries(v)
+		.sort(([a], [b]) => (a < b ? -1 : 1))
+		.flatMap(([k, field]) => (field === undefined ? [] : [`${JSON.stringify(k)}:${canonical(field)}`]))
 		.join(",")}}`;
 }
-const hash = (v: JsonValue) => createHash("sha256").update(canonical(v)).digest("hex");
+const hash = (v: JsonValue | Tool["parameters"]) => createHash("sha256").update(canonical(v)).digest("hex");
 
 const blocks = (content: string | (TextContent | ImageContent)[]) => (Array.isArray(content) ? content : [{ type: "text" as const, text: content }]);
 
@@ -331,7 +328,7 @@ export class ClaudePlan {
 	#stream(model: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions): AssistantMessageEventStream {
 		const stream = createAssistantMessageEventStream();
 		const reply = new Reply(stream, model);
-		const tools = getCurrentTools(context.messages).map((t): ToolDeclaration => ({ name: t.name, description: t.description, parameters: t.parameters as JsonObject }));
+		const tools = getCurrentTools(context.messages).map((t): ToolDeclaration => ({ name: t.name, description: t.description, parameters: t.parameters }));
 		const system = getCurrentSystemPrompt(context.messages);
 		const sessionId = options?.sessionId;
 		const signal = options?.signal;

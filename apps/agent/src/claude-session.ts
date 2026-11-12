@@ -1,11 +1,11 @@
 import { type EffortLevel, type ModelInfo, type Options, query, type Query, type SDKControlInterruptResponse, type SDKMessage, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createRequire } from "node:module";
-import type { JsonObject } from "@earendil-works/pi-ai";
+import type { Tool } from "@earendil-works/pi-ai";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, type CallToolResult, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 export type UserContent = Exclude<SDKUserMessage["message"]["content"], string>[number][];
-export type ToolDeclaration = { name: string; description: string; parameters: JsonObject };
+export type ToolDeclaration = { name: string; description: string; parameters: Tool["parameters"] };
 
 export const TOOL_SERVER = "dorf";
 const MIN_VERSION = [2, 1, 248];
