@@ -3,8 +3,11 @@ import { call, fail, follow, killAgent, send, startAgent, until } from "./kit.ts
 
 export type Entry = { kind: string; data?: { name: string; failed?: true }; model?: { role: string; model?: string; isError?: boolean; content?: string | { type: string; text?: string }[] }[] };
 
-export const text = (e: Entry) => (e.model ?? []).flatMap((m) => (typeof m.content === "string" ? [m.content] : (m.content ?? []).map((c) => c.text ?? ""))).join("");
-export const subagent = (args: object) => `@ ${JSON.stringify(args)}`;
+// The subagent tool's parameters.
+type SubagentCall = { name: string; message?: string; model?: string };
+
+export const text = (e: Entry) => (e.model ?? []).flatMap((m) => (Array.isArray(m.content) ? m.content.map((c) => c.text ?? "") : [m.content ?? ""])).join("");
+export const subagent = (args: SubagentCall) => `@ ${JSON.stringify(args)}`;
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export const TOGETHER = (name: string) => `${name} answered this message together with another one, in the answer another call returned.`;
 export const STOPPED_WAITING = (name: string) => `Stopped waiting because the owner sent a message. ${name} is still working; its answer will arrive as a message.`;

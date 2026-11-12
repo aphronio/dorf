@@ -10,7 +10,7 @@ type Usage = { input: number; output: number; cacheRead: number; cacheWrite: num
 type Msg = { role: string; content?: string | { type: string; text?: string }[]; usage?: Usage; stopReason?: string; errorMessage?: string };
 type Entry = { kind: string; model?: Msg[] };
 
-const text = (m?: Msg) => (typeof m?.content === "string" ? m.content : (m?.content ?? []).map((c) => c.text ?? "").join(""));
+const text = (m?: Msg) => (Array.isArray(m?.content) ? m.content.map((c) => c.text ?? "").join("") : (m?.content ?? ""));
 const steps = (usage: Usage[]) => usage.map((u) => `read ${u.cacheRead}/write ${u.cacheWrite}`).join(", ");
 const claudeSession = () => JSON.parse(readFileSync(`${RECORDS}/${readdirSync(RECORDS)[0]}`, "utf8")).claude as string;
 const claudePids = () =>

@@ -73,8 +73,13 @@ export async function fail(message: string): Promise<never> {
 // On stand-ins the workspace is /proc/self/cwd: each Sandbox's pi-env starts in that Sandbox's own folder, and
 // every command it runs resolves the path there, so files stay apart with no change to the agent or the gate.
 export async function startAgent(model = "faux", idleMs = IDLE_MS): Promise<void> {
+	const env: NodeJS.ProcessEnv = { ...process.env, DORF_MODEL: model, DORF_DATA: DATA, DORF_PORT: String(PORT), DORF_IDLE_MS: String(idleMs), DORF_OWNER: OWNER, DORF_GATE: GATE, DORF_TOKEN_FILE: TOKEN, DORF_SANDBOX_PREFIX: PREFIX };
+	if (!substrate) {
+		env.DORF_WORKSPACE = "/proc/self/cwd";
+		env.DORF_JOBS = join(DATA, "jobs");
+	}
 	agent = spawn("node", [new URL("../src/main.ts", import.meta.url).pathname], {
-		env: { ...process.env, DORF_MODEL: model, DORF_DATA: DATA, DORF_PORT: String(PORT), DORF_IDLE_MS: String(idleMs), DORF_OWNER: OWNER, DORF_GATE: GATE, DORF_TOKEN_FILE: TOKEN, DORF_SANDBOX_PREFIX: PREFIX, ...(substrate ? {} : { DORF_WORKSPACE: "/proc/self/cwd", DORF_JOBS: join(DATA, "jobs") }) },
+		env,
 		stdio: ["ignore", "inherit", "inherit"],
 	});
 	await until("agent up", async () => (await fetch(`http://127.0.0.1:${PORT}/threads`, { headers: HEADERS }).catch(() => undefined))?.ok);
@@ -99,7 +104,11 @@ export async function until<T>(what: string, check: () => Promise<T | undefined 
 	return await fail(`timed out waiting for ${what}`);
 }
 
-export async function call(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
+// A request body as proofs send it, malformed ones included; JSON.stringify drops undefined fields.
+type Json = string | number | boolean | null | undefined | readonly Json[] | { [field: string]: Json };
+export type Body = { [field: string]: Json };
+
+export async function call(method: string, path: string, body?: Body): Promise<{ status: number; json: any }> {
 	const res = await fetch(`http://127.0.0.1:${PORT}${path}`, { method, headers: HEADERS, body: body === undefined ? undefined : JSON.stringify(body) });
 	const text = await res.text();
 	return { status: res.status, json: text ? JSON.parse(text) : undefined };
@@ -115,7 +124,7 @@ export async function createThread(prompt: string, repo?: string, choice?: { mod
 type Content = { type: string; text?: string };
 type Entry = { kind: string; model?: { role: string; isError?: boolean; content?: Content[] | string }[] };
 const text = (e: Entry) =>
-	(e.model ?? []).flatMap((m) => (typeof m.content === "string" ? [{ type: "text", text: m.content }] : (m.content ?? []))).map((c) => c.text ?? "").join("");
+	(e.model ?? []).flatMap((m) => (Array.isArray(m.content) ? m.content.map((c) => c.text ?? "") : [m.content ?? ""])).join("");
 
 export type Result = { output: string; error: boolean };
 
@@ -129,7 +138,7 @@ export async function runEnded(id: number, message: string, timeoutMs = 60_000):
 			if (json.docs["pi.live"]?.run || asked < 0 || text(entries[asked]) !== message) return undefined;
 			const answer = entries.slice(asked);
 			if (!answer.some((e) => e.kind === "pi.assistant" && text(e) === "done")) return undefined;
-			return answer.filter((e) => e.kind === "pi.tool-result").map((e) => ({ output: text(e), error: Boolean(e.model?.[0]?.isError) }));
+			return answer.flatMap((e) => (e.kind === "pi.tool-result" ? [{ output: text(e), error: Boolean(e.model?.[0]?.isError) }] : []));
 		},
 		timeoutMs,
 	);
@@ -141,7 +150,9 @@ export async function send(id: number, message: string): Promise<void> {
 }
 
 // A Thread's event stream, as the page reads it; each event carries its SSE id. A reconnect sends the last one.
-export function follow(path: string, lastEventId?: number): { events: any[]; close: () => void } {
+type Stream = { events: any[]; close: () => void };
+
+export function follow(path: string, lastEventId?: number): Stream {
 	const events: any[] = [];
 	const abort = new AbortController();
 	const headers = lastEventId === undefined ? HEADERS : { ...HEADERS, "last-event-id": String(lastEventId) };
@@ -155,7 +166,11 @@ export function follow(path: string, lastEventId?: number): { events: any[]; clo
 				for (const part of parts) {
 					const field = (name: string) => part.split("\n").find((l) => l.startsWith(`${name}: `))?.slice(name.length + 2);
 					const data = field("data");
-					if (data) events.push({ ...JSON.parse(data), ...(field("id") ? { id: Number(field("id")) } : {}) });
+					if (!data) continue;
+					const event = JSON.parse(data);
+					const id = field("id");
+					if (id) event.id = Number(id);
+					events.push(event);
 				}
 			}
 		})

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { crc32, deflateSync } from "node:zlib";
-import { call, fail, killAgent, log, pass, startAgent, until } from "./kit.ts";
+import { type Body, call, fail, killAgent, log, pass, startAgent, until } from "./kit.ts";
 
 type Block = { type: string; text?: string; data?: string; mimeType?: string };
 type Entry = { id: number; kind: string; model?: { role: string; content: string | Block[] }[] };
@@ -28,7 +28,7 @@ const widthOf = (data: string) => Buffer.from(data, "base64").readUInt32BE(16);
 
 const blocks = (e: Entry): Block[] => {
 	const content = e.model?.[0]?.content ?? [];
-	return typeof content === "string" ? [{ type: "text", text: content }] : content;
+	return Array.isArray(content) ? content : [{ type: "text", text: content }];
 };
 const textOf = (e: Entry) => blocks(e).flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
 const entries = async (id: number): Promise<Entry[]> => (await call("GET", `/threads/${id}`)).json.entries;
@@ -89,7 +89,7 @@ if (after.join() !== before.join()) await fail("the images changed across a rest
 log("5. after the agent is killed and restarted, every message keeps its images");
 
 const threads = (await call("GET", "/threads")).json.length;
-const refused: [string, unknown, number, string][] = [
+const refused: [string, Body, number, string][] = [
 	["no text and no images", { prompt: "" }, 400, "prompt or images required"],
 	["not base64", { prompt: "x", images: ["not base64!"] }, 400, "not base64"],
 	["not an image", { prompt: "x", images: [Buffer.from("hello").toString("base64")] }, 400, "not a PNG"],

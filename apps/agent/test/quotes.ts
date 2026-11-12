@@ -3,7 +3,10 @@
 import { call, createThread, fail, follow, log, pass, startAgent, until } from "./kit.ts";
 
 type Entry = { id: number; kind: string; data?: any; model?: { role: string; content: string | { type: string; text?: string }[] }[] };
-const textOf = (e: Entry) => [e.model?.[0]?.content ?? []].flat().map((c) => (typeof c === "string" ? c : (c.text ?? ""))).join("");
+const textOf = (e: Entry) => {
+	const content = e.model?.[0]?.content ?? [];
+	return Array.isArray(content) ? content.map((c) => c.text ?? "").join("") : content;
+};
 const entries = async (id: number): Promise<Entry[]> => (await call("GET", `/threads/${id}`)).json.entries;
 const answered = (id: number, reply: string) =>
 	until(`the reply "${reply}"`, async () => {

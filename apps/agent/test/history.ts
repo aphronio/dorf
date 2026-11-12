@@ -1,7 +1,10 @@
 import { call, createThread, fail, follow, log, pass, runEnded, send, startAgent, until } from "./kit.ts";
 
 type Entry = { id: number; kind: string; model?: { content?: string | { text?: string }[] }[] };
-const text = (e: Entry) => [e.model?.[0]?.content ?? []].flat().map((c) => (typeof c === "string" ? c : (c.text ?? ""))).join("");
+const text = (e: Entry) => {
+	const content = e.model?.[0]?.content ?? [];
+	return Array.isArray(content) ? content.map((c) => c.text ?? "").join("") : content;
+};
 
 await startAgent();
 const first = "$ true";
