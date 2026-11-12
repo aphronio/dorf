@@ -41,8 +41,8 @@ if (MODEL === "faux") models.setProvider(scriptedModel());
 mkdirSync(DATA, { recursive: true });
 const keys = process.env.DORF_KEYS ? new Keys(process.env.DORF_KEYS) : undefined;
 // A keys service that does not answer leaves the question to Claude Code.
-const connected = async () => ((await keys!.relay("GET", "/claude"))[1] as { connected?: string | null }).connected !== null;
-const claudePlan = new ClaudePlan(`${DATA}/claude`, CLAUDE, keys && (() => connected().catch(() => true)));
+const connected = async () => ((await keys!.relay("GET", "/claude"))[1] as { connected?: string | null }).connected ?? null;
+const claudePlan = new ClaudePlan(`${DATA}/claude`, CLAUDE, keys && (() => connected().catch(() => "")));
 models.setProvider(claudePlan.provider);
 
 const registry = createRegistry();

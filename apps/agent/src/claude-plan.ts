@@ -228,6 +228,7 @@ const effortOf = (model: Model<Api>, reasoning: SimpleStreamOptions["reasoning"]
 };
 
 const NOT_CONNECTED = "Claude is not connected. Connect it under Settings.";
+const BROKER_SYNC_MS = 90_000;
 const REJECTED = "Claude rejected Dorf's connection. Connect it again under Settings.";
 
 const failure = (step: "tools" | SDKResultMessage) =>
@@ -247,11 +248,11 @@ export class ClaudePlan {
 	#refusedUntil = 0;
 	readonly provider;
 
-	readonly #connected: (() => Promise<boolean>) | undefined;
+	readonly #connected: (() => Promise<string | null>) | undefined;
 
-	// `connected` asks whether the owner connected the plan, so a Thread fails at once instead of after Claude Code's
-	// retries of a request without a token.
-	constructor(dataDir: string, executable?: string, connected?: () => Promise<boolean>) {
+	// `connected` says when the owner connected the plan, if they did, so a Thread fails at once instead of after Claude
+	// Code's retries of a request without a token.
+	constructor(dataDir: string, executable?: string, connected?: () => Promise<string | null>) {
 		this.#connected = connected;
 		this.#cwd = dataDir;
 		this.#records = `${dataDir}/sessions`;
@@ -337,7 +338,12 @@ export class ClaudePlan {
 		const work = (async () => {
 			if (Date.now() < this.#refusedUntil)
 				throw new Error(`Claude plan requests are refused until ${new Date(this.#refusedUntil).toISOString()}: the plan's extra usage was drawn`);
-			if (this.#connected && !(await this.#connected())) throw new Error(NOT_CONNECTED);
+			const connected = this.#connected && (await this.#connected());
+			if (connected === null) throw new Error(NOT_CONNECTED);
+			// The broker reads a new token when the kubelet next syncs its Secret, which takes up to about a minute.
+			const fresh = connected ? Date.parse(connected) + BROKER_SYNC_MS - Date.now() : 0;
+			if (fresh > 0) await new Promise((r) => (setTimeout(r, fresh), signal?.addEventListener("abort", r, { once: true })));
+			signal?.throwIfAborted();
 			// Requests without tools, like Pi's compaction summaries, stand alone and leave the Thread's session alone.
 			return sessionId && tools.length
 				? this.#serial(sessionId, () => this.#threadStep(model, effort, context.messages, tools, system, sessionId, reply, signal))
