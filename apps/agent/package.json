@@ -8,10 +8,11 @@
   "scripts": {
     "start": "node src/main.ts",
     "check": "tsc",
-    "proof": "bun run --parallel --no-exit-on-error proof:history proof:models proof:lifecycle proof:make-room proof:images proof:quotes proof:thread-list proof:thread-start",
+    "proof": "bun run --parallel --no-exit-on-error proof:history proof:models proof:subagent-restarts proof:lifecycle proof:make-room proof:images proof:quotes proof:thread-list proof:thread-start",
     "proof:lifecycle": "node test/sandbox-lifecycle.ts",
     "proof:history": "node test/history.ts",
     "proof:models": "node test/models.ts",
+    "proof:subagent-restarts": "node test/subagent-restarts.ts",
     "proof:make-room": "node test/make-room.ts",
     "proof:images": "node test/images.ts",
     "proof:quotes": "node test/quotes.ts",
