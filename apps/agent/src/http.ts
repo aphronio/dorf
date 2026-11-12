@@ -2,31 +2,33 @@ import { readFile } from "node:fs/promises";
 import http from "node:http";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { JsonValue } from "@earendil-works/chord";
 import type { ImageContent } from "@earendil-works/pi-ai";
-import type { ConversationId, EntryId, UserInput } from "@earendil-works/pi-durable";
+import type { ConversationId, EntryId, JsonObject, UserInput } from "@earendil-works/pi-durable";
 import type { ImageProcessor } from "@earendil-works/pi-durable/tools";
+import { arr, compile, str } from "@earendil-works/pi-schema";
 import type { GitHub } from "./github.ts";
 import type { Keys } from "./keys.ts";
 import { prepareImages } from "./images.ts";
 import type { Catalog } from "./models.ts";
 import { Quoted, quotedText, quotes } from "./quotes.ts";
-import { Starting, type Threads } from "./threads.ts";
+import { Starting, type Stop, type Threads } from "./threads.ts";
 
 type Reply = [status: number, body: unknown];
 
 // The page's static export, copied in by the image build (apps/web).
 const WEB = fileURLToPath(new URL("../web/", import.meta.url));
 const API = new Set(["threads", "repos", "models", "claude", "github"]);
-const TYPES: Record<string, string> = {
-	".html": "text/html; charset=utf-8",
-	".txt": "text/plain; charset=utf-8",
-	".js": "text/javascript",
-	".css": "text/css",
-	".woff2": "font/woff2",
-	".ico": "image/x-icon",
-	".svg": "image/svg+xml",
-	".png": "image/png",
-};
+const TYPES = new Map([
+	[".html", "text/html; charset=utf-8"],
+	[".txt", "text/plain; charset=utf-8"],
+	[".js", "text/javascript"],
+	[".css", "text/css"],
+	[".woff2", "font/woff2"],
+	[".ico", "image/x-icon"],
+	[".svg", "image/svg+xml"],
+	[".png", "image/png"],
+]);
 const MAX_BODY = 1 << 20;
 // A message may carry images: their base64 within prepareImages' total, before it shrinks them.
 const MAX_MESSAGE_BODY = 16 << 20;
@@ -45,7 +47,7 @@ class BadRequest extends Error {
 }
 
 // A body past the limit is still read to its end, so the browser gets the answer instead of a reset connection.
-async function json(req: http.IncomingMessage, limit = MAX_BODY): Promise<Record<string, unknown>> {
+async function json(req: http.IncomingMessage, limit = MAX_BODY): Promise<JsonObject> {
 	const tooLarge = new BadRequest(`body larger than ${limit >> 20} MiB`, 413);
 	if (Number(req.headers["content-length"]) > limit) throw tooLarge;
 	const chunks: Buffer[] = [];
@@ -62,10 +64,13 @@ async function json(req: http.IncomingMessage, limit = MAX_BODY): Promise<Record
 	}
 }
 
+const isText = compile(str()).check;
+const isTextList = compile(arr(str())).check;
+
 // The images of a message, as the page sends them: base64 strings.
-function uploads(value: unknown): string[] {
+function uploads(value: JsonValue | undefined): string[] {
 	if (value === undefined) return [];
-	if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) throw new BadRequest("images must be base64 strings");
+	if (!isTextList(value)) throw new BadRequest("images must be base64 strings");
 	return value;
 }
 
@@ -99,11 +104,11 @@ async function route(threads: Threads, catalog: Catalog, github: GitHub | undefi
 			return [200, await threads.list()];
 		case "POST ": {
 			const { prompt = "", repo, model, thinking, images: attached, request } = await json(req, MAX_MESSAGE_BODY);
-			if (typeof prompt !== "string") return [400, { error: "prompt must be text" }];
+			if (!isText(prompt)) return [400, { error: "prompt must be text" }];
 			const list = uploads(attached);
 			if (!prompt && !list.length) return [400, { error: "prompt or images required" }];
-			if (repo !== undefined && typeof repo !== "string") return [400, { error: "repo must be owner/name" }];
-			if (request !== undefined && (typeof request !== "string" || !/^[\w-]{1,64}$/.test(request))) return [400, { error: "request must be up to 64 letters, digits, - or _" }];
+			if (repo !== undefined && !isText(repo)) return [400, { error: "repo must be owner/name" }];
+			if (request !== undefined && (!isText(request) || !/^[\w-]{1,64}$/.test(request))) return [400, { error: "request must be up to 64 letters, digits, - or _" }];
 			const choice = catalog.choose(model, thinking);
 			const prepared = await prepareImages(images, catalog.imageLimits(choice.model), list);
 			return [201, await threads.create(input(prompt, prepared), prompt || "Image", repo || undefined, choice, request)];
@@ -114,7 +119,7 @@ async function route(threads: Threads, catalog: Catalog, github: GitHub | undefi
 		}
 		case "POST :id/messages": {
 			const { text = "", images: attached, quotes: quoting } = await json(req, MAX_MESSAGE_BODY);
-			if (typeof text !== "string") return [400, { error: "text must be text" }];
+			if (!isText(text)) return [400, { error: "text must be text" }];
 			const list = uploads(attached);
 			const quoted = quotes(quoting);
 			if (!text && !list.length && !quoted.length) return [400, { error: "text, images or quotes required" }];
@@ -131,7 +136,7 @@ async function route(threads: Threads, catalog: Catalog, github: GitHub | undefi
 			if (!agent) return [404, { error: "no such thread" }];
 			if (!agent.model) return [409, { error: "the Thread has no model" }];
 			const { level } = await json(req);
-			if (typeof level !== "string") return [400, { error: "level required" }];
+			if (!isText(level)) return [400, { error: "level required" }];
 			return (await threads.think(id, catalog.thinking(agent.model, level))) ? [202, {}] : [404, { error: "no such thread" }];
 		}
 		case "POST :id/archive":
@@ -156,13 +161,13 @@ async function asset(path: string, res: http.ServerResponse): Promise<boolean> {
 	const body = await readFile(file).catch(() => undefined);
 	if (!body) return false;
 	const cache = path.startsWith("/_next/static/") ? "public, max-age=31536000, immutable" : "no-store";
-	res.writeHead(200, { ...HEADERS, "cache-control": cache, "content-type": TYPES[extname(file)] ?? "application/octet-stream" }).end(body);
+	res.writeHead(200, { ...HEADERS, "cache-control": cache, "content-type": TYPES.get(extname(file)) ?? "application/octet-stream" }).end(body);
 	return true;
 }
 
 // Server-sent events. An event with entries takes the newest one's id, which the browser's reconnect sends back as
 // Last-Event-ID; a page that opens the stream again itself sends it as `after`, since it cannot set that header.
-async function follow<E extends object>(start: (after: EntryId | undefined, emit: (event: E) => void) => Promise<(() => Promise<unknown>) | undefined>, req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
+async function follow<E extends object>(start: (after: EntryId | undefined, emit: (event: E) => void) => Promise<Stop | undefined>, req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
 	const last = Number(req.headers["last-event-id"] ?? new URL(req.url ?? "/", "http://x").searchParams.get("after"));
 	const stop = await start(Number.isSafeInteger(last) && last > 0 ? (last as EntryId) : undefined, (event) => {
 		if (!res.headersSent) res.writeHead(200, { ...HEADERS, "cache-control": "no-store, no-transform", "content-type": "text/event-stream" });

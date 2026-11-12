@@ -1,5 +1,6 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { defineExtension, type ToolExecutionApi, wrapTool } from "@earendil-works/pi-durable";
+import { ExecutionError } from "@earendil-works/pi-durable/env";
 import { createBashTool } from "@earendil-works/pi-durable/tools";
 
 // In the Sandbox; proofs on local stand-ins give each run its own, apart from the machine's.
@@ -40,11 +41,10 @@ const quote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 
 // Reattaching is idempotent, so any failure to reach the daemon is retried; pi-env's exec does
 // not say which ones were a lost connection (earendil-works/pi#11976).
-const unreachable = (e: unknown) =>
-	e instanceof Error && ["unknown", "spawn_error"].includes((e as { code?: string }).code ?? "") && !/not found/i.test(e.message);
+const unreachable = (e: ExecutionError) => ["unknown", "spawn_error"].includes(e.code) && !/not found/i.test(e.message);
 
-function killJob(api: ToolExecutionApi, job: string): Promise<unknown> {
-	return api.env!.exec(`bash -c ${quote(KILL)} _ ${job}`, { cwd: api.env!.cwd }, BACKGROUND_CONTEXT).catch(() => {});
+async function killJob(api: ToolExecutionApi, job: string): Promise<void> {
+	await api.env!.exec(`bash -c ${quote(KILL)} _ ${job}`, { cwd: api.env!.cwd }, BACKGROUND_CONTEXT).catch(() => {});
 }
 
 export const SandboxJobs = defineExtension({
@@ -58,7 +58,7 @@ export const SandboxJobs = defineExtension({
 				const counting: ToolExecutionApi = Object.create(api, {
 					output: {
 						value: (chunk: string | Uint8Array, skipped?: { bytes: number }) => {
-							offset += (typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length) + (skipped?.bytes ?? 0);
+							offset += Buffer.byteLength(chunk) + (skipped?.bytes ?? 0);
 							api.output(chunk, skipped as never);
 						},
 					},
@@ -75,7 +75,7 @@ export const SandboxJobs = defineExtension({
 					try {
 						return await bash.execute({ ...args, command, timeout }, counting, context);
 					} catch (e) {
-						if (!unreachable(e)) {
+						if (!(e instanceof ExecutionError && unreachable(e))) {
 							await killJob(api, job);
 							if (deadline !== undefined && Date.now() >= deadline) throw new Error(`Command timed out after ${args.timeout} seconds`);
 							throw e;

@@ -20,13 +20,14 @@ async function mark(tx: Tx, id: ConversationId, change: (thread: ThreadSummary) 
 
 // The Threads whose Sandboxes run now; set once they exist.
 type Holders = () => Promise<ConversationId[]>;
+type Hooks = { holders: Holders };
 
 // A new Thread's Sandbox, its clone of the repository with the clone's setup run, and its first message, after the
 // Thread is committed. While no worker has room the task sleeps and asks again, so it waits as long as it takes, across
 // restarts; each ask first pauses the Thread idle the longest. A repeat after a restart creates, clones and sets up
 // again, since the message is not in until the last commit.
 export function threadStart(sandboxes: Sandboxes) {
-	const hooks: { holders: Holders } = { holders: async () => [] };
+	const hooks: Hooks = { holders: async () => [] };
 	async function clone(sandbox: string, repo: string, workspace: string, into: string, context: Context): Promise<void> {
 		let output = "";
 		const script = 'rm -rf "$1" && git clone --quiet "$2" "$1"';

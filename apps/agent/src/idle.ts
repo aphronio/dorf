@@ -7,7 +7,7 @@ export async function pauseWhenIdle(
 	harness: Harness,
 	id: ConversationId,
 	afterMs: number,
-	pause: (stillIdle: () => boolean) => Promise<unknown | "busy">,
+	pause: (stillIdle: () => boolean) => Promise<boolean | "busy">,
 	onChange: (running: boolean) => void,
 ): Promise<{ now(): void } | undefined> {
 	const watch = await harness.watchDoc(LiveDoc, id, context);

@@ -13,6 +13,7 @@ import type { threadStart } from "./thread-start.ts";
 
 export type ThreadAgent = { model?: ModelRef; thinkingLevel: ModelThinkingLevel };
 export type SubagentView = { name: string; model?: ModelRef; working: boolean };
+export type Stop = () => Promise<void>;
 type FollowEvent = { entries?: ConversationView["entries"]; earlier?: boolean; live?: unknown; queued?: Queued[]; agent?: ThreadAgent; subagents?: SubagentView[] };
 
 // Entries per page: the first window, each fill of a gap, each "load earlier".
@@ -55,13 +56,13 @@ const agentOf = async (conversation: { agent(c: typeof context): Promise<ThreadA
 // token, and they show once the message lands.
 type Inbox = { items?: { mode: string; entry?: { kind: string; data?: unknown }; content?: string | { type: string; text?: string }[] }[] };
 type Queued = { text: string; images: number; quotes?: number };
-const queued = (docs: Record<string, unknown>): Queued[] =>
+const queued = (docs: ConversationView["docs"]): Queued[] =>
 	((docs["pi.inbox"] as Inbox | undefined)?.items ?? []).flatMap((item) => {
 		const quoted = item.entry?.kind === Quoted.kind ? (item.entry.data as QuotedData) : undefined;
 		if (item.mode === "write" || (item.entry !== undefined && !quoted) || item.content === undefined) return [];
-		const images = typeof item.content === "string" ? 0 : item.content.filter((b) => b.type === "image").length;
+		const images = Array.isArray(item.content) ? item.content.filter((b) => b.type === "image").length : 0;
 		if (quoted) return [{ text: quoted.text, images, quotes: quoted.quotes.length }];
-		if (typeof item.content === "string") return [{ text: item.content, images }];
+		if (!Array.isArray(item.content)) return [{ text: item.content, images }];
 		return [{ text: item.content.flatMap((b) => (b.type === "text" && b.text ? [b.text] : [])).join(""), images }];
 	});
 
@@ -101,14 +102,16 @@ export class Threads {
 	}
 
 	// The list now, then again whenever a Thread is added, archived, deleted, starts working or stops.
-	async followList(send: (event: { threads: readonly ThreadSummary[] }) => void): Promise<(() => Promise<unknown>) | undefined> {
+	async followList(send: (event: { threads: readonly ThreadSummary[] }) => void): Promise<Stop | undefined> {
 		const watch = await this.#harness.watchDoc(ThreadList, context);
 		if (!watch) return undefined;
 		send({ threads: watch.value.items });
 		watch.start(async (call) => {
 			if (call.kind === "value") send({ threads: call.value.items });
 		});
-		return () => watch.stop();
+		return async () => {
+			await watch.stop();
+		};
 	}
 
 	// The owner looked at the Thread's last run.
@@ -168,9 +171,14 @@ export class Threads {
 						const list = await tx.doc(ThreadList);
 						const first = request === undefined ? undefined : list.items.find((t) => t.request === request);
 						if (first) throw new Created(first.id);
-						Object.assign(await tx.doc(ThreadSandbox, id), { name: sandbox, ...(repo ? { repo } : {}) });
+						const placed = await tx.doc(ThreadSandbox, id);
+						placed.name = sandbox;
+						if (repo) placed.repo = repo;
 						await tx.doc(Subagents, id);
-						list.items.push({ id, title: title.slice(0, 80), createdAt: new Date().toISOString(), ...(repo ? { repo } : {}), starting: true, ...(request ? { request } : {}) });
+						const thread: ThreadSummary = { id, title: title.slice(0, 80), createdAt: new Date().toISOString(), starting: true };
+						if (repo) thread.repo = repo;
+						if (request) thread.request = request;
+						list.items.push(thread);
 						await tx.createTask(this.#start, { sandbox, repo, workspace, cwd, content }, { ownership: { kind: "conversation" }, conversationId: id, background: true });
 					},
 				},
@@ -216,7 +224,7 @@ export class Threads {
 			const thread = (await tx.doc(ThreadList)).items.find((t) => t.id === id);
 			if (thread) thread.askedAt = new Date().toISOString();
 		}, context);
-		await conversation.submit({ type: "input", content, ...(entry ? { entry } : {}), whenBusy: "steer" }, context);
+		await conversation.submit({ type: "input", content, entry, whenBusy: "steer" }, context);
 		return true;
 	}
 
@@ -285,7 +293,7 @@ export class Threads {
 	// Pi's JSON state mode over a Thread or, by name, its subagent: first the newest entries and whether earlier ones
 	// exist, or after `after` the entries the page missed, then per change the new entries and the live state. The agent
 	// goes along when it changes, and for a Thread the list of its subagents when one starts or one's work starts or ends.
-	async follow(id: ConversationId, name: string | undefined, after: EntryId | undefined, send: (event: FollowEvent) => void): Promise<(() => Promise<unknown>) | undefined> {
+	async follow(id: ConversationId, name: string | undefined, after: EntryId | undefined, send: (event: FollowEvent) => void): Promise<Stop | undefined> {
 		const conversation = await this.#conversation(id, name);
 		return conversation && this.#follow(conversation, after, send, name === undefined);
 	}
@@ -298,7 +306,7 @@ export class Threads {
 		return { entries: [...page.items].reverse(), earlier: page.next !== undefined };
 	}
 
-	async #follow(conversation: Conversation, after: EntryId | undefined, send: (event: FollowEvent) => void, withSubagents: boolean): Promise<() => Promise<unknown>> {
+	async #follow(conversation: Conversation, after: EntryId | undefined, send: (event: FollowEvent) => void, withSubagents: boolean): Promise<Stop> {
 		// A reconnect resumes right after the page's newest entry, as Pi's `ConversationTranscript.resume` does.
 		const watch = await conversation.watch(context, after === undefined ? undefined : { from: (after + 1) as EntryId });
 		// Pi's client transcript over the windowed view: a gap that a stall left is filled before anything is sent, so
@@ -315,7 +323,7 @@ export class Threads {
 			sent = transcript.newest ?? sent;
 			return { entries, earlier: items[0]?.kind === "earlier" };
 		};
-		const children = new Map<ConversationId, SubagentView & { stop: () => Promise<unknown> }>();
+		const children = new Map<ConversationId, SubagentView & { stop: Stop }>();
 		const subagents = () => [...children.values()].map(({ name, model, working }) => ({ name, model, working }));
 		const watchChildren = async (agents: Record<string, { conversationId: ConversationId }>) => {
 			let started = false;
@@ -324,7 +332,7 @@ export class Threads {
 				started = true;
 				const child = (await this.#harness.conversation(conversationId, context))!;
 				const childLive = (await this.#harness.watchDoc(LiveDoc, conversationId, context))!;
-				const view = { name, model: (await child.agent(context)).model, working: Boolean(childLive.value.run), stop: () => childLive.stop() };
+				const view = { name, model: (await child.agent(context)).model, working: Boolean(childLive.value.run), stop: async () => void (await childLive.stop()) };
 				children.set(conversationId, view);
 				childLive.start(async (call) => {
 					if (call.kind !== "value" || Boolean(call.value.run) === view.working) return;
@@ -338,18 +346,26 @@ export class Threads {
 		if (registry) await watchChildren(registry.value.agents);
 		let agent = watch.value.docs["pi.agent"];
 		const { entries, earlier } = await fresh(watch.value);
-		send({ entries, ...(after === undefined ? { earlier } : {}), live: watch.value.docs["pi.live"] ?? {}, queued: queued(watch.value.docs), agent: await agentOf(conversation), ...(withSubagents ? { subagents: subagents() } : {}) });
+		const first: FollowEvent = { entries, live: watch.value.docs["pi.live"] ?? {}, queued: queued(watch.value.docs), agent: await agentOf(conversation) };
+		if (after === undefined) first.earlier = earlier;
+		if (withSubagents) first.subagents = subagents();
+		send(first);
 		watch.start(async (call) => {
 			if (call.kind !== "value") return;
 			const { entries } = await fresh(call.value);
 			const agentChanged = call.value.docs["pi.agent"] !== agent;
 			agent = call.value.docs["pi.agent"];
-			send({ ...(entries.length ? { entries } : {}), live: call.value.docs["pi.live"] ?? {}, queued: queued(call.value.docs), ...(agentChanged ? { agent: await agentOf(conversation) } : {}) });
+			const next: FollowEvent = { live: call.value.docs["pi.live"] ?? {}, queued: queued(call.value.docs) };
+			if (entries.length) next.entries = entries;
+			if (agentChanged) next.agent = await agentOf(conversation);
+			send(next);
 		});
 		registry?.start(async (call) => {
 			if (call.kind === "value" && (await watchChildren(call.value.agents))) send({ subagents: subagents() });
 		});
-		return () => Promise.all([watch.stop(), registry?.stop(), ...[...children.values()].map((c) => c.stop())]);
+		return async () => {
+			await Promise.all([watch.stop(), registry?.stop(), ...[...children.values()].map((c) => c.stop())]);
+		};
 	}
 
 	// The Sandbox goes before the commit: a crash in between leaves a listed Thread whose
