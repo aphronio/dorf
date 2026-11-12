@@ -66,10 +66,9 @@ Facts learned in one slice that a later slice must respect.
   `claude setup-token` under `script`, since the command prints only to a terminal, and writes the
   one-year token into `dorf-broker/claude`, the one Secret its Role may change; no route returns it.
   Agent code that a Thread pushed could show a link from its own sign-in instead and keep the token
-  the owner's code completes; that is accepted, like spending the plan through the broker, because
-  the owner revokes a token at claude.ai › Settings › Claude Code. Revoking one there stopped it
-  within minutes in a public report. A new `setup-token` leaves the old token live, so Settings
-  shows the connect date to find it by, and links there.
+  the owner's code completes. That is open: claude.ai's Settings showed the owner no list of
+  these tokens to revoke, so a stolen one would last its year, and a new `setup-token` leaves the
+  old token live too.
 - Subagents keep Pi's example 22 anchor: each is a conversation owned by a background anchor task,
   pointed at the Thread's Sandbox. A `subagent` call steers its message to the subagent and returns
   the answer as its result, as Pi's coding agent does; calls in one round run at once. The owner's

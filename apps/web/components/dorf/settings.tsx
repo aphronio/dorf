@@ -23,8 +23,7 @@ export function Settings() {
 }
 
 // Claude Code's own `claude setup-token`, run by the keys service: the owner signs in on claude.com and pastes the
-// code back. Each connect mints a new token and leaves the old one live, so the card links to where tokens are revoked.
-const REVOKE = "https://claude.ai/settings/claude-code"
+// code back.
 function ClaudePlan() {
   const [status, setStatus] = useState<Claude | { error: string }>()
   const [url, setUrl] = useState<string>()
@@ -69,11 +68,6 @@ function ClaudePlan() {
           </Badge>
         )}
         <div className="flex-1" />
-        {connected && !url && (
-          <a className="text-xs text-muted-foreground hover:text-foreground" href={REVOKE} target="_blank" rel="noopener noreferrer">
-            Revoke on claude.ai ↗
-          </a>
-        )}
         {ready && (
           <Button
             size="compact"
