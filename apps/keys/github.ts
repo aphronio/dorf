@@ -1,4 +1,4 @@
-import { base64, oneAtATime, Refused, sds, secret } from "./kube.ts";
+import { base64, oneAtATime, sds, secret } from "./kube.ts";
 
 // GitHub, through Dorf's GitHub App and its device flow: the owner approves a short code on github.com, and the service
 // keeps the refresh token in dorf-broker/github-login, which nothing else reads. It refreshes the 8-hour user token
@@ -6,8 +6,8 @@ import { base64, oneAtATime, Refused, sds, secret } from "./kube.ts";
 // device flow needs only the app's public client id, so no app secret or private key is kept anywhere.
 
 // Dorf's own app; a deployment may name its own instead.
-const CLIENT = process.env.DORF_GITHUB_CLIENT || "";
-const APP = process.env.DORF_GITHUB_APP || "";
+const CLIENT = process.env.DORF_GITHUB_CLIENT || "Iv23liysCcb0EV1pMrSD";
+const APP = process.env.DORF_GITHUB_APP || "dorf-agent";
 const GITHUB = "https://github.com";
 const LOGIN = "github-login";
 const CHECK_MS = 10 * 60_000;
@@ -121,10 +121,8 @@ async function refresh(): Promise<void> {
 }
 
 const check = () => void inTurn(refresh).catch((e) => console.error((e as Error).message));
-if (CLIENT) {
-	check();
-	setInterval(check, CHECK_MS);
-}
+check();
+setInterval(check, CHECK_MS);
 
 export async function status() {
 	const s = await stored();
@@ -133,12 +131,11 @@ export async function status() {
 		login: s?.login,
 		pending: flow && { code: flow.code, url: flow.url },
 		error: failed,
-		repositories: APP ? `https://github.com/apps/${APP}/installations/new` : undefined,
+		repositories: `https://github.com/apps/${APP}/installations/new`,
 	};
 }
 
 export async function start() {
-	if (!CLIENT) throw new Refused("this deployment names no GitHub App");
 	const d = await post("/login/device/code", {});
 	if (!d.device_code) throw new Error(`GitHub gave no device code (${d.error})`);
 	if (flow) flow.stopped = true;
