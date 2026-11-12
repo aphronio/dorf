@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Keep this install at the newest commit on main that passed CI. `deploy/follow.sh install <allowed_signers>`
-# runs it every 30 s from a systemd timer. It only reaches out: git and GitHub's API, nothing listens.
+# runs it every 10 s from a systemd timer. It only reaches out: git and GitHub's API, nothing listens.
 # Unsigned commits deploy only when they change what Threads may change; any other change waits for a later
 # commit signed by a key in the allowed_signers file, which lives outside the repository.
 # Each outcome is posted as a GitHub deployment, so a Thread can see what is live; it names no host.
@@ -143,10 +143,12 @@ install() {
 	EOF
 	cat >/etc/systemd/system/dorf-follow.timer <<-EOF
 		[Unit]
-		Description=Check main for a new commit every 30 s
+		Description=Check main for a new commit every 10 s
 		[Timer]
 		OnBootSec=1min
-		OnUnitInactiveSec=30s
+		OnUnitInactiveSec=10s
+		# systemd may otherwise fire up to a minute late; an idle check is one git ls-remote.
+		AccuracySec=1s
 		[Install]
 		WantedBy=timers.target
 	EOF
