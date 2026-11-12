@@ -14,6 +14,10 @@ gate=http://127.0.0.1:${port:?the gate did not forward}
 for name in $(kubectl ate get actors -a dorf -o json 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log((JSON.parse(s).actors??[]).map(a=>a.metadata.name).filter(n=>n.startsWith("p-")).join(" ")))'); do
 	node -e 'fetch(process.argv[1],{method:"DELETE",headers:{authorization:`Bearer ${require("fs").readFileSync(process.argv[2],"utf8").trim()}`}}).then(r=>process.exit(r.ok||r.status===404?0:1))' "$gate/sandboxes/$name" "$dir/token"
 done
+# A proof's repository snapshots start "p-" too.
+for name in $(kubectl ate get tags -a dorf -o json 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log((JSON.parse(s).tags??[]).map(t=>t.metadata.name).filter(n=>n.startsWith("p-")).join(" ")))'); do
+	node -e 'fetch(process.argv[1],{method:"DELETE",headers:{authorization:`Bearer ${require("fs").readFileSync(process.argv[2],"utf8").trim()}`}}).then(r=>process.exit(r.ok||r.status===404?0:1))' "$gate/snapshots/$name" "$dir/token"
+done
 # The proof is code a Thread may have written. It runs as nobody, in a network namespace whose one reachable address is
 # the gate, on a hard-linked copy of the tree without .git: it gets the agent's rights and nothing of this host's.
 cp -al . "$dir/tree" && rm -rf "$dir/tree/.git"

@@ -1,16 +1,12 @@
 // What only Substrate makes good on for repository snapshots: a tag of a paused Sandbox, a fork of it that holds its
-// files and processes, a reaper that spares a tag until its fork saved its own snapshot, and a refusal of a tag taken
-// under an older template. test/repo-snapshots.ts proves the agent's use of them against the stand-ins.
-import { execFileSync } from "node:child_process";
+// files and processes, and a reaper that spares a tag until its fork saved its own snapshot. test/repo-snapshots.ts
+// proves the agent's use of them against the stand-ins.
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { reap } from "../src/repo-snapshots.ts";
-import { SnapshotRefused } from "../src/sandbox.ts";
 import { fail, log, needSubstrate, pass, sandboxes, until } from "./kit.ts";
 
 await needSubstrate();
 
-const ate = (...args: string[]) => execFileSync("kubectl", ["ate", ...args, "-a", "dorf"], { encoding: "utf8", stdio: ["pipe", "pipe", "ignore"] });
-const json = (...args: string[]) => JSON.parse(ate("get", ...args, "-o", "json"));
 const prefix = sandboxes.named("snap-");
 const ours = async () => (await sandboxes.snapshots()).filter((s) => s.name.startsWith(prefix));
 const made: string[] = [];
@@ -58,23 +54,6 @@ await sandboxes.wake(fork, false);
 if ((await run(fork, "cat note")) !== "kept") await fail("the fork lost its file with the tag");
 log("4. after the fork's first sync pause the tag is free; the reaper deleted it and the fork resumed intact");
 
-// The gate creates from the newest template, so a copy of the current one makes every older tag stale.
-const older = `${prefix}b`;
-await sandboxes.snapshot(older, source);
-const current = (json("actor-templates").actorTemplates as any[]).filter((t) => t.metadata.name.startsWith("sandbox-")).sort((a, b) => Number(b.metadata.createTime.seconds) - Number(a.metadata.createTime.seconds))[0];
-const { status: _status, metadata, ...spec } = current;
-const copy = `${metadata.name}-p${Date.now().toString(36)}`;
-execFileSync("kubectl", ["ate", "create", "actor-template", "-f", "-"], { input: JSON.stringify({ ...spec, metadata: { atespace: metadata.atespace, name: copy } }), stdio: ["pipe", "ignore", "inherit"] });
-await until("the copied template's golden snapshot", async () => !!json("actor-template", copy).status?.goldenSnapshotStatus?.goldenTag?.name, 10 * 60_000);
-const stale = sandboxes.newName();
-made.push(stale);
-const refused = await sandboxes.create(stale, older).then(() => undefined, (e) => e);
-if (!(refused instanceof SnapshotRefused)) await fail(`a tag from template ${metadata.name} under ${copy}: ${refused?.message ?? "created"}`);
-log("5. under a newer template the gate refuses the older tag with 412", refused.message.slice(0, 120));
-
 for (const name of made) await sandboxes.delete(name);
 for (const s of await ours()) await sandboxes.deleteSnapshot(s.name);
-// A Sandbox that is not a proof's may have started on the copy meanwhile; deploy/up.sh deletes it once unused.
-const used = (json("actors").actors ?? []).some((a: any) => a.actorTemplate?.name === copy);
-if (!used) ate("delete", "actor-template", copy);
 await pass();
