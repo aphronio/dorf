@@ -4,7 +4,7 @@
 // Components never import an icon directly: they look one up by the role it
 // plays (`useIcons()["chevron-down"]`). That keeps the icon set swappable in
 // one place, so an app on another library wraps its tree in IconProvider and
-// every component follows. Lucide is the default and the only icon library
+// every component follows. Untitled UI is the default and the only icon library
 // this file depends on.
 //
 // Components read from the map rather than calling `useIcon(name)`: React
@@ -16,80 +16,7 @@
 
 import { createContext, useContext, useMemo, type ComponentType, type ReactNode } from "react";
 
-import {
-  ChevronRight,
-  ChevronDown,
-  X,
-  Copy,
-  Menu,
-  Dot,
-  Monitor,
-  Sun,
-  Moon,
-  RectangleHorizontal,
-  Circle,
-  Square,
-  SquareLibrary,
-  Clock,
-  Star,
-  Settings,
-  Plus,
-  ArrowLeft,
-  ArrowRight,
-  ArrowUp,
-  ArrowDown,
-  Search,
-  Loader,
-  Users,
-  Lock,
-  Mail,
-  Bell,
-  Shield,
-  Palette,
-  Lightbulb,
-  Rocket,
-  Heart,
-  Paintbrush,
-  Brain,
-  Globe,
-  User,
-  ImageIcon,
-  Link,
-  Check,
-  RotateCcw,
-  Play,
-  Pause,
-  Pipette,
-  Home,
-  MessageCircle,
-  Inbox,
-  Pencil,
-  Scaling,
-  SkipForward,
-  CornerDownRight,
-  CornerDownLeft,
-  PanelLeft,
-  PanelRight,
-  ChevronsUpDown,
-  Ellipsis,
-  EllipsisVertical,
-  Calendar,
-  Folder,
-  SlidersHorizontal,
-  Info,
-  CircleAlert,
-  CircleCheck,
-  CircleDashed,
-  File,
-  Minus,
-  Maximize2,
-  Minimize2,
-  GripVertical,
-  Tag,
-  Archive,
-  ArchiveRestore,
-  Trash2,
-} from "lucide-react";
+import { untitleduiIcons } from "@/lib/icons-untitledui";
 
 // The whole contract an icon has to meet. Components pass `strokeWidth` and
 // also animate stroke width through `className` (1.5 → 2 on hover is a
@@ -124,86 +51,15 @@ export type IconName =
   | "maximize" | "minimize" | "grip-vertical" | "tag"
   | "archive" | "unarchive" | "delete";
 
-export const defaultIcons: Record<IconName, IconComponent> = {
-  "chevron-right": ChevronRight,
-  "chevron-down": ChevronDown,
-  "pipette": Pipette,
-  "x": X,
-  "copy": Copy,
-  "menu": Menu,
-  "dot": Dot,
-  "monitor": Monitor,
-  "sun": Sun,
-  "moon": Moon,
-  "rectangle-horizontal": RectangleHorizontal,
-  "circle": Circle,
-  "square": Square,
-  "square-library": SquareLibrary,
-  "clock": Clock,
-  "star": Star,
-  "settings": Settings,
-  "plus": Plus,
-  "arrow-left": ArrowLeft,
-  "arrow-right": ArrowRight,
-  "arrow-up": ArrowUp,
-  "arrow-down": ArrowDown,
-  "search": Search,
-  "loader": Loader,
-  "users": Users,
-  "lock": Lock,
-  "mail": Mail,
-  "bell": Bell,
-  "shield": Shield,
-  "palette": Palette,
-  "lightbulb": Lightbulb,
-  "rocket": Rocket,
-  "heart": Heart,
-  "paintbrush": Paintbrush,
-  "brain": Brain,
-  "globe": Globe,
-  "user": User,
-  "image": ImageIcon,
-  "link": Link,
-  "check": Check,
-  "rotate-ccw": RotateCcw,
-  "play": Play,
-  "pause": Pause,
-  "home": Home,
-  "message-circle": MessageCircle,
-  "inbox": Inbox,
-  "pencil": Pencil,
-  "scaling": Scaling,
-  "skip-forward": SkipForward,
-  "corner-down-right": CornerDownRight,
-  "corner-down-left": CornerDownLeft,
-  "panel-left": PanelLeft,
-  "panel-right": PanelRight,
-  "chevrons-up-down": ChevronsUpDown,
-  "more-horizontal": Ellipsis,
-  "more-vertical": EllipsisVertical,
-  "calendar": Calendar,
-  "folder": Folder,
-  "sliders-horizontal": SlidersHorizontal,
-  "info": Info,
-  "circle-alert": CircleAlert,
-  "circle-check": CircleCheck,
-  "circle-dashed": CircleDashed,
-  "file": File,
-  "minus": Minus,
-  "maximize": Maximize2,
-  "minimize": Minimize2,
-  "grip-vertical": GripVertical,
-  tag: Tag,
-  "archive": Archive,
-  "unarchive": ArchiveRestore,
-  "delete": Trash2,
-};
+// Untitled UI, the set the app draws with. The Lucide map this kit ships with
+// was never drawn here, yet loaded with every page.
+export const defaultIcons: Record<IconName, IconComponent> = untitleduiIcons;
 
 const IconContext = createContext<Record<IconName, IconComponent> | null>(null);
 
 /**
  * Returns a single icon component for the given name.
- * Falls back to the default (Lucide) set if no provider is present, so a
+ * Falls back to the default (Untitled UI) set if no provider is present, so a
  * component works on its own before any IconProvider is set up.
  *
  * Fine for passing an icon on as a prop. To render it as `<Icon />`, take it
@@ -216,7 +72,7 @@ function useIcon(name: IconName): IconComponent {
 
 /**
  * Returns the full icon map.
- * Falls back to the default (Lucide) set if no provider is present.
+ * Falls back to the default (Untitled UI) set if no provider is present.
  */
 function useIcons(): Record<IconName, IconComponent> {
   const icons = useContext(IconContext);
@@ -225,7 +81,7 @@ function useIcons(): Record<IconName, IconComponent> {
 
 /**
  * Swap some or all icons for components from another library.
- * Names left out of `icons` keep their default (Lucide) component, so a
+ * Names left out of `icons` keep their default (Untitled UI) component, so a
  * partial map never leaves a component without an icon.
  *
  * Pass a stable `icons` object (module scope or memoized): an inline object
