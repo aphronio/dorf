@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { api, type Claude } from "@/lib/dorf"
@@ -57,37 +58,33 @@ function ClaudePlan() {
 
   const ready = status && "connected" in status
   const connected = ready ? status.connected : null
+  const day = connected && new Date(connected).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border p-4">
       <div className="flex items-center gap-3">
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium">Claude</p>
-          <p className="text-xs text-muted-foreground">
-            {status === undefined
-              ? "Checking…"
-              : !ready
-                ? status.error
-                : connected
-                  ? `Connected on ${new Date(connected).toLocaleDateString()}; Threads use it within a minute. It lasts a year.`
-                  : "Not connected. Threads on the Claude plan fail until you connect."}
-          </p>
-        </div>
-        {ready && !url && (
-          <Button size="compact" variant={connected ? "secondary" : "primary"} disabled={busy} onClick={() => void start()}>
-            {connected ? "Connect again" : "Connect"}
+        <p className="text-sm font-medium">Claude</p>
+        {status && (
+          <Badge variant="ghost" color={!ready ? "red" : connected ? "green" : "gray"} title={day || undefined}>
+            {!ready ? status.error : connected ? `Connected ${day}` : "Not connected"}
+          </Badge>
+        )}
+        <div className="flex-1" />
+        {connected && !url && (
+          <a className="text-xs text-muted-foreground hover:text-foreground" href={REVOKE} target="_blank" rel="noopener noreferrer">
+            Revoke on claude.ai ↗
+          </a>
+        )}
+        {ready && (
+          <Button
+            size="compact"
+            variant={url || connected ? "ghost" : "primary"}
+            disabled={busy}
+            onClick={() => (url ? setUrl(undefined) : void start())}
+          >
+            {url ? "Cancel" : connected ? "Connect again" : "Connect"}
           </Button>
         )}
       </div>
-      {ready && (
-        <p className="text-xs text-muted-foreground">
-          {connected && url && `Connecting again adds a new token; revoke the one from ${new Date(connected).toLocaleDateString()} afterwards. `}
-          Tokens are listed, by date, and revoked at{" "}
-          <a className="underline" href={REVOKE} target="_blank" rel="noopener noreferrer">
-            claude.ai › Settings › Claude Code
-          </a>
-          .
-        </p>
-      )}
       {url && (
         <div className="flex flex-col gap-2">
           <Button size="compact" variant="secondary" onClick={() => window.open(url, "_blank", "noopener,noreferrer")}>
