@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "lint": "eslint",
+    "lint": "eslint --cache --cache-strategy content --cache-location node_modules/.cache/eslint/",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

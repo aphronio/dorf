@@ -1,7 +1,12 @@
 {
   "private": true,
   "scripts": {
-    "check": "bun run --cwd apps/agent check && bun run --cwd apps/gate check && bun run --cwd apps/keys check && bun run --cwd apps/web typecheck && bun run --cwd apps/web lint",
+    "check": "bun run --parallel --no-exit-on-error check:agent check:gate check:keys check:web-types check:web-lint",
+    "check:agent": "bun run --cwd apps/agent check",
+    "check:gate": "bun run --cwd apps/gate check",
+    "check:keys": "bun run --cwd apps/keys check",
+    "check:web-types": "bun run --cwd apps/web typecheck",
+    "check:web-lint": "bun run --cwd apps/web lint",
     "proof": "bun run --cwd apps/agent proof"
   }
 }
