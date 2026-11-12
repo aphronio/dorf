@@ -29,7 +29,7 @@ Run these from the repository root.
 | Command | What it does | Time in a Sandbox |
 | --- | --- | --- |
 | `.agents/setup` | Installs every package from its lockfile; safe to run again | seconds |
-| `bun run check` | Types of the agent, gate and page, and the page's lint | seconds |
+| `bun run check` | Types of every app, and oxlint with the anti-slop rules in `tools/oxlint` over all of them | seconds |
 | `bun run proof` | The proofs its script in `apps/agent/package.json` names, with the faux model, against local stand-ins of the gate | under a minute |
 | `deploy/proof.sh <name>` | One file of `apps/agent/test` against a cluster running Substrate; needs `kubectl` | minutes |
 

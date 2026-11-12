@@ -10,6 +10,7 @@ import { oneAtATime, Refused, sds, secret } from "./kube.ts";
 
 const CLAUDE = createRequire(import.meta.url).resolve(`@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/claude`);
 const FLOW_MS = 10 * 60_000;
+// oxlint-disable-next-line no-control-regex -- it strips the terminal's escape codes
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\x1b[()][0-9A-Za-z]/g;
 const LINK = /https:\/\/claude\.com\/cai\/oauth\/authorize\?[^\s"'<>]+/;
 const TOKEN = /sk-ant-oat01-[\w-]{80,}(?=\s)/;

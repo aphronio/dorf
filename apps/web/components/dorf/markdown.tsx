@@ -13,6 +13,8 @@ const code = ({ className, children, ...p }: ComponentProps<"code"> & ExtraProps
   return <code className="rounded bg-surface-3 px-1 py-0.5 font-mono text-[0.9em]" {...p}>{children}</code>
 }
 
+// react-markdown passes each element's children in the spread props.
+/* oxlint-disable jsx-a11y/heading-has-content, jsx-a11y/anchor-has-content */
 const components: Components = {
   p: (p) => <p className="my-2 first:mt-0 last:mb-0" {...p} />,
   ul: (p) => <ul className="my-2 list-disc space-y-1 pl-5" {...p} />,
@@ -30,6 +32,7 @@ const components: Components = {
   th: (p) => <th className="border-b border-border px-2 py-1 font-semibold" {...p} />,
   td: (p) => <td className="border-b border-border/50 px-2 py-1 align-top" {...p} />,
 }
+/* oxlint-enable jsx-a11y/heading-has-content, jsx-a11y/anchor-has-content */
 
 // The image opens in the viewer, focused the way an attachment's thumbnail is.
 export const OPENS = "block w-full cursor-zoom-in rounded-md outline-none focus-visible:ring-1 focus-visible:ring-[color:var(--focus-ring,#6B97FF)]"

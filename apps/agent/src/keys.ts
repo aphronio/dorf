@@ -11,6 +11,7 @@ export class Keys {
 		const res = await fetch(`${this.#url}${path}`, {
 			method,
 			headers: body === undefined ? {} : { "content-type": "application/json" },
+			// oxlint-disable-next-line unicorn/no-invalid-fetch-options -- the body is undefined on every GET
 			body: body === undefined ? undefined : JSON.stringify(body),
 			signal: AbortSignal.timeout(60_000),
 		});

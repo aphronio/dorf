@@ -1,0 +1,180 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "jsPlugins": [
+    {
+      "name": "anti-slop",
+      "specifier": "./tools/oxlint/anti-slop/index.ts"
+    }
+  ],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    "oxc/no-accumulating-spread": "error",
+    "anti-slop/no-reduce-accumulator-copy": "error",
+    "anti-slop/no-chained-type-assertions": "error",
+    "anti-slop/no-module-mocking": "error",
+    "anti-slop/no-reflect-apply": "error",
+    "anti-slop/no-reflect-get": "error",
+    "anti-slop/no-unknown-type-aliases": "error",
+    "anti-slop/no-widen-then-assert": "error"
+  },
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "apps/web/.next/**",
+    "apps/web/out/**",
+    "apps/web/next-env.d.ts",
+    "tools/oxlint/anti-slop/**"
+  ],
+  "overrides": [
+    {
+      "files": [
+        "apps/web/**"
+      ],
+      "plugins": [
+        "react",
+        "nextjs",
+        "import",
+        "jsx-a11y",
+        "typescript"
+      ],
+      "rules": {
+        "react/display-name": "error",
+        "react/jsx-key": "error",
+        "react/jsx-no-comment-textnodes": "error",
+        "react/jsx-no-duplicate-props": "error",
+        "react/jsx-no-undef": "error",
+        "react/no-children-prop": "error",
+        "react/no-danger-with-children": "error",
+        "react/no-direct-mutation-state": "error",
+        "react/no-find-dom-node": "error",
+        "react/no-is-mounted": "error",
+        "react/no-render-return-value": "error",
+        "react/no-string-refs": "error",
+        "react/no-unescaped-entities": "error",
+        "react/require-render-return": "error",
+        "react/rules-of-hooks": "error",
+        "react/exhaustive-deps": "error",
+        "react/static-components": "error",
+        "react/use-memo": "error",
+        "react/preserve-manual-memoization": "error",
+        "react/incompatible-library": "error",
+        "react/immutability": "error",
+        "react/globals": "error",
+        "react/refs": "error",
+        "react/set-state-in-effect": "error",
+        "react/error-boundaries": "error",
+        "react/purity": "error",
+        "react/set-state-in-render": "error",
+        "react/unsupported-syntax": "error",
+        "nextjs/google-font-display": "error",
+        "nextjs/google-font-preconnect": "error",
+        "nextjs/next-script-for-ga": "error",
+        "nextjs/no-async-client-component": "error",
+        "nextjs/no-before-interactive-script-outside-document": "error",
+        "nextjs/no-css-tags": "error",
+        "nextjs/no-head-element": "error",
+        "nextjs/no-html-link-for-pages": "error",
+        "nextjs/no-img-element": "error",
+        "nextjs/no-page-custom-font": "error",
+        "nextjs/no-styled-jsx-in-document": "error",
+        "nextjs/no-sync-scripts": "error",
+        "nextjs/no-title-in-document-head": "error",
+        "nextjs/no-typos": "error",
+        "nextjs/no-unwanted-polyfillio": "error",
+        "nextjs/inline-script-id": "error",
+        "nextjs/no-assign-module-variable": "error",
+        "nextjs/no-document-import-in-page": "error",
+        "nextjs/no-duplicate-head": "error",
+        "nextjs/no-head-import-in-document": "error",
+        "nextjs/no-script-component-in-head": "error",
+        "import/no-anonymous-default-export": "error",
+        "jsx-a11y/alt-text": "error",
+        "jsx-a11y/aria-props": "error",
+        "jsx-a11y/aria-proptypes": "error",
+        "jsx-a11y/aria-unsupported-elements": "error",
+        "jsx-a11y/role-has-required-aria-props": "error",
+        "jsx-a11y/role-supports-aria-props": "error",
+        "no-var": "error",
+        "prefer-const": "error",
+        "prefer-rest-params": "error",
+        "prefer-spread": "error",
+        "no-unused-expressions": "error",
+        "no-unused-vars": "error",
+        "typescript/ban-ts-comment": "error",
+        "typescript/no-array-constructor": "error",
+        "typescript/no-duplicate-enum-values": "error",
+        "typescript/no-empty-object-type": "error",
+        "typescript/no-explicit-any": "error",
+        "typescript/no-extra-non-null-assertion": "error",
+        "typescript/no-misused-new": "error",
+        "typescript/no-namespace": "error",
+        "typescript/no-non-null-asserted-optional-chain": "error",
+        "typescript/no-require-imports": "error",
+        "typescript/no-this-alias": "error",
+        "typescript/no-unnecessary-type-constraint": "error",
+        "typescript/no-unsafe-declaration-merging": "error",
+        "typescript/no-unsafe-function-type": "error",
+        "typescript/no-unused-expressions": "error",
+        "typescript/no-unused-vars": "error",
+        "typescript/no-wrapper-object-types": "error",
+        "typescript/prefer-as-const": "error",
+        "typescript/prefer-namespace-keyword": "error",
+        "typescript/triple-slash-reference": "error"
+      }
+    },
+    {
+      "files": [
+        "apps/web/components/**",
+        "apps/web/hooks/**",
+        "apps/web/lib/**"
+      ],
+      "rules": {
+        "anti-slop/no-reduce-accumulator-copy": "off",
+        "anti-slop/no-chained-type-assertions": "off",
+        "anti-slop/no-module-mocking": "off",
+        "anti-slop/no-reflect-apply": "off",
+        "anti-slop/no-reflect-get": "off",
+        "anti-slop/no-unknown-type-aliases": "off",
+        "anti-slop/no-widen-then-assert": "off",
+        "oxc/no-accumulating-spread": "off",
+        "jsx-a11y/prefer-tag-over-role": "off",
+        "jsx-a11y/click-events-have-key-events": "off",
+        "jsx-a11y/heading-has-content": "off",
+        "jsx-a11y/no-static-element-interactions": "off",
+        "jsx-a11y/no-autofocus": "off",
+        "jsx-a11y/interactive-supports-focus": "off",
+        "jsx-a11y/no-noninteractive-tabindex": "off",
+        "jsx-a11y/anchor-has-content": "off",
+        "jsx-a11y/no-noninteractive-element-interactions": "off",
+        "unicorn/no-useless-fallback-in-spread": "off",
+        "unicorn/no-useless-spread": "off",
+        "react/refs": "off"
+      },
+      "plugins": [
+        "react",
+        "nextjs",
+        "import",
+        "jsx-a11y",
+        "typescript"
+      ]
+    },
+    {
+      "files": [
+        "apps/web/components/dorf/**",
+        "apps/web/lib/dorf.ts",
+        "apps/web/lib/attention.ts"
+      ],
+      "rules": {
+        "anti-slop/no-reduce-accumulator-copy": "error",
+        "anti-slop/no-chained-type-assertions": "error",
+        "anti-slop/no-module-mocking": "error",
+        "anti-slop/no-reflect-apply": "error",
+        "anti-slop/no-reflect-get": "error",
+        "anti-slop/no-unknown-type-aliases": "error",
+        "anti-slop/no-widen-then-assert": "error",
+        "oxc/no-accumulating-spread": "error"
+      }
+    }
+  ]
+}

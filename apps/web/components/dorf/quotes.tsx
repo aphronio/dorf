@@ -153,6 +153,7 @@ function CommentBox({ quote, onAdd, onCancel }: { quote: string; onAdd: (comment
     <div className="flex w-80 max-w-[calc(100vw-1rem)] flex-col gap-2 rounded-xl bg-surface-3 p-2 shadow-surface-3">
       <p className="line-clamp-2 border-l-2 border-border pl-2 text-xs text-muted-foreground">{quote}</p>
       <textarea
+        // oxlint-disable-next-line jsx-a11y/no-autofocus -- the comment box opens so the owner can type at once
         autoFocus
         rows={2}
         value={comment}

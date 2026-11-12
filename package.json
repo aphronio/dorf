@@ -1,12 +1,17 @@
 {
   "private": true,
+  "type": "module",
   "scripts": {
-    "check": "bun run --parallel --no-exit-on-error check:agent check:gate check:keys check:web-types check:web-lint",
+    "check": "bun run --parallel --no-exit-on-error check:agent check:gate check:keys check:web-types check:lint",
     "check:agent": "bun run --cwd apps/agent check",
     "check:gate": "bun run --cwd apps/gate check",
     "check:keys": "bun run --cwd apps/keys check",
     "check:web-types": "bun run --cwd apps/web typecheck",
-    "check:web-lint": "bun run --cwd apps/web lint",
-    "proof": "bun run --cwd apps/agent proof"
+    "proof": "bun run --cwd apps/agent proof",
+    "check:lint": "oxlint apps images"
+  },
+  "devDependencies": {
+    "@oxlint/plugins": "1.90.0",
+    "oxlint": "1.90.0"
   }
 }

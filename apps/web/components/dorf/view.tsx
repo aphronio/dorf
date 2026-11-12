@@ -125,6 +125,7 @@ export function View({ html }: { html: string }) {
       </button>
       {full &&
         createPortal(
+          // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- a native <dialog> would change how the view opens and stacks
           <div role="dialog" aria-modal="true" aria-label="View" className="fixed inset-0 z-50 flex flex-col bg-background">
             <div className="flex justify-end border-b border-border p-1.5">
               <button type="button" aria-label="Close" onClick={() => setFull(false)} className="rounded-md p-1 text-muted-foreground hover:bg-hover hover:text-foreground">

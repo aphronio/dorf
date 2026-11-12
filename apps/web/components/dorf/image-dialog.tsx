@@ -250,7 +250,7 @@ export function ImageDialog({ image, onClose }: { image: Viewed | undefined; onC
           className={`grid grid-cols-[100%] grid-rows-[100%] self-center place-items-center-safe overscroll-contain rounded-md touch-pan-x touch-pan-y ${zoomed ? "overflow-auto" : "overflow-hidden"}`}
         >
           {url && (
-            // eslint-disable-next-line @next/next/no-img-element -- an image from the Thread, held by the page
+            // oxlint-disable-next-line nextjs/no-img-element, jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- an image from the Thread, held by the page; a click zooms it like a pinch does
             <img
               ref={img}
               src={url}
