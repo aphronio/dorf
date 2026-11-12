@@ -1,0 +1,75 @@
+# Connects the owner's Claude plan and GitHub from the chat page, through the agent, and writes their tokens where the
+# broker (deploy/broker.yaml) and the egress gateway read them. It may change only those Secrets, and only the agent
+# may call it.
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: keys, namespace: dorf-broker}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: keys, namespace: dorf-broker}
+rules:
+- {apiGroups: [""], resources: [secrets], resourceNames: [claude, github, github-login], verbs: [get, patch]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: keys, namespace: dorf-secrets}
+rules:
+- {apiGroups: [""], resources: [secrets], resourceNames: [github], verbs: [patch]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: keys, namespace: dorf-secrets}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: keys}
+subjects:
+- {kind: ServiceAccount, name: keys, namespace: dorf-broker}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: keys, namespace: dorf-broker}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: keys}
+subjects:
+- {kind: ServiceAccount, name: keys, namespace: dorf-broker}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: keys, namespace: dorf-broker}
+spec:
+  selector: {matchLabels: {app: keys}}
+  template:
+    metadata: {labels: {app: keys}}
+    spec:
+      serviceAccountName: keys
+      securityContext: {runAsNonRoot: true, runAsUser: 1000}
+      containers:
+      - name: keys
+        image: ${KEYS_IMAGE}
+        env:
+        - {name: NODE_EXTRA_CA_CERTS, value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt}
+        - {name: DORF_GITHUB_CLIENT, value: "${DORF_GITHUB_CLIENT}"}
+        - {name: DORF_GITHUB_APP, value: "${DORF_GITHUB_APP}"}
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true}
+        volumeMounts:
+        - {name: tmp, mountPath: /tmp}
+      volumes:
+      - name: tmp
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: keys, namespace: dorf-broker}
+spec:
+  selector: {app: keys}
+  ports: [{port: 80, targetPort: 8092}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: keys, namespace: dorf-broker}
+spec:
+  podSelector: {matchLabels: {app: keys}}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: dorf-gate}}
+      podSelector: {matchLabels: {app: dorf-agent}}
+    ports: [{port: 8092}]

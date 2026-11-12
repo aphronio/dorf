@@ -1,22 +1,25 @@
-// Every call carries the caller's token to Substrate, which decides; the gate holds no rights over Sandboxes.
+// The gate holds Dorf's Substrate rights and spends them only on these routes. The agent proves itself to the gate with a
+// token for the gate's audience, which Substrate does not accept, so agent code cannot call Substrate with its own rules.
 import { readFileSync } from "node:fs";
 import http from "node:http";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
-import { type Api, connect, httpStatus } from "./ateapi.ts";
+import { type Api, connect, FAILED_PRECONDITION, httpStatus, type Method, type Reply, type Request } from "./ateapi.ts";
 
 const ATESPACE = "dorf";
 const POOL_NAMESPACE = "dorf";
 const NAME = /^[a-z0-9-]+$/;
 const ROUTER_TIMEOUT_MS = 30_000;
-const FAILED_PRECONDITION = 9;
 const COMPLETED = "SNAPSHOT_STORAGE_STATE_COMPLETED";
 const SERVICEDNS = "/run/ate/servicedns/trust-bundle.pem";
 const PODIDENTITY = "/run/ate/podidentity/credential-bundle.pem";
 const ROUTER = "atenet-router.ate-system.svc";
 const KUBE = "/var/run/secrets/kubernetes.io/serviceaccount";
-// With GitHub on, the egress gateway swaps the token from dorf-secrets/github into git's and gh's
-// Authorization header, whatever placeholder they send.
+const OWN_TOKEN = "/run/dorf/substrate/token";
+const CALLER = "system:serviceaccount:dorf-gate:dorf-agent";
+const REVIEW_MS = 60_000;
+// The egress gateway swaps the token from dorf-secrets/github into git's and gh's Authorization header, whatever
+// placeholder they send.
 const GITHUB = {
 	https: {
 		hostnames: ["github.com", "api.github.com", "uploads.github.com"],
@@ -26,7 +29,7 @@ const GITHUB = {
 const EGRESS = [
 	{ tlsPassthrough: { hostnames: ["*"], ports: { all: {} } } },
 	{ http: { hostnames: ["*"] } },
-	...(process.env.DORF_GITHUB ? [GITHUB] : []),
+	GITHUB,
 ];
 
 const api: Api = connect("api.ate-system.svc:443", readFileSync(SERVICEDNS), "api.ate-system.svc");
@@ -41,30 +44,43 @@ class HttpError extends Error {
 }
 
 // `refused` answers a FailedPrecondition with its own status instead of 409.
-async function call(method: string, request: object, token: string, refused?: number): Promise<any> {
-	return api(method, request, token).catch((e) => {
+async function call<M extends Method>(method: M, request: Request<M>, refused?: number): Promise<Reply<M>> {
+	return api(method, request, readFileSync(OWN_TOKEN, "utf8").trim()).catch((e) => {
 		throw new HttpError(refused && e.code === FAILED_PRECONDITION ? refused : httpStatus(e), `${method}: ${e.details ?? e.message}`);
 	});
 }
 
-async function listAll(method: string, key: string, token: string): Promise<any[]> {
-	const items: any[] = [];
+// Every page of a list, which Substrate answers a page at a time.
+async function listAll<M extends "ListTags" | "ListActors", T>(method: M, items: (reply: Reply<M>) => T[] | undefined): Promise<T[]> {
+	const all: T[] = [];
 	let pageToken = "";
 	do {
-		const page = await call(method, { atespace: ATESPACE, options: { pageToken } }, token);
-		items.push(...(page[key] ?? []));
+		const page = await call(method, { atespace: ATESPACE, options: { pageToken } });
+		all.push(...(items(page) ?? []));
 		pageToken = page.nextPageToken ?? "";
 	} while (pageToken);
-	return items;
+	return all;
 }
 
-function bearer(req: http.IncomingMessage): string {
+const admitted = new Map<string, number>();
+
+async function admit(req: http.IncomingMessage): Promise<void> {
 	const token = req.headers.authorization?.match(/^Bearer (\S+)$/)?.[1];
 	if (!token) throw new HttpError(401, "bearer token required");
-	return token;
+	if ((admitted.get(token) ?? 0) > Date.now()) return;
+	const res = await fetch("https://kubernetes.default.svc/apis/authentication.k8s.io/v1/tokenreviews", {
+		method: "POST",
+		headers: { authorization: `Bearer ${readFileSync(`${KUBE}/token`, "utf8")}`, "content-type": "application/json" },
+		body: JSON.stringify({ apiVersion: "authentication.k8s.io/v1", kind: "TokenReview", spec: { token, audiences: ["dorf-gate"] } }),
+	});
+	if (!res.ok) throw new HttpError(502, `token review: ${res.status}`);
+	const { status } = (await res.json()) as { status?: { authenticated?: boolean; user?: { username?: string } } };
+	if (!status?.authenticated || status.user?.username !== CALLER) throw new HttpError(403, "only Dorf's agent may use the gate");
+	for (const [t, until] of admitted) if (until <= Date.now()) admitted.delete(t);
+	admitted.set(token, Date.now() + REVIEW_MS);
 }
 
-function currentPodCertificate(): { key?: string; cert?: string } {
+function currentPodCertificate() {
 	const bundle = readFileSync(PODIDENTITY, "utf8");
 	return {
 		key: bundle.match(/-----BEGIN [A-Z ]*PRIVATE KEY-----[^-]+-----END [A-Z ]*PRIVATE KEY-----/)?.[0],
@@ -95,7 +111,8 @@ function routerTunnel(name: string): Promise<tls.TLSSocket> {
 }
 
 async function forwardUpgradeToSandbox(req: http.IncomingMessage, client: Duplex, head: Buffer, name: string) {
-	await call("ResumeActor", { actor: ref(name) }, bearer(req));
+	await admit(req);
+	await call("ResumeActor", { actor: ref(name) });
 	const tunnel = await routerTunnel(name);
 	const headers = Object.entries(req.headers).filter(([k]) => k !== "authorization" && k !== "host");
 	tunnel.write(`GET /pienv HTTP/1.1\r\nHost: ${name}\r\n${headers.map(([k, v]) => `${k}: ${v}\r\n`).join("")}\r\n`);
@@ -113,11 +130,11 @@ function sandboxState(actorState: string): string {
 	return actorState === "ACTOR_STATE_SUSPENDED" ? "paused" : actorState.replace(/^ACTOR_STATE_/, "").toLowerCase();
 }
 
-async function newestTemplate(token: string): Promise<string> {
-	const { actorTemplates = [] } = await call("ListActorTemplates", { atespace: ATESPACE }, token);
+async function newestTemplate(): Promise<string> {
+	const { actorTemplates = [] } = await call("ListActorTemplates", { atespace: ATESPACE });
 	const newest = actorTemplates
-		.filter((t: any) => t.metadata.name.startsWith("sandbox-"))
-		.sort((a: any, b: any) => Number(b.metadata.createTime.seconds) - Number(a.metadata.createTime.seconds))[0];
+		.filter((t) => t.metadata.name.startsWith("sandbox-"))
+		.sort((a, b) => Number(b.metadata.createTime.seconds) - Number(a.metadata.createTime.seconds))[0];
 	if (!newest) throw new HttpError(409, "no Sandbox template; run deploy/up.sh");
 	return newest.metadata.name;
 }
@@ -133,41 +150,39 @@ async function leavingPods(): Promise<Set<string>> {
 
 // A snapshot is borrowed while a Sandbox made from it has not yet saved its own: that Sandbox's newest finished
 // snapshot is still the tag's. Deleting the tag then would lose the Sandbox.
-async function snapshots(token: string): Promise<{ name: string; ready: boolean; borrowed: boolean }[]> {
-	const [tags, actors] = await Promise.all([listAll("ListTags", "tags", token), listAll("ListActors", "actors", token)]);
+async function snapshots(): Promise<{ name: string; ready: boolean; borrowed: boolean }[]> {
+	const [tags, actors] = await Promise.all([listAll("ListTags", (r) => r.tags), listAll("ListActors", (r) => r.actors)]);
 	const borrowed = new Set<string>();
 	for (const actor of actors) {
-		const newest = (actor.status?.snapshots ?? [])
-			.filter((s: any) => s.durableSnapshot?.state === COMPLETED)
-			.sort((a: any, b: any) => b.generation - a.generation)[0];
-		const uri = newest?.durableSnapshot.object?.snapshotUri;
+		const newest = (actor.status.snapshots ?? []).filter((s) => s.durableSnapshot?.state === COMPLETED).sort((a, b) => Number(b.generation) - Number(a.generation))[0];
+		const uri = newest?.durableSnapshot?.object?.snapshotUri;
 		if (newest?.owner === "SNAPSHOT_OWNER_TAG" && uri) borrowed.add(uri);
 	}
-	return tags.map((tag: any) => {
+	return tags.map((tag) => {
 		const durable = tag.status?.snapshot?.durableSnapshot;
 		const uri = durable?.object?.snapshotUri;
-		return { name: tag.metadata.name, ready: durable?.state === COMPLETED && !tag.metadata.deleteTime, borrowed: Boolean(uri) && borrowed.has(uri) };
+		return { name: tag.metadata.name, ready: durable?.state === COMPLETED && !tag.metadata.deleteTime, borrowed: uri !== undefined && borrowed.has(uri) };
 	});
 }
 
 async function route(req: http.IncomingMessage): Promise<[number, unknown]> {
-	const token = bearer(req);
+	await admit(req);
 	const [, root, name, action] = new URL(req.url ?? "/", "http://x").pathname.split("/");
 	if (root === "draining" && req.method === "GET") {
-		const { actors = [] } = await call("ListActors", { atespace: ATESPACE }, token);
+		const { actors = [] } = await call("ListActors", { atespace: ATESPACE });
 		const leaving = await leavingPods();
-		return [200, actors.filter((a: any) => a.status.state === "ACTOR_STATE_RUNNING" && leaving.has(a.status.workerAssignment?.workerPod)).map((a: any) => a.metadata.name)];
+		return [200, actors.filter((a) => a.status.state === "ACTOR_STATE_RUNNING" && leaving.has(a.status.workerAssignment?.workerPod ?? "")).map((a) => a.metadata.name)];
 	}
 	const from = new URL(req.url ?? "/", "http://x").searchParams.get("from");
 	if (from !== null && !NAME.test(from)) return [400, { error: "from must name a Sandbox or snapshot" }];
-	if (root === "snapshots" && req.method === "GET" && name === undefined) return [200, await snapshots(token)];
+	if (root === "snapshots" && req.method === "GET" && name === undefined) return [200, await snapshots()];
 	if (root === "snapshots" && NAME.test(name ?? "") && action === undefined) {
 		if (req.method === "POST" && from) {
-			await call("CreateTag", { tag: { metadata: ref(name), scope: "TAG_SCOPE_ATESPACE", sourceActor: ref(from) } }, token);
+			await call("CreateTag", { tag: { metadata: ref(name), scope: "TAG_SCOPE_ATESPACE", sourceActor: ref(from) } });
 			return [201, {}];
 		}
 		if (req.method === "DELETE") {
-			await call("DeleteTag", { tag: ref(name) }, token);
+			await call("DeleteTag", { tag: ref(name) });
 			return [204, null];
 		}
 		return [405, { error: "method not allowed" }];
@@ -177,24 +192,26 @@ async function route(req: http.IncomingMessage): Promise<[number, unknown]> {
 	switch (`${req.method} ${action ?? ""}`) {
 		// 412: Substrate refused the snapshot, as one taken under another template or being deleted.
 		case "POST ": {
-			const actorTemplate = ref(await newestTemplate(token));
-			await call("CreateActor", { actor: { metadata: ref(name), actorTemplate, ...(from ? { sourceTag: ref(from) } : {}) } }, token, 412);
-			await call("CreateActorEgressPolicy", { actor: ref(name), egressPolicy: { metadata: ref("default"), rules: EGRESS } }, token);
+			const actorTemplate = ref(await newestTemplate());
+			const actor: Request<"CreateActor">["actor"] = { metadata: ref(name), actorTemplate };
+			if (from) actor.sourceTag = ref(from);
+			await call("CreateActor", { actor }, 412);
+			await call("CreateActorEgressPolicy", { actor: ref(name), egressPolicy: { metadata: ref("default"), rules: EGRESS } });
 			return [201, {}];
 		}
 		case "GET ":
-			return [200, { state: sandboxState((await call("GetActor", { actor: ref(name) }, token)).status.state) }];
+			return [200, { state: sandboxState((await call("GetActor", { actor: ref(name) })).status.state) }];
 		// 503: no worker has room until a Sandbox pauses.
 		case "POST resume":
-			await call("ResumeActor", { actor: ref(name) }, token);
+			await call("ResumeActor", { actor: ref(name) });
 			return [204, null];
 		case "POST suspend": {
 			const mode = new URL(req.url ?? "/", "http://x").searchParams.get("mode") === "sync" ? "DURABILITY_MODE_SYNCHRONOUS" : "DURABILITY_MODE_ASYNCHRONOUS";
-			await call("SuspendActor", { actor: ref(name), options: { mode } }, token);
+			await call("SuspendActor", { actor: ref(name), options: { mode } });
 			return [204, null];
 		}
 		case "DELETE ":
-			await call("DeleteActor", { actor: ref(name) }, token);
+			await call("DeleteActor", { actor: ref(name) });
 			return [204, null];
 	}
 	return [405, { error: "method not allowed" }];

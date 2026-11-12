@@ -2,6 +2,7 @@ import { useMemo, type ComponentProps } from "react"
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { Code } from "@/components/dorf/code"
+import { Mermaid } from "@/components/dorf/mermaid"
 import type { Picture } from "@/components/dorf/image-dialog"
 import { View, ViewPending } from "@/components/dorf/view"
 
@@ -12,6 +13,8 @@ const code = ({ className, children, ...p }: ComponentProps<"code"> & ExtraProps
   return <code className="rounded bg-surface-3 px-1 py-0.5 font-mono text-[0.9em]" {...p}>{children}</code>
 }
 
+// react-markdown passes each element's children in the spread props.
+/* oxlint-disable jsx-a11y/heading-has-content, jsx-a11y/anchor-has-content */
 const components: Components = {
   p: (p) => <p className="my-2 first:mt-0 last:mb-0" {...p} />,
   ul: (p) => <ul className="my-2 list-disc space-y-1 pl-5" {...p} />,
@@ -29,6 +32,7 @@ const components: Components = {
   th: (p) => <th className="border-b border-border px-2 py-1 font-semibold" {...p} />,
   td: (p) => <td className="border-b border-border/50 px-2 py-1 align-top" {...p} />,
 }
+/* oxlint-enable jsx-a11y/heading-has-content, jsx-a11y/anchor-has-content */
 
 // The image opens in the viewer, focused the way an attachment's thumbnail is.
 export const OPENS = "block w-full cursor-zoom-in rounded-md outline-none focus-visible:ring-1 focus-visible:ring-[color:var(--focus-ring,#6B97FF)]"
@@ -38,6 +42,7 @@ export const OPENS = "block w-full cursor-zoom-in rounded-md outline-none focus-
 // opens the image in the viewer.
 export function Markdown({ children, images, onImageOpen }: { children: string; images?: Map<string, string>; onImageOpen?: (image: Picture) => void }) {
   const img: Components["img"] = ({ src, alt }) => {
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- React types an img's src as string or Blob; hast only produces strings
     const path = typeof src === "string" ? src : ""
     const seen = images?.get(path) ?? images?.get(path.split("/").pop() ?? "")
     if (!seen) return <span className="text-muted-foreground">[{alt || path}]</span>
@@ -52,15 +57,20 @@ export function Markdown({ children, images, onImageOpen }: { children: string; 
       </span>
     )
   }
-  // A `view` block becomes a sandboxed frame once its closing fence arrives; until then it is still streaming. The
-  // component stays the same while the text does, so React keeps each frame and its state.
+  // A `view` block becomes a sandboxed frame, and a `mermaid` block a diagram, once its closing fence arrives; until
+  // then it is still streaming. The component stays the same while the text does, so React keeps each frame and its
+  // state.
   const view = useMemo(
     () =>
       function ViewOrCode(p: ComponentProps<"code"> & ExtraProps) {
-        if (!/\blanguage-view\b/.test(p.className ?? "")) return code(p)
+        const lang = /\blanguage-(view|mermaid)\b/.exec(p.className ?? "")?.[1]
+        if (!lang) return code(p)
         const at = p.node?.position
         const raw = at ? children.slice(at.start.offset, at.end.offset) : ""
-        return /\n[ \t]*(`{3,}|~{3,})[ \t]*$/.test(raw) ? <View html={String(p.children ?? "")} /> : <ViewPending />
+        const closed = /\n[ \t]*(`{3,}|~{3,})[ \t]*$/.test(raw)
+        const text = String(p.children ?? "")
+        if (lang === "mermaid") return closed ? <Mermaid code={text.replace(/\n$/, "")} /> : code(p)
+        return closed ? <View html={text} /> : <ViewPending />
       },
     [children],
   )

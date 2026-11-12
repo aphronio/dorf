@@ -1,17 +1,22 @@
 import { posix } from "node:path";
 import { defineExtension, section } from "@earendil-works/pi-durable";
+import { compile, str } from "@earendil-works/pi-schema";
 import { parse } from "yaml";
 import { ancestors } from "./context-files.ts";
 
 type Skill = { name: string; description: string; location: string };
+const isText = compile(str()).check;
+
+type FrontMatter = { name?: string; description?: string; disabled?: boolean };
 
 // A SKILL.md's front matter, parsed as Pi's coding agent parses it; a file without one has none.
-function frontMatter(text: string): Record<string, unknown> {
+function frontMatter(text: string): FrontMatter {
 	const normalized = text.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
 	const end = normalized.startsWith("---") ? normalized.indexOf("\n---", 3) : -1;
 	if (end === -1) return {};
 	try {
-		return parse(normalized.slice(4, end)) ?? {};
+		const { name, description, "disable-model-invocation": disabled } = parse(normalized.slice(4, end)) ?? {};
+		return { name: isText(name) ? name : undefined, description: isText(description) ? description : undefined, disabled: disabled === true };
 	} catch {
 		return {};
 	}
@@ -38,8 +43,8 @@ export const Skills = defineExtension({
 							const location = posix.join(root, dirName, "SKILL.md");
 							const read = await env.readTextFile(location, context);
 							const front = read.ok ? frontMatter(read.value) : {};
-							if (typeof front.description !== "string" || !front.description.trim() || front["disable-model-invocation"] === true) return undefined;
-							return { name: typeof front.name === "string" && front.name ? front.name : dirName, description: front.description, location };
+							if (!front.description?.trim() || front.disabled) return undefined;
+							return { name: front.name || dirName, description: front.description, location };
 						}),
 					);
 				}),

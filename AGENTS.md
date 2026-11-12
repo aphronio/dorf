@@ -29,7 +29,7 @@ Run these from the repository root.
 | Command | What it does | Time in a Sandbox |
 | --- | --- | --- |
 | `.agents/setup` | Installs every package from its lockfile; safe to run again | seconds |
-| `bun run check` | Types of the agent, gate and page, and the page's lint | seconds |
+| `bun run check` | Types of every app, and oxlint with the anti-slop rules in `tools/oxlint` over all of them | seconds |
 | `bun run proof` | The proofs its script in `apps/agent/package.json` names, with the faux model, against local stand-ins of the gate | under a minute |
 | `deploy/proof.sh <name>` | One file of `apps/agent/test` against a cluster running Substrate; needs `kubectl` | minutes |
 
@@ -46,7 +46,7 @@ the cluster. Run `bun run check` and `bun run proof` as you work.
 ## Ship
 
 - Commit with the Sandbox's git identity, in Conventional Commits whose subject states the impact.
-- When the change touches only `apps/agent`, `apps/web` or `docs`, and check and proof pass, push
+- When the change touches only `apps/agent`, `apps/web`, `docs` or `.agents/skills`, and check and proof pass, push
   to `main` and follow its CI run with `gh run watch`. If CI fails, fix it forward at once. Main
   deploys on its own a minute or two after CI passes; the newest of
   `gh api repos/{owner}/{repo}/deployments` and its statuses say whether your commit is live, held or

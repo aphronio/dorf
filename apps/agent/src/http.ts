@@ -2,30 +2,32 @@ import { readFile } from "node:fs/promises";
 import http from "node:http";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ImageContent } from "@earendil-works/pi-ai";
+import type { ImageContent, JsonObject, JsonValue } from "@earendil-works/pi-ai";
 import type { ConversationId, EntryId, UserInput } from "@earendil-works/pi-durable";
 import type { ImageProcessor } from "@earendil-works/pi-durable/tools";
-import { type ClaudeLogin, LoginError } from "./claude-login.ts";
+import { arr, compile, int, map, obj, opt, str, unknown } from "@earendil-works/pi-schema";
 import type { GitHub } from "./github.ts";
+import type { Keys } from "./keys.ts";
 import { prepareImages } from "./images.ts";
 import type { Catalog } from "./models.ts";
-import { Starting, type Threads } from "./threads.ts";
+import { MAX_QUOTE_LENGTH, MAX_QUOTES, type Quote, Quoted, quotedText } from "./quotes.ts";
+import { Starting, type Stop, type Threads } from "./threads.ts";
 
 type Reply = [status: number, body: unknown];
 
 // The page's static export, copied in by the image build (apps/web).
 const WEB = fileURLToPath(new URL("../web/", import.meta.url));
-const API = new Set(["threads", "repos", "claude", "models"]);
-const TYPES: Record<string, string> = {
-	".html": "text/html; charset=utf-8",
-	".txt": "text/plain; charset=utf-8",
-	".js": "text/javascript",
-	".css": "text/css",
-	".woff2": "font/woff2",
-	".ico": "image/x-icon",
-	".svg": "image/svg+xml",
-	".png": "image/png",
-};
+const API = new Set(["threads", "repos", "models", "claude", "github"]);
+const TYPES = new Map([
+	[".html", "text/html; charset=utf-8"],
+	[".txt", "text/plain; charset=utf-8"],
+	[".js", "text/javascript"],
+	[".css", "text/css"],
+	[".woff2", "font/woff2"],
+	[".ico", "image/x-icon"],
+	[".svg", "image/svg+xml"],
+	[".png", "image/png"],
+]);
 const MAX_BODY = 1 << 20;
 // A message may carry images: their base64 within prepareImages' total, before it shrinks them.
 const MAX_MESSAGE_BODY = 16 << 20;
@@ -43,8 +45,15 @@ class BadRequest extends Error {
 	}
 }
 
+const isObject = compile(map(unknown())).check;
+const isText = compile(str()).check;
+const isTextList = compile(arr(str())).check;
+const isQuoteList = compile(arr(unknown(), { maxItems: MAX_QUOTES })).check;
+const isQuoteFields = compile(obj({ entry: opt(unknown()), text: opt(unknown()), comment: opt(unknown()) }, { open: true })).check;
+const isEntryId = compile(int({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })).check;
+
 // A body past the limit is still read to its end, so the browser gets the answer instead of a reset connection.
-async function json(req: http.IncomingMessage, limit = MAX_BODY): Promise<Record<string, unknown>> {
+async function json(req: http.IncomingMessage, limit = MAX_BODY): Promise<JsonObject> {
 	const tooLarge = new BadRequest(`body larger than ${limit >> 20} MiB`, 413);
 	if (Number(req.headers["content-length"]) > limit) throw tooLarge;
 	const chunks: Buffer[] = [];
@@ -54,18 +63,36 @@ async function json(req: http.IncomingMessage, limit = MAX_BODY): Promise<Record
 		if (size <= limit) chunks.push(chunk);
 	}
 	if (size > limit) throw tooLarge;
+	let body: JsonValue;
 	try {
-		return size ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
+		body = size ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
 	} catch {
 		throw new BadRequest("body is not JSON");
 	}
+	if (!isObject(body)) throw new BadRequest("body is not JSON");
+	return body;
 }
 
 // The images of a message, as the page sends them: base64 strings.
-function uploads(value: unknown): string[] {
+function uploads(value: JsonValue | undefined): string[] {
 	if (value === undefined) return [];
-	if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) throw new BadRequest("images must be base64 strings");
+	if (!isTextList(value)) throw new BadRequest("images must be base64 strings");
 	return value;
+}
+
+// The quotes of a message; none when it has none.
+function quotes(value: JsonValue | undefined): Quote[] {
+	if (value === undefined) return [];
+	if (!isQuoteList(value)) throw new BadRequest(`quotes must be a list of up to ${MAX_QUOTES}`);
+	return value.map((q) => {
+		const { entry, text, comment } = isQuoteFields(q) ? q : {};
+		if (!isEntryId(entry)) throw new BadRequest("a quote's entry must be an entry id");
+		if (!isText(text) || !text.trim() || text.length > MAX_QUOTE_LENGTH) throw new BadRequest(`a quote's text must be 1 to ${MAX_QUOTE_LENGTH} characters`);
+		if (comment !== undefined && (!isText(comment) || comment.length > MAX_QUOTE_LENGTH)) throw new BadRequest(`a quote's comment must be up to ${MAX_QUOTE_LENGTH} characters`);
+		const quote: Quote = { entry, text };
+		if (comment?.trim()) quote.comment = comment.trim();
+		return quote;
+	});
 }
 
 // Text alone stays a string, as before images; with images, Pi's content blocks, the text first.
@@ -81,23 +108,14 @@ function refused(req: http.IncomingMessage, owner: string): Reply | undefined {
 	if (site && site !== "same-origin" && site !== "none") return [403, { error: "cross-site request" }];
 }
 
-async function route(threads: Threads, catalog: Catalog, claude: ClaudeLogin, github: GitHub | undefined, images: ImageProcessor, req: http.IncomingMessage): Promise<Reply> {
+async function route(threads: Threads, catalog: Catalog, github: GitHub | undefined, keys: Keys | undefined, images: ImageProcessor, req: http.IncomingMessage): Promise<Reply> {
 	const [, root, rawId, sub] = new URL(req.url ?? "/", "http://x").pathname.split("/");
 	if (root === "repos" && req.method === "GET" && !rawId) return [200, github ? await github.repos() : []];
 	if (root === "models" && req.method === "GET" && !rawId) return [200, catalog.list()];
-	if (root === "claude") {
-		switch (`${req.method} ${rawId ?? ""}`) {
-			case "GET ":
-				return [200, await claude.status()];
-			case "POST login":
-				return [200, { url: await claude.start() }];
-			case "POST code": {
-				const status = await claude.finish((await json(req)).code);
-				await catalog.refresh();
-				return [200, status];
-			}
-		}
-		return [405, { error: "method not allowed" }];
+	if ((root === "claude" || root === "github") && !keys) return [404, { error: "This deployment has no keys service." }];
+	if ((root === "claude" || root === "github") && keys && !sub) {
+		if (req.method === "GET" && !rawId) return keys.relay("GET", `/${root}`);
+		if (req.method === "POST" && (rawId === "start" || rawId === "code" || rawId === "disconnect")) return keys.relay("POST", `/${root}/${rawId}`, await json(req));
 	}
 	if (root !== "threads") return [404, { error: "not found" }];
 	const id = Number(rawId) as ConversationId;
@@ -107,11 +125,13 @@ async function route(threads: Threads, catalog: Catalog, claude: ClaudeLogin, gi
 			return [200, await threads.list()];
 		case "POST ": {
 			const { prompt = "", repo, model, thinking, images: attached, request } = await json(req, MAX_MESSAGE_BODY);
-			if (typeof prompt !== "string") return [400, { error: "prompt must be text" }];
+			if (!isText(prompt)) return [400, { error: "prompt must be text" }];
 			const list = uploads(attached);
 			if (!prompt && !list.length) return [400, { error: "prompt or images required" }];
-			if (repo !== undefined && typeof repo !== "string") return [400, { error: "repo must be owner/name" }];
-			if (request !== undefined && (typeof request !== "string" || !/^[\w-]{1,64}$/.test(request))) return [400, { error: "request must be up to 64 letters, digits, - or _" }];
+			if (repo !== undefined && !isText(repo)) return [400, { error: "repo must be owner/name" }];
+			if (request !== undefined && (!isText(request) || !/^[\w-]{1,64}$/.test(request))) return [400, { error: "request must be up to 64 letters, digits, - or _" }];
+			if (model !== undefined && !isText(model)) return [400, { error: "model must be a model id" }];
+			if (thinking !== undefined && !isText(thinking)) return [400, { error: "thinking level must be a string" }];
 			const choice = catalog.choose(model, thinking);
 			const prepared = await prepareImages(images, catalog.imageLimits(choice.model), list);
 			return [201, await threads.create(input(prompt, prepared), prompt || "Image", repo || undefined, choice, request)];
@@ -121,21 +141,25 @@ async function route(threads: Threads, catalog: Catalog, claude: ClaudeLogin, gi
 			return view ? [200, { sandbox: await threads.sandbox(id), agent: await threads.agent(id), ...view }] : [404, { error: "no such thread" }];
 		}
 		case "POST :id/messages": {
-			const { text = "", images: attached } = await json(req, MAX_MESSAGE_BODY);
-			if (typeof text !== "string") return [400, { error: "text must be text" }];
+			const { text = "", images: attached, quotes: quoting } = await json(req, MAX_MESSAGE_BODY);
+			if (!isText(text)) return [400, { error: "text must be text" }];
 			const list = uploads(attached);
-			if (!text && !list.length) return [400, { error: "text or images required" }];
+			const quoted = quotes(quoting);
+			if (!text && !list.length && !quoted.length) return [400, { error: "text, images or quotes required" }];
 			const agent = await threads.agent(id);
 			if (!agent) return [404, { error: "no such thread" }];
 			const prepared = await prepareImages(images, catalog.imageLimits(agent.model), list);
-			return (await threads.send(id, input(text, prepared))) ? [202, {}] : [404, { error: "no such thread" }];
+			// With quotes, the model reads them before the text, and the page shows them from the entry.
+			const content = input(quoted.length ? quotedText(quoted, text) : text, prepared);
+			const entry = quoted.length ? { kind: Quoted.kind, data: { text, quotes: quoted } } : undefined;
+			return (await threads.send(id, content, entry)) ? [202, {}] : [404, { error: "no such thread" }];
 		}
 		case "POST :id/thinking": {
 			const agent = await threads.agent(id);
 			if (!agent) return [404, { error: "no such thread" }];
 			if (!agent.model) return [409, { error: "the Thread has no model" }];
 			const { level } = await json(req);
-			if (typeof level !== "string") return [400, { error: "level required" }];
+			if (!isText(level)) return [400, { error: "level required" }];
 			return (await threads.think(id, catalog.thinking(agent.model, level))) ? [202, {}] : [404, { error: "no such thread" }];
 		}
 		case "POST :id/archive":
@@ -160,13 +184,13 @@ async function asset(path: string, res: http.ServerResponse): Promise<boolean> {
 	const body = await readFile(file).catch(() => undefined);
 	if (!body) return false;
 	const cache = path.startsWith("/_next/static/") ? "public, max-age=31536000, immutable" : "no-store";
-	res.writeHead(200, { ...HEADERS, "cache-control": cache, "content-type": TYPES[extname(file)] ?? "application/octet-stream" }).end(body);
+	res.writeHead(200, { ...HEADERS, "cache-control": cache, "content-type": TYPES.get(extname(file)) ?? "application/octet-stream" }).end(body);
 	return true;
 }
 
 // Server-sent events. An event with entries takes the newest one's id, which the browser's reconnect sends back as
 // Last-Event-ID; a page that opens the stream again itself sends it as `after`, since it cannot set that header.
-async function follow<E extends object>(start: (after: EntryId | undefined, emit: (event: E) => void) => Promise<(() => Promise<unknown>) | undefined>, req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
+async function follow<E extends object>(start: (after: EntryId | undefined, emit: (event: E) => void) => Promise<Stop | undefined>, req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
 	const last = Number(req.headers["last-event-id"] ?? new URL(req.url ?? "/", "http://x").searchParams.get("after"));
 	const stop = await start(Number.isSafeInteger(last) && last > 0 ? (last as EntryId) : undefined, (event) => {
 		if (!res.headersSent) res.writeHead(200, { ...HEADERS, "cache-control": "no-store, no-transform", "content-type": "text/event-stream" });
@@ -180,7 +204,7 @@ async function follow<E extends object>(start: (after: EntryId | undefined, emit
 	return true;
 }
 
-export function serve(threads: Threads, catalog: Catalog, claude: ClaudeLogin, github: GitHub | undefined, images: ImageProcessor, owner: string, port: number): http.Server {
+export function serve(threads: Threads, catalog: Catalog, github: GitHub | undefined, keys: Keys | undefined, images: ImageProcessor, owner: string, port: number): http.Server {
 	return http
 		.createServer(async (req, res) => {
 			const send = ([status, body]: Reply) =>
@@ -201,9 +225,9 @@ export function serve(threads: Threads, catalog: Catalog, claude: ClaudeLogin, g
 					if (!Number.isSafeInteger(before) || before < 1) return send([400, { error: "before must be an entry id" }]);
 					return send((await threads.earlier(id, name, before as EntryId).then((page) => page && ([200, page] as Reply))) ?? missing);
 				}
-				send(await route(threads, catalog, claude, github, images, req));
+				send(await route(threads, catalog, github, keys, images, req));
 			} catch (e) {
-				send([e instanceof BadRequest ? e.status : e instanceof Starting ? 409 : e instanceof LoginError || e instanceof RangeError ? 400 : 500, { error: (e as Error).message }]);
+				send([e instanceof BadRequest ? e.status : e instanceof Starting ? 409 : e instanceof RangeError ? 400 : 500, { error: (e as Error).message }]);
 			}
 		})
 		.listen(port, "127.0.0.1");

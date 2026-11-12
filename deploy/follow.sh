@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Keep this install at the newest commit on main that passed CI. `deploy/follow.sh install <allowed_signers>`
-# runs it every 30 s from a systemd timer. It only reaches out: git and GitHub's API, nothing listens.
+# runs it every 10 s from a systemd timer. It only reaches out: git and GitHub's API, nothing listens.
 # Unsigned commits deploy only when they change what Threads may change; any other change waits for a later
 # commit signed by a key in the allowed_signers file, which lives outside the repository.
 # Each outcome is posted as a GitHub deployment, so a Thread can see what is live; it names no host.
@@ -8,9 +8,11 @@ set -euo pipefail
 shopt -s inherit_errexit
 
 # Threads may change these; everything else (deploy/, the gate, images, CI) needs a signature. A package.json may
-# change its scripts, but a dependency changes the lockfile, so any bun.lock change needs a signature.
-SAFE='^(apps/agent/src/|apps/agent/test/|apps/agent/package\.json$|docs/|apps/web/)'
-UNSAFE='(^|/)bun\.lock$'
+# change its scripts, but a dependency changes the lockfile, so any bun.lock change needs a signature, and so does
+# a bunfig.toml or .npmrc, which could point the install elsewhere. Skills are text later Threads read; `.agents/setup`
+# is not, since a deploy runs it here.
+SAFE='^(apps/agent/src/|apps/agent/test/|apps/agent/package\.json$|docs/|apps/web/|\.agents/skills/)'
+UNSAFE='(^|/)(bun\.lock|bunfig\.toml|\.npmrc)$'
 SIGNERS=/etc/dorf/allowed_signers
 AUTH=
 EMPTY_TREE=4b825dc642cb6eb9a060e54bf8d69288fbee4904
@@ -73,7 +75,7 @@ follow() {
 	# The token Threads push with, as a header file only root can read, never on a command line.
 	local basic
 	basic=$(kubectl -n dorf-secrets get secret github -o jsonpath='{.data.basic}' 2>/dev/null | base64 -d || true)
-	if [ -n "$basic" ]; then
+	if [ -n "$basic" ] && [ "$(base64 -d <<<"$basic")" != x-access-token:none ]; then
 		AUTH=$(mktemp)
 		trap 'rm -f "$AUTH"' EXIT
 		printf 'authorization: Basic %s' "$basic" >"$AUTH"
@@ -97,7 +99,7 @@ follow() {
 		record "$tip" failure "held: main no longer contains the live commit"
 		return 0
 	fi
-	signed=$(git log --topo-order --format='%H %G?' "$tip" | awk '$2 == "G" && !found { print $1; found = 1 }')
+	signed=$(git log --first-parent --format='%H %G?' "$tip" | awk '$2 == "G" && !found { print $1; found = 1 }')
 	changed=$(git diff --name-only "${signed:-$EMPTY_TREE}" "$tip")
 	unsafe=$({ grep -Ev "$SAFE" <<<"$changed" || true; grep -E "$UNSAFE" <<<"$changed" || true; } | grep . || true)
 	if [ -n "$unsafe" ]; then
@@ -141,10 +143,12 @@ install() {
 	EOF
 	cat >/etc/systemd/system/dorf-follow.timer <<-EOF
 		[Unit]
-		Description=Check main for a new commit every 30 s
+		Description=Check main for a new commit every 10 s
 		[Timer]
 		OnBootSec=1min
-		OnUnitInactiveSec=30s
+		OnUnitInactiveSec=10s
+		# systemd may otherwise fire up to a minute late; an idle check is one git ls-remote.
+		AccuracySec=1s
 		[Install]
 		WantedBy=timers.target
 	EOF

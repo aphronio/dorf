@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { deleteSession, type EffortLevel, getSessionInfo, type ModelInfo, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { Api, AssistantMessage, ImageContent, Message, Model, SimpleStreamOptions, TextContent, ToolResultMessage, TranscriptContext } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, ImageContent, JsonValue, Message, Model, SimpleStreamOptions, TextContent, Tool, ToolResultMessage, TranscriptContext } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, createProvider } from "@earendil-works/pi-ai/models";
 import { type AssistantMessageEventStream, createAssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
@@ -24,22 +24,21 @@ type Group = { role: Role; hash: string; start: number; end: number };
 type Saved = { claude: string; hashes: string[] };
 type Thread = { saved?: Saved; session?: ClaudeSession; launch?: string; effort?: EffortLevel };
 
-const canonical = (v: unknown): string =>
-	Array.isArray(v)
-		? `[${v.map(canonical).join(",")}]`
-		: v !== null && typeof v === "object"
-			? `{${Object.keys(v)
-					.sort()
-					.filter((k) => (v as Record<string, unknown>)[k] !== undefined)
-					.map((k) => `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`)
-					.join(",")}}`
-			: (JSON.stringify(v) ?? "null");
-const hash = (v: unknown) => createHash("sha256").update(canonical(v)).digest("hex");
+function canonical(v: JsonValue | Tool["parameters"]): string {
+	if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- it tells JSON objects from primitives in a JsonValue
+	if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
+	return `{${Object.entries(v)
+		.sort(([a], [b]) => (a < b ? -1 : 1))
+		.flatMap(([k, field]) => (field === undefined ? [] : [`${JSON.stringify(k)}:${canonical(field)}`]))
+		.join(",")}}`;
+}
+const hash = (v: JsonValue | Tool["parameters"]) => createHash("sha256").update(canonical(v)).digest("hex");
 
-const blocks = (content: string | (TextContent | ImageContent)[]) => (typeof content === "string" ? [{ type: "text" as const, text: content }] : content);
+const blocks = (content: string | (TextContent | ImageContent)[]) => (Array.isArray(content) ? content : [{ type: "text" as const, text: content }]);
 
 // Thinking is display only and not sent back to Claude Code, so it does not count.
-function visible(m: Exclude<Message, { role: "system" }>): unknown {
+function visible(m: Exclude<Message, { role: "system" }>): JsonValue {
 	if (m.role === "assistant") return m.content.filter((c) => c.type !== "thinking").map((c) => (c.type === "toolCall" ? { id: c.id, name: c.name, arguments: c.arguments } : c.text));
 	const content = blocks(m.content).map((c) => (c.type === "text" ? c.text : { image: c.mimeType, data: hash(c.data) }));
 	return m.role === "toolResult" ? { id: m.toolCallId, name: m.toolName, isError: m.isError, content } : content;
@@ -197,9 +196,9 @@ class Reply {
 		this.#stream.push({ type: "done", reason, message: this.message });
 	}
 
-	fail(error: unknown, aborted: boolean) {
+	fail(error: Error, aborted: boolean) {
 		this.message.stopReason = aborted ? "aborted" : "error";
-		this.message.errorMessage = (error as Error).message;
+		this.message.errorMessage = error.message;
 		this.#stream.push({ type: "error", reason: this.message.stopReason, error: this.message });
 	}
 }
@@ -227,8 +226,16 @@ const effortOf = (model: Model<Api>, reasoning: SimpleStreamOptions["reasoning"]
 	return level && EFFORTS.includes(level) ? (level as EffortLevel) : undefined;
 };
 
+const NOT_CONNECTED = "Claude is not connected. Connect it under Settings.";
+const BROKER_SYNC_MS = 90_000;
+const REJECTED = "Claude rejected Dorf's connection. Connect it again under Settings.";
+
 const failure = (step: "tools" | SDKResultMessage) =>
-	step !== "tools" && (step.subtype !== "success" || step.is_error) ? `Claude Code: ${step.subtype} ${step.subtype === "success" ? step.result : step.errors.join("; ")}` : undefined;
+	step === "tools" || (step.subtype === "success" && !step.is_error)
+		? undefined
+		: step.subtype === "success" && step.result.startsWith("Failed to authenticate")
+			? REJECTED
+			: `Claude Code: ${step.subtype} ${step.subtype === "success" ? step.result : step.errors.join("; ")}`;
 
 // Claude Code keeps its own copy of each Thread, so a request sends only the groups of Pi's history it has not seen.
 export class ClaudePlan {
@@ -240,7 +247,12 @@ export class ClaudePlan {
 	#refusedUntil = 0;
 	readonly provider;
 
-	constructor(dataDir: string, executable?: string) {
+	readonly #connected: (() => Promise<string | null>) | undefined;
+
+	// `connected` says when the owner connected the plan, if they did, so a Thread fails at once instead of after Claude
+	// Code's retries of a request without a token.
+	constructor(dataDir: string, executable?: string, connected?: () => Promise<string | null>) {
+		this.#connected = connected;
 		this.#cwd = dataDir;
 		this.#records = `${dataDir}/sessions`;
 		this.#executable = executable;
@@ -322,13 +334,20 @@ export class ClaudePlan {
 		const signal = options?.signal;
 		const effort = effortOf(model, options?.reasoning);
 		if (effort) reply.message.providerThinkingLevel = effort;
-		const work =
-			Date.now() < this.#refusedUntil
-				? Promise.reject(new Error(`Claude plan requests are refused until ${new Date(this.#refusedUntil).toISOString()}: the plan's extra usage was drawn`))
-				: // Requests without tools, like Pi's compaction summaries, stand alone and leave the Thread's session alone.
-					sessionId && tools.length
-					? this.#serial(sessionId, () => this.#threadStep(model, effort, context.messages, tools, system, sessionId, reply, signal))
-					: this.#oneShot(model, effort, context.messages, system, reply, signal);
+		const work = (async () => {
+			if (Date.now() < this.#refusedUntil)
+				throw new Error(`Claude plan requests are refused until ${new Date(this.#refusedUntil).toISOString()}: the plan's extra usage was drawn`);
+			const connected = this.#connected && (await this.#connected());
+			if (connected === null) throw new Error(NOT_CONNECTED);
+			// The broker reads a new token when the kubelet next syncs its Secret, which takes up to about a minute.
+			const fresh = connected ? Date.parse(connected) + BROKER_SYNC_MS - Date.now() : 0;
+			if (fresh > 0) await new Promise((r) => (setTimeout(r, fresh), signal?.addEventListener("abort", r, { once: true })));
+			signal?.throwIfAborted();
+			// Requests without tools, like Pi's compaction summaries, stand alone and leave the Thread's session alone.
+			return sessionId && tools.length
+				? this.#serial(sessionId, () => this.#threadStep(model, effort, context.messages, tools, system, sessionId, reply, signal))
+				: this.#oneShot(model, effort, context.messages, system, reply, signal);
+		})();
 		work.catch((e) => {
 			if (e instanceof ExtraUsage) this.#refusedUntil = e.until;
 			reply.fail(e, Boolean(signal?.aborted));

@@ -5,8 +5,8 @@ import { RETRY_ROOM_MS, type Sandboxes } from "./sandbox.ts";
 import { ThreadList, type ThreadSummary } from "./thread-list.ts";
 
 export type StartInput = { sandbox: string; repo?: string; workspace: string; cwd: string; content: UserInput };
-// `plain` once the Sandbox gave up on the repository's snapshot.
-type StartState = { phase: "start"; tries?: number; plain?: true };
+// `plain` is true once the Sandbox gave up on the repository's snapshot.
+type StartState = { phase: "start"; tries?: number; plain?: boolean };
 
 // Errors other than a failed clone, such as the gate restarting, are tried again this many times.
 const TRIES = 5;
@@ -18,6 +18,7 @@ async function mark(tx: Tx, id: ConversationId, change: (thread: ThreadSummary) 
 
 // The Threads whose Sandboxes run now; set once they exist.
 type Holders = () => Promise<ConversationId[]>;
+type Hooks = { holders: Holders };
 
 // A new Thread's Sandbox, from its repository's snapshot when there is one, the clone brought to the default branch's
 // tip with its setup run, and its first message, after the Thread is committed. While no worker has room the task
@@ -26,7 +27,7 @@ type Holders = () => Promise<ConversationId[]>;
 // commit. A setup that fails or runs too long is logged and the Thread starts anyway: the agent finds out when it runs
 // its checks.
 export function threadStart(sandboxes: Sandboxes, snapshots: ReturnType<typeof repoSnapshots>) {
-	const hooks: { holders: Holders } = { holders: async () => [] };
+	const hooks: Hooks = { holders: async () => [] };
 
 	const task = defineTask<StartInput, StartState, null>({
 		name: "dorf.thread-start",
@@ -40,7 +41,7 @@ export function threadStart(sandboxes: Sandboxes, snapshots: ReturnType<typeof r
 				const checkpoint = start.state.checkpoint;
 				let failure: string | undefined;
 				let caughtUp: CatchUp | undefined;
-				let plain = checkpoint.plain;
+				let plain = checkpoint.plain === true;
 				try {
 					const snapshot = repo && !plain ? (await runtime.snapshot(RepoSnapshots, context))?.repos[repo]?.snapshot : undefined;
 					const started = await startFrom(sandboxes, sandbox, snapshot, true);
@@ -52,7 +53,7 @@ export function threadStart(sandboxes: Sandboxes, snapshots: ReturnType<typeof r
 								if (!t.waiting) t.waiting = { since: new Date().toISOString(), busy };
 								else if (t.waiting.busy.join() !== busy.join()) t.waiting.busy = busy;
 							});
-							return later({ phase: "start", ...(plain ? { plain } : {}) });
+							return later({ phase: "start", plain });
 						}, context);
 					}
 					await runtime.commit(async (tx) => void (await mark(tx, id, (t) => void delete t.waiting)), context);
@@ -66,7 +67,7 @@ export function threadStart(sandboxes: Sandboxes, snapshots: ReturnType<typeof r
 				} catch (e) {
 					const tries = (checkpoint.tries ?? 0) + 1;
 					console.error(`start Thread ${id}: ${(e as Error).message}`);
-					if (!(e instanceof CheckoutFailed) && tries < TRIES) return await runtime.commit(() => later({ phase: "start", tries, ...(plain ? { plain } : {}) }), context);
+					if (!(e instanceof CheckoutFailed) && tries < TRIES) return await runtime.commit(() => later({ phase: "start", tries, plain }), context);
 					failure = (e as Error).message;
 				}
 				const thread = (await runtime.conversation(id, context))!;
@@ -76,7 +77,7 @@ export function threadStart(sandboxes: Sandboxes, snapshots: ReturnType<typeof r
 					await mark(tx, id, (t) => {
 						delete t.starting;
 						delete t.waiting;
-						if (failure) Object.assign(t, { failure, attention: "failed" });
+						if (failure) Object.assign(t, { failure, attention: "failed", ended: "failed", endedAt: new Date().toISOString() });
 					});
 					return { status: "terminal", outcome: { status: "completed", result: null } };
 				}, context);

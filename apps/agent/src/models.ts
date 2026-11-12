@@ -2,6 +2,7 @@ import type { Models, ModelThinkingLevel, ThinkingLevel } from "@earendil-works/
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import type { ModelRef } from "@earendil-works/pi-durable";
 import { DEFAULT_IMAGE_LIMITS, type ImageLimits } from "@earendil-works/pi-durable/tools";
+import type { ThreadAgent } from "./threads.ts";
 
 export type ModelChoice = { ref: string; name: string; thinking: ThinkingLevel[]; defaultThinking: ModelThinkingLevel };
 
@@ -61,8 +62,7 @@ export class Catalog {
 
 	// A Thread's model, by an offered model's id or name, and thinking level, checked against what the model offers;
 	// unset ones take the defaults.
-	choose(ref?: unknown, thinking?: unknown): { model: ModelRef; thinkingLevel: ModelThinkingLevel } {
-		if (ref !== undefined && typeof ref !== "string") throw new RangeError("model must be a model id");
+	choose(ref?: string, thinking?: string): Required<ThreadAgent> {
 		const all = this.#offered();
 		const found = ref ? (all.find((m) => key(m.id) === key(ref)) ?? all.find((m) => key(m.name) === key(ref))) : undefined;
 		if (ref && !found) throw new RangeError(`not an offered model: ${ref}. Offered: ${this.offered()}`);
@@ -71,7 +71,7 @@ export class Catalog {
 	}
 
 	// Another model at the level nearest to the one given.
-	near(ref: string, level: ModelThinkingLevel): { model: ModelRef; thinkingLevel: ModelThinkingLevel } {
+	near(ref: string, level: ModelThinkingLevel): Required<ThreadAgent> {
 		const { model } = this.choose(ref);
 		return { model, thinkingLevel: clampThinkingLevel(this.#models.getModel(model.provider, model.modelId)!, level) };
 	}
@@ -86,11 +86,10 @@ export class Catalog {
 		};
 	}
 
-	thinking(model: ModelRef, level?: unknown): ModelThinkingLevel {
+	thinking(model: ModelRef, level?: string): ModelThinkingLevel {
 		const found = this.#models.getModel(model.provider, model.modelId);
 		if (!found) throw new RangeError(`unknown model ${model.provider}/${model.modelId}`);
 		if (level === undefined) return clampThinkingLevel(found, DEFAULT_THINKING);
-		if (typeof level !== "string") throw new RangeError("thinking level must be a string");
 		const offered = getSupportedThinkingLevels(found);
 		if (!offered.includes(level as ModelThinkingLevel)) throw new RangeError(`${found.name} does not offer thinking level ${level}`);
 		return level as ModelThinkingLevel;

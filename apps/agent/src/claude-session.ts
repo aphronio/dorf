@@ -1,9 +1,11 @@
-import { type EffortLevel, type ModelInfo, type Options, query, type Query, type SDKMessage, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { type EffortLevel, type ModelInfo, type Options, query, type Query, type SDKControlInterruptResponse, type SDKMessage, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { createRequire } from "node:module";
+import type { Tool } from "@earendil-works/pi-ai";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, type CallToolResult, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 export type UserContent = Exclude<SDKUserMessage["message"]["content"], string>[number][];
-export type ToolDeclaration = { name: string; description: string; parameters: object };
+export type ToolDeclaration = { name: string; description: string; parameters: Tool["parameters"] };
 
 export const TOOL_SERVER = "dorf";
 const MIN_VERSION = [2, 1, 248];
@@ -17,10 +19,18 @@ const ISOLATION_ENV = {
 	ENABLE_TOOL_SEARCH: "false",
 	CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1",
 	MAX_MCP_OUTPUT_TOKENS: "200000",
+	// Telemetry cannot leave the agent pod, and Claude Code waits about 5 s on it before its first request.
+	CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
 };
 // An allowlist, so no API key, token or provider switch in the agent's environment reaches Claude Code.
 const PASSED_ENV = ["PATH", "HOME", "LANG", "TERM", "TMPDIR", "USER"];
-export const claudeEnv = () => Object.fromEntries(PASSED_ENV.flatMap((k) => (process.env[k] ? [[k, process.env[k]!]] : [])));
+// Behind the broker Claude Code holds a placeholder, and the broker adds the plan's token on the way to Anthropic.
+const BROKERED = process.env.DORF_BROKER ? { ANTHROPIC_BASE_URL: process.env.DORF_BROKER, CLAUDE_CODE_OAUTH_TOKEN: "placeholder" } : {};
+const claudeEnv = () => ({ ...Object.fromEntries(PASSED_ENV.flatMap((k) => (process.env[k] ? [[k, process.env[k]!]] : []))), ...BROKERED });
+
+export function bundledClaude(): string {
+	return createRequire(import.meta.url).resolve(`@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/claude`);
+}
 
 export type SessionStart = {
 	executable?: string;
@@ -149,7 +159,7 @@ export class ClaudeSession {
 				hooks: { PreToolUse: [{ hooks: [async (i) => (i.hook_event_name === "PreToolUse" && this.pending.before(i.tool_use_id), {})] }] },
 				verbatimPrompts: true,
 				thinking: { type: "adaptive", display: "summarized" },
-				...(start.effort ? { effort: start.effort } : {}),
+				effort: start.effort,
 				includePartialMessages: true,
 				persistSession: start.persist,
 				...("resume" in start ? { resume: start.resume } : { sessionId: start.sessionId }),
@@ -168,7 +178,8 @@ export class ClaudeSession {
 			const problems = [
 				account.apiProvider !== "firstParty" && `Claude Code uses ${account.apiProvider}, not a Claude plan`,
 				account.apiKeySource && `Claude Code uses an API key (${account.apiKeySource}), not a Claude plan`,
-				!account.subscriptionType && "Claude Code is not signed in to a Claude plan; connect Claude first",
+				// A `claude setup-token` token exists only on a Claude plan, and Claude Code reports no plan for it.
+				!account.subscriptionType && account.tokenSource !== "CLAUDE_CODE_OAUTH_TOKEN" && "Claude Code is not signed in to a Claude plan",
 				!atLeast(init.claude_code_version ?? "0", MIN_VERSION) && `Claude Code ${init.claude_code_version} is older than ${MIN_VERSION.join(".")}`,
 				!offered.includes(start.model) && `Claude Code does not offer ${start.model}; it offers ${offered.join(", ")}`,
 				start.tools.length > 0 &&
@@ -257,8 +268,8 @@ export class ClaudeSession {
 		return this.#query.applyFlagSettings({ effortLevel: effort ?? null });
 	}
 
-	interrupt(): Promise<unknown> {
-		return this.#turn ? this.#query.interrupt() : Promise.resolve();
+	interrupt(): Promise<SDKControlInterruptResponse | undefined> {
+		return this.#turn ? this.#query.interrupt() : Promise.resolve(undefined);
 	}
 
 	// Interrupting first keeps a pending tool call from turning into a "declined" reply that costs a model call.

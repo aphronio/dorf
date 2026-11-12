@@ -15,11 +15,13 @@ import { Elapsed } from "@/components/dorf/elapsed"
 import { Starting } from "@/components/dorf/starting"
 import { Thinking } from "@/components/dorf/thinking"
 import { SubagentList, SubagentView } from "@/components/dorf/subagent-panel"
+import { Settings } from "@/components/dorf/settings"
 import { ThreadSidebar } from "@/components/dorf/thread-sidebar"
 import { Transcript } from "@/components/dorf/transcript"
+import { QuoteChips, useQuotes } from "@/components/dorf/quotes"
 import { ImageDialog } from "@/components/dorf/image-dialog"
 import { useIcons } from "@/lib/icon-context"
-import { api, encodeImage, IMAGE_TYPES, lastModel, MAX_IMAGES, Unreachable, type ModelChoice, modelName, newRequest, openThread, type Repo, RETRY_MS, type Thread, useHashId, useThread, useThreads } from "@/lib/dorf"
+import { api, encodeImage, IMAGE_TYPES, lastModel, MAX_IMAGES, Unreachable, type ModelChoice, modelName, newRequest, openThread, type Repo, RETRY_MS, type Thread, useHash, useThread, useThreads } from "@/lib/dorf"
 
 const NO_REPO = "none"
 const REPO_KEY = "dorf.repo"
@@ -42,12 +44,16 @@ const store = (key: string, value: string) => {
 const level = (m: ModelChoice | undefined, wanted: string | null) => (wanted && m?.thinking.includes(wanted) ? wanted : m?.defaultThinking)
 
 export default function Page() {
-  const id = useHashId()
+  const hash = useHash()
+  const settings = hash === "settings"
+  const id = Number(hash) || undefined
   const icons = useIcons()
   const [repos, setRepos] = useState<Repo[]>([])
   const [repo, setRepo] = useState(NO_REPO)
   const [draft, setDraft] = useState("")
   const [images, setImages] = useState<File[]>([])
+  // Passages quoted from replies, waiting for the next message.
+  const [quotes, setQuotes] = useQuotes(id)
   // Set while the attached images are prepared, before the message leaves.
   const [preparing, setPreparing] = useState(false)
   const [opened, setOpened] = useState<File>()
@@ -67,8 +73,9 @@ export default function Page() {
   // what the page asked it for when it was away. The streams open again by themselves.
   const [down, setDown] = useState(false)
   const [connection, setConnection] = useState(0)
-  const fail = useCallback((e: unknown) => (e instanceof Unreachable ? setDown(true) : setError((e as Error).message)), [])
-  const lost = useCallback((e: unknown) => void (e instanceof Unreachable && setDown(true)), [])
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- it takes what a catch caught, which can be anything thrown
+  const fail = useCallback((e: unknown) => (e instanceof Unreachable ? setDown(true) : setError(e instanceof Error ? e.message : String(e))), [])
+  const lost = useCallback((e: Error) => void (e instanceof Unreachable && setDown(true)), [])
 
   // The list as it changes: a Thread added, archived, deleted, starting work or ending it.
   const threads = useThreads(useCallback(() => setDown(true), []))
@@ -163,17 +170,19 @@ export default function Page() {
       }
     }
     const attached = encoded.length ? { images: encoded } : {}
+    const quoting = id !== undefined ? quotes : []
     setDraft("")
     setImages([])
+    if (quoting.length) setQuotes([])
     try {
       if (id !== undefined) {
-        await api("POST", `/threads/${id}/messages`, { text: value, ...attached })
+        await api("POST", `/threads/${id}/messages`, { text: value, ...attached, quotes: quoting.length ? quoting : undefined })
         return
       }
       store(REPO_KEY, repo)
       const chosen = repo !== NO_REPO ? repo : undefined
       setStarting({ prompt: value, images: files, repo: chosen })
-      const created = await api<Thread>("POST", "/threads", { prompt: value, ...attached, ...(chosen ? { repo: chosen } : {}), model, thinking: newLevels.length ? newLevel : undefined, request })
+      const created = await api<Thread>("POST", "/threads", { prompt: value, ...attached, repo: chosen || undefined, model, thinking: newLevels.length ? newLevel : undefined, request })
       setStarting({ prompt: value, images: files, repo: chosen, id: created.id })
       setRequest(newRequest())
       openThread(created.id)
@@ -181,6 +190,7 @@ export default function Page() {
       setStarting(undefined)
       setDraft(value)
       setImages(files)
+      if (quoting.length) setQuotes(quoting)
       fail(e)
     }
   }
@@ -236,14 +246,14 @@ export default function Page() {
 
   return (
     <SidebarProvider className="h-dvh">
-      <ThreadSidebar threads={threads} attention={attention} current={id} connection={connection} onUnarchive={(t) => void archive("unarchive", t)} onDelete={(t) => void remove(t)} />
+      <ThreadSidebar threads={threads} attention={attention} current={settings ? "settings" : id} onUnarchive={(t) => void archive("unarchive", t)} onDelete={(t) => void remove(t)} />
       <CommandPalette threads={threads} />
       <ThemeSync />
       <AttentionMark attention={attention} />
       <SidebarInset className="max-md:!m-0 max-md:!rounded-none">
         <SidebarInsetTopbar>
           <span className="min-w-0 flex-1 truncate text-sm font-medium">
-            {thread ? (thread.repo ? `${thread.repo} · ${thread.title}` : thread.title) : id === undefined ? (first ? first.prompt || "Image" : "New Thread") : ""}
+            {settings ? "Settings" : thread ? (thread.repo ? `${thread.repo} · ${thread.title}` : thread.title) : id === undefined ? (first ? first.prompt || "Image" : "New Thread") : ""}
           </span>
           {id !== undefined && (
             <>
@@ -269,7 +279,9 @@ export default function Page() {
 
         <div className="relative flex min-h-0 flex-1">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {first ? (
+        {settings ? (
+          <Settings />
+        ) : first ? (
           <Starting {...first} />
         ) : id === undefined ? (
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
@@ -279,14 +291,14 @@ export default function Page() {
         ) : openSubagent ? (
           <SubagentView thread={id} subagent={openSubagent} models={models} onBack={() => setPanel(undefined)} />
         ) : (
-          <Transcript entries={entries} live={live} queued={queued} onSubagent={setPanel} loadEarlier={loadEarlier} />
+          <Transcript entries={entries} live={live} queued={queued} onSubagent={setPanel} loadEarlier={loadEarlier} onQuote={(q) => setQuotes([...quotes, q])} />
         )}
         {id !== undefined && !first && <SubagentList subagents={subagents} open={panel} onOpen={setPanel} />}
 
         {/* A subagent's view is read-only: messages go to the Thread, so the composer waits there. */}
-        <div hidden={Boolean(openSubagent)} className="mx-auto w-full max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+        <div hidden={Boolean(openSubagent) || settings} className="mx-auto w-full max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           {down ? (
-            <p role="status" className="px-2 pb-2 text-xs text-red-600 dark:text-red-400">The agent is unreachable. Trying again every few seconds…</p>
+            <output className="block px-2 pb-2 text-xs text-red-600 dark:text-red-400">The agent is unreachable. Trying again every few seconds…</output>
           ) : (
             error && <p className="px-2 pb-2 text-xs text-red-600 dark:text-red-400">{error}</p>
           )}
@@ -302,6 +314,8 @@ export default function Page() {
               setError(`Not attached: ${files.map((f) => f.name).join(", ")}. A message takes up to ${MAX_IMAGES} PNG, JPEG, GIF or WebP images.`)
             }
             sending={preparing}
+            header={id !== undefined && <QuoteChips quotes={quotes} onChange={setQuotes} disabled={preparing} />}
+            sendable={id !== undefined && quotes.length > 0}
             onFileOpen={setOpened}
             placeholder={id === undefined ? "Describe a coding task" : "Ask or tell Dorf anything"}
             status={running ? "streaming" : "idle"}

@@ -31,7 +31,8 @@ import { ThreadSandbox } from "./thread-sandbox.ts";
 type Work = { requestId: string; message: string; waiter?: TaskId; reporter?: TaskId };
 type Subagent = { conversationId: ConversationId; reported: EntryId[]; claims?: Record<string, TaskId>; work?: Work[] };
 // A subagent's answer in the Thread: the model reads its text, the page its author.
-export const SubagentReport = defineEntry<{ name: string; failed?: true }>("dorf.subagent-report");
+type Report = { name: string; failed?: true };
+export const SubagentReport = defineEntry<Report>("dorf.subagent-report");
 // Created with its Thread, so the page can follow it from the start: a watch never creates a document.
 export const Subagents = defineDoc<{ agents: Record<string, Subagent> }>({
 	checkpointWhen: () => false,
@@ -67,11 +68,6 @@ function cap(text: string, name: string): string {
 	const head = Buffer.from(text).subarray(0, CAP - 256).toString().replace(/�$/, "");
 	return `${head}\n\n[Answer truncated: ${bytes - Buffer.byteLength(head)} bytes omitted. The whole answer is in ${name}'s transcript.]`;
 }
-
-// For the proof only: a call holds before or after its last commit until it is aborted, so a stop or a crash lands there.
-const FAULT = process.env.DORF_FAULT as "hold-before-commit" | "hold-after-commit" | undefined;
-const hold = (context: Context) =>
-	new Promise<never>((_, reject) => context.abortSignal?.addEventListener("abort", () => reject(context.abortSignal!.reason ?? new Error("aborted")), { once: true }));
 
 const own = <T>(record: Record<string, T>, key: string) => (Object.hasOwn(record, key) ? record[key] : undefined);
 const live = async (tx: Tx, id: TaskId | undefined) => {
@@ -109,7 +105,11 @@ function keep(agent: Subagent, taken: Taken, by: TaskId | undefined, requestId: 
 // submission the call made. A reporter from before waiting calls has no `requestId` and may be in `report`.
 type ReporterInput = { name: string; conversationId: ConversationId; message: string; requestId?: string };
 type ReporterState = { phase: "deliver" } | { phase: "report"; report?: string; failed?: true };
-const reportEntry = (name: string, failed?: true) => ({ kind: SubagentReport.kind, data: { name, ...(failed ? { failed } : {}) } });
+const reportEntry = (name: string, failed?: true) => {
+	const data: Report = { name };
+	if (failed) data.failed = failed;
+	return { kind: SubagentReport.kind, data };
+};
 const Reporter = defineTask<ReporterInput, ReporterState, null>({
 	name: REPORTER,
 	version: 1,
@@ -187,7 +187,12 @@ async function ownerWrites(api: { conversationId: ConversationId; watchDoc: Harn
 	}
 }
 
-const result = ({ text, isError }: { text: string; isError?: boolean }) => ({ output: [{ type: "text" as const, text }], ...(isError ? { isError } : {}) });
+type Result = { output: { type: "text"; text: string }[]; isError?: boolean };
+const result = ({ text, isError }: { text: string; isError?: boolean }) => {
+	const out: Result = { output: [{ type: "text", text }] };
+	if (isError) out.isError = isError;
+	return out;
+};
 type Target = { conversationId: ConversationId; requestId: string; message: string };
 
 export function subagents(catalog: Catalog): Extension {
@@ -246,7 +251,6 @@ export function subagents(catalog: Catalog): Extension {
 			const subagent = (await api.conversation(conversationId, callContext))!;
 			const submission = await subagent.submit({ type: "input", content: target.message, whenBusy: "steer", requestId }, callContext);
 			const woke = await Promise.race([submission.wait(callContext), ownerWrites(api, callContext)]);
-			if (FAULT === "hold-before-commit") await hold(callContext);
 			const outcome = await api.commit(async (tx) => {
 				// An answer that came with the owner's message is still this call's: the reporter defers to a waiting call.
 				const record = woke ?? (await tx.submissionByRequest(conversationId, requestId));
@@ -265,7 +269,6 @@ export function subagents(catalog: Catalog): Extension {
 				keep(agent, taken, api.taskId, requestId);
 				return result(taken);
 			}, callContext);
-			if (FAULT === "hold-after-commit") await hold(callContext);
 			return outcome;
 		},
 	});

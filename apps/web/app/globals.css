@@ -1001,3 +1001,16 @@ body {
   height: 100%;
   overflow: hidden;
 }
+/* Mermaid diagrams drawn by Pele take the page's colors and font, so they follow the theme. */
+.dorf-mermaid {
+  --pele-bg: transparent;
+  --pele-fg: var(--foreground);
+  --pele-muted: var(--muted-foreground);
+  --pele-line: var(--muted-foreground);
+  --pele-surface: var(--surface-2);
+  --pele-surface-alt: var(--surface-3);
+  --pele-border: var(--border);
+  --pele-accent: var(--fluid-accent);
+  --pele-font: inherit;
+  --pele-font-mono: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}

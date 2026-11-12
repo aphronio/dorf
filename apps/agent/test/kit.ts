@@ -72,9 +72,16 @@ export async function fail(message: string): Promise<never> {
 
 // On stand-ins the workspace is /proc/self/cwd: each Sandbox's pi-env starts in that Sandbox's own folder, and
 // every command it runs resolves the path there, so files stay apart with no change to the agent or the gate.
-export async function startAgent(model = "faux", idleMs = IDLE_MS, env: Record<string, string> = {}): Promise<void> {
+// `slowCatchUpMs` replaces the deployed 10 s after which a Thread's catch-up builds a newer repository snapshot.
+export async function startAgent(model = "faux", idleMs = IDLE_MS, slowCatchUpMs?: number): Promise<void> {
+	const env: NodeJS.ProcessEnv = { ...process.env, DORF_MODEL: model, DORF_DATA: DATA, DORF_PORT: String(PORT), DORF_IDLE_MS: String(idleMs), DORF_OWNER: OWNER, DORF_GATE: GATE, DORF_TOKEN_FILE: TOKEN, DORF_SANDBOX_PREFIX: PREFIX };
+	if (slowCatchUpMs !== undefined) env.DORF_SLOW_CATCH_UP_MS = String(slowCatchUpMs);
+	if (!substrate) {
+		env.DORF_WORKSPACE = "/proc/self/cwd";
+		env.DORF_JOBS = join(DATA, "jobs");
+	}
 	agent = spawn("node", [new URL("../src/main.ts", import.meta.url).pathname], {
-		env: { ...process.env, DORF_MODEL: model, DORF_DATA: DATA, DORF_PORT: String(PORT), DORF_IDLE_MS: String(idleMs), DORF_OWNER: OWNER, DORF_GATE: GATE, DORF_TOKEN_FILE: TOKEN, DORF_SANDBOX_PREFIX: PREFIX, ...env, ...(substrate ? {} : { DORF_WORKSPACE: "/proc/self/cwd", DORF_JOBS: join(DATA, "jobs") }) },
+		env,
 		stdio: ["ignore", "inherit", "inherit"],
 	});
 	await until("agent up", async () => (await fetch(`http://127.0.0.1:${PORT}/threads`, { headers: HEADERS }).catch(() => undefined))?.ok);
@@ -85,10 +92,12 @@ export async function startAgent(model = "faux", idleMs = IDLE_MS, env: Record<s
 // `.agents/setup` if given, committed to a bare repository. `commit` adds a commit there.
 const REPOS = join(DATA, "repos");
 if (!substrate) Object.assign(process.env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: `url.${REPOS}/.insteadOf`, GIT_CONFIG_VALUE_0: "https://github.com/" });
-export function repository(name: string, files: Record<string, string>): { repo: string; commit: (files: Record<string, string>, message: string) => string } {
+type Files = Record<string, string>;
+export type TestRepository = { repo: string; commit: (files: Files, message: string) => string };
+export function repository(name: string, files: Files): TestRepository {
 	const dir = join(REPOS, "work", name);
 	const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=proof", "-c", "user.email=proof@example.com", ...args], { cwd: dir, encoding: "utf8" }).trim();
-	const commit = (changes: Record<string, string>, message: string) => {
+	const commit = (changes: Files, message: string) => {
 		for (const [path, text] of Object.entries(changes)) {
 			mkdirSync(join(dir, path, ".."), { recursive: true });
 			writeFileSync(join(dir, path), text);
@@ -119,12 +128,16 @@ export async function until<T>(what: string, check: () => Promise<T | undefined 
 	while (Date.now() < end) {
 		const value = await check();
 		if (value) return value;
-		await new Promise((r) => setTimeout(r, 250));
+		await new Promise((r) => setTimeout(r, 50));
 	}
 	return await fail(`timed out waiting for ${what}`);
 }
 
-export async function call(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
+// A request body as proofs send it, malformed ones included; JSON.stringify drops undefined fields.
+type JsonValue = string | number | boolean | null | undefined | readonly JsonValue[] | { [field: string]: JsonValue };
+export type Body = { [field: string]: JsonValue };
+
+export async function call(method: string, path: string, body?: Body): Promise<{ status: number; json: any }> {
 	const res = await fetch(`http://127.0.0.1:${PORT}${path}`, { method, headers: HEADERS, body: body === undefined ? undefined : JSON.stringify(body) });
 	const text = await res.text();
 	return { status: res.status, json: text ? JSON.parse(text) : undefined };
@@ -140,7 +153,7 @@ export async function createThread(prompt: string, repo?: string, choice?: { mod
 type Content = { type: string; text?: string };
 type Entry = { kind: string; model?: { role: string; isError?: boolean; content?: Content[] | string }[] };
 const text = (e: Entry) =>
-	(e.model ?? []).flatMap((m) => (typeof m.content === "string" ? [{ type: "text", text: m.content }] : (m.content ?? []))).map((c) => c.text ?? "").join("");
+	(e.model ?? []).flatMap((m) => (Array.isArray(m.content) ? m.content.map((c) => c.text ?? "") : [m.content ?? ""])).join("");
 
 export type Result = { output: string; error: boolean };
 
@@ -154,7 +167,7 @@ export async function runEnded(id: number, message: string, timeoutMs = 60_000):
 			if (json.docs["pi.live"]?.run || asked < 0 || text(entries[asked]) !== message) return undefined;
 			const answer = entries.slice(asked);
 			if (!answer.some((e) => e.kind === "pi.assistant" && text(e) === "done")) return undefined;
-			return answer.filter((e) => e.kind === "pi.tool-result").map((e) => ({ output: text(e), error: Boolean(e.model?.[0]?.isError) }));
+			return answer.flatMap((e) => (e.kind === "pi.tool-result" ? [{ output: text(e), error: Boolean(e.model?.[0]?.isError) }] : []));
 		},
 		timeoutMs,
 	);
@@ -166,7 +179,9 @@ export async function send(id: number, message: string): Promise<void> {
 }
 
 // A Thread's event stream, as the page reads it; each event carries its SSE id. A reconnect sends the last one.
-export function follow(path: string, lastEventId?: number): { events: any[]; close: () => void } {
+type Stream = { events: any[]; close: () => void };
+
+export function follow(path: string, lastEventId?: number): Stream {
 	const events: any[] = [];
 	const abort = new AbortController();
 	const headers = lastEventId === undefined ? HEADERS : { ...HEADERS, "last-event-id": String(lastEventId) };
@@ -180,7 +195,11 @@ export function follow(path: string, lastEventId?: number): { events: any[]; clo
 				for (const part of parts) {
 					const field = (name: string) => part.split("\n").find((l) => l.startsWith(`${name}: `))?.slice(name.length + 2);
 					const data = field("data");
-					if (data) events.push({ ...JSON.parse(data), ...(field("id") ? { id: Number(field("id")) } : {}) });
+					if (!data) continue;
+					const event = JSON.parse(data);
+					const id = field("id");
+					if (id) event.id = Number(id);
+					events.push(event);
 				}
 			}
 		})

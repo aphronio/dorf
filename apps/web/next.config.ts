@@ -13,7 +13,7 @@ const nextConfig: NextConfig =
         allowedDevOrigins: process.env.DORF_DEV_ORIGINS?.split(","),
         async rewrites() {
           return agent
-            ? ["threads", "repos", "claude", "models"].flatMap((root) => [
+            ? ["threads", "repos", "claude", "github", "models"].flatMap((root) => [
                 { source: `/${root}`, destination: `${agent}/${root}` },
                 { source: `/${root}/:path*`, destination: `${agent}/${root}/:path*` },
               ])

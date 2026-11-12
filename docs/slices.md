@@ -9,13 +9,14 @@ Each slice is the smallest demoable step. A slice is done when its proof runs fr
 | S2 | Harmless Substrate upgrades | `bun run --cwd apps/agent proof:upgrade` on a fresh machine: installs the previous Substrate release on kind, then upgrades to the pinned one and rolls back with no hand steps while two Threads run tool calls and a third is paused. No tool call fails, no Sandbox crashes, busy Sandboxes move workers, and every Thread keeps its files and processes | Done |
 | S3 | A real repository, used daily | `bun run --cwd apps/agent proof:repository` with `DORF_PROOF_REPO` set to a private repository with a `node --test` suite: a Thread clones it, changes it, runs the tests, commits and pushes a branch the remote then shows, with the token injected by the egress gateway. Then one run with a real model on this repository | Done |
 | S3.5 | The agent reaches Sandboxes without `kubectl` or a cluster kubeconfig, through Dorf's gate, so it can later run on Cloudflare | `deploy/proof.sh sandbox-lifecycle`: the agent holds only a `dorf-agent` token and calls the gate over HTTP and WebSocket; every step of S1's proof still passes | Done |
-| S4 | Dogfood: build Dorf with Dorf | From a minimal chat page, start a Thread on this repository, follow its output live, reply, and get a pushed branch. The agent runs as a pod beside the gate and Substrate, on a service-account token Kubernetes renews, with Claude connected from the chat page; the chat page is reached only over Tailscale. Sandboxes commit with a default git identity. Friction found while using it is filed as `friction` issues, and those issues pick the next slice | Planned |
-| S4.1 | Pick the model and thinking per Thread, and persistent subagents (owner asked while dogfooding) | `bun run --cwd apps/agent proof:models` with the faux model: the default model leads the offered list with its thinking levels; a Thread runs on the model and level it was created with, the level changes mid-Thread, and unknown models or levels are refused; a subagent works in the Thread's Sandbox, keeps its conversation across messages and returns each answer; a working subagent keeps the Sandbox awake; stop and Thread deletion end its work. Then `proof:claude-plan`, which covers the plan's model list, a live thinking change and a steer. It needs Claude Code signed in on the machine it runs on | Built; the plan checks ran against the lab agent; the steer fix awaits a run |
+| S4 | Dogfood: build Dorf with Dorf | From a minimal chat page, start a Thread on this repository, follow its output live, reply, and get a pushed branch. The agent runs as a pod beside the gate and Substrate, on a service-account token Kubernetes renews, with Claude connected from the chat page's Settings; the chat page is reached only over Tailscale. Sandboxes commit with a default git identity. Friction found while using it is filed as `friction` issues, and those issues pick the next slice | Planned |
+| S4.1 | Pick the model and thinking per Thread, and persistent subagents (owner asked while dogfooding) | `bun run --cwd apps/agent proof:models` and `proof:subagent-restarts` with the faux model: the default model leads the offered list with its thinking levels; a Thread runs on the model and level it was created with, the level changes mid-Thread, and unknown models or levels are refused; a subagent works in the Thread's Sandbox, keeps its conversation across messages and returns each answer; a working subagent keeps the Sandbox awake; stop and Thread deletion end its work, and a killed agent or a stop delivers each answer once. Then `proof:claude-plan`, which covers the plan's model list, a live thinking change and a steer. It needs Claude Code signed in on the machine it runs on | Built; the plan checks ran against the lab agent; the steer fix awaits a run |
 | S4.2 | A long Thread keeps its whole history on the page (found reviewing Dorf against Pi's examples) | `bun run --cwd apps/agent proof:history` with the faux model: a Thread of about 130 entries streams its newest fifty and says earlier ones exist; loading earlier pages the rest, in order, back to its first message; a reconnect that missed 10 or nearly all entries gets exactly those | Built |
 | S4.3 | A Thread proves its own change to Dorf, with no cluster and no credentials (found reviewing Dorf for agents) | `bun run --cwd apps/agent proof` inside a Sandbox: history, models, lifecycle, make-room and images pass against local stand-ins of the gate, each Sandbox a folder of its own on one machine, and each proof says so on its first line. The same files pass through `deploy/proof.sh` on Substrate, where `deploy/proof.sh substrate` adds what only Substrate does: a file and a process survive a pause, Sandboxes don't see each other's files, the internet is reachable and the cluster is not | Built |
 | S4.4 | A Thread follows the repository's AGENTS.md and skills (found when a fresh Thread on Dorf never read AGENTS.md) | `bun run --cwd apps/agent proof:models` with the faux model: after a Thread writes an AGENTS.md and a skill in its Sandbox, its next request carries the instructions and lists the skill with its description and location | Built |
 | S4.5 | Images in a message: paste, drop or attach them when starting a Thread, sending, or steering a run (owner asked) | `bun run --cwd apps/agent proof:images` with the faux model: a Thread starts from text and an image and the model sees it fitted to its limits; a message of only images carries no empty text; an image sent mid-run lands after the running tool call; `read` fits a wide image the same way and refuses one whose header claims more pixels than the bound, before decoding it; every image survives an agent restart; bad, corrupt, too many or too large images get a plain error and create no Thread | Built |
-| S4.6 | Repository snapshots: a new Thread on a repository starts from a saved Sandbox that already holds the clone with its `.agents/setup` run, as Amp's orbs do (owner asked) | `bun run --cwd apps/agent proof:repo-snapshots` with the faux model against the stand-ins: a second Thread starts from the snapshot and its setup installs nothing; a commit that makes catch-up slow builds a newer snapshot in the background, one that keeps it fast does not; an agent killed mid-build finishes it; a refused snapshot falls back to a plain Sandbox and starts a rebuild; a failed setup saves nothing. Then `deploy/proof.sh snapshots`: a tag holds files and processes; a fork borrows its tag, which the reaper spares until the fork's first sync pause; a newer template refuses an older tag with 412 | Built; the Substrate proof awaits a run |
+| S4.6 | Quote replies: select text in a reply, add a comment, collect several, and send them with the next message (owner asked) | `bun run --cwd apps/agent proof:quotes` with the faux model: the model reads each quote, its comment, then the text, while the `dorf.quoted` entry keeps them apart for the page; quotes alone make a message; bad quotes get a 400; a quoted message sent mid-command shows its text and quote count while it waits, then lands | Built |
+| S4.7 | Repository snapshots: a new Thread on a repository starts from a saved Sandbox that already holds the clone with its `.agents/setup` run, as Amp's orbs do (owner asked) | `bun run --cwd apps/agent proof:repo-snapshots` with the faux model against the stand-ins: a second Thread starts from the snapshot and its setup installs nothing; a commit that makes catch-up slow builds a newer snapshot in the background, one that keeps it fast does not; an agent killed mid-build finishes it; a refused snapshot falls back to a plain Sandbox and starts a rebuild; a failed setup saves nothing. Then `deploy/proof.sh snapshots`: a tag holds files and processes; a fork borrows its tag, which the reaper spares until the fork's first sync pause; a newer template refuses an older tag with 412 | Built; the Substrate proof awaits a run |
 | S5 | Execution nodes anywhere | The lab moves from kind to k3s meshed over Tailscale (Headscale for self-hosters); a machine on another network joins as a node, a Thread's Sandbox runs there, and its tool-call latency is measured against a local Sandbox | Planned after S4 |
 | S6 | GitHub triggers | A mention or failing check starts or continues a Thread | Deferred until dogfooding asks for it |
 | S7 | Agent off-site | The agent runs outside the cluster: the gate is exposed and the agent proves its identity from outside | Deferred until a host cannot join the cluster |
@@ -62,13 +63,29 @@ Facts learned in one slice that a later slice must respect.
   only when `claude-plan.ts`, `claude-session.ts` or the Agent SDK pin changes; every other proof
   uses the faux model.
 - The plan's models and their effort levels come from Claude Code's start-up handshake, which sends
-  no model request. Pi's `fetchModels` loads them when the agent starts, before Threads resume, and
-  after the owner signs in; only the default model's provider is offered. Pi's thinking levels are
+  no model request. Pi's `fetchModels` loads them when the agent starts, before Threads resume;
+  only the default model's provider is offered. Pi's thinking levels are
   Claude Code's effort levels, and a change reaches the running Claude Code session through
   `applyFlagSettings`, so it is not relaunched. A message sent mid-run steers: Pi places it after
   the tool round, and the provider queues it into Claude Code's running turn with `priority:
   "next"`, so the model reads it as the user's. Put inside a tool result, the model treated it as
   prompt injection and refused it.
+- The agent holds no key. Claude Code runs with `CLAUDE_CODE_OAUTH_TOKEN=placeholder` and
+  `ANTHROPIC_BASE_URL` at the broker (`deploy/broker.yaml`, Envoy). The broker adds the plan's token
+  on exact `POST /v1/messages` and `/v1/messages/count_tokens` and the GitHub token on `GET
+  /user/repos`, refuses every other route, and admits only the agent's pod. Each key is an SDS file
+  in a Secret, which Envoy reloads within about a minute of a change, as the Secret's files update. Claude Code reports `tokenSource:
+  CLAUDE_CODE_OAUTH_TOKEN` and no `subscriptionType` for such a token, which exists only on a plan.
+  Agent code can still spend a key through those routes, but cannot read it or send it elsewhere.
+- The owner connects the plan under Settings, AI subscriptions. The agent relays those calls to the keys
+  service (`apps/keys`), the one caller its NetworkPolicy admits. The service runs Claude Code's own
+  `claude setup-token` under `script`, since the command prints only to a terminal, and writes the
+  one-year token into `dorf-broker/claude`, the one Secret its Role may change; no route returns it.
+  Agent code that a Thread pushed could show a link from its own sign-in instead and keep the token
+  the owner's code completes. Disconnect, and connecting again, revoke the token the service held
+  at the endpoint Claude Code's own logout uses, since a new `setup-token` leaves the old one live
+  and claude.ai's Settings showed the owner no list to revoke from. A token taken that way is one
+  the service never held, so nothing here revokes it; that stays open.
 - Subagents keep Pi's example 22 anchor: each is a conversation owned by a background anchor task,
   pointed at the Thread's Sandbox. A `subagent` call steers its message to the subagent and returns
   the answer as its result, as Pi's coding agent does; calls in one round run at once. The owner's
@@ -107,9 +124,10 @@ Facts learned in one slice that a later slice must respect.
   repository needs.
 - Substrate's egress gateway injects the GitHub token from Secret `dorf-secrets/github`, so a
   Sandbox pushes without holding it. The gateway only replaces an Authorization header the request
-  already carries, so git's credential helper sends a placeholder. Without the Secret, public
-  repositories still work and only authenticated requests get 403. The Secret's key `basic` holds
-  base64 of `x-access-token:<token>`.
+  already carries, so git's credential helper sends a placeholder. The Secret's key `basic` holds
+  base64 of `x-access-token:<token>`, and `x-access-token:none` until the owner connects GitHub;
+  git sends no credentials for a public repository, so those still clone. The gateway reads the
+  Secret on each request: a changed token reached a Sandbox's `gh` within 5 s, without a restart.
 - Egress rules are allow-only host names, and the gateway resolves cluster names too, so an open
   policy reached the Kubernetes API by its cluster name. `deploy/egress-fence.yaml` limits the
   gateway to public addresses, DNS and the two Substrate services it calls; it needs a CNI that
@@ -126,11 +144,19 @@ Facts learned in one slice that a later slice must respect.
   cluster's machine, in front of a systemd unit running `kubectl -n dorf-gate port-forward
   deploy/dorf-agent 8091:8091` with `Restart=always`: the forward exits whenever `up.sh` replaces the
   pod. `up.sh` needs `DORF_OWNER`, the one Tailscale login the agent serves.
-- GitHub is on when the Secret `dorf-secrets/github` exists: `up.sh` then gives the gate the egress
-  rule for github.com, api.github.com and uploads.github.com, and the agent its own copy to list
-  repositories. The gateway swaps the whole Authorization value, so `gh` works with
-  `GH_TOKEN=placeholder` on REST and GraphQL. A fine-grained token lists every public repository of
-  its owner too, not only the granted ones.
+- The owner connects GitHub under Settings, Source control, through Dorf's GitHub App and
+  GitHub's device flow: they approve a short code on github.com. The keys service keeps the
+  refresh token in `dorf-broker/github-login`, refreshes the 8-hour user token an hour before it
+  runs out, and writes it to `dorf-secrets/github` for the gateway and `dorf-broker/github` for
+  the broker. The device flow needs only the app's public client id, so no app secret or private
+  key is kept; `DORF_GITHUB_CLIENT` and `DORF_GITHUB_APP` name a deployment's own app. GitHub
+  revokes a user token only with the app's secret, so Disconnect forgets the sign-in and the
+  token lapses within 8 hours, or at once when the owner revokes Dorf at github.com › Settings ›
+  Applications. Agent code that a Thread pushed could show a code from its own device flow with
+  the same public client id; the owner's approval then gives it a refresh token, good until the
+  owner revokes Dorf on github.com, for the repositories the app may reach. That is the same open
+  risk as the Claude sign-in. The gateway swaps the whole Authorization value, so `gh` works with
+  `GH_TOKEN=placeholder` on REST and GraphQL.
 - A Sandbox has no user or mount namespaces (gVisor), so local stand-ins can't give each Sandbox
   its own filesystem. Each gets its own folder instead: the stand-in starts that Sandbox's pi-env
   there and the workspace is `/proc/self/cwd`. Pi resolves a relative workspace on the agent's side,
@@ -150,12 +176,16 @@ Facts learned in one slice that a later slice must respect.
   API itself (with a door only for bytes) was as fast but cannot run in a Worker, and its token
   also had to work at the Kubernetes API.
 - Substrate scopes a ServiceAccount token to one atespace through that atespace's access policy
-  (`editor`); the token's audience must be `api.ate-system.svc`. The `dorf-agent` token is denied
-  other atespaces, global calls and changing its own policy. The gate forwards it on every call and
-  holds no rights over Sandboxes itself.
+  (`editor`); the token's audience must be `api.ate-system.svc`. That right sits with the
+  `dorf-gate` token, which is denied other atespaces, global calls and changing its own policy. An
+  editor may also write a Sandbox's egress rules, and Substrate's credential provider never checks
+  where a rule sends a secret: with the agent as editor, agent code created a Sandbox whose rule
+  sent a `dorf-secrets` canary to an outside host (tested). So the agent holds no Substrate right.
+  Its token's audience is `dorf-gate`, which Substrate refuses, and the gate admits it by a
+  Kubernetes TokenReview, then spends its own right only on its routes and fixed egress rules.
 - Substrate's router accepts clients by an exact SPIFFE allow-list and checks no atespace, so the
   gate's pod certificate could reach every Sandbox. The gate therefore opens a WebSocket only after
-  `ResumeActor` succeeds with the caller's token (it needs `editor` and is harmless on a running
+  `ResumeActor` succeeds with its own atespace-scoped token (it needs `editor` and is harmless on a running
   Sandbox). `deploy/substrate.sh` puts `dorf-gate` on the allow-list at install; the install record
   keeps it across upgrades. The gate runs in its own namespace so that identity stays apart from the
   Sandboxes' pool, and has only a ClusterIP: anything outside the cluster reaches it through a port

@@ -15,7 +15,6 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
-import { ClaudeStatus } from "@/components/dorf/claude-status"
 import { useIcons } from "@/lib/icon-context"
 import { fontWeights } from "@/lib/font-weight"
 import type { Thread } from "@/lib/dorf"
@@ -42,10 +41,10 @@ function useNow() {
 }
 
 // What the Thread is doing, for how long or since when, and that in words. A new Thread first waits for a machine,
-// then starts, then works.
+// then starts, then works. The words say how the last run ended whether or not the owner has looked since.
 function stateOf(thread: Thread, attention: Attention | undefined, now: number) {
   const state = thread.waiting ? "waiting" : thread.starting ? "starting" : thread.working ? "working" : attention
-  const from = thread.waiting ? thread.waiting.since : thread.starting ? thread.createdAt : thread.working ? thread.startedAt : (thread.endedAt ?? thread.createdAt)
+  const from = thread.waiting ? thread.waiting.since : thread.starting ? thread.createdAt : thread.working ? thread.startedAt : thread.endedAt
   const since = now - time(from)
   const said = {
     waiting: `Waiting ${long(since)} for a machine`,
@@ -53,8 +52,11 @@ function stateOf(thread: Thread, attention: Attention | undefined, now: number) 
     working: `Working for ${long(since)}`,
     failed: `Failed ${long(since)} ago`,
     done: `Done ${long(since)} ago`,
-    idle: `Last ran ${long(since)} ago`,
-  }[state ?? "idle"]
+    stopped: `Stopped ${long(since)} ago`,
+    // A run that ended before the list kept how.
+    ended: `Ended ${long(since)} ago`,
+    idle: "Not started",
+  }[state ?? (thread.endedAt ? (thread.ended ?? "ended") : "idle")]
   return { since, state, said }
 }
 
@@ -100,12 +102,12 @@ function Row({ thread, attention, now }: { thread: Thread; attention?: Attention
   )
 }
 
-type ThreadSidebarProps = { threads: Thread[]; attention: Map<number, Attention>; current?: number; connection: number; onUnarchive: (id: number) => void; onDelete: (id: number) => void }
+type ThreadSidebarProps = { threads: Thread[]; attention: Map<number, Attention>; current?: number | "settings"; onUnarchive: (id: number) => void; onDelete: (id: number) => void }
 
 // Two sections, as a priority inbox: Threads whose run ended since the owner last looked, failed first, then every
 // other Thread by when the owner last asked in it. A row moves when it crosses between them or when the owner sends,
 // never because an agent made progress; `attention` says which Threads need the owner. Archived Threads fold at the bottom; only they can be deleted, and the bin asks once more in place.
-export function ThreadSidebar({ threads, attention, current, connection, onUnarchive, onDelete }: ThreadSidebarProps) {
+export function ThreadSidebar({ threads, attention, current, onUnarchive, onDelete }: ThreadSidebarProps) {
   const icons = useIcons()
   const now = useNow()
   const [confirming, setConfirming] = useState<number>()
@@ -191,7 +193,13 @@ export function ThreadSidebar({ threads, attention, current, connection, onUnarc
         )}
       </SidebarContent>
       <SidebarFooter>
-        <ClaudeStatus key={connection} />
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton icon={icons.settings} isActive={current === "settings"} onClick={() => go("settings")}>
+              Settings
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
       </SidebarFooter>
     </Sidebar>
   )

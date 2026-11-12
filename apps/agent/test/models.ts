@@ -1,9 +1,9 @@
-// Model choice, thinking levels and subagents, on the faux provider's two models.
-import { SandboxNotFound } from "../src/sandbox.ts";
-import { call, createThread, fail, follow, IDLE_MS, killAgent, log, pass, runEnded, sandboxes, send, startAgent, until } from "./kit.ts";
+// Model choice, thinking levels and subagents, on the faux provider's two models. subagent-restarts.ts proves
+// what happens to subagents when the agent is killed or the Thread is stopped.
+import { call, createThread, fail, IDLE_MS, log, pass, runEnded, sandboxes, send, startAgent, until } from "./kit.ts";
+import { type Entry, STOPPED_WAITING, subagent, subagentThread, text } from "./subagents.ts";
 
 type Choice = { ref: string; name: string; thinking: string[] };
-type Entry = { kind: string; model?: { role: string; model?: string; isError?: boolean; content?: string | { type: string; text?: string }[] }[] };
 
 await startAgent();
 
@@ -19,7 +19,6 @@ for (const [body, what] of [
 	const refused = await call("POST", "/threads", { prompt: "hi", ...body });
 	if (refused.status !== 400) await fail(`${what}: ${refused.status}`);
 }
-const text = (e: Entry) => (e.model ?? []).flatMap((m) => (typeof m.content === "string" ? [m.content] : (m.content ?? []).map((c) => c.text ?? ""))).join("");
 const first = "$ echo hello";
 const { id, sandbox } = await createThread(first, undefined, { model: "faux/faux-2", thinking: "low" });
 await runEnded(id, first);
@@ -51,58 +50,10 @@ await until("the project's instructions and skills", async () =>
 );
 log("4. AGENTS.md and the skills in the Thread's machine reach its next request");
 
-// A Thread's turn: from its message to the next one, once the Thread answered "done".
-async function answered(message: string, timeoutMs?: number): Promise<{ output: string; error: boolean }[]> {
-	return until(
-		`the answer to ${JSON.stringify(message.slice(0, 50))}`,
-		async () => {
-			const entries: Entry[] = (await call("GET", `/threads/${id}`)).json.entries;
-			const asked = entries.findLastIndex((e) => e.kind === "pi.user" && text(e) === message);
-			if (asked < 0) return undefined;
-			const next = entries.findIndex((e, i) => i > asked && e.kind === "pi.user");
-			const turn = entries.slice(asked + 1, next < 0 ? undefined : next);
-			if (!turn.some((e) => e.kind === "pi.assistant" && text(e) === "done")) return undefined;
-			return turn.filter((e) => e.kind === "pi.tool-result").map((e) => ({ output: text(e), error: Boolean(e.model?.[0]?.isError) }));
-		},
-		timeoutMs,
-	);
-}
-async function ask(message: string) {
-	await send(id, message);
-	return answered(message);
-}
-const entries = async () => (await call("GET", `/threads/${id}`)).json.entries as (Entry & { data?: { name: string; failed?: true } })[];
-const reports = async (name: string) => (await entries()).filter((e) => e.kind === "dorf.subagent-report" && e.data?.name === name && !e.data.failed).map(text);
-const results = async () => (await entries()).filter((e) => e.kind === "pi.tool-result").map((e) => ({ output: text(e), error: Boolean(e.model?.[0]?.isError) }));
-const subagent = (args: object) => `@ ${JSON.stringify(args)}`;
-// Kills the agent and starts it again, with a fault the subagent tool reads (DORF_FAULT) or none.
-async function restart(fault?: "hold-before-commit" | "hold-after-commit") {
-	stream.close();
-	if (fault) process.env.DORF_FAULT = fault;
-	else delete process.env.DORF_FAULT;
-	killAgent("SIGKILL");
-	await startAgent();
-	stream = follow(`/threads/${id}/events`);
-	await until("the stream", async () => stream.events.length > 0);
-}
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-// Sends a message to a subagent, then the owner's message that ends the Thread's wait for it.
-async function handOff(name: string, message: string) {
-	await send(id, subagent({ name, message }));
-	await until(`${name} to work`, async () => working(name), 30_000);
-	await ask("$ true");
-	if (!(await results()).some((r) => r.output === STOPPED_WAITING(name))) await fail(`${name} was not handed off: ${JSON.stringify(await results())}`);
-}
-const ARRIVED = (name: string) => `${name}'s answer to this message already arrived as a message.`;
-const TOGETHER = (name: string) => `${name} answered this message together with another one, in the answer another call returned.`;
-const STOPPED_WAITING = (name: string) => `Stopped waiting because the owner sent a message. ${name} is still working; its answer will arrive as a message.`;
-
-let stream = follow(`/threads/${id}/events`);
-await until("the stream", async () => stream.events.length > 0);
-const working = (name: string) => stream.events.findLast((e) => e.subagents)?.subagents?.find((s: { name: string }) => s.name === name)?.working === true;
+const { answered, ask, entries, events, reports, results, working } = await subagentThread(id);
 
 const [wrote] = await ask(subagent({ name: "helper", message: "$ echo from-child > child.txt\n= wrote child.txt" }));
-await until("helper in the streamed subagents", async () => stream.events.some((e) => e.subagents?.some((s: { name: string }) => s.name === "helper")), 10_000);
+await until("helper in the streamed subagents", async () => events().some((e) => e.subagents?.some((s: { name: string }) => s.name === "helper")), 10_000);
 const [recalled] = await ask(subagent({ name: "helper", message: "^" }));
 const [file] = await ask("$ cat child.txt");
 if (wrote?.output !== "wrote child.txt" || recalled?.output !== "before: $ echo from-child > child.txt\n= wrote child.txt" || file?.output.trim() !== "from-child" || (await reports("helper")).length)
@@ -161,97 +112,4 @@ const [back] = await ask(subagent({ name: "long", message: "= back" }));
 if (back?.output !== "back" || (await reports("long")).length) await fail(`long after a stop: ${JSON.stringify({ back, reports: await reports("long") })}`);
 await until("the idle pause after a stop", async () => (await sandboxes.state(sandbox)) === "paused", 2 * IDLE_MS + 30_000);
 log("10. a subagent wakes the paused Sandbox; the stop button stops the subagent the Thread waits for, the same name answers a later call, and the Thread still pauses");
-
-const job = subagent({ name: "worker", message: "$[60] sleep 6 && echo ran >> runs\n= worked" });
-await send(id, job);
-await until("worker to work", async () => working("worker"), 30_000);
-await new Promise((r) => setTimeout(r, 1_000));
-await restart();
-const [worked] = await answered(job, 60_000);
-await new Promise((r) => setTimeout(r, 2_000));
-const [runs] = await ask("$ wc -l < runs");
-const answers = (await results()).filter((r) => r.output === "worked").length + (await reports("worker")).length;
-if (worked?.output !== "worked" || answers !== 1 || runs?.output.trim() !== "1") await fail(`restart mid-wait: ${JSON.stringify({ worked, answers, runs })}`);
-log("11. an agent killed while the Thread waits answers the call exactly once; the command ran once");
-
-const twins = await ask(`@ ${JSON.stringify([{ name: "twin", message: "$ sleep 2\n= one" }, { name: "twin", message: "= two" }])}`);
-await sleep(2_000);
-const own = twins.map((r) => r.output).filter((o) => o !== TOGETHER("twin"));
-if (twins.length !== 2 || twins.some((r) => r.error) || !own.length || own.some((o) => o !== "one" && o !== "two") || new Set(own).size !== own.length || (await reports("twin")).length)
-	await fail(`two calls to one name: ${JSON.stringify({ twins, reports: await reports("twin") })}`);
-log("12. two calls to one name in one round: each returns an answer, and an answer to both reaches the Thread once", twins.map((r) => JSON.stringify(r.output)).join(" and "));
-
-await handOff("bg", "$[120] sleep 120\n= bg done");
-if ((await call("POST", `/threads/${id}/abort`)).status !== 202) await fail("abort");
-await until("bg to stop with the Thread", async () => !working("bg"), 30_000);
-await sleep(3_000);
-const lastBeforeBack = (await entries()).at(-1);
-const [bgBack] = await ask(subagent({ name: "bg", message: "= bg back" }));
-if ((await reports("bg")).length || lastBeforeBack?.kind === "dorf.subagent-report" || bgBack?.output !== "bg back") await fail(`stop after a handoff: ${JSON.stringify({ reports: await reports("bg"), bgBack })}`);
-log("13. the stop button also stops handed-off work and its reporter: no answer arrives and no run starts, and the same name answers later");
-
-await handOff("relay", "$[60] sleep 5 && echo ran >> relay-runs\n= relayed");
-await restart();
-await until("relay's report after the restart", async () => (await reports("relay")).length > 0, 60_000);
-await sleep(2_000);
-const [relayRuns] = await ask("$ wc -l < relay-runs");
-if ((await reports("relay")).join() !== "[subagent relay answered] relayed" || relayRuns?.output.trim() !== "1") await fail(`restart after a handoff: ${JSON.stringify({ reports: await reports("relay"), relayRuns })}`);
-log("14. an agent killed after the owner's message handed work off reports its answer once; the command ran once");
-
-await handOff("taken", "$[60] sleep 4\n= taken over");
-await restart("hold-after-commit");
-const takeOver = subagent({ name: "taken" });
-await send(id, takeOver);
-await until("taken to answer", async () => !working("taken"), 30_000);
-await sleep(1_000);
-await restart();
-const [killedTakeover] = await answered(takeOver, 60_000);
-await sleep(2_000);
-if (killedTakeover?.output !== "taken over" || (await reports("taken")).length) await fail(`a takeover killed after its commit: ${JSON.stringify({ killedTakeover, reports: await reports("taken") })}`);
-log("15. a call without a message killed after its commit took the answer returns that answer when it runs again, and it arrives no other way");
-
-await handOff("late", "$[60] sleep 4\n= landed");
-await restart("hold-before-commit");
-await send(id, subagent({ name: "late" }));
-await until("late to answer", async () => !working("late"), 30_000);
-await sleep(1_000);
-if ((await call("POST", `/threads/${id}/abort`)).status !== 202) await fail("abort");
-const [landed] = await until("late's answer after the stop", async () => (await reports("late")).length > 0 && (await reports("late")), 30_000);
-await sleep(3_000);
-const afterStop = await entries();
-if (landed !== "[subagent late answered] landed" || (await reports("late")).length !== 1 || afterStop.at(-1)?.kind !== "dorf.subagent-report")
-	await fail(`a stop as the answer lands: ${JSON.stringify({ reports: await reports("late"), last: afterStop.at(-1)?.kind })}`);
-log("16. a stop between the answer and the call's commit places the answer in the Thread once, without starting a run");
-
-await restart("hold-after-commit");
-await send(id, subagent({ name: "echo", message: "$[60] sleep 4\n= echoed" }));
-await until("echo to work", async () => working("echo"), 30_000);
-await send(id, "$ true");
-await until("echo to answer", async () => !working("echo"), 30_000);
-await sleep(1_000);
-await restart();
-const echoReport = await until("echo's report", async () => (await reports("echo")).length > 0 && (await reports("echo")), 60_000);
-await sleep(2_000);
-const echoCall = (await results()).filter((r) => r.output === ARRIVED("echo") || r.output === STOPPED_WAITING("echo"));
-if (echoReport.join() !== "[subagent echo answered] echoed" || (await reports("echo")).length !== 1 || echoCall.length !== 1 || (await results()).some((r) => r.output === "echoed"))
-	await fail(`a handed-off call run again: ${JSON.stringify({ reports: await reports("echo"), results: await results() })}`);
-log("17. a handed-off call run again after the reporter delivered says what became of the answer", JSON.stringify(echoCall[0]!.output));
-
-await handOff("pair", "$[60] sleep 5\n= first");
-await send(id, subagent({ name: "pair", message: "= second" }));
-await send(id, "$ true");
-await until("the second handoff", async () => (await results()).filter((r) => r.output === STOPPED_WAITING("pair")).length === 2, 30_000);
-const [newest] = await ask(subagent({ name: "pair" }));
-await sleep(2_000);
-if (newest?.output !== "second" || (await reports("pair")).length) await fail(`a takeover after two handoffs: ${JSON.stringify({ newest, reports: await reports("pair") })}`);
-log("18. after two handoffs to one name, a call without a message takes the newest; the steered subagent answered both at once, and that answer arrives once");
-
-const busy = follow(`/threads/${id}/events`);
-await send(id, subagent({ name: "busy", message: "$[120] sleep 120" }));
-await until("busy to work", async () => busy.events.findLast((e) => e.subagents)?.subagents?.some((s: { name: string; working: boolean }) => s.name === "busy" && s.working), 30_000);
-busy.close();
-const deleting = Date.now();
-if ((await call("DELETE", `/threads/${id}`)).status !== 204) await fail("delete");
-if (!(await sandboxes.state(sandbox).then(() => false, (e) => e instanceof SandboxNotFound))) await fail("the Sandbox outlived its Thread");
-log("19. deleting a Thread stops its subagents and removes the Sandbox", `${((Date.now() - deleting) / 1000).toFixed(1)}s`);
 await pass();

@@ -7,6 +7,8 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseFact
 
 export const FAUX_MODEL = { provider: "faux", modelId: "faux" };
 
+type BashArgs = { command: string; timeout?: number };
+
 export function scriptedModel() {
 	const faux = fauxProvider({
 		provider: FAUX_MODEL.provider,
@@ -21,16 +23,20 @@ export function scriptedModel() {
 		const messages = transcript.messages;
 		const lastUser = messages.findLastIndex((m) => m.role === "user");
 		const content = messages[lastUser]?.content;
-		const text = typeof content === "string" ? content : (content ?? []).map((c) => (c.type === "text" ? c.text : "")).join("");
+		const text = Array.isArray(content) ? content.map((c) => (c.type === "text" ? c.text : "")).join("") : (content ?? "");
 		const sections = Object.assign({}, ...messages.map((m) => (m.role === "system" ? m.sections : undefined)));
 		if (text === "?") return fauxAssistantMessage(Object.values(sections).filter(Boolean).join("\n"));
 		if (text === "^") {
 			const before = messages.slice(0, lastUser).findLast((m) => m.role === "user")?.content;
-			return fauxAssistantMessage(`before: ${typeof before === "string" ? before : (before ?? []).map((c) => (c.type === "text" ? c.text : "")).join("")}`);
+			return fauxAssistantMessage(`before: ${Array.isArray(before) ? before.map((c) => (c.type === "text" ? c.text : "")).join("") : (before ?? "")}`);
 		}
 		const rounds = text.split("\n").flatMap((l) => {
 			const bash = l.match(/^\$(?:\[(\d+)\])? (.*)$/);
-			if (bash) return [[fauxToolCall("bash", { command: bash[2], ...(bash[1] ? { timeout: Number(bash[1]) } : {}) })]];
+			if (bash) {
+				const args: BashArgs = { command: bash[2] };
+				if (bash[1]) args.timeout = Number(bash[1]);
+				return [[fauxToolCall("bash", args)]];
+			}
 			if (l.startsWith("> ")) return [[fauxToolCall("read", { path: l.slice(2) })]];
 			if (!l.startsWith("@ ")) return [];
 			const args: object | object[] = JSON.parse(l.slice(2));
@@ -42,7 +48,7 @@ export function scriptedModel() {
 		const error = text.split("\n").findLast((l) => l.startsWith("! "))?.slice(2);
 		if (error) return fauxAssistantMessage("", { stopReason: "error", errorMessage: error });
 		const answer = text.split("\n").findLast((l) => l.startsWith("= "))?.slice(2);
-		const images = typeof content === "string" ? 0 : (content ?? []).filter((c) => c.type === "image").length;
+		const images = Array.isArray(content) ? content.filter((c) => c.type === "image").length : 0;
 		return fauxAssistantMessage(answer ?? (images ? `done, saw ${images} image${images > 1 ? "s" : ""}` : "done"));
 	};
 	faux.setResponses([step]);

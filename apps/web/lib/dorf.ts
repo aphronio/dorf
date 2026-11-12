@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react"
 
 // `starting` until the first message is in, `waiting` meanwhile while no machine is free, since when and with which
 // Threads holding the machines, and `failure` if it never got in. `working` while a run is live; `attention` once it ended, until the owner opens the Thread.
-// `askedAt` is the owner's last message, `startedAt` and `endedAt` the newest run's.
+// `askedAt` is the owner's last message, `startedAt` and `endedAt` the newest run's, and `ended` how it ended, which
+// stays after the owner looked.
 export type Thread = {
   id: number
   title: string
@@ -19,22 +20,28 @@ export type Thread = {
   askedAt?: string
   startedAt?: string
   endedAt?: string
+  ended?: "done" | "failed" | "stopped"
 }
 
 // Names one draft, so sending it again after a lost answer finds the Thread the first send made. Not randomUUID: that
 // needs a secure context.
 export const newRequest = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, "0")).join("")
 export type Repo = { name: string; private: boolean }
-export type Claude = { loggedIn: boolean; plan: string | null; email: string | null }
+// When the owner last connected the Claude plan; null until then.
+export type Claude = { connected: string | null }
+// GitHub as the keys service reports it: who is connected, the code to approve while a sign-in waits, and where the
+// owner picks the repositories Dorf's app may reach.
+export type GitHub = { connected: string | null; login?: string; pending?: { code: string; url: string }; error?: string; repositories?: string }
 export type ModelChoice = { ref: string; name: string; thinking: string[]; defaultThinking: string }
 export type ModelRef = { provider: string; modelId: string }
 export type ThreadAgent = { model?: ModelRef; thinkingLevel: string }
 export type Subagent = { name: string; model?: ModelRef; working: boolean }
 
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue | undefined }
 export type Block =
   | { type: "text"; text: string }
   | { type: "thinking"; thinking: string }
-  | { type: "toolCall"; id: string; name: string; arguments?: Record<string, unknown> }
+  | { type: "toolCall"; id: string; name: string; arguments?: Record<string, JsonValue> }
   | { type: "image"; data: string; mimeType: string }
 export type Message = {
   role: "user" | "assistant" | "toolResult"
@@ -62,7 +69,7 @@ export class Unreachable extends Error {
 
 // The agent answers every call in JSON, so anything else came from in front of it: the network, a
 // proxy's error page, or the development server's 404 when it proxies to no agent.
-export async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
+export async function api<T>(method: string, path: string, body?: JsonValue): Promise<T> {
   const res = await fetch(path, {
     method,
     headers: { "content-type": "application/json" },
@@ -116,9 +123,9 @@ export function useThreads(lost: () => void): Thread[] {
 }
 
 export const text = (content: Message["content"] | undefined) =>
-  typeof content === "string"
-    ? content
-    : (content ?? []).flatMap((c) => (c.type === "text" ? [c.text] : [])).join("")
+  Array.isArray(content)
+    ? content.flatMap((c) => (c.type === "text" ? [c.text] : [])).join("")
+    : (content ?? "")
 
 // Pi's JSON state stream: the first event holds the newest entries and whether earlier ones exist,
 // later ones the new entries. A reconnect sends the newest entry it has and gets the ones it missed, however many, so
@@ -129,8 +136,8 @@ function merge(prev: Entry[], next: Entry[]): Entry[] {
   return [...byId.values()].sort((a, b) => a.id - b.id)
 }
 
-// A message sent while the Thread works, waiting for the current step to end; its images show once it lands.
-export type Queued = { text: string; images: number }
+// A message sent while the Thread works, waiting for the current step to end; its images and quotes show once it lands.
+export type Queued = { text: string; images: number; quotes?: number }
 
 // A Thread's or a subagent's event stream.
 export function useConversation(url: string | undefined) {
@@ -204,16 +211,16 @@ export function openThread(id: number | undefined): void {
   window.location.hash = id === undefined ? "" : String(id)
 }
 
-export function useHashId(): number | undefined {
-  const read = () => Number(window.location.hash.slice(1)) || undefined
-  const [id, setId] = useState<number | undefined>(undefined)
+// What the page shows: "" for a new Thread, a Thread's id, or "settings".
+export function useHash(): string {
+  const [hash, setHash] = useState("")
   useEffect(() => {
-    const update = () => setId(read())
+    const update = () => setHash(window.location.hash.slice(1))
     update()
     window.addEventListener("hashchange", update)
     return () => window.removeEventListener("hashchange", update)
   }, [])
-  return id
+  return hash
 }
 
 // ─── Images ──────────────────────────────────────────────────────────────

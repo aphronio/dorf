@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request replaces its running checks; pushes to main all run, since each one may deploy.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   gitleaks:
     name: Gitleaks
@@ -44,12 +49,27 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      # The proofs read only apps/agent and how CI installs and runs them; a change anywhere else cannot change
+      # what they prove. The job still passes, so the commit deploys.
+      - id: scope
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if git cat-file -e "$BASE^{commit}" 2>/dev/null && git diff --quiet "$BASE" HEAD -- apps/agent package.json .agents/setup .github/workflows/ci.yml; then
+            echo "Nothing the proofs read changed; they are skipped."
+            echo skip=true >>"$GITHUB_OUTPUT"
+          fi
+      - if: steps.scope.outputs.skip != 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26.13.0
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - if: steps.scope.outputs.skip != 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
-      - run: .agents/setup
-      - run: bun run proof
+      - if: steps.scope.outputs.skip != 'true'
+        run: .agents/setup
+      - if: steps.scope.outputs.skip != 'true'
+        run: bun run proof

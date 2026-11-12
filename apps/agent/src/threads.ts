@@ -1,9 +1,10 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { type AgentChange, type Conversation, type ConversationId, ConversationTranscript, type ConversationView, type EntryId, type ModelRef, type Harness, type HarnessOptions, LiveDoc, ProviderDoc } from "@earendil-works/pi-durable";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import type { UserInput } from "@earendil-works/pi-durable";
+import type { InputEntry, UserInput } from "@earendil-works/pi-durable";
 import { REPO } from "./github.ts";
 import { pauseWhenIdle } from "./idle.ts";
+import { Quoted, type QuotedData } from "./quotes.ts";
 import type { Sandboxes } from "./sandbox.ts";
 import { placeStopped, Subagents, subagentsOf } from "./subagent.ts";
 import { ThreadList, type ThreadSummary } from "./thread-list.ts";
@@ -12,6 +13,7 @@ import type { threadStart } from "./thread-start.ts";
 
 export type ThreadAgent = { model?: ModelRef; thinkingLevel: ModelThinkingLevel };
 export type SubagentView = { name: string; model?: ModelRef; working: boolean };
+export type Stop = () => Promise<void>;
 type FollowEvent = { entries?: ConversationView["entries"]; earlier?: boolean; live?: unknown; queued?: Queued[]; agent?: ThreadAgent; subagents?: SubagentView[] };
 
 // Entries per page: the first window, each fill of a gap, each "load earlier".
@@ -50,15 +52,18 @@ const agentOf = async (conversation: { agent(c: typeof context): Promise<ThreadA
 // A provider that keeps a process or copy per Thread, keyed by Pi's provider session id.
 // Messages sent while the Thread works wait in Pi's inbox until the current step ends; the page shows them meanwhile.
 // Only the user's own messages: an input placed as another entry, such as a subagent's report, shows once it lands.
-// Images are counted, not sent: the live state goes out with each token, and they show once the message lands.
-type Inbox = { items?: { mode: string; entry?: unknown; content?: string | { type: string; text?: string }[] }[] };
-type Queued = { text: string; images: number };
-const queued = (docs: Record<string, unknown>): Queued[] =>
+// A message with quotes shows its own text. Images and quotes are counted, not sent: the live state goes out with each
+// token, and they show once the message lands.
+type Inbox = { items?: { mode: string; entry?: { kind: string; data?: unknown }; content?: string | { type: string; text?: string }[] }[] };
+type Queued = { text: string; images: number; quotes?: number };
+const queued = (docs: ConversationView["docs"]): Queued[] =>
 	((docs["pi.inbox"] as Inbox | undefined)?.items ?? []).flatMap((item) => {
-		if (item.mode === "write" || item.entry !== undefined || item.content === undefined) return [];
-		if (typeof item.content === "string") return [{ text: item.content, images: 0 }];
-		const text = item.content.flatMap((b) => (b.type === "text" && b.text ? [b.text] : [])).join("");
-		return [{ text, images: item.content.filter((b) => b.type === "image").length }];
+		const quoted = item.entry?.kind === Quoted.kind ? (item.entry.data as QuotedData) : undefined;
+		if (item.mode === "write" || (item.entry !== undefined && !quoted) || item.content === undefined) return [];
+		const images = Array.isArray(item.content) ? item.content.filter((b) => b.type === "image").length : 0;
+		if (quoted) return [{ text: quoted.text, images, quotes: quoted.quotes.length }];
+		if (!Array.isArray(item.content)) return [{ text: item.content, images }];
+		return [{ text: item.content.flatMap((b) => (b.type === "text" && b.text ? [b.text] : [])).join(""), images }];
 	});
 
 export type ProviderSessions = { release(sessionId: string): Promise<void>; forget(sessionId: string): Promise<void> };
@@ -97,14 +102,16 @@ export class Threads {
 	}
 
 	// The list now, then again whenever a Thread is added, archived, deleted, starts working or stops.
-	async followList(send: (event: { threads: readonly ThreadSummary[] }) => void): Promise<(() => Promise<unknown>) | undefined> {
+	async followList(send: (event: { threads: readonly ThreadSummary[] }) => void): Promise<Stop | undefined> {
 		const watch = await this.#harness.watchDoc(ThreadList, context);
 		if (!watch) return undefined;
 		send({ threads: watch.value.items });
 		watch.start(async (call) => {
 			if (call.kind === "value") send({ threads: call.value.items });
 		});
-		return () => watch.stop();
+		return async () => {
+			await watch.stop();
+		};
 	}
 
 	// The owner looked at the Thread's last run.
@@ -136,7 +143,8 @@ export class Threads {
 			delete thread.working;
 			thread.endedAt = new Date().toISOString();
 			const failure = live.runFailure?.reason;
-			if (!thread.archived && failure !== "aborted") thread.attention = failure ? "failed" : "done";
+			thread.ended = failure === "aborted" ? "stopped" : failure ? "failed" : "done";
+			if (!thread.archived && thread.ended !== "stopped") thread.attention = thread.ended;
 		}, context);
 	}
 
@@ -147,7 +155,7 @@ export class Threads {
 	// Answers once the Thread is committed: a background task then starts its Sandbox, clones the repository and sends
 	// the first message, waiting for a worker with room as long as it takes. The Thread exists before its Sandbox, so no
 	// Sandbox is ever left without a Thread. A repeat with the same `request` returns the Thread the first one made.
-	async create(content: UserInput, title: string, repo: string | undefined, choice: { model: ModelRef; thinkingLevel: ModelThinkingLevel }, request?: string): Promise<{ id: ConversationId; sandbox: string }> {
+	async create(content: UserInput, title: string, repo: string | undefined, choice: Required<ThreadAgent>, request?: string): Promise<{ id: ConversationId; sandbox: string }> {
 		if (repo !== undefined && !REPO.test(repo)) throw new RangeError(`not a GitHub repository: ${repo}`);
 		const sandbox = this.#sandboxes.newName();
 		const workspace = this.#agent.cwd ?? "/";
@@ -163,9 +171,14 @@ export class Threads {
 						const list = await tx.doc(ThreadList);
 						const first = request === undefined ? undefined : list.items.find((t) => t.request === request);
 						if (first) throw new Created(first.id);
-						Object.assign(await tx.doc(ThreadSandbox, id), { name: sandbox, ...(repo ? { repo } : {}) });
+						const placed = await tx.doc(ThreadSandbox, id);
+						placed.name = sandbox;
+						if (repo) placed.repo = repo;
 						await tx.doc(Subagents, id);
-						list.items.push({ id, title: title.slice(0, 80), createdAt: new Date().toISOString(), ...(repo ? { repo } : {}), starting: true, ...(request ? { request } : {}) });
+						const thread: ThreadSummary = { id, title: title.slice(0, 80), createdAt: new Date().toISOString(), starting: true };
+						if (repo) thread.repo = repo;
+						if (request) thread.request = request;
+						list.items.push(thread);
 						await tx.createTask(this.#start, { sandbox, repo, workspace, cwd, content }, { ownership: { kind: "conversation" }, conversationId: id, background: true });
 					},
 				},
@@ -202,7 +215,7 @@ export class Threads {
 	}
 
 	// A message brings an archived Thread back.
-	async send(id: ConversationId, content: UserInput): Promise<boolean> {
+	async send(id: ConversationId, content: UserInput, entry?: InputEntry): Promise<boolean> {
 		const conversation = await this.#known(id);
 		if (!conversation) return false;
 		if (await this.#starting(id)) throw new Starting();
@@ -211,7 +224,7 @@ export class Threads {
 			const thread = (await tx.doc(ThreadList)).items.find((t) => t.id === id);
 			if (thread) thread.askedAt = new Date().toISOString();
 		}, context);
-		await conversation.submit({ type: "input", content, whenBusy: "steer" }, context);
+		await conversation.submit({ type: "input", content, entry, whenBusy: "steer" }, context);
 		return true;
 	}
 
@@ -280,7 +293,7 @@ export class Threads {
 	// Pi's JSON state mode over a Thread or, by name, its subagent: first the newest entries and whether earlier ones
 	// exist, or after `after` the entries the page missed, then per change the new entries and the live state. The agent
 	// goes along when it changes, and for a Thread the list of its subagents when one starts or one's work starts or ends.
-	async follow(id: ConversationId, name: string | undefined, after: EntryId | undefined, send: (event: FollowEvent) => void): Promise<(() => Promise<unknown>) | undefined> {
+	async follow(id: ConversationId, name: string | undefined, after: EntryId | undefined, send: (event: FollowEvent) => void): Promise<Stop | undefined> {
 		const conversation = await this.#conversation(id, name);
 		return conversation && this.#follow(conversation, after, send, name === undefined);
 	}
@@ -293,7 +306,7 @@ export class Threads {
 		return { entries: [...page.items].reverse(), earlier: page.next !== undefined };
 	}
 
-	async #follow(conversation: Conversation, after: EntryId | undefined, send: (event: FollowEvent) => void, withSubagents: boolean): Promise<() => Promise<unknown>> {
+	async #follow(conversation: Conversation, after: EntryId | undefined, send: (event: FollowEvent) => void, withSubagents: boolean): Promise<Stop> {
 		// A reconnect resumes right after the page's newest entry, as Pi's `ConversationTranscript.resume` does.
 		const watch = await conversation.watch(context, after === undefined ? undefined : { from: (after + 1) as EntryId });
 		// Pi's client transcript over the windowed view: a gap that a stall left is filled before anything is sent, so
@@ -310,7 +323,7 @@ export class Threads {
 			sent = transcript.newest ?? sent;
 			return { entries, earlier: items[0]?.kind === "earlier" };
 		};
-		const children = new Map<ConversationId, SubagentView & { stop: () => Promise<unknown> }>();
+		const children = new Map<ConversationId, SubagentView & { stop: Stop }>();
 		const subagents = () => [...children.values()].map(({ name, model, working }) => ({ name, model, working }));
 		const watchChildren = async (agents: Record<string, { conversationId: ConversationId }>) => {
 			let started = false;
@@ -319,7 +332,14 @@ export class Threads {
 				started = true;
 				const child = (await this.#harness.conversation(conversationId, context))!;
 				const childLive = (await this.#harness.watchDoc(LiveDoc, conversationId, context))!;
-				const view = { name, model: (await child.agent(context)).model, working: Boolean(childLive.value.run), stop: () => childLive.stop() };
+				const view = {
+					name,
+					model: (await child.agent(context)).model,
+					working: Boolean(childLive.value.run),
+					stop: async () => {
+						await childLive.stop();
+					},
+				};
 				children.set(conversationId, view);
 				childLive.start(async (call) => {
 					if (call.kind !== "value" || Boolean(call.value.run) === view.working) return;
@@ -333,18 +353,26 @@ export class Threads {
 		if (registry) await watchChildren(registry.value.agents);
 		let agent = watch.value.docs["pi.agent"];
 		const { entries, earlier } = await fresh(watch.value);
-		send({ entries, ...(after === undefined ? { earlier } : {}), live: watch.value.docs["pi.live"] ?? {}, queued: queued(watch.value.docs), agent: await agentOf(conversation), ...(withSubagents ? { subagents: subagents() } : {}) });
+		const first: FollowEvent = { entries, live: watch.value.docs["pi.live"] ?? {}, queued: queued(watch.value.docs), agent: await agentOf(conversation) };
+		if (after === undefined) first.earlier = earlier;
+		if (withSubagents) first.subagents = subagents();
+		send(first);
 		watch.start(async (call) => {
 			if (call.kind !== "value") return;
 			const { entries } = await fresh(call.value);
 			const agentChanged = call.value.docs["pi.agent"] !== agent;
 			agent = call.value.docs["pi.agent"];
-			send({ ...(entries.length ? { entries } : {}), live: call.value.docs["pi.live"] ?? {}, queued: queued(call.value.docs), ...(agentChanged ? { agent: await agentOf(conversation) } : {}) });
+			const next: FollowEvent = { live: call.value.docs["pi.live"] ?? {}, queued: queued(call.value.docs) };
+			if (entries.length) next.entries = entries;
+			if (agentChanged) next.agent = await agentOf(conversation);
+			send(next);
 		});
 		registry?.start(async (call) => {
 			if (call.kind === "value" && (await watchChildren(call.value.agents))) send({ subagents: subagents() });
 		});
-		return () => Promise.all([watch.stop(), registry?.stop(), ...[...children.values()].map((c) => c.stop())]);
+		return async () => {
+			await Promise.all([watch.stop(), registry?.stop(), ...[...children.values()].map((c) => c.stop())]);
+		};
 	}
 
 	// The Sandbox goes before the commit: a crash in between leaves a listed Thread whose

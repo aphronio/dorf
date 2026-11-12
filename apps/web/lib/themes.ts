@@ -78,7 +78,7 @@ export function chooseTheme(id: ThemeId): void {
 export async function applyTheme(id: ThemeId, setMode: (mode: "dark" | "light") => void): Promise<void> {
   const root = document.documentElement
   const t = THEMES.find((x) => x.id === id)!
-  for (const name of [...root.style]) if (name.startsWith("--")) root.style.removeProperty(name)
+  for (const name of Array.from(root.style)) if (name.startsWith("--")) root.style.removeProperty(name)
   if (!("accent" in t)) return setMode("dark")
   const { bundledThemes } = await import("shiki")
   const theme = (await bundledThemes[t.id as keyof typeof bundledThemes]()).default
