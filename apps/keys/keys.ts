@@ -92,9 +92,32 @@ async function revoke(token: string | undefined): Promise<void> {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify({ token, token_type_hint: "access_token", client_id: CLIENT }),
+		redirect: "error",
 		signal: AbortSignal.timeout(10_000),
 	});
-	if (!res.ok) throw new Error(`Claude's revoke answered ${res.status}`);
+	// As Claude Code counts it: a 2xx without Anthropic's request id did not come from Anthropic.
+	if (!res.ok || !res.headers.get("request-id")) throw new Error(`Claude's revoke answered ${res.status}`);
+}
+
+// Connecting and disconnecting each read the stored token and replace it, so they run one at a time.
+let turn: Promise<unknown> = Promise.resolve();
+function inTurn<T>(run: () => Promise<T>): Promise<T> {
+	const next = turn.then(run, run);
+	turn = next.catch(() => {});
+	return next;
+}
+
+// The old token is revoked before the new one is stored, so neither is left live outside the Secret: if either step
+// fails, the new token is revoked and the old one stays connected.
+async function replace(token: string, old: string | undefined): Promise<void> {
+	try {
+		if (old !== token) await revoke(old);
+		await store(token);
+	} catch (e) {
+		await revoke(token).catch((r) => console.error(`a new token may be live outside the Secret: ${(r as Error).message}`));
+		console.error((e as Error).message);
+		throw new Refused("Claude did not take the change; start again");
+	}
 }
 
 async function body(req: http.IncomingMessage): Promise<Record<string, unknown>> {
@@ -124,15 +147,15 @@ async function route(req: http.IncomingMessage): Promise<[number, unknown]> {
 			f.child.stdin!.write("\r");
 			const token = await find(f, TOKEN, 30_000, "token for that code");
 			end(f);
-			// A new token leaves the old one live, so the old one is revoked once the broker has the new one.
-			const old = await stored();
-			await store(token);
-			await revoke(old);
+			// A new token leaves the old one live.
+			await inTurn(async () => replace(token, await stored()));
 			return [200, { connected: await connected() }];
 		}
 		case "POST /claude/disconnect":
-			await revoke(await stored());
-			await store(null);
+			await inTurn(async () => {
+				await revoke(await stored());
+				await store(null);
+			});
 			return [200, { connected: null }];
 	}
 	return [404, { error: "not found" }];
