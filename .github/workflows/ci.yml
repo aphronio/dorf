@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request replaces its running checks; pushes to main all run, since each one may deploy.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   gitleaks:
     name: Gitleaks
