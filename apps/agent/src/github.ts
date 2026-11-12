@@ -14,6 +14,8 @@ export class GitHub {
 		const res = await fetch(`${this.#broker}/user/repos?per_page=100&sort=pushed`, {
 			headers: { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" },
 		});
+		// Until the owner connects GitHub, the broker sends a placeholder.
+		if (res.status === 401) return [];
 		if (!res.ok) throw new Error(`GitHub repositories: ${res.status} ${await res.text()}`);
 		return ((await res.json()) as { full_name: string; private: boolean }[]).map((r) => ({ name: r.full_name, private: r.private }));
 	}

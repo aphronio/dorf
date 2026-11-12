@@ -1,8 +1,9 @@
 import http from "node:http";
 import * as claude from "./claude.ts";
+import * as github from "./github.ts";
 import { Refused } from "./kube.ts";
 
-// Connects the owner's accounts to the broker: the Claude plan. The chat page drives it through the agent,
+// Connects the owner's accounts to the broker: the Claude plan and GitHub. The chat page drives it through the agent,
 // the only caller its NetworkPolicy admits, and no route returns a token.
 
 const PORT = 8092;
@@ -12,6 +13,9 @@ const ROUTES: Record<string, (body: Record<string, unknown>) => Promise<unknown>
 	"POST /claude/start": claude.start,
 	"POST /claude/code": claude.code,
 	"POST /claude/disconnect": claude.disconnect,
+	"GET /github": github.status,
+	"POST /github/start": github.start,
+	"POST /github/disconnect": github.disconnect,
 };
 
 async function body(req: http.IncomingMessage): Promise<Record<string, unknown>> {

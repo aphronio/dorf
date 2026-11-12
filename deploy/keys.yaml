@@ -1,6 +1,6 @@
-# Connects the owner's Claude plan from the chat page, through the agent: it runs `claude setup-token` and writes the
-# token into the Secret the broker reads (deploy/broker.yaml). It may change only that Secret, and only the agent may
-# call it.
+# Connects the owner's Claude plan and GitHub from the chat page, through the agent, and writes their tokens where the
+# broker (deploy/broker.yaml) and the egress gateway read them. It may change only those Secrets, and only the agent
+# may call it.
 apiVersion: v1
 kind: ServiceAccount
 metadata: {name: keys, namespace: dorf-broker}
@@ -9,7 +9,20 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata: {name: keys, namespace: dorf-broker}
 rules:
-- {apiGroups: [""], resources: [secrets], resourceNames: [claude], verbs: [get, patch]}
+- {apiGroups: [""], resources: [secrets], resourceNames: [claude, github, github-login], verbs: [get, patch]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: keys, namespace: dorf-secrets}
+rules:
+- {apiGroups: [""], resources: [secrets], resourceNames: [github], verbs: [patch]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: keys, namespace: dorf-secrets}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: keys}
+subjects:
+- {kind: ServiceAccount, name: keys, namespace: dorf-broker}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -33,6 +46,8 @@ spec:
         image: ${KEYS_IMAGE}
         env:
         - {name: NODE_EXTRA_CA_CERTS, value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt}
+        - {name: DORF_GITHUB_CLIENT, value: "${DORF_GITHUB_CLIENT}"}
+        - {name: DORF_GITHUB_APP, value: "${DORF_GITHUB_APP}"}
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true}
         volumeMounts:
         - {name: tmp, mountPath: /tmp}

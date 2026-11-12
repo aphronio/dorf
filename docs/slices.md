@@ -108,9 +108,10 @@ Facts learned in one slice that a later slice must respect.
   repository needs.
 - Substrate's egress gateway injects the GitHub token from Secret `dorf-secrets/github`, so a
   Sandbox pushes without holding it. The gateway only replaces an Authorization header the request
-  already carries, so git's credential helper sends a placeholder. Without the Secret, public
-  repositories still work and only authenticated requests get 403. The Secret's key `basic` holds
-  base64 of `x-access-token:<token>`.
+  already carries, so git's credential helper sends a placeholder. The Secret's key `basic` holds
+  base64 of `x-access-token:<token>`, and `x-access-token:none` until the owner connects GitHub;
+  git sends no credentials for a public repository, so those still clone. The gateway reads the
+  Secret on each request: a changed token reached a Sandbox's `gh` within 5 s, without a restart.
 - Egress rules are allow-only host names, and the gateway resolves cluster names too, so an open
   policy reached the Kubernetes API by its cluster name. `deploy/egress-fence.yaml` limits the
   gateway to public addresses, DNS and the two Substrate services it calls; it needs a CNI that
@@ -127,11 +128,19 @@ Facts learned in one slice that a later slice must respect.
   cluster's machine, in front of a systemd unit running `kubectl -n dorf-gate port-forward
   deploy/dorf-agent 8091:8091` with `Restart=always`: the forward exits whenever `up.sh` replaces the
   pod. `up.sh` needs `DORF_OWNER`, the one Tailscale login the agent serves.
-- GitHub is on when the Secret `dorf-secrets/github` exists: `up.sh` then gives the gate the egress
-  rule for github.com, api.github.com and uploads.github.com, and the broker a copy for the
-  agent's list of repositories. The gateway swaps the whole Authorization value, so `gh` works with
-  `GH_TOKEN=placeholder` on REST and GraphQL. A fine-grained token lists every public repository of
-  its owner too, not only the granted ones.
+- The owner connects GitHub under Settings, Source control, through Dorf's GitHub App and
+  GitHub's device flow: they approve a short code on github.com. The keys service keeps the
+  refresh token in `dorf-broker/github-login`, refreshes the 8-hour user token an hour before it
+  runs out, and writes it to `dorf-secrets/github` for the gateway and `dorf-broker/github` for
+  the broker. The device flow needs only the app's public client id, so no app secret or private
+  key is kept; `DORF_GITHUB_CLIENT` and `DORF_GITHUB_APP` name a deployment's own app. GitHub
+  revokes a user token only with the app's secret, so Disconnect forgets the sign-in and the
+  token lapses within 8 hours, or at once when the owner revokes Dorf at github.com › Settings ›
+  Applications. Agent code that a Thread pushed could show a code from its own device flow with
+  the same public client id; the owner's approval then gives it a refresh token, good until the
+  owner revokes Dorf on github.com, for the repositories the app may reach. That is the same open
+  risk as the Claude sign-in. The gateway swaps the whole Authorization value, so `gh` works with
+  `GH_TOKEN=placeholder` on REST and GraphQL.
 - A Sandbox has no user or mount namespaces (gVisor), so local stand-ins can't give each Sandbox
   its own filesystem. Each gets its own folder instead: the stand-in starts that Sandbox's pi-env
   there and the workspace is `/proc/self/cwd`. Pi resolves a relative workspace on the agent's side,

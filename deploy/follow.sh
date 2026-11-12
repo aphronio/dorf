@@ -75,7 +75,7 @@ follow() {
 	# The token Threads push with, as a header file only root can read, never on a command line.
 	local basic
 	basic=$(kubectl -n dorf-secrets get secret github -o jsonpath='{.data.basic}' 2>/dev/null | base64 -d || true)
-	if [ -n "$basic" ]; then
+	if [ -n "$basic" ] && [ "$(base64 -d <<<"$basic")" != x-access-token:none ]; then
 		AUTH=$(mktemp)
 		trap 'rm -f "$AUTH"' EXIT
 		printf 'authorization: Basic %s' "$basic" >"$AUTH"

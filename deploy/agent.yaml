@@ -32,7 +32,6 @@ spec:
         - {name: HOME, value: /data}
         - {name: DORF_BROKER, value: http://broker.dorf-broker}
         - {name: DORF_KEYS, value: http://keys.dorf-broker}
-        - {name: DORF_GITHUB, value: "${DORF_GITHUB}"}
         volumeMounts:
         - {name: data, mountPath: /data}
         - {name: token, mountPath: /run/dorf/token, readOnly: true}

@@ -31,7 +31,7 @@ const MODEL = process.env.DORF_MODEL ?? "faux";
 const OWNER = process.env.DORF_OWNER;
 if (!OWNER) throw new Error("set DORF_OWNER to the Tailscale login allowed to use this agent");
 const CLAUDE = process.env.DORF_CLAUDE_BIN ?? bundledClaude();
-const github = process.env.DORF_GITHUB && process.env.DORF_BROKER ? new GitHub(process.env.DORF_BROKER) : undefined;
+const github = process.env.DORF_BROKER ? new GitHub(process.env.DORF_BROKER) : undefined;
 
 const models = builtinModels();
 const slash = MODEL.indexOf("/");

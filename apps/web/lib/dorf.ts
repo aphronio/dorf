@@ -29,6 +29,9 @@ export const newRequest = () => Array.from(crypto.getRandomValues(new Uint8Array
 export type Repo = { name: string; private: boolean }
 // When the owner last connected the Claude plan; null until then.
 export type Claude = { connected: string | null }
+// GitHub as the keys service reports it: who is connected, the code to approve while a sign-in waits, and where the
+// owner picks the repositories Dorf's app may reach.
+export type GitHub = { connected: string | null; login?: string; pending?: { code: string; url: string }; error?: string; repositories?: string }
 export type ModelChoice = { ref: string; name: string; thinking: string[]; defaultThinking: string }
 export type ModelRef = { provider: string; modelId: string }
 export type ThreadAgent = { model?: ModelRef; thinkingLevel: string }

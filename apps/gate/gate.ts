@@ -17,8 +17,8 @@ const KUBE = "/var/run/secrets/kubernetes.io/serviceaccount";
 const OWN_TOKEN = "/run/dorf/substrate/token";
 const CALLER = "system:serviceaccount:dorf-gate:dorf-agent";
 const REVIEW_MS = 60_000;
-// With GitHub on, the egress gateway swaps the token from dorf-secrets/github into git's and gh's
-// Authorization header, whatever placeholder they send.
+// The egress gateway swaps the token from dorf-secrets/github into git's and gh's Authorization header, whatever
+// placeholder they send.
 const GITHUB = {
 	https: {
 		hostnames: ["github.com", "api.github.com", "uploads.github.com"],
@@ -28,7 +28,7 @@ const GITHUB = {
 const EGRESS = [
 	{ tlsPassthrough: { hostnames: ["*"], ports: { all: {} } } },
 	{ http: { hostnames: ["*"] } },
-	...(process.env.DORF_GITHUB ? [GITHUB] : []),
+	GITHUB,
 ];
 
 const api: Api = connect("api.ate-system.svc:443", readFileSync(SERVICEDNS), "api.ate-system.svc");
