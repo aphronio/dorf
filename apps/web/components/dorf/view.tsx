@@ -77,7 +77,7 @@ function Frame({ html, fill, title }: { html: string; fill?: boolean; title: str
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       if (e.source !== ref.current?.contentWindow || e.data?.dorfView !== "height") return
-      if (typeof e.data.height === "number") setHeight(e.data.height)
+      if (Number.isFinite(e.data.height)) setHeight(e.data.height)
     }
     addEventListener("message", onMessage)
     const send = () => ref.current?.contentWindow?.postMessage({ dorfView: "theme", ...theme() }, "*")

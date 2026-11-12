@@ -32,7 +32,7 @@ const command = (c: Call) => {
 // Consecutive commands form one block, even across the assistant messages Pi splits them into. The items before are
 // left as they are: they may be the settled ones, kept from render to render.
 function push(items: Item[], key: string, message: Message, entry?: number) {
-  const blocks = typeof message.content === "string" ? [{ type: "text", text: message.content } as Block] : message.content
+  const blocks = Array.isArray(message.content) ? message.content : [{ type: "text", text: message.content } as Block]
   blocks.forEach((b, i) => {
     const last = items.at(-1)
     if (b.type === "toolCall") {
@@ -58,7 +58,7 @@ function place(items: Item[], from: number, outputs: Record<string, Output>, ima
   return images
 }
 
-const EXTENSION: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" }
+const EXTENSION = new Map([["image/png", "png"], ["image/jpeg", "jpg"], ["image/gif", "gif"], ["image/webp", "webp"]])
 
 // The items of the stored entries. They change when an entry arrives, not with each token of a reply.
 function settle(entries: Entry[]) {
@@ -68,12 +68,12 @@ function settle(entries: Entry[]) {
     const m = e.model?.[0]
     if (!m) continue
     if (e.kind === "pi.tool-result" && m.toolCallId) {
-      const images = typeof m.content === "string" ? [] : m.content.flatMap((b) => (b.type === "image" ? [`data:${b.mimeType};base64,${b.data}`] : []))
+      const images = Array.isArray(m.content) ? m.content.flatMap((b) => (b.type === "image" ? [`data:${b.mimeType};base64,${b.data}`] : [])) : []
       outputs[m.toolCallId] = { text: text(m.content), error: m.isError, images }
     }
     else if (e.kind === "pi.user" || e.kind === "dorf.quoted") {
-      const sent = typeof m.content === "string" ? [] : m.content.flatMap((b) => (b.type === "image" ? [b] : []))
-      const files = sent.map((b, i) => imageFile(b, `image ${i + 1}.${EXTENSION[b.mimeType] ?? "png"}`))
+      const sent = Array.isArray(m.content) ? m.content.flatMap((b) => (b.type === "image" ? [b] : [])) : []
+      const files = sent.map((b, i) => imageFile(b, `image ${i + 1}.${EXTENSION.get(b.mimeType) ?? "png"}`))
       // The model reads the quotes before the text; the page shows them from the entry's data.
       const quoted = e.kind === "dorf.quoted" ? (e.data as { text: string; quotes: Quote[] }) : undefined
       items.push({ kind: "user", key: String(e.id), text: quoted ? quoted.text : text(m.content), files, quotes: quoted?.quotes })

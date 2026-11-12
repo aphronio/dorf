@@ -42,7 +42,7 @@ export const OPENS = "block w-full cursor-zoom-in rounded-md outline-none focus-
 // opens the image in the viewer.
 export function Markdown({ children, images, onImageOpen }: { children: string; images?: Map<string, string>; onImageOpen?: (image: Picture) => void }) {
   const img: Components["img"] = ({ src, alt }) => {
-    const path = typeof src === "string" ? src : ""
+    const path = src instanceof Blob ? "" : (src ?? "")
     const seen = images?.get(path) ?? images?.get(path.split("/").pop() ?? "")
     if (!seen) return <span className="text-muted-foreground">[{alt || path}]</span>
     const name = alt || path.split("/").pop() || "image"

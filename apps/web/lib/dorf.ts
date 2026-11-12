@@ -37,10 +37,11 @@ export type ModelRef = { provider: string; modelId: string }
 export type ThreadAgent = { model?: ModelRef; thinkingLevel: string }
 export type Subagent = { name: string; model?: ModelRef; working: boolean }
 
+export type Json = string | number | boolean | null | Json[] | { [key: string]: Json | undefined }
 export type Block =
   | { type: "text"; text: string }
   | { type: "thinking"; thinking: string }
-  | { type: "toolCall"; id: string; name: string; arguments?: Record<string, unknown> }
+  | { type: "toolCall"; id: string; name: string; arguments?: Record<string, Json> }
   | { type: "image"; data: string; mimeType: string }
 export type Message = {
   role: "user" | "assistant" | "toolResult"
@@ -68,7 +69,7 @@ export class Unreachable extends Error {
 
 // The agent answers every call in JSON, so anything else came from in front of it: the network, a
 // proxy's error page, or the development server's 404 when it proxies to no agent.
-export async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
+export async function api<T>(method: string, path: string, body?: Json): Promise<T> {
   const res = await fetch(path, {
     method,
     headers: { "content-type": "application/json" },
@@ -122,9 +123,9 @@ export function useThreads(lost: () => void): Thread[] {
 }
 
 export const text = (content: Message["content"] | undefined) =>
-  typeof content === "string"
-    ? content
-    : (content ?? []).flatMap((c) => (c.type === "text" ? [c.text] : [])).join("")
+  Array.isArray(content)
+    ? content.flatMap((c) => (c.type === "text" ? [c.text] : [])).join("")
+    : (content ?? "")
 
 // Pi's JSON state stream: the first event holds the newest entries and whether earlier ones exist,
 // later ones the new entries. A reconnect sends the newest entry it has and gets the ones it missed, however many, so

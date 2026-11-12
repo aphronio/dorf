@@ -120,7 +120,9 @@ export function QuoteSelection({ container, onQuote }: { container: RefObject<HT
   if (!pick) return null
   const tooLong = pick.quote.text.length > MAX_LENGTH
   const add = (comment: string) => {
-    onQuote({ ...pick.quote, ...(comment.trim() ? { comment: comment.trim() } : {}) })
+    const quote = { ...pick.quote }
+    if (comment.trim()) quote.comment = comment.trim()
+    onQuote(quote)
     window.getSelection()?.removeAllRanges()
     setPick(undefined)
   }

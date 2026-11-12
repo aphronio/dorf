@@ -73,8 +73,8 @@ export default function Page() {
   // what the page asked it for when it was away. The streams open again by themselves.
   const [down, setDown] = useState(false)
   const [connection, setConnection] = useState(0)
-  const fail = useCallback((e: unknown) => (e instanceof Unreachable ? setDown(true) : setError((e as Error).message)), [])
-  const lost = useCallback((e: unknown) => void (e instanceof Unreachable && setDown(true)), [])
+  const fail = useCallback((e: Error) => (e instanceof Unreachable ? setDown(true) : setError(e.message)), [])
+  const lost = useCallback((e: Error) => void (e instanceof Unreachable && setDown(true)), [])
 
   // The list as it changes: a Thread added, archived, deleted, starting work or ending it.
   const threads = useThreads(useCallback(() => setDown(true), []))
@@ -175,13 +175,13 @@ export default function Page() {
     if (quoting.length) setQuotes([])
     try {
       if (id !== undefined) {
-        await api("POST", `/threads/${id}/messages`, { text: value, ...attached, ...(quoting.length ? { quotes: quoting } : {}) })
+        await api("POST", `/threads/${id}/messages`, { text: value, ...attached, quotes: quoting.length ? quoting : undefined })
         return
       }
       store(REPO_KEY, repo)
       const chosen = repo !== NO_REPO ? repo : undefined
       setStarting({ prompt: value, images: files, repo: chosen })
-      const created = await api<Thread>("POST", "/threads", { prompt: value, ...attached, ...(chosen ? { repo: chosen } : {}), model, thinking: newLevels.length ? newLevel : undefined, request })
+      const created = await api<Thread>("POST", "/threads", { prompt: value, ...attached, repo: chosen || undefined, model, thinking: newLevels.length ? newLevel : undefined, request })
       setStarting({ prompt: value, images: files, repo: chosen, id: created.id })
       setRequest(newRequest())
       openThread(created.id)
@@ -190,7 +190,7 @@ export default function Page() {
       setDraft(value)
       setImages(files)
       if (quoting.length) setQuotes(quoting)
-      fail(e)
+      fail(e as Error)
     }
   }
   const stop = () => id !== undefined && api("POST", `/threads/${id}/abort`).catch(fail)
