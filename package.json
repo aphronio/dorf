@@ -1,7 +1,7 @@
 {
   "private": true,
   "scripts": {
-    "check": "bun run --cwd apps/agent check && bun run --cwd apps/gate check && bun run --cwd apps/web typecheck && bun run --cwd apps/web lint",
+    "check": "bun run --cwd apps/agent check && bun run --cwd apps/gate check && bun run --cwd apps/keys check && bun run --cwd apps/web typecheck && bun run --cwd apps/web lint",
     "proof": "bun run --cwd apps/agent proof"
   }
 }

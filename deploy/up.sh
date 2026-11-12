@@ -80,21 +80,26 @@ kubectl -n dorf-gate delete secret github --ignore-not-found >/dev/null
 kubectl -n dorf-gate rollout status deploy/dorf-gate --timeout=5m >/dev/null
 echo "gate ready: service dorf-gate/dorf-gate"
 
-# The broker holds the agent's keys: a copy of the GitHub token, and the Claude plan's token from `claude setup-token`.
+# The broker adds the agent's keys, each from a Secret holding an Envoy SDS file. The keys service writes the Claude
+# plan's token, so up.sh only creates that Secret with a placeholder; it writes the GitHub token, or a placeholder.
 kubectl get namespace dorf-broker >/dev/null 2>&1 || kubectl create namespace dorf-broker >/dev/null
+sds() { json "v=>JSON.stringify({apiVersion:'v1',kind:'Secret',metadata:{name:'$1',namespace:'dorf-broker'},data:{'sds.yaml':Buffer.from(JSON.stringify({resources:[{'@type':'type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret',name:'$1',generic_secret:{secret:{inline_string:v}}}]})).toString('base64')}})"; }
+kubectl -n dorf-broker get secret claude >/dev/null 2>&1 || json '_=>JSON.stringify("Bearer none")' <<<'{}' | sds claude | kubectl create -f - >/dev/null
 if [ -n "$DORF_GITHUB" ]; then
-	kubectl -n dorf-secrets get secret github -o json |
-		json 's=>JSON.stringify({apiVersion:"v1",kind:"Secret",metadata:{name:"github",namespace:"dorf-broker"},data:{basic:s.data.basic}})' |
-		kubectl apply -f - >/dev/null
+	kubectl -n dorf-secrets get secret github -o json | json 's=>JSON.stringify("Basic "+Buffer.from(s.data.basic,"base64"))'
 else
-	kubectl -n dorf-broker delete secret github --ignore-not-found >/dev/null
-fi
-kubectl -n dorf-broker get secret claude >/dev/null 2>&1 ||
-	echo "no Claude plan token: run \`claude setup-token\`, then pipe it to \`kubectl -n dorf-broker create secret generic claude --from-file=token=/dev/stdin\`" >&2
-BROKER_INPUTS=$( (cat deploy/broker.yaml; kubectl -n dorf-broker get secrets -o jsonpath='{range .items[*]}{.metadata.name}={.metadata.resourceVersion} {end}') | sha256sum | cut -c1-12)
-BROKER_INPUTS=$BROKER_INPUTS envsubst '$BROKER_INPUTS' <deploy/broker.yaml | kubectl apply -f - >/dev/null
+	json '_=>JSON.stringify("Basic none")' <<<'{}'
+fi | sds github | kubectl apply -f - >/dev/null
+BROKER_CONFIG=$(sha256sum deploy/broker.yaml | cut -c1-12) envsubst '$BROKER_CONFIG' <deploy/broker.yaml | kubectl apply -f - >/dev/null
 kubectl -n dorf-broker rollout status deploy/broker --timeout=5m >/dev/null
 echo "broker ready: service dorf-broker/broker"
+
+KEYS=$REGISTRY/dorf-keys:$(cat apps/keys/{Dockerfile,package.json,bun.lock,keys.ts,page.html,page.js} | sha256sum | cut -c1-12)
+docker build -q -t "$KEYS" apps/keys >/dev/null
+KEYS_IMAGE=$(pushed "$KEYS") DORF_OWNER=${DORF_OWNER:?set DORF_OWNER to the Tailscale login allowed to use Dorf} \
+	envsubst '$KEYS_IMAGE $DORF_OWNER' <deploy/keys.yaml | kubectl apply -f - >/dev/null
+kubectl -n dorf-broker rollout status deploy/keys --timeout=5m >/dev/null
+echo "keys ready: deployment dorf-broker/keys"
 
 AGENT=$REGISTRY/dorf-agent:$(find apps/agent/{Dockerfile,Dockerfile.dockerignore,package.json,bun.lock,src} apps/web -path apps/web/node_modules -prune -o -path apps/web/.next -prune -o -path apps/web/out -prune -o -type f -print0 | sort -z | xargs -0 cat | sha256sum | cut -c1-12)
 docker build -q -f apps/agent/Dockerfile -t "$AGENT" apps >/dev/null

@@ -1,0 +1,43 @@
+# Connects the owner's Claude plan from a page: it runs `claude setup-token` and writes the token into the Secret the
+# broker reads (deploy/broker.yaml). It may change only that Secret, and the agent cannot reach it.
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: keys, namespace: dorf-broker}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: keys, namespace: dorf-broker}
+rules:
+- {apiGroups: [""], resources: [secrets], resourceNames: [claude], verbs: [get, patch]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: keys, namespace: dorf-broker}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: keys}
+subjects:
+- {kind: ServiceAccount, name: keys, namespace: dorf-broker}
+---
+# No Service: the page listens on the pod's loopback, so only a port-forward behind `tailscale serve` on its own port
+# reaches it, and the Tailscale login header can be trusted.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: keys, namespace: dorf-broker}
+spec:
+  selector: {matchLabels: {app: keys}}
+  template:
+    metadata: {labels: {app: keys}}
+    spec:
+      serviceAccountName: keys
+      securityContext: {runAsNonRoot: true, runAsUser: 1000}
+      containers:
+      - name: keys
+        image: ${KEYS_IMAGE}
+        env:
+        - {name: DORF_OWNER, value: "${DORF_OWNER}"}
+        - {name: NODE_EXTRA_CA_CERTS, value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt}
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true}
+        volumeMounts:
+        - {name: tmp, mountPath: /tmp}
+      volumes:
+      - name: tmp
+        emptyDir: {}

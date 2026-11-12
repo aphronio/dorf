@@ -1,5 +1,6 @@
 # The agent holds no key: it calls the broker, and the broker adds the Claude plan's token or the GitHub token on the
 # few routes the agent needs. Agent code can use a key through these routes but cannot read it or send it elsewhere.
+# The keys service (deploy/keys.yaml) writes the Claude token; up.sh writes the GitHub one.
 apiVersion: v1
 kind: Namespace
 metadata: {name: dorf-broker}
@@ -9,6 +10,7 @@ kind: ConfigMap
 metadata: {name: broker, namespace: dorf-broker}
 data:
   envoy.yaml: |
+    node: {id: broker, cluster: dorf}
     static_resources:
       listeners:
       - name: broker
@@ -23,7 +25,30 @@ data:
               normalize_path: true
               merge_slashes: true
               path_with_escaped_slashes_action: REJECT_REQUEST
+              # Each key is added only on the routes that switch its filter on. Envoy reloads a key when its Secret changes.
               http_filters:
+              - name: claude
+                disabled: true
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.credential_injector.v3.CredentialInjector
+                  overwrite: true
+                  credential:
+                    name: envoy.http.injected_credentials.generic
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.http.injected_credentials.generic.v3.Generic
+                      header: Authorization
+                      credential: {name: claude, sds_config: {path_config_source: {path: /etc/broker-keys/claude.yaml, watched_directory: {path: /etc/broker-keys}}}}
+              - name: github
+                disabled: true
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.credential_injector.v3.CredentialInjector
+                  overwrite: true
+                  credential:
+                    name: envoy.http.injected_credentials.generic
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.http.injected_credentials.generic.v3.Generic
+                      header: Authorization
+                      credential: {name: github, sds_config: {path_config_source: {path: /etc/broker-keys/github.yaml, watched_directory: {path: /etc/broker-keys}}}}
               - name: envoy.filters.http.router
                 typed_config: {"@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router}
               route_config:
@@ -34,20 +59,17 @@ data:
                   # Claude Code's model requests; it sends a placeholder token, replaced here.
                   - match: {path: /v1/messages, headers: [{name: ":method", string_match: {exact: POST}}]}
                     route: {cluster: anthropic, host_rewrite_literal: api.anthropic.com, timeout: 0s}
-                    request_headers_to_add:
-                    - {header: {key: authorization, value: "Bearer %ENVIRONMENT(CLAUDE_TOKEN)%"}, append_action: OVERWRITE_IF_EXISTS_OR_ADD}
+                    typed_per_filter_config: {claude: {"@type": type.googleapis.com/envoy.config.route.v3.FilterConfig, config: {}}}
                   - match: {path: /v1/messages/count_tokens, headers: [{name: ":method", string_match: {exact: POST}}]}
                     route: {cluster: anthropic, host_rewrite_literal: api.anthropic.com}
-                    request_headers_to_add:
-                    - {header: {key: authorization, value: "Bearer %ENVIRONMENT(CLAUDE_TOKEN)%"}, append_action: OVERWRITE_IF_EXISTS_OR_ADD}
+                    typed_per_filter_config: {claude: {"@type": type.googleapis.com/envoy.config.route.v3.FilterConfig, config: {}}}
                   # Claude Code's reachability check, without a token.
                   - match: {path: /api/hello, headers: [{name: ":method", string_match: {exact: HEAD}}]}
                     route: {cluster: anthropic, host_rewrite_literal: api.anthropic.com}
                   # The repositories the page offers for a new Thread.
                   - match: {path: /user/repos, headers: [{name: ":method", string_match: {exact: GET}}]}
                     route: {cluster: github, host_rewrite_literal: api.github.com}
-                    request_headers_to_add:
-                    - {header: {key: authorization, value: "Basic %ENVIRONMENT(GITHUB_BASIC)%"}, append_action: OVERWRITE_IF_EXISTS_OR_ADD}
+                    typed_per_filter_config: {github: {"@type": type.googleapis.com/envoy.config.route.v3.FilterConfig, config: {}}}
                   - match: {prefix: /}
                     direct_response: {status: 403, body: {inline_string: "not a brokered route\n"}}
       clusters:
@@ -86,8 +108,8 @@ spec:
   template:
     metadata:
       labels: {app: broker}
-      # A changed key or config restarts the broker, since Envoy reads both once.
-      annotations: {dorf.dev/inputs: "${BROKER_INPUTS}"}
+      # A changed config restarts the broker, since Envoy reads it once; keys reload on their own.
+      annotations: {dorf.dev/config: "${BROKER_CONFIG}"}
     spec:
       automountServiceAccountToken: false
       securityContext: {runAsNonRoot: true, runAsUser: 101}
@@ -98,16 +120,17 @@ spec:
         ports: [{containerPort: 8080}]
         readinessProbe: {tcpSocket: {port: 8080}}
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true}
-        env:
-        - name: CLAUDE_TOKEN
-          valueFrom: {secretKeyRef: {name: claude, key: token, optional: true}}
-        - name: GITHUB_BASIC
-          valueFrom: {secretKeyRef: {name: github, key: basic, optional: true}}
         volumeMounts:
         - {name: config, mountPath: /etc/broker, readOnly: true}
+        - {name: keys, mountPath: /etc/broker-keys, readOnly: true}
       volumes:
       - name: config
         configMap: {name: broker}
+      - name: keys
+        projected:
+          sources:
+          - secret: {name: claude, items: [{key: sds.yaml, path: claude.yaml}]}
+          - secret: {name: github, items: [{key: sds.yaml, path: github.yaml}]}
 ---
 apiVersion: v1
 kind: Service

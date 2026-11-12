@@ -1,0 +1,19 @@
+{
+  "name": "@dorf/keys",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "check": "tsc"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/claude-agent-sdk-linux-arm64": "0.3.322",
+    "@anthropic-ai/claude-agent-sdk-linux-x64": "0.3.322"
+  }
+}
