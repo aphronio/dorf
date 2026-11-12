@@ -5,7 +5,12 @@ const definition = loader.loadSync(new URL("./ateapi.proto", import.meta.url).pa
 const { Control } = (grpc.loadPackageDefinition(definition) as any).substrate.ateapi.v1;
 
 type Ref = { atespace: string; name: string };
-type Actor = { metadata: { name: string }; status: { state: string; workerAssignment?: { workerPod?: string } } };
+type Durable = { state?: string; object?: { snapshotUri?: string } };
+// One of an Actor's snapshots: its own, or, until its first pause finishes uploading, the tag it started from.
+type ActorSnapshot = { generation: string; owner?: string; durableSnapshot?: Durable };
+type Actor = { metadata: { name: string }; status: { state: string; workerAssignment?: { workerPod?: string }; snapshots?: ActorSnapshot[] } };
+type Tag = { metadata: { name: string; deleteTime?: object }; status?: { snapshot?: { durableSnapshot?: Durable } } };
+type Page = { atespace: string; options?: { pageToken: string } };
 type ActorTemplate = { metadata: { name: string; createTime: { seconds: string } } };
 type EgressRule =
 	| { tlsPassthrough: { hostnames: string[]; ports: { all: {} } } }
@@ -15,9 +20,12 @@ type EgressRule =
 // The Control methods the gate calls: what each takes, and what the gate reads of its reply.
 type Methods = {
 	ListActorTemplates: [{ atespace: string }, { actorTemplates?: ActorTemplate[] }];
-	ListActors: [{ atespace: string }, { actors?: Actor[] }];
+	ListActors: [Page, { actors?: Actor[]; nextPageToken?: string }];
+	ListTags: [Page, { tags?: Tag[]; nextPageToken?: string }];
+	CreateTag: [{ tag: { metadata: Ref; scope: "TAG_SCOPE_ATESPACE"; sourceActor: Ref } }, void];
+	DeleteTag: [{ tag: Ref }, void];
 	GetActor: [{ actor: Ref }, Actor];
-	CreateActor: [{ actor: { metadata: Ref; actorTemplate: Ref } }, void];
+	CreateActor: [{ actor: { metadata: Ref; actorTemplate: Ref; sourceTag?: Ref } }, void];
 	CreateActorEgressPolicy: [{ actor: Ref; egressPolicy: { metadata: Ref; rules: EgressRule[] } }, void];
 	ResumeActor: [{ actor: Ref }, void];
 	SuspendActor: [{ actor: Ref; options: { mode: string } }, void];
@@ -43,6 +51,8 @@ export function connect(address: string, ca: Buffer, serverName: string): Api {
 			);
 		});
 }
+
+export const FAILED_PRECONDITION = grpc.status.FAILED_PRECONDITION;
 
 const HTTP_STATUS = new Map<number, number>([
 	[grpc.status.INVALID_ARGUMENT, 400],

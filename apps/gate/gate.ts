@@ -4,12 +4,13 @@ import { readFileSync } from "node:fs";
 import http from "node:http";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
-import { type Api, connect, httpStatus, type Method, type Reply, type Request } from "./ateapi.ts";
+import { type Api, connect, FAILED_PRECONDITION, httpStatus, type Method, type Reply, type Request } from "./ateapi.ts";
 
 const ATESPACE = "dorf";
 const POOL_NAMESPACE = "dorf";
 const NAME = /^[a-z0-9-]+$/;
 const ROUTER_TIMEOUT_MS = 30_000;
+const COMPLETED = "SNAPSHOT_STORAGE_STATE_COMPLETED";
 const SERVICEDNS = "/run/ate/servicedns/trust-bundle.pem";
 const PODIDENTITY = "/run/ate/podidentity/credential-bundle.pem";
 const ROUTER = "atenet-router.ate-system.svc";
@@ -42,10 +43,23 @@ class HttpError extends Error {
 	}
 }
 
-async function call<M extends Method>(method: M, request: Request<M>): Promise<Reply<M>> {
+// `refused` answers a FailedPrecondition with its own status instead of 409.
+async function call<M extends Method>(method: M, request: Request<M>, refused?: number): Promise<Reply<M>> {
 	return api(method, request, readFileSync(OWN_TOKEN, "utf8").trim()).catch((e) => {
-		throw new HttpError(httpStatus(e), `${method}: ${e.details ?? e.message}`);
+		throw new HttpError(refused && e.code === FAILED_PRECONDITION ? refused : httpStatus(e), `${method}: ${e.details ?? e.message}`);
 	});
+}
+
+// Every page of a list, which Substrate answers a page at a time.
+async function listAll<M extends "ListTags" | "ListActors", T>(method: M, items: (reply: Reply<M>) => T[] | undefined): Promise<T[]> {
+	const all: T[] = [];
+	let pageToken = "";
+	do {
+		const page = await call(method, { atespace: ATESPACE, options: { pageToken } });
+		all.push(...(items(page) ?? []));
+		pageToken = page.nextPageToken ?? "";
+	} while (pageToken);
+	return all;
 }
 
 const admitted = new Map<string, number>();
@@ -134,6 +148,23 @@ async function leavingPods(): Promise<Set<string>> {
 	return new Set(items.filter((p) => p.metadata.deletionTimestamp).map((p) => p.metadata.name));
 }
 
+// A snapshot is borrowed while a Sandbox made from it has not yet saved its own: that Sandbox's newest finished
+// snapshot is still the tag's. Deleting the tag then would lose the Sandbox.
+async function snapshots(): Promise<{ name: string; ready: boolean; borrowed: boolean }[]> {
+	const [tags, actors] = await Promise.all([listAll("ListTags", (r) => r.tags), listAll("ListActors", (r) => r.actors)]);
+	const borrowed = new Set<string>();
+	for (const actor of actors) {
+		const newest = (actor.status.snapshots ?? []).filter((s) => s.durableSnapshot?.state === COMPLETED).sort((a, b) => Number(b.generation) - Number(a.generation))[0];
+		const uri = newest?.durableSnapshot?.object?.snapshotUri;
+		if (newest?.owner === "SNAPSHOT_OWNER_TAG" && uri) borrowed.add(uri);
+	}
+	return tags.map((tag) => {
+		const durable = tag.status?.snapshot?.durableSnapshot;
+		const uri = durable?.object?.snapshotUri;
+		return { name: tag.metadata.name, ready: durable?.state === COMPLETED && !tag.metadata.deleteTime, borrowed: uri !== undefined && borrowed.has(uri) };
+	});
+}
+
 async function route(req: http.IncomingMessage): Promise<[number, unknown]> {
 	await admit(req);
 	const [, root, name, action] = new URL(req.url ?? "/", "http://x").pathname.split("/");
@@ -142,12 +173,29 @@ async function route(req: http.IncomingMessage): Promise<[number, unknown]> {
 		const leaving = await leavingPods();
 		return [200, actors.filter((a) => a.status.state === "ACTOR_STATE_RUNNING" && leaving.has(a.status.workerAssignment?.workerPod ?? "")).map((a) => a.metadata.name)];
 	}
+	const from = new URL(req.url ?? "/", "http://x").searchParams.get("from");
+	if (from !== null && !NAME.test(from)) return [400, { error: "from must name a Sandbox or snapshot" }];
+	if (root === "snapshots" && req.method === "GET" && name === undefined) return [200, await snapshots()];
+	if (root === "snapshots" && NAME.test(name ?? "") && action === undefined) {
+		if (req.method === "POST" && from) {
+			await call("CreateTag", { tag: { metadata: ref(name), scope: "TAG_SCOPE_ATESPACE", sourceActor: ref(from) } });
+			return [201, {}];
+		}
+		if (req.method === "DELETE") {
+			await call("DeleteTag", { tag: ref(name) });
+			return [204, null];
+		}
+		return [405, { error: "method not allowed" }];
+	}
 	// 400, not 404: the agent reads 404 as a Sandbox that no longer exists.
 	if (root !== "sandboxes" || !NAME.test(name ?? "")) return [400, { error: "no such route" }];
 	switch (`${req.method} ${action ?? ""}`) {
+		// 412: Substrate refused the snapshot, as one taken under another template or being deleted.
 		case "POST ": {
 			const actorTemplate = ref(await newestTemplate());
-			await call("CreateActor", { actor: { metadata: ref(name), actorTemplate } });
+			const actor: Request<"CreateActor">["actor"] = { metadata: ref(name), actorTemplate };
+			if (from) actor.sourceTag = ref(from);
+			await call("CreateActor", { actor }, 412);
 			await call("CreateActorEgressPolicy", { actor: ref(name), egressPolicy: { metadata: ref("default"), rules: EGRESS } });
 			return [201, {}];
 		}

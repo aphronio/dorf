@@ -1,5 +1,5 @@
-import { type ChildProcess, spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { type ChildProcess, execFileSync, spawn } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -72,8 +72,10 @@ export async function fail(message: string): Promise<never> {
 
 // On stand-ins the workspace is /proc/self/cwd: each Sandbox's pi-env starts in that Sandbox's own folder, and
 // every command it runs resolves the path there, so files stay apart with no change to the agent or the gate.
-export async function startAgent(model = "faux", idleMs = IDLE_MS): Promise<void> {
+// `slowCatchUpMs` replaces the deployed 10 s after which a Thread's catch-up builds a newer repository snapshot.
+export async function startAgent(model = "faux", idleMs = IDLE_MS, slowCatchUpMs?: number): Promise<void> {
 	const env: NodeJS.ProcessEnv = { ...process.env, DORF_MODEL: model, DORF_DATA: DATA, DORF_PORT: String(PORT), DORF_IDLE_MS: String(idleMs), DORF_OWNER: OWNER, DORF_GATE: GATE, DORF_TOKEN_FILE: TOKEN, DORF_SANDBOX_PREFIX: PREFIX };
+	if (slowCatchUpMs !== undefined) env.DORF_SLOW_CATCH_UP_MS = String(slowCatchUpMs);
 	if (!substrate) {
 		env.DORF_WORKSPACE = "/proc/self/cwd";
 		env.DORF_JOBS = join(DATA, "jobs");
@@ -84,6 +86,33 @@ export async function startAgent(model = "faux", idleMs = IDLE_MS): Promise<void
 	});
 	await until("agent up", async () => (await fetch(`http://127.0.0.1:${PORT}/threads`, { headers: HEADERS }).catch(() => undefined))?.ok);
 	log("agent started", `data ${DATA}`);
+}
+
+// Repositories on this machine that the stand-ins' git clones in place of github.com's: `files`, with an executable
+// `.agents/setup` if given, committed to a bare repository. `commit` adds a commit there.
+const REPOS = join(DATA, "repos");
+if (!substrate) Object.assign(process.env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: `url.${REPOS}/.insteadOf`, GIT_CONFIG_VALUE_0: "https://github.com/" });
+type Files = Record<string, string>;
+export type TestRepository = { repo: string; commit: (files: Files, message: string) => string };
+export function repository(name: string, files: Files): TestRepository {
+	const dir = join(REPOS, "work", name);
+	const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=proof", "-c", "user.email=proof@example.com", ...args], { cwd: dir, encoding: "utf8" }).trim();
+	const commit = (changes: Files, message: string) => {
+		for (const [path, text] of Object.entries(changes)) {
+			mkdirSync(join(dir, path, ".."), { recursive: true });
+			writeFileSync(join(dir, path), text);
+			if (path === ".agents/setup") chmodSync(join(dir, path), 0o755);
+		}
+		git("add", ".");
+		git("commit", "-qm", message);
+		git("push", "-q", join(REPOS, "proof", `${name}.git`), "HEAD:main");
+		return git("rev-parse", "HEAD");
+	};
+	mkdirSync(dir, { recursive: true });
+	git("init", "-q", "-b", "main");
+	execFileSync("git", ["init", "-q", "--bare", "-b", "main", join(REPOS, "proof", `${name}.git`)]);
+	commit(files, "first");
+	return { repo: `proof/${name}`, commit };
 }
 
 export function agentPid(): number | undefined {

@@ -20,6 +20,7 @@ import { Skills } from "./skills.ts";
 import { subagents } from "./subagent.ts";
 import { drain } from "./drain.ts";
 import { SandboxJobs } from "./jobs.ts";
+import { repoSnapshots } from "./repo-snapshots.ts";
 import { threadStart } from "./thread-start.ts";
 import { sandboxEnv, Threads } from "./threads.ts";
 
@@ -28,6 +29,8 @@ const PORT = Number(process.env.DORF_PORT ?? 8091);
 const IDLE_MS = Number(process.env.DORF_IDLE_MS ?? 5 * 60_000);
 const WORKSPACE = process.env.DORF_WORKSPACE ?? "/workspace";
 const MODEL = process.env.DORF_MODEL ?? "faux";
+// A Thread that took longer to catch up from its repository's snapshot has a newer one built.
+const SLOW_CATCH_UP_MS = Number(process.env.DORF_SLOW_CATCH_UP_MS ?? 10_000);
 const OWNER = process.env.DORF_OWNER;
 if (!OWNER) throw new Error("set DORF_OWNER to the Tailscale login allowed to use this agent");
 const CLAUDE = process.env.DORF_CLAUDE_BIN ?? bundledClaude();
@@ -57,7 +60,9 @@ registry.install(SandboxJobs);
 const catalog = new Catalog(models, model);
 await catalog.refresh();
 registry.install(subagents(catalog));
-const start = threadStart(sandboxes);
+const snapshots = repoSnapshots(sandboxes, SLOW_CATCH_UP_MS);
+registry.install(snapshots.extension);
+const start = threadStart(sandboxes, snapshots);
 registry.install(start.extension);
 const harness = await Harness.open(
 	await openNodeSqliteStorage(`${DATA}/agent.sqlite`),
@@ -72,6 +77,8 @@ const harness = await Harness.open(
 );
 harness.closed.then((end) => process.exit(end.kind === "failed" ? 1 : 0));
 process.on("SIGTERM", () => harness.close(context));
+// Owns the repository snapshot builds, which outlive the Thread that started them.
+await harness.root(context);
 harness.resume();
 
 const threads = new Threads(

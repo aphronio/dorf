@@ -8,7 +8,7 @@
   "scripts": {
     "start": "node src/main.ts",
     "check": "tsc",
-    "proof": "bun run --parallel --no-exit-on-error proof:history proof:models proof:subagent-restarts proof:lifecycle proof:make-room proof:images proof:quotes proof:thread-list proof:thread-start",
+    "proof": "bun run --parallel --no-exit-on-error proof:history proof:models proof:subagent-restarts proof:lifecycle proof:make-room proof:images proof:quotes proof:thread-list proof:thread-start proof:repo-snapshots",
     "proof:lifecycle": "node test/sandbox-lifecycle.ts",
     "proof:history": "node test/history.ts",
     "proof:models": "node test/models.ts",
@@ -18,6 +18,8 @@
     "proof:quotes": "node test/quotes.ts",
     "proof:thread-list": "node test/thread-list.ts",
     "proof:thread-start": "node test/thread-start.ts",
+    "proof:repo-snapshots": "node test/repo-snapshots.ts",
+    "proof:snapshots": "../../deploy/proof.sh snapshots",
     "proof:claude-plan": "node test/claude-plan.ts",
     "proof:substrate": "../../deploy/proof.sh substrate",
     "proof:repository": "../../deploy/proof.sh repository",
