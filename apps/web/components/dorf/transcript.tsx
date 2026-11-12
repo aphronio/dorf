@@ -139,7 +139,7 @@ export function Transcript({ entries, live, queued = [], onSubagent, loadEarlier
     items.push({ kind: "note", key: "thinking", text: "" })
   if (live.generation?.retry) items.push({ kind: "note", key: "retry", text: `Retrying: ${live.generation.retry.error}` })
   if (live.runFailure && !live.run)
-    items.push({ kind: "note", key: "failed", error: true, text: `Run ended: ${live.runFailure.reason}${live.runFailure.detail ? `, ${live.runFailure.detail}` : ""}` })
+    items.push({ kind: "note", key: "failed", error: true, text: live.runFailure.detail ?? `Run ended: ${live.runFailure.reason}` })
 
   useLayoutEffect(() => {
     const el = scroller.current

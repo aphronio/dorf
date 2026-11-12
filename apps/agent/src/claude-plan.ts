@@ -227,8 +227,15 @@ const effortOf = (model: Model<Api>, reasoning: SimpleStreamOptions["reasoning"]
 	return level && EFFORTS.includes(level) ? (level as EffortLevel) : undefined;
 };
 
+const NOT_CONNECTED = "Claude is not connected. Connect it under Settings.";
+const REJECTED = "Claude rejected Dorf's connection. Connect it again under Settings.";
+
 const failure = (step: "tools" | SDKResultMessage) =>
-	step !== "tools" && (step.subtype !== "success" || step.is_error) ? `Claude Code: ${step.subtype} ${step.subtype === "success" ? step.result : step.errors.join("; ")}` : undefined;
+	step === "tools" || (step.subtype === "success" && !step.is_error)
+		? undefined
+		: step.subtype === "success" && step.result.startsWith("Failed to authenticate")
+			? REJECTED
+			: `Claude Code: ${step.subtype} ${step.subtype === "success" ? step.result : step.errors.join("; ")}`;
 
 // Claude Code keeps its own copy of each Thread, so a request sends only the groups of Pi's history it has not seen.
 export class ClaudePlan {
@@ -240,7 +247,12 @@ export class ClaudePlan {
 	#refusedUntil = 0;
 	readonly provider;
 
-	constructor(dataDir: string, executable?: string) {
+	readonly #connected: (() => Promise<boolean>) | undefined;
+
+	// `connected` asks whether the owner connected the plan, so a Thread fails at once instead of after Claude Code's
+	// retries of a request without a token.
+	constructor(dataDir: string, executable?: string, connected?: () => Promise<boolean>) {
+		this.#connected = connected;
 		this.#cwd = dataDir;
 		this.#records = `${dataDir}/sessions`;
 		this.#executable = executable;
@@ -322,13 +334,15 @@ export class ClaudePlan {
 		const signal = options?.signal;
 		const effort = effortOf(model, options?.reasoning);
 		if (effort) reply.message.providerThinkingLevel = effort;
-		const work =
-			Date.now() < this.#refusedUntil
-				? Promise.reject(new Error(`Claude plan requests are refused until ${new Date(this.#refusedUntil).toISOString()}: the plan's extra usage was drawn`))
-				: // Requests without tools, like Pi's compaction summaries, stand alone and leave the Thread's session alone.
-					sessionId && tools.length
-					? this.#serial(sessionId, () => this.#threadStep(model, effort, context.messages, tools, system, sessionId, reply, signal))
-					: this.#oneShot(model, effort, context.messages, system, reply, signal);
+		const work = (async () => {
+			if (Date.now() < this.#refusedUntil)
+				throw new Error(`Claude plan requests are refused until ${new Date(this.#refusedUntil).toISOString()}: the plan's extra usage was drawn`);
+			if (this.#connected && !(await this.#connected())) throw new Error(NOT_CONNECTED);
+			// Requests without tools, like Pi's compaction summaries, stand alone and leave the Thread's session alone.
+			return sessionId && tools.length
+				? this.#serial(sessionId, () => this.#threadStep(model, effort, context.messages, tools, system, sessionId, reply, signal))
+				: this.#oneShot(model, effort, context.messages, system, reply, signal);
+		})();
 		work.catch((e) => {
 			if (e instanceof ExtraUsage) this.#refusedUntil = e.until;
 			reply.fail(e, Boolean(signal?.aborted));
