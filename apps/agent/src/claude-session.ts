@@ -18,6 +18,8 @@ const ISOLATION_ENV = {
 	ENABLE_TOOL_SEARCH: "false",
 	CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1",
 	MAX_MCP_OUTPUT_TOKENS: "200000",
+	// Telemetry cannot leave the agent pod, and Claude Code waits about 5 s on it before its first request.
+	CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
 };
 // An allowlist, so no API key, token or provider switch in the agent's environment reaches Claude Code.
 const PASSED_ENV = ["PATH", "HOME", "LANG", "TERM", "TMPDIR", "USER"];
