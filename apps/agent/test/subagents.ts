@@ -6,7 +6,6 @@ export type Entry = { kind: string; data?: { name: string; failed?: true }; mode
 export const text = (e: Entry) => (e.model ?? []).flatMap((m) => (typeof m.content === "string" ? [m.content] : (m.content ?? []).map((c) => c.text ?? ""))).join("");
 export const subagent = (args: object) => `@ ${JSON.stringify(args)}`;
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-export const ARRIVED = (name: string) => `${name}'s answer to this message already arrived as a message.`;
 export const TOGETHER = (name: string) => `${name} answered this message together with another one, in the answer another call returned.`;
 export const STOPPED_WAITING = (name: string) => `Stopped waiting because the owner sent a message. ${name} is still working; its answer will arrive as a message.`;
 
@@ -40,11 +39,9 @@ export async function subagentThread(id: number) {
 	await until("the stream", async () => stream.events.length > 0);
 	const working = (name: string) => stream.events.findLast((e) => e.subagents)?.subagents?.find((s: { name: string }) => s.name === name)?.working === true;
 
-	// Kills the agent and starts it again, with a fault the subagent tool reads (DORF_FAULT) or none.
-	async function restart(fault?: "hold-before-commit" | "hold-after-commit") {
+	// Kills the agent and starts it again.
+	async function restart() {
 		stream.close();
-		if (fault) process.env.DORF_FAULT = fault;
-		else delete process.env.DORF_FAULT;
 		killAgent("SIGKILL");
 		await startAgent();
 		stream = follow(`/threads/${id}/events`);

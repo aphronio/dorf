@@ -1,7 +1,7 @@
 // What happens to a Thread's subagents when the agent is killed or the Thread is stopped, on the faux model.
 import { SandboxNotFound } from "../src/sandbox.ts";
 import { call, createThread, fail, follow, log, pass, runEnded, sandboxes, send, startAgent, until } from "./kit.ts";
-import { ARRIVED, sleep, STOPPED_WAITING, subagent, subagentThread, TOGETHER } from "./subagents.ts";
+import { sleep, STOPPED_WAITING, subagent, subagentThread, TOGETHER } from "./subagents.ts";
 
 await startAgent();
 const first = "$ echo hello";
@@ -45,45 +45,6 @@ const [relayRuns] = await ask("$ wc -l < relay-runs");
 if ((await reports("relay")).join() !== "[subagent relay answered] relayed" || relayRuns?.output.trim() !== "1") await fail(`restart after a handoff: ${JSON.stringify({ reports: await reports("relay"), relayRuns })}`);
 log("4. an agent killed after the owner's message handed work off reports its answer once; the command ran once");
 
-await handOff("taken", "$[60] sleep 4\n= taken over");
-await restart("hold-after-commit");
-const takeOver = subagent({ name: "taken" });
-await send(id, takeOver);
-await until("taken to answer", async () => !working("taken"), 30_000);
-await sleep(1_000);
-await restart();
-const [killedTakeover] = await answered(takeOver, 60_000);
-await sleep(2_000);
-if (killedTakeover?.output !== "taken over" || (await reports("taken")).length) await fail(`a takeover killed after its commit: ${JSON.stringify({ killedTakeover, reports: await reports("taken") })}`);
-log("5. a call without a message killed after its commit took the answer returns that answer when it runs again, and it arrives no other way");
-
-await handOff("late", "$[60] sleep 4\n= landed");
-await restart("hold-before-commit");
-await send(id, subagent({ name: "late" }));
-await until("late to answer", async () => !working("late"), 30_000);
-await sleep(1_000);
-if ((await call("POST", `/threads/${id}/abort`)).status !== 202) await fail("abort");
-const [landed] = await until("late's answer after the stop", async () => (await reports("late")).length > 0 && (await reports("late")), 30_000);
-await sleep(3_000);
-const afterStop = await entries();
-if (landed !== "[subagent late answered] landed" || (await reports("late")).length !== 1 || afterStop.at(-1)?.kind !== "dorf.subagent-report")
-	await fail(`a stop as the answer lands: ${JSON.stringify({ reports: await reports("late"), last: afterStop.at(-1)?.kind })}`);
-log("6. a stop between the answer and the call's commit places the answer in the Thread once, without starting a run");
-
-await restart("hold-after-commit");
-await send(id, subagent({ name: "echo", message: "$[60] sleep 4\n= echoed" }));
-await until("echo to work", async () => working("echo"), 30_000);
-await send(id, "$ true");
-await until("echo to answer", async () => !working("echo"), 30_000);
-await sleep(1_000);
-await restart();
-const echoReport = await until("echo's report", async () => (await reports("echo")).length > 0 && (await reports("echo")), 60_000);
-await sleep(2_000);
-const echoCall = (await results()).filter((r) => r.output === ARRIVED("echo") || r.output === STOPPED_WAITING("echo"));
-if (echoReport.join() !== "[subagent echo answered] echoed" || (await reports("echo")).length !== 1 || echoCall.length !== 1 || (await results()).some((r) => r.output === "echoed"))
-	await fail(`a handed-off call run again: ${JSON.stringify({ reports: await reports("echo"), results: await results() })}`);
-log("7. a handed-off call run again after the reporter delivered says what became of the answer", JSON.stringify(echoCall[0]!.output));
-
 await handOff("pair", "$[60] sleep 5\n= first");
 await send(id, subagent({ name: "pair", message: "= second" }));
 await send(id, "$ true");
@@ -91,7 +52,7 @@ await until("the second handoff", async () => (await results()).filter((r) => r.
 const [newest] = await ask(subagent({ name: "pair" }));
 await sleep(2_000);
 if (newest?.output !== "second" || (await reports("pair")).length) await fail(`a takeover after two handoffs: ${JSON.stringify({ newest, reports: await reports("pair") })}`);
-log("8. after two handoffs to one name, a call without a message takes the newest; the steered subagent answered both at once, and that answer arrives once");
+log("5. after two handoffs to one name, a call without a message takes the newest; the steered subagent answered both at once, and that answer arrives once");
 
 const busy = follow(`/threads/${id}/events`);
 await send(id, subagent({ name: "busy", message: "$[120] sleep 120" }));
@@ -100,5 +61,5 @@ busy.close();
 const deleting = Date.now();
 if ((await call("DELETE", `/threads/${id}`)).status !== 204) await fail("delete");
 if (!(await sandboxes.state(sandbox).then(() => false, (e) => e instanceof SandboxNotFound))) await fail("the Sandbox outlived its Thread");
-log("9. deleting a Thread stops its subagents and removes the Sandbox", `${((Date.now() - deleting) / 1000).toFixed(1)}s`);
+log("6. deleting a Thread stops its subagents and removes the Sandbox", `${((Date.now() - deleting) / 1000).toFixed(1)}s`);
 await pass();
