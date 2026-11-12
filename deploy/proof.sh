@@ -30,4 +30,5 @@ cd "$DIR/tree" && node "apps/agent/test/$PROOF.ts"
 RUN
 for _ in $(seq 50); do [ -S "$dir/gate.sock" ] && break; sleep 0.1; done
 unshare --net sh -c 'ip link set lo up && exec "$@"' unshare setpriv --reuid=nobody --regid=nogroup --clear-groups \
-	env -i PATH="$PATH" HOME="$dir/home" DIR="$dir" PROOF="$proof" PIPE="$PIPE" DORF_GATE=http://127.0.0.1:8080 DORF_TOKEN_FILE="$dir/token" bash "$dir/run.sh"
+	env -i PATH="$PATH" HOME="$dir/home" DIR="$dir" PROOF="$proof" PIPE="$PIPE" DORF_GATE=http://127.0.0.1:8080 DORF_TOKEN_FILE="$dir/token" \
+	DORF_PROOF_REPO="${DORF_PROOF_REPO:-}" bash "$dir/run.sh"
