@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Body } from "./keys.ts";
 import { oneAtATime, Refused, sds, secret } from "./kube.ts";
 
 // The Claude plan: Claude Code's own `claude setup-token` makes a one-year token, which goes into the Secret the broker
@@ -106,10 +107,10 @@ export async function start() {
 	return { url: await find(begin(), LINK, 20_000, "sign-in link") };
 }
 
-export async function code(body: Record<string, unknown>) {
+export async function code(body: Body) {
 	const f = flow;
 	if (!f || f.done) throw new Refused("start again");
-	if (typeof body.code !== "string" || !CODE.test(body.code)) throw new Refused("that does not look like a sign-in code");
+	if (body.code === undefined || !CODE.test(body.code)) throw new Refused("that does not look like a sign-in code");
 	// Typed, then Enter on its own, so the terminal does not read the two as one paste.
 	f.child.stdin!.write(body.code);
 	await new Promise((r) => setTimeout(r, 300));

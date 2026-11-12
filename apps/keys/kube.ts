@@ -5,8 +5,11 @@ const KUBE = "/var/run/secrets/kubernetes.io/serviceaccount";
 // A refusal the owner can act on; any other error is logged and reported as a failure of this service.
 export class Refused extends Error {}
 
+// A JSON merge patch of a Secret: null removes a key.
+type Patch = { metadata?: { annotations: Record<string, string | null> }; data: Record<string, string | null> };
+
 // Reads a Secret, or merges `patch` into it, asking up to three times. The service's Roles name each Secret it may touch.
-export async function secret(namespace: string, name: string, patch?: object): Promise<any> {
+export async function secret(namespace: string, name: string, patch?: Patch): Promise<any> {
 	for (let attempt = 1; ; attempt++) {
 		try {
 			return await once(namespace, name, patch);
@@ -17,7 +20,7 @@ export async function secret(namespace: string, name: string, patch?: object): P
 	}
 }
 
-async function once(namespace: string, name: string, patch?: object): Promise<any> {
+async function once(namespace: string, name: string, patch?: Patch): Promise<any> {
 	const res = await fetch(`https://kubernetes.default.svc/api/v1/namespaces/${namespace}/secrets/${name}`, {
 		method: patch ? "PATCH" : "GET",
 		headers: { authorization: `Bearer ${readFileSync(`${KUBE}/token`, "utf8")}`, "content-type": "application/merge-patch+json" },

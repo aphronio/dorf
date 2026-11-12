@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import http from "node:http";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
-import { type Api, connect, httpStatus } from "./ateapi.ts";
+import { type Api, connect, httpStatus, type Method, type Reply, type Request } from "./ateapi.ts";
 
 const ATESPACE = "dorf";
 const POOL_NAMESPACE = "dorf";
@@ -42,7 +42,7 @@ class HttpError extends Error {
 	}
 }
 
-async function call(method: string, request: object): Promise<any> {
+async function call<M extends Method>(method: M, request: Request<M>): Promise<Reply<M>> {
 	return api(method, request, readFileSync(OWN_TOKEN, "utf8").trim()).catch((e) => {
 		throw new HttpError(httpStatus(e), `${method}: ${e.details ?? e.message}`);
 	});
@@ -66,7 +66,7 @@ async function admit(req: http.IncomingMessage): Promise<void> {
 	admitted.set(token, Date.now() + REVIEW_MS);
 }
 
-function currentPodCertificate(): { key?: string; cert?: string } {
+function currentPodCertificate() {
 	const bundle = readFileSync(PODIDENTITY, "utf8");
 	return {
 		key: bundle.match(/-----BEGIN [A-Z ]*PRIVATE KEY-----[^-]+-----END [A-Z ]*PRIVATE KEY-----/)?.[0],
@@ -119,8 +119,8 @@ function sandboxState(actorState: string): string {
 async function newestTemplate(): Promise<string> {
 	const { actorTemplates = [] } = await call("ListActorTemplates", { atespace: ATESPACE });
 	const newest = actorTemplates
-		.filter((t: any) => t.metadata.name.startsWith("sandbox-"))
-		.sort((a: any, b: any) => Number(b.metadata.createTime.seconds) - Number(a.metadata.createTime.seconds))[0];
+		.filter((t) => t.metadata.name.startsWith("sandbox-"))
+		.sort((a, b) => Number(b.metadata.createTime.seconds) - Number(a.metadata.createTime.seconds))[0];
 	if (!newest) throw new HttpError(409, "no Sandbox template; run deploy/up.sh");
 	return newest.metadata.name;
 }
@@ -140,7 +140,7 @@ async function route(req: http.IncomingMessage): Promise<[number, unknown]> {
 	if (root === "draining" && req.method === "GET") {
 		const { actors = [] } = await call("ListActors", { atespace: ATESPACE });
 		const leaving = await leavingPods();
-		return [200, actors.filter((a: any) => a.status.state === "ACTOR_STATE_RUNNING" && leaving.has(a.status.workerAssignment?.workerPod)).map((a: any) => a.metadata.name)];
+		return [200, actors.filter((a) => a.status.state === "ACTOR_STATE_RUNNING" && leaving.has(a.status.workerAssignment?.workerPod ?? "")).map((a) => a.metadata.name)];
 	}
 	// 400, not 404: the agent reads 404 as a Sandbox that no longer exists.
 	if (root !== "sandboxes" || !NAME.test(name ?? "")) return [400, { error: "no such route" }];
