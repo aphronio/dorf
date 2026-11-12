@@ -94,7 +94,7 @@ export async function until<T>(what: string, check: () => Promise<T | undefined 
 	while (Date.now() < end) {
 		const value = await check();
 		if (value) return value;
-		await new Promise((r) => setTimeout(r, 250));
+		await new Promise((r) => setTimeout(r, 50));
 	}
 	return await fail(`timed out waiting for ${what}`);
 }
