@@ -23,7 +23,7 @@ export function Settings() {
 }
 
 // Claude Code's own `claude setup-token`, run by the keys service: the owner signs in on claude.com and pastes the
-// code back.
+// code back. Connecting again, or disconnecting, revokes the token the keys service held.
 function ClaudePlan() {
   const [status, setStatus] = useState<Claude | { error: string }>()
   const [url, setUrl] = useState<string>()
@@ -31,9 +31,8 @@ function ClaudePlan() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
 
-  useEffect(() => {
-    api<Claude>("GET", "/claude").then(setStatus, (e: Error) => setStatus({ error: e.message }))
-  }, [])
+  const load = () => api<Claude>("GET", "/claude").then(setStatus, (e: Error) => setStatus({ error: e.message }))
+  useEffect(() => void load(), [])
 
   const step = async (run: () => Promise<void>) => {
     setError(undefined)
@@ -42,6 +41,7 @@ function ClaudePlan() {
       await run()
     } catch (e) {
       setError((e as Error).message)
+      void load()
     } finally {
       setBusy(false)
     }
@@ -54,6 +54,9 @@ function ClaudePlan() {
       setUrl(undefined)
       setStatus(await api<Claude>("POST", "/claude/code", { code: code.trim() }))
     })
+  const disconnect = () =>
+    confirm("Disconnect Claude? Its token is revoked, and Threads on the Claude plan stop until you connect again.") &&
+    step(async () => setStatus(await api<Claude>("POST", "/claude/disconnect")))
 
   const ready = status && "connected" in status
   const connected = ready ? status.connected : null
@@ -68,6 +71,11 @@ function ClaudePlan() {
           </Badge>
         )}
         <div className="flex-1" />
+        {connected && !url && (
+          <Button size="compact" variant="ghost" disabled={busy} onClick={() => void disconnect()}>
+            Disconnect
+          </Button>
+        )}
         {ready && (
           <Button
             size="compact"

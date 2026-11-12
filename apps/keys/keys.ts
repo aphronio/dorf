@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // Connects the owner's Claude plan to the broker: it runs Claude Code's own `claude setup-token` and writes the token
-// into the Secret the broker reads. The chat page drives it through the agent, the only caller its NetworkPolicy
-// admits, and no route returns the token.
+// into the Secret the broker reads, and revokes the token it replaces or disconnects. The chat page drives it through
+// the agent, the only caller its NetworkPolicy admits, and no route returns the token.
 
 const PORT = 8092;
 const CLAUDE = createRequire(import.meta.url).resolve(`@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/claude`);
@@ -17,7 +17,11 @@ const FLOW_MS = 10 * 60_000;
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\x1b[()][0-9A-Za-z]/g;
 const LINK = /https:\/\/claude\.com\/cai\/oauth\/authorize\?[^\s"'<>]+/;
 const TOKEN = /sk-ant-oat01-[\w-]{80,}(?=\s)/;
+const TOKEN_IN_SDS = /Bearer (sk-ant-oat01-[\w-]{80,})/;
 const CODE = /^[\w#.~-]{8,512}$/;
+// Where Claude Code's own logout revokes a token, and the OAuth client its sign-in link names.
+const REVOKE = "https://platform.claude.com/v1/oauth/token/revoke";
+const CLIENT = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 
 class Refused extends Error {}
 
@@ -71,10 +75,26 @@ async function connected(): Promise<string | null> {
 	return (await kube("GET")).metadata?.annotations?.["dorf.dev/connected"] ?? null;
 }
 
-// The broker's credential injector reads an SDS file and reloads it when the Secret changes.
-async function store(token: string): Promise<void> {
-	const sds = { resources: [{ "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret", name: "claude", generic_secret: { secret: { inline_string: `Bearer ${token}` } } }] };
-	await kube("PATCH", { metadata: { annotations: { "dorf.dev/connected": new Date().toISOString() } }, data: { "sds.yaml": Buffer.from(JSON.stringify(sds)).toString("base64") } });
+// The broker's credential injector reads an SDS file and reloads it when the Secret changes. No token is "Bearer none".
+async function store(token: string | null): Promise<void> {
+	const sds = { resources: [{ "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret", name: "claude", generic_secret: { secret: { inline_string: `Bearer ${token ?? "none"}` } } }] };
+	await kube("PATCH", { metadata: { annotations: { "dorf.dev/connected": token && new Date().toISOString() } }, data: { "sds.yaml": Buffer.from(JSON.stringify(sds)).toString("base64") } });
+}
+
+async function stored(): Promise<string | undefined> {
+	const sds = Buffer.from((await kube("GET")).data?.["sds.yaml"] ?? "", "base64").toString();
+	return sds.match(TOKEN_IN_SDS)?.[1];
+}
+
+async function revoke(token: string | undefined): Promise<void> {
+	if (!token) return;
+	const res = await fetch(REVOKE, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ token, token_type_hint: "access_token", client_id: CLIENT }),
+		signal: AbortSignal.timeout(10_000),
+	});
+	if (!res.ok) throw new Error(`Claude's revoke answered ${res.status}`);
 }
 
 async function body(req: http.IncomingMessage): Promise<Record<string, unknown>> {
@@ -104,9 +124,16 @@ async function route(req: http.IncomingMessage): Promise<[number, unknown]> {
 			f.child.stdin!.write("\r");
 			const token = await find(f, TOKEN, 30_000, "token for that code");
 			end(f);
+			// A new token leaves the old one live, so the old one is revoked once the broker has the new one.
+			const old = await stored();
 			await store(token);
+			await revoke(old);
 			return [200, { connected: await connected() }];
 		}
+		case "POST /claude/disconnect":
+			await revoke(await stored());
+			await store(null);
+			return [200, { connected: null }];
 	}
 	return [404, { error: "not found" }];
 }

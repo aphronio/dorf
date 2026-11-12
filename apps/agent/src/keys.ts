@@ -7,7 +7,7 @@ export class Keys {
 		this.#url = url;
 	}
 
-	async relay(method: "GET" | "POST", path: "/claude" | "/claude/start" | "/claude/code", body?: unknown): Promise<[number, unknown]> {
+	async relay(method: "GET" | "POST", path: "/claude" | "/claude/start" | "/claude/code" | "/claude/disconnect", body?: unknown): Promise<[number, unknown]> {
 		const res = await fetch(`${this.#url}${path}`, {
 			method,
 			headers: body === undefined ? {} : { "content-type": "application/json" },

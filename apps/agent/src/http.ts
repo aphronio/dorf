@@ -89,7 +89,7 @@ async function route(threads: Threads, catalog: Catalog, github: GitHub | undefi
 	if (root === "claude" && !keys) return [404, { error: "This deployment has no keys service." }];
 	if (root === "claude" && keys && !sub) {
 		if (req.method === "GET" && !rawId) return keys.relay("GET", "/claude");
-		if (req.method === "POST" && (rawId === "start" || rawId === "code")) return keys.relay("POST", `/claude/${rawId}`, await json(req));
+		if (req.method === "POST" && (rawId === "start" || rawId === "code" || rawId === "disconnect")) return keys.relay("POST", `/claude/${rawId}`, await json(req));
 	}
 	if (root !== "threads") return [404, { error: "not found" }];
 	const id = Number(rawId) as ConversationId;
