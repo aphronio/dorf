@@ -7,12 +7,12 @@
 set -euo pipefail
 shopt -s inherit_errexit
 
-# Threads may change these; everything else (deploy/, the gate, images, CI) needs a signature. A package.json may
-# change its scripts, but a dependency changes the lockfile, so any bun.lock change needs a signature, and so does
-# a bunfig.toml or .npmrc, which could point the install elsewhere. Skills are text later Threads read; `.agents/setup`
-# is not, since a deploy runs it here.
-SAFE='^(apps/agent/src/|apps/agent/test/|apps/agent/package\.json$|docs/|apps/web/|\.agents/skills/)'
-UNSAFE='(^|/)(bun\.lock|bunfig\.toml|\.npmrc)$'
+# Threads may change these; everything else (deploy/, the gate, images, CI) needs a signature. A Thread that may
+# change the agent's code may also change its dependencies and image, which run with the same rights. A bunfig.toml
+# or .npmrc needs a signature, since it could point the install elsewhere. Skills are text later Threads read;
+# `.agents/setup` is not, since a deploy runs it here.
+SAFE='^(apps/agent/|apps/web/|docs/|\.agents/skills/)'
+UNSAFE='(^|/)(bunfig\.toml|\.npmrc)$'
 SIGNERS=/etc/dorf/allowed_signers
 AUTH=
 EMPTY_TREE=4b825dc642cb6eb9a060e54bf8d69288fbee4904
