@@ -63,6 +63,7 @@ harnesses. That code is frozen at the `v0.31.3` tag and is not maintained.
 | **create, resume, pause, delete** | The Sandbox operations Dorf performs. The agent resumes a Sandbox before it connects. |
 | **make room** | When no worker has room for a Sandbox to resume, pausing the Sandbox whose Thread has been idle the longest. With every Sandbox busy, the resume waits for a run to end. |
 | **archive** | As in Amp: a Thread leaves the list, its work stops and its Sandbox pauses at once; a message brings it back. Delete removes the Thread's Sandbox; Pi keeps its transcript. |
+| **Signal** | Something that happened that a Thread may act on: a CI result, a held deploy, a labelled issue, a time of day. A Thread follows the signals it cares about, set up from plain words in the Thread. A signal wakes each Thread that follows it, or starts a new one. |
 | **drain** | Pausing every running Sandbox on a worker that is going away, even mid-call, so an upgrade loses no work. Substrate leaves it to the Sandbox's driver, the agent. |
 
 Substrate's own terms (Actor, Worker, Atespace, ActorTemplate) appear only in the gate and in
@@ -76,7 +77,7 @@ deployment files.
 - The agent sees a machine: tools reach a Sandbox only through pi-env. Where the agent runs is a
   deployment choice; it needs only HTTP and WebSocket to the gate.
 - The Sandbox image holds no credentials and knows nothing about Dorf.
-- A later trigger app (GitHub, CI) knows only the agent's Thread API.
+- Signals reach Threads only through the agent's Thread API, whatever carries them there.
 - Code moves into a shared package only when a second app imports it.
 
 ## Deleted, and when to add it back
