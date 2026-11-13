@@ -46,13 +46,15 @@ the cluster. Run `bun run check` and `bun run proof` as you work.
 ## Ship
 
 - Commit with the Sandbox's git identity, in Conventional Commits whose subject states the impact.
-- When the change touches only `apps/agent`, `apps/web`, `docs` or `.agents/skills`, and check and proof pass, push
-  to `main` and follow its CI run with `gh run watch`. If CI fails, fix it forward at once. Main
+- When the change touches only `apps/agent/src`, `apps/agent/test`, `apps/agent/package.json`, `apps/web`, `docs`
+  or `.agents/skills`, changes no `bun.lock`, `bunfig.toml` or `.npmrc`, and check and proof pass, push to `main`
+  and follow its CI run with `gh run watch`. `deploy/follow.sh` holds every other unsigned change, and every
+  commit after it, until the owner signs. If CI fails, fix it forward at once. Main
   deploys on its own a minute or two after CI passes; the newest of
   `gh api repos/{owner}/{repo}/deployments` and its statuses say whether your commit is live, held or
   rolled back.
-- Push any other change to a branch and say which Substrate proof it needs: the gate, the Sandbox
-  image, `deploy/`, CI and this file wait for the owner until staging exists.
+- Push any other change to a branch and say which Substrate proof it needs: a new dependency, the gate, the
+  Sandbox image, `deploy/`, CI and this file wait for the owner until staging exists.
 - Reply with the `show-me` skill: the smallest picture that proves the change, sized to it, with as
   little text as it needs. Write commit messages with the `prose` skill.
 - When something about Dorf got in your way, or you found a problem you did not fix, file it with
